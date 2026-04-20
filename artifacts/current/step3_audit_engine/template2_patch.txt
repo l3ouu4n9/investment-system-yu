@@ -1,0 +1,23 @@
+PATCH_1
+fail_check_id: "1.62"
+fail_reason: "DECISION_PACKET.MARKET_DATA_SNAPSHOT 將非交易日 2026-04-19 寫成 market_data_target_close_date_et 與 tickers[*].price_asof，且 execution_date_et 亦錯寫為週日。"
+patch_action: "將 MARKET_DATA_SNAPSHOT.market_data_target_close_date_et 統一修正為 2026-04-17；將所有 tickers[*].price_asof 修正為 2026-04-17；將 execution_date_et 修正為 next actionable session 2026-04-20。"
+patch_scope: "structure-only"
+
+PATCH_2
+fail_check_id: "1.61 / 1.63"
+fail_reason: "VT 在 TEMPLATE2_OUTPUT 與 assumptions 明示為 fallback(Stooq) 補 last_close / price_asof，但 DECISION_PACKET 被錯誤 normalize 成 Barchart，且 data_gap=false。"
+patch_action: "保留 VT per-ticker fallback provenance：last_close_source=Stooq、price_asof_source=Stooq、technicals_source=Barchart、data_gap=true、data_gap_reason='VT 的 last_close 與 52w range 以 Stooq 補齊；MA/ATR/avg_volume 仍採 Barchart technical page.'"
+patch_scope: "structure-only"
+
+PATCH_3
+fail_check_id: "1.64"
+fail_reason: "DECISION_PACKET.MARKET_DATA_SNAPSHOT 將 Template2 已提供且 execution_plans / diagnostics 引用之 atr / 52w / trend / liquidity / quadrant 等欄位留為 null，造成 compiler derivability fail。"
+patch_action: "依 TEMPLATE2_OUTPUT.MARKET_DATA_TABLE 回填各 ticker 的 atr_20_abs、atr_20_30d_pct、week_52_low、week_52_high、trend_state、liquidity_tier、quadrant；其餘可由 compiler 直接使用的 market-data 欄位全部補齊。"
+patch_scope: "structure-only"
+
+PATCH_4
+fail_check_id: "8.6"
+fail_reason: "sell_side_delta_table_8_2 含未收斂狀態 HOLD_REVIEW_FOR_AUDIT（VTI、IGV），不符合 compile-ready final-state 規則。"
+patch_action: "在不改動 thesis / ranking / budget / rotation 的前提下，將 VTI 與 IGV 的 sell-side 狀態收斂為 HOLD_NO_SELL_DRAFT，並補明確 why：open-order rotation 或低於 MA200 不足以單獨構成 LTCG trim / sell trigger。"
+patch_scope: "structure-only"

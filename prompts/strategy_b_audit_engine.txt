@@ -35,6 +35,13 @@
 - 不得重跑 market data 抓取
 - 不得修改 RESEARCH_JSON 定義與事件內容
 
+2.5) Weekend / Holiday Market-Data Canonicalization (NEW, MUST)
+- 若 as_of / run_timestamp_et 落在非交易日（含週末 / 美股休市日），MARKET_DATA_SNAPSHOT.market_data_target_close_date_et 必須回退到最近一個已完成的美股正常收盤日；不得寫成週末 / 假日日期。
+- MARKET_DATA_SNAPSHOT.tickers[*].price_asof 必須與該 ticker 採用之 last_close 對應的實際收盤日一致。
+- MARKET_DATA_SNAPSHOT.execution_date_et 若落在非交易日，必須改寫為下一個可執行交易日（next actionable session date）。
+- 若 Template2 已明確提供 last_close_asof / market close date，Audit 不得改寫成較晚但不存在的 close date。
+- 若上述任一欄位彼此不一致，視為 MUST PASS FAIL；優先 patch MARKET_DATA_SNAPSHOT，而非改動 shortlist / ranking / budget / thesis。
+
 3) Dual-Lane Boundary
 - proposed_extended_etf_candidates 不得進入：
   effective_allowed_buy_universe / shortlist / buy-side delta / BUY_ORDERS
@@ -67,48 +74,8 @@ PORTFOLIO_SNAPSHOT_START
 {{ portfolio_snapshot }}
 PORTFOLIO_SNAPSHOT_END
 
-
 STRATEGY_SETTINGS_START
-- as_of: {AS_OF}
-- benchmark: QQQ
-- tax_intent: "LTCG_only"
-- min_holding_period: ">=12m"
-- hard_cap_open_orders_budget: 27723
-- relative_rotation_enabled: true
-- relative_rotation_reference_source: "RESEARCH_JSON.buy_universe_scorecard"
-
-- core_universe: ["QQQ","VOO","VTI","VT"]
-- satellite_universe: ["SMH","IGV"]
-
-- active_shortlist_size_rule:
-  - benchmark carrier：1 檔
-  - diversified_core_buffer：最多 1 檔
-  - sector_alpha_tilt：最多 2 檔
-
-- max_new_tickers_per_week:
-  base_universe_new_tickers_per_week: 0
-  extended_etf_sleeve_new_tickers_per_week: 1
-
-- optional_extended_etf_sleeve_rule:
-  - 預設：disabled
-  - 若 RESEARCH_JSON.optional_extended_etf_sleeve.enabled = true：
-      (a) 可擴充 effective_allowed_buy_universe
-      (b) extended ETF 新增數量每週 <= 1
-      (c) 任一 extended ETF positive_delta_budget_pct_of_hard_cap <= 15%
-      (d) 所有 extended ETF 合計 positive_delta_budget_pct_of_hard_cap <= 20%
-
-- benchmark_tracking_guard:
-  - 若未觸發 core_switch_rule 或 thesis_invalidated，core_tickers 必須包含 QQQ
-  - 若本回合存在 buy-side delta > 0：
-      (a) QQQ 與 core_universe 合計至少 40%
-      (b) satellite_universe（SMH, IGV）合計不得超過 60%
-
-- budget_allocation_cascade_rule:
-  - 預算分配順序必須為：
-    (1) benchmark carrier
-    (2) diversified_core_buffer
-    (3) sector_alpha_tilt
-    (4) enabled extended ETF minority sleeve
+{{ strategy_settings }}
 STRATEGY_SETTINGS_END
 
 TEMPLATE2_OUTPUT_START
@@ -125,6 +92,9 @@ DECISION_PACKET_END
 1.5. A 是否等於 existing_buy_open_orders_summary 加總
 1.6. market data source consistency
 1.61. primary / fallback hardlock
+1.62. weekend / holiday close-date canonicalization
+1.63. per-ticker source provenance hardlock
+1.64. market data field parity / compiler derivability
 2. 整股可行性
 3. risk_limits_on_open_orders / core_min_pct_of_open_orders_budget
 4. event window concentration
@@ -152,27 +122,94 @@ DECISION_PACKET_END
 7. event window ladder-rung proximity
 8. plan structure consistency
 8.5. base / alt execution plan schema consistency
+8.6. final-state resolution / no unresolved review labels
+- AUDITED_DECISION_PACKET 不得保留任何未收斂的中間狀態，例如：
+  HOLD_REVIEW_FOR_AUDIT
+  REVIEW_NEEDED
+  PENDING_AUDIT
+  TO_BE_DECIDED
+  NEEDS_MANUAL_INTERPRETATION
+- final_buy_side_delta_table / final_sell_side_delta_table / final_execution_plans / final_sell_execution_plans 中的每一筆，必須收斂為 compile-ready 狀態。
+- 若 Audit 認為資訊不足以收斂，必須：
+  (a) 將該項標記為 FAIL
+  (b) 把原因寫入 compiler_blockers
+  (c) 不得輸出半完成的 final state
 10. actionable_window
 10.5. ORDER_STATE_EXPORT derivability and post-Step4 consistency
 11. max_total_positions
+
+【Market Data Audit 補充判準（NEW, MUST）】
+- 對 1.6 / 1.61 / 1.62 / 1.63 / 1.64，必須同時比對：
+  (a) TEMPLATE2_OUTPUT 的 MARKET_DATA_TABLE
+  (b) DECISION_PACKET.MARKET_DATA_SNAPSHOT
+  (c) existing_buy_order_diagnostics / execution_plan_drafts 內引用到的 market-data 欄位
+- 若 TEMPLATE2_OUTPUT 與 DECISION_PACKET 對同一 ticker 的 last_close / price_asof / source attribution / data_gap flag 不一致：
+  視為 FAIL。
+- 若某 ticker 使用 fallback source（例如 Stooq 補 last_close / price_asof），則 AUDITED_DECISION_PACKET 必須逐欄保留：
+  last_close_source
+  price_asof_source
+  technicals_source
+  data_gap
+  data_gap_reason
+  不得在 packet normalize 時回寫成 primary source。
+- 若 Template2 / execution draft / diagnostics 曾引用 ATR、52w range、trend_state、liquidity_tier、quadrant、avg_volume、MA50、MA200、data_gap 或 source attribution，則 AUDITED_DECISION_PACKET 的 MARKET_DATA_SNAPSHOT 不得把這些欄位省略為 null；否則視為 compiler-derivability FAIL。
+- 若 run 落在非交易日，Audit 必須同時檢查：
+  market_data_target_close_date_et 是否為最近正常收盤日、
+  tickers[*].price_asof 是否與 last_close 對齊、
+  execution_date_et 是否為 next actionable session；
+  任一不一致即 FAIL。
 
 【Dual-Lane 新增稽核】
 - Check 0.25: dual-lane boundary integrity
 - Check 0.26: lane_b promotion gate compliance
 - Check 6.521A: base-first capital allocation discipline
 
-【Patch 規則】
+【Patch 規則（REVISED, MUST）】
 若任一 MUST PASS 檢查 FAIL：
 (1) 你必須輸出 TEMPLATE2_PATCH_START ... TEMPLATE2_PATCH_END
-(2) 並產出一份新的 PATCHED_DECISION_PACKET
-(3) 再輸出一份新的 TEMPLATE3_AUDIT_START ... TEMPLATE3_AUDIT_END
-(4) 直到所有 MUST PASS 都 PASS 為止
+(2) TEMPLATE2_PATCH 必須清楚列出：
+    - fail check id
+    - fail reason
+    - patch action
+    - patch scope（structure-only / decision-level）
+(3) 你不得另外輸出獨立的 PATCHED_DECISION_PACKET 區塊
+(4) 所有 patch 結果必須直接反映在最終的 AUDITED_DECISION_PACKET
+(5) 你應先在內部完成必要迭代，直到所有 MUST PASS 檢查都 PASS，然後只輸出：
+    - 最終版 TEMPLATE3_AUDIT
+    - （若有 FAIL/patch）TEMPLATE2_PATCH
+    - 最終版 AUDITED_DECISION_PACKET
+
+【Structure-Only Patch Discipline (NEW, MUST)】
+- 若 FAIL 來源僅屬於 packet structure / metadata / market-data canonicalization / source attribution / actionable_window / schema completeness：
+  必須優先採用 structure-only patch。
+- structure-only patch 只允許修正：
+  MARKET_DATA_SNAPSHOT
+  source attribution
+  data_gap flags / reasons
+  execution_date_et
+  market_data_target_close_date_et
+  price_asof
+  packet 缺失欄位補齊
+  review-state 收斂
+- 在上述情況下，不得順勢改動：
+  active_shortlist
+  rank
+  budget
+  delta_budget
+  rotation direction
+  thesis
+  event refs
+  structural_theme_refs
+- 只有當 FAIL 明確來自投資邏輯違規（例如 hard cap、Dual-Lane boundary、LTCG-only、role layering、sell eligibility）時，才允許改動決策層內容。
 
 【輸出協定】
 你整個回合只能輸出以下區塊：
 1) TEMPLATE3_AUDIT_START ... TEMPLATE3_AUDIT_END
 2) 若有 FAIL：TEMPLATE2_PATCH_START ... TEMPLATE2_PATCH_END
 3) 最終：AUDITED_DECISION_PACKET_START ... AUDITED_DECISION_PACKET_END
+
+- 只允許輸出「最終一輪」結果；不得輸出多輪 TEMPLATE3_AUDIT 或多輪 patch 區塊。
+- 若模型在內部完成多次 patch / re-audit，對外只可呈現最後一次、已通過 MUST PASS 檢查的版本。
 
 除上述區塊外，禁止輸出任何其他文字。
 
@@ -186,3 +223,29 @@ DECISION_PACKET_END
 - audit_fail_reasons
 - patches_applied
 - compiler_blockers
+
+- MARKET_DATA_SNAPSHOT（REQUIRED；不得省略）
+  - execution_date_et
+  - market_data_target_close_date_et
+  - primary_source
+  - fallback_source_for_last_close_and_price_asof_only
+  - 對每個 ticker 至少保留：
+    ticker
+    last_close
+    price_asof
+    atr_20_abs
+    atr_20_30d_pct
+    ma50
+    ma200
+    avg_volume_3m
+    week_52_low
+    week_52_high
+    trend_state
+    liquidity_tier
+    quadrant
+    last_close_source
+    price_asof_source
+    technicals_source
+    freshness_ok
+    data_gap
+    data_gap_reason

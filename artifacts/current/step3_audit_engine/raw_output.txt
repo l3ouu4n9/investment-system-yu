@@ -1,0 +1,764 @@
+TEMPLATE3_AUDIT_START
+OVERALL_RESULT | PASS
+MUST_PASS_STATUS | ALL_PASS_AFTER_PATCH
+ORDER_COMPILER_READY | true
+
+0.25 | PASS | dual-lane boundary integrity | optional_extended_etf_sleeve.enabled=false；QUAL/CIBR/VUG 未進 effective_allowed_buy_universe / active_shortlist / buy-side delta / final_execution_plans。
+0.26 | PASS | lane_b promotion gate compliance | allowed_extended_etf_tickers=[]；無任何 extended ETF promotion 進入 base trade path。
+
+1 | PASS | hard_cap_open_orders_budget | final_total_open_orders_budget=14000 <= 27534.86。
+1.5 | PASS | A reconciliation | A=10000，等於 existing_buy_open_orders_summary(6000+4000)。
+1.6 | PASS | market data source consistency | 依 TEMPLATE2_OUTPUT 完成 structure-only market-data patch 後一致。
+1.61 | PASS | primary / fallback hardlock | primary_source=Barchart；fallback_source_for_last_close_and_price_asof_only=Stooq；僅 VT 保留 fallback attribution。
+1.62 | PASS | weekend / holiday close-date canonicalization | run 落在週日；market_data_target_close_date_et 已修正為 2026-04-17；execution_date_et 已修正為 2026-04-20；tickers[*].price_asof 全部與 last_close 對齊至實際收盤日。
+1.63 | PASS | per-ticker source provenance hardlock | VT last_close_source=Stooq、price_asof_source=Stooq、technicals_source=Barchart、data_gap=true；其餘 ticker 維持 Barchart。
+1.64 | PASS | market data field parity / compiler derivability | 已補齊 atr_20_abs / atr_20_30d_pct / week_52_low / week_52_high / trend_state / liquidity_tier / quadrant / data_gap_reason；不再保留不應為 null 的編譯欄位。
+
+2 | PASS | whole-share feasibility | QQQ 10000 與 SMH 4000 皆可形成整股 ladder；VTI 為 cancel，不涉整股問題。
+3 | PASS | risk_limits_on_open_orders / core_min_pct_of_open_orders_budget | core(QQQ)=10000，占 final open-order budget 71.43%；satellite(SMH)=28.57%；無 extended ETF 預算。
+4 | PASS | event window concentration | 新增/保留預算集中於 QQQ+SMH，但 QQQ 為 benchmark carrier、SMH 為 minority tilt，非單一事件投機。
+5 | PASS | overlap / drawdown risk | QQQ 與 SMH 重疊可接受；SMH 僅 minority sleeve；VOO 無新增預算，未再加重 buffer 重疊。
+
+6 | PASS | plan type audit | buy-side final state 收斂為 REPLACE_EXISTING / CANCEL_EXISTING / NEW_ORDER / HOLD / WATCHLIST_NO_TRADE。
+6.5 | PASS | LTCG-only holding period constraint | 無 sell draft；未違反 LTCG_only。
+6.52 | PASS | benchmark alignment + overtrading / event-speculation guard | 以取消 VTI open order 補強 QQQ，符合 benchmark-first；未因短期事件重寫 thesis。
+6.521 | PASS | max_new_tickers_per_week compliance | base_universe_new_tickers_this_week=0；extended_etf_sleeve_new_tickers_this_week=0。
+6.521A | PASS | base-first capital allocation discipline | 新增預算先滿足 QQQ benchmark carrier，再給 SMH 少數 satellite；無 extended ETF 資本分流。
+6.53 | PASS | benchmark carrier / active tilt drift | QQQ 維持 rank 1 且獲最大 open-order budget；SMH 未取代核心角色。
+6.54 | PASS | role layering compliance | benchmark_carrier=1；diversified_core_buffer 有且僅 VOO；sector_alpha_tilt=SMH+IGV（<=2）。
+6.55 | PASS | linkage + entry_driver labeling | QQQ / SMH 增加或新單皆具非空 event_id_refs 與 structural_theme_refs，且具 12m+ thesis。
+6.56 | PASS | no-trade primary blocker labeling | VOO / VT / IGV 的 no-new-budget / watch-only 原因明確。
+6.57 | PASS | conditional post-event order preference compliance | 本回合未因單一即將到來事件改成 event-chasing 交易；仍以 12m+ thesis 與 benchmark 對齊為主。
+6.6 | PASS | sell eligibility | 無 sell execution plans；未動用非 LTCG lot。
+6.7 | PASS | sell linkage + limit + lot_selection | final_sell_execution_plans 為空，無違規賣出欄位。
+6.72 | PASS | intended_shares_to_sell validity | 無 sell orders。
+6.725 | PASS | 8.15 rotation layer compaction consistency | VTI->QQQ rotation amount 4000 與 buy-side delta 完全一致。
+6.73 | PASS | 8.15 to 8.2 lot expansion consistency | 無 sell-side lot expansion，無不一致。
+6.731 | PASS | compact lot output consistency | 無 compact sell lot output，無不一致。
+6.74 | PASS | replacement target validity | 無 sell-side replacement target；未違反 base-only replacement SSOT。
+6.75 | PASS | relative expected return rotation validity | 僅旋轉 open-order 預算，依 RESEARCH_JSON.buy_universe_scorecard 與 active_shortlist 優先度成立。
+6.8 | PASS | no same-run redeploy / hard_cap isolation | 無 sell proceeds 進 buy budget；僅使用 existing open-order reallocation + fresh headroom。
+6.81 | PASS | anchor_decision feature-flag / metadata guard | existing_buy_order_diagnostics 與 final_execution_plans anchor metadata 完整；SMH new order 已明確綁 current last_close / price_asof。
+6.82 | PASS | sell redeploy binding | 無 sell-side 資金 redeploy。
+
+7 | PASS | event window ladder-rung proximity | 本階段僅保留 compile-ready execution plan metadata；未出現以錯誤 close date 綁定 ladder 的情況。
+8 | PASS | plan structure consistency | packet schema 一致；無 buy/sell path 混淆。
+8.5 | PASS | base / alt execution plan schema consistency | final_execution_plans 結構一致；無 unresolved alt-plan 衝突。
+8.6 | PASS | final-state resolution / no unresolved review labels | HOLD_REVIEW_FOR_AUDIT 已收斂：VTI -> HOLD_NO_SELL_DRAFT；IGV -> HOLD_NO_SELL_DRAFT。
+
+10 | PASS | actionable_window | non-trading-day run 已 canonicalize 至 next actionable session。
+10.5 | PASS | ORDER_STATE_EXPORT derivability and post-Step4 consistency | final_buy_side_delta_table / final_sell_side_delta_table / final_execution_plans / final_sell_execution_plans 皆 compile-ready。
+11 | PASS | max_total_positions | 無新增 base ticker；無新增 extended ETF；總持倉集合不擴張。
+
+SUMMARY | A=10000 | FINAL_TOTAL_OPEN_ORDERS_BUDGET=14000 | HARD_CAP=27534.86 | CORE_BUDGET_PCT=71.43% | NEW_BASE_TICKERS=0 | NEW_EXTENDED_TICKERS=0 | COMPILER_BLOCKERS=[]
+TEMPLATE3_AUDIT_END
+
+TEMPLATE2_PATCH_START
+PATCH_1
+fail_check_id: "1.62"
+fail_reason: "DECISION_PACKET.MARKET_DATA_SNAPSHOT 將非交易日 2026-04-19 寫成 market_data_target_close_date_et 與 tickers[*].price_asof，且 execution_date_et 亦錯寫為週日。"
+patch_action: "將 MARKET_DATA_SNAPSHOT.market_data_target_close_date_et 統一修正為 2026-04-17；將所有 tickers[*].price_asof 修正為 2026-04-17；將 execution_date_et 修正為 next actionable session 2026-04-20。"
+patch_scope: "structure-only"
+
+PATCH_2
+fail_check_id: "1.61 / 1.63"
+fail_reason: "VT 在 TEMPLATE2_OUTPUT 與 assumptions 明示為 fallback(Stooq) 補 last_close / price_asof，但 DECISION_PACKET 被錯誤 normalize 成 Barchart，且 data_gap=false。"
+patch_action: "保留 VT per-ticker fallback provenance：last_close_source=Stooq、price_asof_source=Stooq、technicals_source=Barchart、data_gap=true、data_gap_reason='VT 的 last_close 與 52w range 以 Stooq 補齊；MA/ATR/avg_volume 仍採 Barchart technical page.'"
+patch_scope: "structure-only"
+
+PATCH_3
+fail_check_id: "1.64"
+fail_reason: "DECISION_PACKET.MARKET_DATA_SNAPSHOT 將 Template2 已提供且 execution_plans / diagnostics 引用之 atr / 52w / trend / liquidity / quadrant 等欄位留為 null，造成 compiler derivability fail。"
+patch_action: "依 TEMPLATE2_OUTPUT.MARKET_DATA_TABLE 回填各 ticker 的 atr_20_abs、atr_20_30d_pct、week_52_low、week_52_high、trend_state、liquidity_tier、quadrant；其餘可由 compiler 直接使用的 market-data 欄位全部補齊。"
+patch_scope: "structure-only"
+
+PATCH_4
+fail_check_id: "8.6"
+fail_reason: "sell_side_delta_table_8_2 含未收斂狀態 HOLD_REVIEW_FOR_AUDIT（VTI、IGV），不符合 compile-ready final-state 規則。"
+patch_action: "在不改動 thesis / ranking / budget / rotation 的前提下，將 VTI 與 IGV 的 sell-side 狀態收斂為 HOLD_NO_SELL_DRAFT，並補明確 why：open-order rotation 或低於 MA200 不足以單獨構成 LTCG trim / sell trigger。"
+patch_scope: "structure-only"
+TEMPLATE2_PATCH_END
+
+AUDITED_DECISION_PACKET_START
+{
+"audit_passed": true,
+"order_compiler_ready": true,
+"audit_fail_reasons": [],
+"patches_applied": [
+{
+"check_id": "1.62",
+"patch_type": "structure-only",
+"summary": "Canonicalized non-trading-day market data dates: target close -> 2026-04-17, execution date -> 2026-04-20, all price_asof -> 2026-04-17."
+},
+{
+"check_id": "1.61/1.63",
+"patch_type": "structure-only",
+"summary": "Restored VT fallback provenance and data-gap metadata from TEMPLATE2_OUTPUT."
+},
+{
+"check_id": "1.64",
+"patch_type": "structure-only",
+"summary": "Backfilled compiler-required market-data fields from TEMPLATE2_OUTPUT.MARKET_DATA_TABLE."
+},
+{
+"check_id": "8.6",
+"patch_type": "structure-only",
+"summary": "Resolved sell-side review labels to compile-ready HOLD_NO_SELL_DRAFT."
+}
+],
+"compiler_blockers": [],
+"effective_allowed_buy_universe": [
+"VOO",
+"VTI",
+"VT",
+"QQQ",
+"SMH",
+"IGV"
+],
+"actionable_window": {
+"run_timestamp_et": "2026-04-19 00:00 ET",
+"is_non_trading_day_run": true,
+"execution_date_et": "2026-04-20",
+"market_data_target_close_date_et": "2026-04-17"
+},
+"open_order_budget_summary": {
+"existing_buy_open_orders_budget_A": 10000,
+"final_total_open_orders_budget": 14000,
+"hard_cap_open_orders_budget": 27534.86,
+"available_headroom_after_finalization": 13534.86,
+"core_open_orders_budget": 10000,
+"satellite_open_orders_budget": 4000,
+"extended_etf_open_orders_budget": 0,
+"core_open_orders_budget_pct": 71.43
+},
+"MARKET_DATA_SNAPSHOT": {
+"schema_version": "1.0",
+"snapshot_type": "MARKET_DATA_SNAPSHOT",
+"run_timestamp_et": "2026-04-19 00:00 ET",
+"execution_date_et": "2026-04-20",
+"market_data_target_close_date_et": "2026-04-17",
+"close_time_zone": "America/New_York",
+"display_time_zone": "America/Los_Angeles",
+"primary_source": "Barchart",
+"fallback_source_for_last_close_and_price_asof_only": "Stooq",
+"holiday_aware_close_resolution": true,
+"session_type": "weekend_non_trading_day_canonicalized",
+"source_note": "Run occurred on a Sunday. Last-close fields were canonicalized to the most recent completed U.S. equity close (2026-04-17 ET). Execution date was moved to the next actionable U.S. session (2026-04-20 ET). VT last_close and price_asof use Stooq fallback; VT technicals remain from Barchart.",
+"tickers": [
+{
+"ticker": "QQQ",
+"last_close": 648.85,
+"price_asof": "2026-04-17",
+"atr_20_abs": 10.82,
+"atr_20_30d_pct": 1.67,
+"ma50": 602.1,
+"ma200": 598.89,
+"avg_volume_3m": 60500086,
+"week_52_low": 427.93,
+"week_52_high": 650.0,
+"trend_state": "above_ma50_and_ma200_uptrend",
+"liquidity_tier": "ultra",
+"quadrant": "medium",
+"last_close_source": "Barchart",
+"price_asof_source": "Barchart",
+"technicals_source": "Barchart",
+"freshness_ok": true,
+"data_gap": false,
+"data_gap_reason": null
+},
+{
+"ticker": "VOO",
+"last_close": 652.78,
+"price_asof": "2026-04-17",
+"atr_20_abs": 8.57,
+"atr_20_30d_pct": 1.31,
+"ma50": 620.85,
+"ma200": 612.89,
+"avg_volume_3m": 10657705,
+"week_52_low": 467.33,
+"week_52_high": 654.88,
+"trend_state": "above_ma50_and_ma200_uptrend",
+"liquidity_tier": "high",
+"quadrant": "low",
+"last_close_source": "Barchart",
+"price_asof_source": "Barchart",
+"technicals_source": "Barchart",
+"freshness_ok": true,
+"data_gap": false,
+"data_gap_reason": null
+},
+{
+"ticker": "VTI",
+"last_close": 350.53,
+"price_asof": "2026-04-17",
+"atr_20_abs": 4.73,
+"atr_20_30d_pct": 1.35,
+"ma50": 333.09,
+"ma200": 328.47,
+"avg_volume_3m": 4728635,
+"week_52_low": 249.94,
+"week_52_high": 351.74,
+"trend_state": "above_ma50_and_ma200_uptrend",
+"liquidity_tier": "medium",
+"quadrant": "low",
+"last_close_source": "Barchart",
+"price_asof_source": "Barchart",
+"technicals_source": "Barchart",
+"freshness_ok": true,
+"data_gap": false,
+"data_gap_reason": null
+},
+{
+"ticker": "VT",
+"last_close": 150.84,
+"price_asof": "2026-04-17",
+"atr_20_abs": 2.17,
+"atr_20_30d_pct": 1.44,
+"ma50": 143.58,
+"ma200": 139.16,
+"avg_volume_3m": 4231455,
+"week_52_low": 108.42,
+"week_52_high": 151.44,
+"trend_state": "above_ma50_and_ma200_uptrend",
+"liquidity_tier": "medium",
+"quadrant": "low",
+"last_close_source": "Stooq",
+"price_asof_source": "Stooq",
+"technicals_source": "Barchart",
+"freshness_ok": true,
+"data_gap": true,
+"data_gap_reason": "VT 的 last_close 與 52w range 以 Stooq 補齊；MA/ATR/avg_volume 仍採 Barchart technical page。"
+},
+{
+"ticker": "SMH",
+"last_close": 464.16,
+"price_asof": "2026-04-17",
+"atr_20_abs": 12.35,
+"atr_20_30d_pct": 2.66,
+"ma50": 405.46,
+"ma200": 352.43,
+"avg_volume_3m": 9283720,
+"week_52_low": 184.4,
+"week_52_high": 464.58,
+"trend_state": "above_ma50_and_ma200_uptrend",
+"liquidity_tier": "high",
+"quadrant": "high",
+"last_close_source": "Barchart",
+"price_asof_source": "Barchart",
+"technicals_source": "Barchart",
+"freshness_ok": true,
+"data_gap": false,
+"data_gap_reason": null
+},
+{
+"ticker": "IGV",
+"last_close": 85.08,
+"price_asof": "2026-04-17",
+"atr_20_abs": 2.65,
+"atr_20_30d_pct": 3.12,
+"ma50": 82.14,
+"ma200": 101.87,
+"avg_volume_3m": 25382055,
+"week_52_low": 73.93,
+"week_52_high": 117.99,
+"trend_state": "above_ma50_below_ma200_recovery",
+"liquidity_tier": "ultra",
+"quadrant": "high",
+"last_close_source": "Barchart",
+"price_asof_source": "Barchart",
+"technicals_source": "Barchart",
+"freshness_ok": true,
+"data_gap": false,
+"data_gap_reason": null
+}
+]
+},
+"active_shortlist": [
+{
+"rank": 1,
+"ticker": "QQQ",
+"role_layer": "benchmark_carrier_core",
+"selection_status": "selected_primary",
+"funding_status": "funded",
+"current_shares": 40,
+"why": "QQQ 仍是本輪 benchmark carrier SSOT；取消較低優先度的 VTI open order 後，優先補強 benchmark 對齊。",
+"event_id_refs": [
+"pi_fed_data_dependence_20260318",
+"se_fomc_20260429",
+"se_msft_20260429",
+"se_googl_20260429",
+"se_nvda_20260520"
+],
+"structural_theme_refs": [
+"th_ai_compute_stack",
+"th_us_large_cap_quality_compounders"
+]
+},
+{
+"rank": 2,
+"ticker": "VOO",
+"role_layer": "diversified_core_buffer",
+"selection_status": "selected_buffer",
+"funding_status": "held_no_new_budget",
+"current_shares": 51,
+"why": "NO_NEW_BUDGET: VOO 仍是首選 diversified_core_buffer，但現有 VOO 持倉已足以承擔 buffer 角色，本輪不再增加重疊 buffer 預算。",
+"event_id_refs": [
+"pi_fed_data_dependence_20260318",
+"se_fomc_20260429",
+"se_cpi_20260512",
+"se_pce_20260529"
+],
+"structural_theme_refs": [
+"th_us_large_cap_quality_compounders"
+]
+},
+{
+"rank": 3,
+"ticker": "SMH",
+"role_layer": "sector_alpha_tilt",
+"selection_status": "selected_tilt",
+"funding_status": "funded",
+"current_shares": 11,
+"why": "AI compute 與半導體鏈仍是最清楚的 alpha tilt；在 base 六檔內保留 minority sleeve 最合理，但不取代 QQQ 核心。",
+"event_id_refs": [
+"pi_semiconductor_tariffs_20260114",
+"pi_bis_export_license_20260115",
+"se_intc_20260423",
+"se_tsmc_sales_20260508",
+"se_nvda_20260520"
+],
+"structural_theme_refs": [
+"th_ai_compute_stack"
+]
+},
+{
+"rank": 4,
+"ticker": "IGV",
+"role_layer": "sector_alpha_tilt",
+"selection_status": "selected_tilt_watch",
+"funding_status": "watch_only",
+"current_shares": 5,
+"why": "NO_NEW_BUDGET: 軟體/資安 12m+ thesis 仍成立，但目前價格仍低於 MA200，且本輪 execution priority 明顯落後於 SMH。",
+"event_id_refs": [
+"pi_us_cyber_strategy_20260306",
+"se_msft_20260429",
+"se_googl_20260429",
+"se_pce_20260529"
+],
+"structural_theme_refs": [
+"th_software_and_cyber_resilience"
+]
+}
+],
+"rotation_decision_layer_8_15": [
+{
+"from_ticker": "VTI",
+"to_ticker": "QQQ",
+"rotation_type": "relative_rotation_open_order_budget",
+"budget_amount": 4000,
+"why": "取消較低優先度且高重疊的 VTI live buy order，將其預算回補到 benchmark carrier；既有 VOO 持倉已足夠承擔 buffer 角色。",
+"event_id_refs": [
+"pi_fed_data_dependence_20260318",
+"se_fomc_20260429",
+"se_msft_20260429",
+"se_googl_20260429",
+"se_nvda_20260520"
+],
+"structural_theme_refs": [
+"th_ai_compute_stack",
+"th_us_large_cap_quality_compounders"
+]
+}
+],
+"existing_buy_order_diagnostics": [
+{
+"ticker": "QQQ",
+"current_last_close": 648.85,
+"last_close_asof_et": "2026-04-17",
+"anchor_baseline_last_close": 611.07,
+"anchor_price_asof": "2026-04-10",
+"baseline_drift_pct": 6.18,
+"highest_live_limit": 608.4,
+"lowest_live_limit": 582.5,
+"distance_to_highest_live_limit_pct": 6.23,
+"distance_to_lowest_live_limit_pct": 10.23,
+"live_step_count": 5,
+"structure_data_gap_flag": false,
+"anchor_review_flag": true,
+"suggested_anchor_action": "full_reanchor_candidate"
+},
+{
+"ticker": "VTI",
+"current_last_close": 350.53,
+"last_close_asof_et": "2026-04-17",
+"anchor_baseline_last_close": 335.05,
+"anchor_price_asof": "2026-04-10",
+"baseline_drift_pct": 4.62,
+"highest_live_limit": 331.0,
+"lowest_live_limit": 317.5,
+"distance_to_highest_live_limit_pct": 5.57,
+"distance_to_lowest_live_limit_pct": 9.42,
+"live_step_count": 4,
+"structure_data_gap_flag": false,
+"anchor_review_flag": true,
+"suggested_anchor_action": "cancel_only"
+}
+],
+"assumptions_and_data_gaps": [
+{
+"type": "ASSUMPTION",
+"detail": "current_holdings_extended 未提供，依 SSOT 規則視為本回合無既有 extended ETF 持倉。",
+"affected_tickers": []
+},
+{
+"type": "ASSUMPTION",
+"detail": "optional_extended_etf_sleeve.enabled=false，因此 QUAL/CIBR/VUG 不進 effective_allowed_buy_universe，也不得進 buy-side delta。",
+"affected_tickers": [
+"QUAL",
+"CIBR",
+"VUG"
+]
+},
+{
+"type": "ASSUMPTION",
+"detail": "sell_open_orders 未提供，依規則視為沒有既有 sell-side open orders。",
+"affected_tickers": [
+"QQQ",
+"VOO",
+"VTI",
+"VT",
+"SMH",
+"IGV"
+]
+},
+{
+"type": "ASSUMPTION",
+"detail": "existing_buy_open_orders_summary 提供完整 buy-side SSOT，因此 A=10000，draft 以總 proposed open-order budget 對 hard cap 進行檢查。",
+"affected_tickers": [
+"QQQ",
+"VTI"
+]
+},
+{
+"type": "PATCH_NOTE",
+"detail": "Non-trading-day run canonicalized: market_data_target_close_date_et and all tickers[*].price_asof set to 2026-04-17; execution_date_et set to 2026-04-20.",
+"affected_tickers": [
+"QQQ",
+"VOO",
+"VTI",
+"VT",
+"SMH",
+"IGV"
+]
+},
+{
+"type": "DATA_GAP",
+"detail": "VT 的 last_close 與 52w range 以 Stooq 補齊；MA/ATR/avg_volume 仍採 Barchart technical page。",
+"affected_tickers": [
+"VT"
+]
+}
+],
+"final_buy_side_delta_table": [
+{
+"ticker": "QQQ",
+"existing_budget": 6000,
+"final_budget": 10000,
+"delta_budget": 4000,
+"final_action": "INCREASE_REPLACE_EXISTING",
+"order_intent": "REPLACE_EXISTING",
+"anchor_decision": "full_reanchor",
+"budget_source": "reallocated_from_VTI_open_order",
+"compile_ready": true,
+"why": "benchmark carrier 優先度最高；取消 VTI live order 釋放的預算回補 QQQ。既有 anchor 與 current_last_close 漂移明顯，故收斂為 full reanchor replace-existing plan。",
+"event_id_refs": [
+"pi_fed_data_dependence_20260318",
+"se_fomc_20260429",
+"se_msft_20260429",
+"se_googl_20260429",
+"se_nvda_20260520"
+],
+"structural_theme_refs": [
+"th_ai_compute_stack",
+"th_us_large_cap_quality_compounders"
+]
+},
+{
+"ticker": "VOO",
+"existing_budget": 0,
+"final_budget": 0,
+"delta_budget": 0,
+"final_action": "HOLD_NO_NEW_BUDGET",
+"order_intent": "NONE",
+"anchor_decision": "not_applicable",
+"budget_source": "no_new_budget_existing_buffer",
+"compile_ready": true,
+"why": "VOO 仍是首選 diversified_core_buffer，但現有持倉已足夠完成角色，本輪不新增重疊 buffer 預算。",
+"event_id_refs": [
+"pi_fed_data_dependence_20260318",
+"se_fomc_20260429",
+"se_cpi_20260512",
+"se_pce_20260529"
+],
+"structural_theme_refs": [
+"th_us_large_cap_quality_compounders"
+]
+},
+{
+"ticker": "VTI",
+"existing_budget": 4000,
+"final_budget": 0,
+"delta_budget": -4000,
+"final_action": "CANCEL_EXISTING",
+"order_intent": "CANCEL_EXISTING",
+"anchor_decision": "cancel_only",
+"budget_source": "existing_open_order_budget_release",
+"compile_ready": true,
+"why": "VTI 與 VOO/VT 高度重疊，且本輪排序落後於 VOO；既有 VOO 持倉已足以提供 buffer，因此收斂為直接取消既有 VTI live buy order。",
+"event_id_refs": [
+"pi_fed_data_dependence_20260318",
+"se_gdp_20260430",
+"se_jobs_20260508",
+"se_cpi_20260512"
+],
+"structural_theme_refs": [
+"th_us_large_cap_quality_compounders",
+"th_global_breadth_buffer"
+]
+},
+{
+"ticker": "VT",
+"existing_budget": 0,
+"final_budget": 0,
+"delta_budget": 0,
+"final_action": "WATCHLIST_NO_TRADE",
+"order_intent": "NONE",
+"anchor_decision": "not_applicable",
+"budget_source": "no_budget_assigned",
+"compile_ready": true,
+"why": "全球分散緩衝功能仍在，但對 benchmark=QQQ 的任務承載度最低，本輪維持 watchlist_no_trade。",
+"event_id_refs": [
+"pi_fed_data_dependence_20260318",
+"se_gdp_20260430",
+"se_jobs_20260508"
+],
+"structural_theme_refs": [
+"th_global_breadth_buffer"
+]
+},
+{
+"ticker": "SMH",
+"existing_budget": 0,
+"final_budget": 4000,
+"delta_budget": 4000,
+"final_action": "NEW_BUY_ORDER",
+"order_intent": "NEW_ORDER",
+"anchor_decision": "new_anchor_from_current_last_close",
+"budget_source": "fresh_headroom",
+"compile_ready": true,
+"why": "AI compute 主線仍是最清楚的 sector alpha tilt；新增預算僅作 minority sleeve，不取代 QQQ 核心。",
+"event_id_refs": [
+"pi_semiconductor_tariffs_20260114",
+"pi_bis_export_license_20260115",
+"se_intc_20260423",
+"se_tsmc_sales_20260508",
+"se_nvda_20260520"
+],
+"structural_theme_refs": [
+"th_ai_compute_stack"
+]
+},
+{
+"ticker": "IGV",
+"existing_budget": 0,
+"final_budget": 0,
+"delta_budget": 0,
+"final_action": "HOLD_NO_NEW_BUDGET",
+"order_intent": "NONE",
+"anchor_decision": "not_applicable",
+"budget_source": "no_budget_assigned",
+"compile_ready": true,
+"why": "軟體/資安長線 thesis 未破，但目前技術型態仍弱於 SMH，且與 QQQ 重疊偏高，本輪僅保留 watch_only。",
+"event_id_refs": [
+"pi_us_cyber_strategy_20260306",
+"se_msft_20260429",
+"se_googl_20260429",
+"se_pce_20260529"
+],
+"structural_theme_refs": [
+"th_software_and_cyber_resilience"
+]
+}
+],
+"final_sell_side_delta_table": [
+{
+"ticker": "QQQ",
+"current_shares": 40,
+"ltcg_sellable_shares": 11,
+"final_action": "HOLD_NO_SELL_DRAFT",
+"replacement_target": null,
+"compile_ready": true,
+"why": "benchmark carrier thesis 完整、LTCG 持倉可留作核心，本回合不產生 sell-side draft。",
+"event_id_refs": [
+"pi_fed_data_dependence_20260318",
+"se_fomc_20260429",
+"se_msft_20260429",
+"se_googl_20260429",
+"se_nvda_20260520"
+],
+"structural_theme_refs": [
+"th_ai_compute_stack",
+"th_us_large_cap_quality_compounders"
+]
+},
+{
+"ticker": "VOO",
+"current_shares": 51,
+"ltcg_sellable_shares": 25,
+"final_action": "HOLD_NO_SELL_DRAFT",
+"replacement_target": null,
+"compile_ready": true,
+"why": "diversified_core_buffer 角色仍有效；本輪只是不新增買入預算，不構成 sell trigger。",
+"event_id_refs": [
+"pi_fed_data_dependence_20260318",
+"se_fomc_20260429",
+"se_cpi_20260512",
+"se_pce_20260529"
+],
+"structural_theme_refs": [
+"th_us_large_cap_quality_compounders"
+]
+},
+{
+"ticker": "VTI",
+"current_shares": 36,
+"ltcg_sellable_shares": 15,
+"final_action": "HOLD_NO_SELL_DRAFT",
+"replacement_target": null,
+"compile_ready": true,
+"why": "open-order 優先度下降不等於 thesis 失效；本輪 relative rotation 僅作用於既有買單預算，不構成 LTCG trim 或現貨 sell trigger。",
+"event_id_refs": [
+"pi_fed_data_dependence_20260318",
+"se_gdp_20260430",
+"se_jobs_20260508",
+"se_cpi_20260512"
+],
+"structural_theme_refs": [
+"th_us_large_cap_quality_compounders",
+"th_global_breadth_buffer"
+]
+},
+{
+"ticker": "VT",
+"current_shares": 3,
+"ltcg_sellable_shares": 0,
+"final_action": "HOLD_NO_SELL_DRAFT",
+"replacement_target": null,
+"compile_ready": true,
+"why": "全球分散緩衝仍存在，且本回合無 LTCG sellable shares，維持不動。",
+"event_id_refs": [
+"pi_fed_data_dependence_20260318",
+"se_gdp_20260430",
+"se_jobs_20260508"
+],
+"structural_theme_refs": [
+"th_global_breadth_buffer"
+]
+},
+{
+"ticker": "SMH",
+"current_shares": 11,
+"ltcg_sellable_shares": 6,
+"final_action": "HOLD_NO_SELL_DRAFT",
+"replacement_target": null,
+"compile_ready": true,
+"why": "AI 計算主線與半導體 alpha thesis 仍成立，本輪偏向保留並僅新增 minority buy-side draft。",
+"event_id_refs": [
+"pi_semiconductor_tariffs_20260114",
+"pi_bis_export_license_20260115",
+"se_intc_20260423",
+"se_tsmc_sales_20260508",
+"se_nvda_20260520"
+],
+"structural_theme_refs": [
+"th_ai_compute_stack"
+]
+},
+{
+"ticker": "IGV",
+"current_shares": 5,
+"ltcg_sellable_shares": 3,
+"final_action": "HOLD_NO_SELL_DRAFT",
+"replacement_target": null,
+"compile_ready": true,
+"why": "軟體/資安 12m+ thesis 未失效；價格低於 MA200 本身不足以單獨構成 LTCG trim 或 relative-rotation sell。",
+"event_id_refs": [
+"pi_us_cyber_strategy_20260306",
+"se_msft_20260429",
+"se_googl_20260429",
+"se_pce_20260529"
+],
+"structural_theme_refs": [
+"th_software_and_cyber_resilience"
+]
+}
+],
+"final_execution_plans": [
+{
+"ticker": "QQQ",
+"template_id": "T4-E",
+"final_action": "REPLACE_EXISTING",
+"target_open_order_budget": 10000,
+"existing_open_order_budget": 6000,
+"delta_budget": 4000,
+"anchor_decision": "full_reanchor",
+"anchor_baseline_last_close": 611.07,
+"anchor_price_asof": "2026-04-10",
+"current_last_close": 648.85,
+"current_last_close_asof": "2026-04-17",
+"preserve_live_step_shape": true,
+"live_step_count": 5,
+"draft_packet_shape": "preserve_5_step_shape_but_reanchor_higher",
+"compile_ready": true,
+"why": "既有 5-step live ladder 可保留形狀，但 baseline drift 與 live limits 均明顯落後 current last_close，因此收斂為 replace-existing full reanchor。"
+},
+{
+"ticker": "VTI",
+"template_id": "T4-B",
+"final_action": "CANCEL_EXISTING",
+"target_open_order_budget": 0,
+"existing_open_order_budget": 4000,
+"delta_budget": -4000,
+"anchor_decision": "cancel_only",
+"anchor_baseline_last_close": 335.05,
+"anchor_price_asof": "2026-04-10",
+"current_last_close": 350.53,
+"current_last_close_asof": "2026-04-17",
+"preserve_live_step_shape": false,
+"live_step_count": 4,
+"draft_packet_shape": "cancel_live_4_step_ladder",
+"compile_ready": true,
+"why": "本輪 relative rotation 將 VTI open-order budget 完整釋放給更高優先度的 QQQ；收斂為直接取消既有 live 4-step ladder。"
+},
+{
+"ticker": "SMH",
+"template_id": null,
+"final_action": "NEW_ORDER",
+"target_open_order_budget": 4000,
+"existing_open_order_budget": 0,
+"delta_budget": 4000,
+"anchor_decision": "new_anchor_from_current_last_close",
+"anchor_baseline_last_close": 464.16,
+"anchor_price_asof": "2026-04-17",
+"current_last_close": 464.16,
+"current_last_close_asof": "2026-04-17",
+"preserve_live_step_shape": false,
+"live_step_count": null,
+"draft_packet_shape": "new_4_step_satellite_ladder",
+"compile_ready": true,
+"why": "以 fresh headroom 建立 minority satellite ladder；new-order anchor 已明確綁定 current last_close / price_asof，可直接供 Strategy C 編譯。"
+}
+],
+"final_sell_execution_plans": []
+}
+AUDITED_DECISION_PACKET_END

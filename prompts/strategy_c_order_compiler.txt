@@ -67,48 +67,8 @@ PORTFOLIO_SNAPSHOT_START
 {{ portfolio_snapshot }}
 PORTFOLIO_SNAPSHOT_END
 
-
 STRATEGY_SETTINGS_START
-- as_of: {AS_OF}
-- benchmark: QQQ
-- tax_intent: "LTCG_only"
-- min_holding_period: ">=12m"
-- hard_cap_open_orders_budget: 27723
-- relative_rotation_enabled: true
-- relative_rotation_reference_source: "RESEARCH_JSON.buy_universe_scorecard"
-
-- core_universe: ["QQQ","VOO","VTI","VT"]
-- satellite_universe: ["SMH","IGV"]
-
-- active_shortlist_size_rule:
-  - benchmark carrier：1 檔
-  - diversified_core_buffer：最多 1 檔
-  - sector_alpha_tilt：最多 2 檔
-
-- max_new_tickers_per_week:
-  base_universe_new_tickers_per_week: 0
-  extended_etf_sleeve_new_tickers_per_week: 1
-
-- optional_extended_etf_sleeve_rule:
-  - 預設：disabled
-  - 若 RESEARCH_JSON.optional_extended_etf_sleeve.enabled = true：
-      (a) 可擴充 effective_allowed_buy_universe
-      (b) extended ETF 新增數量每週 <= 1
-      (c) 任一 extended ETF positive_delta_budget_pct_of_hard_cap <= 15%
-      (d) 所有 extended ETF 合計 positive_delta_budget_pct_of_hard_cap <= 20%
-
-- benchmark_tracking_guard:
-  - 若未觸發 core_switch_rule 或 thesis_invalidated，core_tickers 必須包含 QQQ
-  - 若本回合存在 buy-side delta > 0：
-      (a) QQQ 與 core_universe 合計至少 40%
-      (b) satellite_universe（SMH, IGV）合計不得超過 60%
-
-- budget_allocation_cascade_rule:
-  - 預算分配順序必須為：
-    (1) benchmark carrier
-    (2) diversified_core_buffer
-    (3) sector_alpha_tilt
-    (4) enabled extended ETF minority sleeve
+{{ strategy_settings }}
 STRATEGY_SETTINGS_END
 
 MARKET_DATA_SNAPSHOT_START

@@ -1,0 +1,52 @@
+OVERALL_RESULT | PASS
+MUST_PASS_STATUS | ALL_PASS_AFTER_PATCH
+ORDER_COMPILER_READY | true
+
+0.25 | PASS | dual-lane boundary integrity | optional_extended_etf_sleeve.enabled=false；QUAL/CIBR/VUG 未進 effective_allowed_buy_universe / active_shortlist / buy-side delta / final_execution_plans。
+0.26 | PASS | lane_b promotion gate compliance | allowed_extended_etf_tickers=[]；無任何 extended ETF promotion 進入 base trade path。
+
+1 | PASS | hard_cap_open_orders_budget | final_total_open_orders_budget=14000 <= 27534.86。
+1.5 | PASS | A reconciliation | A=10000，等於 existing_buy_open_orders_summary(6000+4000)。
+1.6 | PASS | market data source consistency | 依 TEMPLATE2_OUTPUT 完成 structure-only market-data patch 後一致。
+1.61 | PASS | primary / fallback hardlock | primary_source=Barchart；fallback_source_for_last_close_and_price_asof_only=Stooq；僅 VT 保留 fallback attribution。
+1.62 | PASS | weekend / holiday close-date canonicalization | run 落在週日；market_data_target_close_date_et 已修正為 2026-04-17；execution_date_et 已修正為 2026-04-20；tickers[*].price_asof 全部與 last_close 對齊至實際收盤日。
+1.63 | PASS | per-ticker source provenance hardlock | VT last_close_source=Stooq、price_asof_source=Stooq、technicals_source=Barchart、data_gap=true；其餘 ticker 維持 Barchart。
+1.64 | PASS | market data field parity / compiler derivability | 已補齊 atr_20_abs / atr_20_30d_pct / week_52_low / week_52_high / trend_state / liquidity_tier / quadrant / data_gap_reason；不再保留不應為 null 的編譯欄位。
+
+2 | PASS | whole-share feasibility | QQQ 10000 與 SMH 4000 皆可形成整股 ladder；VTI 為 cancel，不涉整股問題。
+3 | PASS | risk_limits_on_open_orders / core_min_pct_of_open_orders_budget | core(QQQ)=10000，占 final open-order budget 71.43%；satellite(SMH)=28.57%；無 extended ETF 預算。
+4 | PASS | event window concentration | 新增/保留預算集中於 QQQ+SMH，但 QQQ 為 benchmark carrier、SMH 為 minority tilt，非單一事件投機。
+5 | PASS | overlap / drawdown risk | QQQ 與 SMH 重疊可接受；SMH 僅 minority sleeve；VOO 無新增預算，未再加重 buffer 重疊。
+
+6 | PASS | plan type audit | buy-side final state 收斂為 REPLACE_EXISTING / CANCEL_EXISTING / NEW_ORDER / HOLD / WATCHLIST_NO_TRADE。
+6.5 | PASS | LTCG-only holding period constraint | 無 sell draft；未違反 LTCG_only。
+6.52 | PASS | benchmark alignment + overtrading / event-speculation guard | 以取消 VTI open order 補強 QQQ，符合 benchmark-first；未因短期事件重寫 thesis。
+6.521 | PASS | max_new_tickers_per_week compliance | base_universe_new_tickers_this_week=0；extended_etf_sleeve_new_tickers_this_week=0。
+6.521A | PASS | base-first capital allocation discipline | 新增預算先滿足 QQQ benchmark carrier，再給 SMH 少數 satellite；無 extended ETF 資本分流。
+6.53 | PASS | benchmark carrier / active tilt drift | QQQ 維持 rank 1 且獲最大 open-order budget；SMH 未取代核心角色。
+6.54 | PASS | role layering compliance | benchmark_carrier=1；diversified_core_buffer 有且僅 VOO；sector_alpha_tilt=SMH+IGV（<=2）。
+6.55 | PASS | linkage + entry_driver labeling | QQQ / SMH 增加或新單皆具非空 event_id_refs 與 structural_theme_refs，且具 12m+ thesis。
+6.56 | PASS | no-trade primary blocker labeling | VOO / VT / IGV 的 no-new-budget / watch-only 原因明確。
+6.57 | PASS | conditional post-event order preference compliance | 本回合未因單一即將到來事件改成 event-chasing 交易；仍以 12m+ thesis 與 benchmark 對齊為主。
+6.6 | PASS | sell eligibility | 無 sell execution plans；未動用非 LTCG lot。
+6.7 | PASS | sell linkage + limit + lot_selection | final_sell_execution_plans 為空，無違規賣出欄位。
+6.72 | PASS | intended_shares_to_sell validity | 無 sell orders。
+6.725 | PASS | 8.15 rotation layer compaction consistency | VTI->QQQ rotation amount 4000 與 buy-side delta 完全一致。
+6.73 | PASS | 8.15 to 8.2 lot expansion consistency | 無 sell-side lot expansion，無不一致。
+6.731 | PASS | compact lot output consistency | 無 compact sell lot output，無不一致。
+6.74 | PASS | replacement target validity | 無 sell-side replacement target；未違反 base-only replacement SSOT。
+6.75 | PASS | relative expected return rotation validity | 僅旋轉 open-order 預算，依 RESEARCH_JSON.buy_universe_scorecard 與 active_shortlist 優先度成立。
+6.8 | PASS | no same-run redeploy / hard_cap isolation | 無 sell proceeds 進 buy budget；僅使用 existing open-order reallocation + fresh headroom。
+6.81 | PASS | anchor_decision feature-flag / metadata guard | existing_buy_order_diagnostics 與 final_execution_plans anchor metadata 完整；SMH new order 已明確綁 current last_close / price_asof。
+6.82 | PASS | sell redeploy binding | 無 sell-side 資金 redeploy。
+
+7 | PASS | event window ladder-rung proximity | 本階段僅保留 compile-ready execution plan metadata；未出現以錯誤 close date 綁定 ladder 的情況。
+8 | PASS | plan structure consistency | packet schema 一致；無 buy/sell path 混淆。
+8.5 | PASS | base / alt execution plan schema consistency | final_execution_plans 結構一致；無 unresolved alt-plan 衝突。
+8.6 | PASS | final-state resolution / no unresolved review labels | HOLD_REVIEW_FOR_AUDIT 已收斂：VTI -> HOLD_NO_SELL_DRAFT；IGV -> HOLD_NO_SELL_DRAFT。
+
+10 | PASS | actionable_window | non-trading-day run 已 canonicalize 至 next actionable session。
+10.5 | PASS | ORDER_STATE_EXPORT derivability and post-Step4 consistency | final_buy_side_delta_table / final_sell_side_delta_table / final_execution_plans / final_sell_execution_plans 皆 compile-ready。
+11 | PASS | max_total_positions | 無新增 base ticker；無新增 extended ETF；總持倉集合不擴張。
+
+SUMMARY | A=10000 | FINAL_TOTAL_OPEN_ORDERS_BUDGET=14000 | HARD_CAP=27534.86 | CORE_BUDGET_PCT=71.43% | NEW_BASE_TICKERS=0 | NEW_EXTENDED_TICKERS=0 | COMPILER_BLOCKERS=[]
