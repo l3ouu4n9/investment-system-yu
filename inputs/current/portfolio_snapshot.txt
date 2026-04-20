@@ -1,0 +1,271 @@
+【輸入 2｜Portfolio Snapshot（PATCH: base ETF holdings required; extended ETF holdings optional）】
+# updated 2026-04-19
+
+(1) current_holdings_base（REQUIRED；六檔 base ETF 必填）
+格式：TICKER | shares | avg_cost
+- TICKER 必須屬於 RESEARCH_JSON.trade_universe.allowed_buy_tickers
+- 建議一次提供六行；若某檔未持有，shares=0
+- shares 必須為整數且 >=0
+- avg_cost 允許為 NA/null
+
+IGV | 5 | 97.05
+QQQ | 40 | 586.63
+SMH | 11 | 246.53
+VOO | 51 | 538.93
+VT | 3 | 144.49
+VTI | 36 | 290.45
+
+(1a_detail) current_holdings_base_by_broker（OPTIONAL；僅作明細保留，不作本回合 base holdings SSOT）
+格式：BROKER | TICKER | shares | avg_cost
+
+- 本區塊只用於保留不同券商/帳戶的持倉明細，不改變 current_holdings_base 的 SSOT 地位
+- current_holdings_base 仍必須維持每個 base ticker 一行
+- 若提供本區塊，current_holdings_base 的 shares 與 avg_cost 應為各券商明細的聚合結果
+- 模型不得直接以本區塊取代 current_holdings_base 做 base exposure / ranking / rotation 計算
+
+SCH | QQQ | 37 | 584.86
+FID | QQQ | 3 | 608.4
+
+(1b) current_holdings_extended（OPTIONAL；若目前持有任何 extended ETF，無論本回合 optional_extended_etf_sleeve.enabled=true/false 都應提供）
+格式：TICKER | shares | avg_cost
+- TICKER 必須屬於 RESEARCH_JSON.optional_extended_etf_sleeve.allowed_extended_etf_tickers，或屬於使用者既有 extended ETF 持倉清單
+- 若未持有可不提供
+- shares 必須為整數且 >=0
+- avg_cost 允許為 NA/null
+- 若本回合 enabled=false 但仍持有 extended ETF，仍必須提供，供 extended_etf_disable_handling_rule 判定 keep / reduce / sell
+
+- extended_etf_disable_handling_rule (NEW, MUST):
+  - 若 current_holdings_extended 存在，但本回合 RESEARCH_JSON.optional_extended_etf_sleeve.enabled = false：
+      (a) 不得僅因 disabled 就自動 sell_all
+      (b) 只能 keep / reduce，除非 thesis_invalidated 或 relative_expected_return_rotation 成立
+      (c) 若 reduce / sell，理由必須明確包含：
+          REPLACEMENT_TARGET: {ticker}
+          WHY_NOT_KEEP: {一句話，繁體中文}
+
+- existing_extended_holdings_ssot_rule (NEW, MUST):
+  - 若 current_holdings_extended 有提供，則「使用者既有 extended ETF 持倉清單」的唯一 SSOT = current_holdings_extended 內出現的 ticker 集合
+  - 模型不得自行假設其他 extended ETF 屬於既有持倉
+  - 若某 extended ETF 不在 current_holdings_extended，則不得被視為 existing holding，只能視為本回合新候選
+
+(2a) existing_buy_open_orders_summary（optional, ticker-level summary; buy-side existing open orders SSOT）
+
+- 若此區塊缺失，或此區塊存在但無任何資料列：視為沒有既有 buy open orders；模型不得假設市場上已有買單
+- parsing_rule: "Portfolio Snapshot 的 budget 若含逗號（如 2,500 / 8,000），計算前必須先移除逗號再做加總/占比。"
+
+- open_orders_anchor_state_rule (NEW, MUST):
+  - 為了讓 keep/reduce 時能決定是否 reanchor / mini-reanchor，你必須為每個 ticker 提供「上次下單時使用的錨定基準」：
+    anchor_baseline_last_close 與 anchor_price_asof
+  - anchor_baseline_last_close 定義：
+    上一次你生成/重掛該 ticker 買單時所採用的 baseline last_close
+  - anchor_price_asof 定義：
+    該 baseline 的收盤日（YYYY-MM-DD, ET）
+  - last_refresh_date_et（optional）：
+    你上次實際取消/重掛該 ticker 買單的日期（ET）；若缺則視為未知，不用年齡觸發，只用漂移觸發
+  - 若 anchor_baseline_last_close 或 anchor_price_asof 缺失：
+    視為 DATA_GAP；本回合該 ticker 允許 keep / reduce / cancel，但不得觸發 mini-reanchor / reanchor
+
+格式（UPDATED）：
+TICKER | budget | template_id | anchor_baseline_last_close | anchor_price_asof | last_refresh_date_et(optional) | highest_live_limit(optional) | lowest_live_limit(optional) | live_step_count(optional) | live_order_steps_summary(optional) | live_order_qtys_summary(optional)
+
+- live_buy_order_structure_rule (NEW, MUST):
+  - existing_buy_open_orders_summary 除了 baseline 外，還必須盡量保留目前 live 買單價格結構摘要：
+    - highest_live_limit = 目前尚未成交的最高買入限價
+    - lowest_live_limit = 目前尚未成交的最低買入限價
+    - live_step_count = 目前 live、未成交的 BUY step 數量
+    - live_order_steps_summary = 目前 live buy order 的 step 與價格摘要
+    - live_order_qtys_summary = 目前 live buy order 各 step 的剩餘股數摘要
+  - live_order_steps_summary 與 live_order_qtys_summary 的 step 名稱必須一致
+
+- data_gap_behavior_for_live_structure (NEW, MUST):
+  - 若 highest_live_limit / lowest_live_limit / live_step_count / live_order_steps_summary / live_order_qtys_summary 全部缺失：
+    - 不得僅靠 baseline 推定原掛單成交機率仍合理
+    - 允許 keep / cancel / baseline-based mini_reanchor / baseline-based reanchor
+    - 但 reason 必須明確寫：
+      "DATA_GAP: live order price structure missing; fill probability inferred from baseline only"
+
+- live_step_count_definition_rule (NEW, MUST):
+  - live_step_count = 目前市場上仍有效的未成交 BUY steps 數量
+  - 若 live_step_count 缺失，且 live_order_steps_summary 也無法可靠解析：
+    - 不得憑空假設 step 數量
+    - 不得輸出 preserve_existing_step_shape / preserve_existing_live_qty 類型的 replace-style packet
+
+- summary_ssot_rule_for_buy_open_orders (NEW, MUST):
+  - existing_buy_open_orders_summary 是 buy-side existing open orders 的唯一 SSOT
+  - A = Σ(existing_buy_open_orders_summary budgets)
+  - 若其中 ticker 不在 effective_allowed_buy_universe：
+      action 必須 = cancel
+      new_budget 必須 = 0
+      且不得輸出該 ticker 的 Execution Plan / BUY_ORDERS
+
+
+(2b) sell_open_orders（optional, lot-aware open sell orders summary）
+
+- sell_open_orders_state_rule:
+  - 目的：讓下次 run 能追蹤市場中已存在的 SELL open orders，並判定 keep / reduce / increase / replace / cancel
+  - 若此區塊缺失，或此區塊存在但無任何資料列：視為沒有既有 sell open orders；模型不得假設市場上已有賣單
+
+格式（UPDATED）：
+TICKER | shares_to_sell | limit_price | tax_lot_source | lot_selection_mode | acquired_date_ref | lot_id | anchor_baseline_last_close | anchor_price_asof | last_refresh_date_et(optional)
+
+定義：
+- shares_to_sell: 目前市場上該筆 SELL open order 的未成交股數
+- limit_price: 目前市場上該筆 SELL open order 的限價
+- tax_lot_source:
+  - 只能是：
+    - LTCG_ELIGIBLE_SELLABLE
+    - ESPP_DISPOSITION_CANDIDATES
+    - NON_LTCG_OVERRIDE_CANDIDATES
+- lot_selection_mode:
+  - 若 tax_lot_source=LTCG_ELIGIBLE_SELLABLE，必須 = "specific-lot long_term_only"
+  - 若 tax_lot_source=ESPP_DISPOSITION_CANDIDATES，必須 = "specific-lot exact_lot"
+  - 若 tax_lot_source=NON_LTCG_OVERRIDE_CANDIDATES，必須 = "specific-lot exact_lot"
+- acquired_date_ref:
+  - 若 tax_lot_source=LTCG_ELIGIBLE_SELLABLE，對應 LTCG_ELIGIBLE_SELLABLE 的 acquired_before_date
+  - 若 tax_lot_source=ESPP_DISPOSITION_CANDIDATES，對應 ESPP_DISPOSITION_CANDIDATES 的 transfer_date
+  - 若 tax_lot_source=NON_LTCG_OVERRIDE_CANDIDATES，對應 NON_LTCG_OVERRIDE_CANDIDATES 的 acquired_date
+- lot_id:
+  - 必須與對應來源區塊的 lot_id 一致
+- anchor_baseline_last_close:
+  - 上次生成/重掛該 SELL 單時所用的 baseline last_close
+- anchor_price_asof:
+  - 該 baseline 的收盤日（YYYY-MM-DD, ET）
+- last_refresh_date_et:
+  - 上次實際取消/重掛該 SELL 單的日期（ET）；若缺則只用價格漂移判定，不用年齡判定
+
+若 anchor_baseline_last_close 或 anchor_price_asof 缺失：
+- 視為 DATA_GAP
+- 允許 keep / reduce / cancel
+- 不得自動 replace / reanchor
+
+- open_orders_input_hierarchy_rule (REVISED, MUST):
+  - existing_buy_open_orders_summary 為 buy-side existing open orders 的唯一 SSOT，用於：
+      (a) A = Σ(existing_buy_open_orders_summary budgets)
+      (b) cap / headroom / B 計算
+      (c) buy-side non-universe open order checks
+      (d) buy-side anchor_decision / anchor_baseline_shift / order_intent = REPLACE_EXISTING 的可用性判定
+  - sell_open_orders 為 sell-side existing open orders 的唯一 SSOT，用於：
+      (a) sell-side keep / reduce / replace / cancel 判定
+      (b) sell-side order_intent / anchor_decision / anchor_baseline_shift 的可用性判定
+  - sell_open_orders 不得用於推導 A，因其不提供 buy-side budget
+  - 若 existing_buy_open_orders_summary 有提供，buy-side 狀態判定與 buy-side 預算彙總皆以 existing_buy_open_orders_summary 為準
+  - 若 existing_buy_open_orders_summary 未提供：
+      A_from_snapshot = 0
+      並標註 ASSUMPTION: no existing buy-side open orders provided
+
+- QQQ | 6000 | T4-E | 611.07 | 2026-04-10 | 2026-04-12 | 608.40 | 582.50 | 5 | starter=608.40;L1=602.00;L2=595.50;L3=589.00;L4=582.50 | starter=3;L1=2;L2=2;L3=2;L4=1
+- VTI | 4000 | T4-B | 335.05 | 2026-04-10 | 2026-04-12 | 331.00 | 317.50 | 4 | L1=331.00;L2=326.50;L3=322.00;L4=317.50 | L1=3;L2=3;L3=3;L4=3
+
+(3) LTCG_ELIGIBLE_SELLABLE（你提供可賣 long-term lots；本回合只允許從這裡賣）
+格式（UPDATED）：
+TICKER | lt_shares_sellable | acquired_before_date | lot_selection_mode | lt_cost_basis_per_share | lot_id
+
+# Equities
+- AVGO | 1 | 2025-01-28 | specific-lot long_term_only | 200 | AVGO
+- BRK.B | 1 | 2024-08-29 | specific-lot long_term_only | 468 | BRK.B
+- COST | 1 | 2024-07-11 | specific-lot long_term_only | 850 | COST
+- CRWD | 1 | 2024-08-09 | specific-lot long_term_only | 241 | CRWD
+- INTC | 1 | 2024-10-09 | specific-lot long_term_only | 23.35 | INTC
+- LLY | 1 | 2025-01-16 | specific-lot long_term_only | 760 | LLY.
+- META | 1 | 2024-08-27 | specific-lot long_term_only | 520 | META
+- MSFT | 1 | 2024-07-22 | specific-lot long_term_only | 443.9 | MSFT_202407_2
+- MSFT | 1 | 2024-07-09 | specific-lot long_term_only | 459.5 | MSFT_202407_1
+- MSFT | 1 | 2024-06-28 | specific-lot long_term_only | 453.9 | MSFT_202406
+- MSTR | 1 | 2024-12-04 | specific-lot long_term_only | 375 | MSTR
+- MU | 1 | 2025-03-10 | specific-lot long_term_only | 86 | MU
+- NVDA | 1 | 2025-01-28 | specific-lot long_term_only | 118.5 | NVDA_202501
+- NVDA | 9 | 2022-08-12 | specific-lot long_term_only | 18.65 | NVDA_202208
+- RIVN | 5 | 2024-06-27 | specific-lot long_term_only | 13.95 | RIVN
+- TSLA | 1 | 2025-03-10 | specific-lot long_term_only | 228 | TSLA_202503_3
+- TSLA | 1 | 2025-03-07 | specific-lot long_term_only | 260 | TSLA_202503_2
+- TSLA | 1 | 2025-03-04 | specific-lot long_term_only | 271 | TSLA_202503_1
+- TSLA | 1 | 2025-02-27 | specific-lot long_term_only | 282.7 | TSLA_202502_4
+- TSLA | 1 | 2025-02-25 | specific-lot long_term_only | 300 | TSLA_202502_3
+- TSLA | 1 | 2025-02-11 | specific-lot long_term_only | 330 | TSLA_202502_2
+- TSLA | 1 | 2025-02-10 | specific-lot long_term_only | 355 | TSLA_202502_1
+- TSLA | 1 | 2024-04-18 | specific-lot long_term_only | 150 | TSLA_202404
+- TSM | 1 | 2025-02-25 | specific-lot long_term_only | 188.5 | TSM_202502
+- TSM | 1 | 2025-01-28 | specific-lot long_term_only | 199.5 | TSM_202501
+- UBER | 1 | 2025-02-11 | specific-lot long_term_only | 77 | UBER
+
+
+
+# ETF
+- ANGL | 1 | 2024-08-27 | specific-lot long_term_only | 29.22 | ANGL
+- IEF | 1 | 2024-11-15 | specific-lot long_term_only | 93.45 | IEF_202411
+- IEF | 1 | 2024-09-18 | specific-lot long_term_only | 98.6 | IEF_202409
+- IEF | 1 | 2024-08-05 | specific-lot long_term_only | 97.8 | IEF_202408
+- IEF | 1 | 2024-07-29 | specific-lot long_term_only | 95.1 | IEF_202407
+- IGV | 1 | 2025-01-31 | specific-lot long_term_only | 103 | IGV_202501
+- IGV | 1 | 2024-12-19 | specific-lot long_term_only | 102 | IGV_202412_2
+- IGV | 1 | 2024-12-09 | specific-lot long_term_only | 108 | IGV_202412_1
+- JEPI | 1 | 2022-10-13 | specific-lot long_term_only | 50 | JEPI_202210
+- JEPI | 2 | 2022-09-15 | specific-lot long_term_only | 54.5 | JEPI_202209
+- JEPI | 1 | 2022-08-25 | specific-lot long_term_only | 57.45 | JEPI_202208
+- QQQ | 1 | 2025-03-10 | specific-lot long_term_only | 474.5 | QQQ_202503_2
+- QQQ | 1 | 2025-03-03 | specific-lot long_term_only | 494 | QQQ_202503_1
+- QQQ | 1 | 2025-02-27 | specific-lot long_term_only | 503 | QQQ_202502_3
+- QQQ | 1 | 2025-02-25 | specific-lot long_term_only | 513 | QQQ_202502_2
+- QQQ | 1 | 2025-02-21 | specific-lot long_term_only | 528 | QQQ_202502_1
+- QQQ | 1 | 2024-12-19 | specific-lot long_term_only | 517 | QQQ_202412
+- QQQ | 1 | 2024-08-12 | specific-lot long_term_only | 450 | QQQ_202408
+- QQQ | 1 | 2024-07-25 | specific-lot long_term_only | 460 | QQQ_202407_3
+- QQQ | 1 | 2024-07-23 | specific-lot long_term_only | 481 | QQQ_202407_2
+- QQQ | 1 | 2024-07-11 | specific-lot long_term_only | 493.8 | QQQ_202407_1
+- QQQ | 1 | 2024-06-25 | specific-lot long_term_only | 478.9 | QQQ_202406
+- SMH | 1 | 2025-03-10 | specific-lot long_term_only | 213 | SMH_202503
+- SMH | 1 | 2024-04-15 | specific-lot long_term_only | 217 | SMH_202404_2
+- SMH | 1 | 2024-04-04 | specific-lot long_term_only | 223 | SMH_202404_1
+- SMH | 1 | 2023-10-25 | specific-lot long_term_only | 138.5 | SMH_202310_2
+- SMH | 1 | 2023-10-17 | specific-lot long_term_only | 145 | SMH_202310_1
+- SMH | 1 | 2023-08-09 | specific-lot long_term_only | 150.5 | SMH_202308
+- VOO | 1 | 2025-03-10 | specific-lot long_term_only | 515 | VOO_202503_2
+- VOO | 1 | 2025-03-06 | specific-lot long_term_only | 525 | VOO_202503_1
+- VOO | 1 | 2025-02-28 | specific-lot long_term_only | 537 | VOO_202502_4
+- VOO | 1 | 2025-02-27 | specific-lot long_term_only | 545 | VOO_202502_3
+- VOO | 1 | 2025-02-21 | specific-lot long_term_only | 553 | VOO_202502_2
+- VOO | 1 | 2025-02-05 | specific-lot long_term_only | 554.5 | VOO_202502_1
+- VOO | 1 | 2025-01-27 | specific-lot long_term_only | 548.5 | VOO_202501_2
+- VOO | 1 | 2025-01-02 | specific-lot long_term_only | 535 | VOO_202501_1
+- VOO | 1 | 2024-12-19 | specific-lot long_term_only | 542 | VOO_202412_4
+- VOO | 1 | 2024-12-17 | specific-lot long_term_only | 554.8 | VOO_202412_3
+- VOO | 1 | 2024-12-16 | specific-lot long_term_only | 558.45 | VOO_202412_2
+- VOO | 1 | 2024-12-02 | specific-lot long_term_only | 555 | VOO_202412_1
+- VOO | 1 | 2024-10-23 | specific-lot long_term_only | 531 | VOO_202410
+- VOO | 1 | 2024-09-16 | specific-lot long_term_only | 516.8 | VOO_202409
+- VOO | 1 | 2024-08-06 | specific-lot long_term_only | 482.95 | VOO_202408
+- VOO | 1 | 2024-07-24 | specific-lot long_term_only | 498.8 | VOO_202407_2
+- VOO | 1 | 2024-07-11 | specific-lot long_term_only | 512 | VOO_202407_1
+- VOO | 1 | 2024-06-28 | specific-lot long_term_only | 501.71 | VOO_202406
+- VOO | 1 | 2024-03-18 | specific-lot long_term_only | 473.6 | VOO_202403
+- VOO | 1 | 2023-10-04 | specific-lot long_term_only | 386.5 | VOO_202310
+- VOO | 1 | 2023-08-25 | specific-lot long_term_only | 401.5 | VOO_202308_2
+- VOO | 1 | 2023-08-03 | specific-lot long_term_only | 412.7 | VOO_202308_1
+- VOO | 1 | 2022-09-23 | specific-lot long_term_only | 340 | VOO_202209_2
+- VOO | 1 | 2022-09-12 | specific-lot long_term_only | 377.67 | VOO_202209_1
+- VOO | 1 | 2022-08-12 | specific-lot long_term_only | 391.9 | VOO_202208
+- VTI | 1 | 2025-03-10 | specific-lot long_term_only | 275 | VTI_202503_2
+- VTI | 1 | 2025-03-03 | specific-lot long_term_only | 286.7 | VTI_202503_1
+- VTI | 1 | 2025-02-25 | specific-lot long_term_only | 293 | VTI_202502_2
+- VTI | 1 | 2025-02-07 | specific-lot long_term_only | 298 | VTI_202502_1
+- VTI | 1 | 2025-01-16 | specific-lot long_term_only | 293.74 | VTI_202501
+- VTI | 1 | 2024-12-19 | specific-lot long_term_only | 291.5 | VTI_202412_2
+- VTI | 1 | 2024-12-17 | specific-lot long_term_only | 299.35 | VTI_202412_1
+- VTI | 1 | 2024-10-07 | specific-lot long_term_only | 280 | VTI_202410
+- VTI | 1 | 2024-09-04 | specific-lot long_term_only | 272 | VTI_202409
+- VTI | 1 | 2024-06-28 | specific-lot long_term_only | 268.8 | VTI_202406
+- VTI | 1 | 2022-09-30 | specific-lot long_term_only | 180 | VTI_202209_5
+- VTI | 1 | 2022-09-23 | specific-lot long_term_only | 185 | VTI_202209_4
+- VTI | 1 | 2022-09-21 | specific-lot long_term_only | 190 | VTI_202209_3
+- VTI | 1 | 2022-09-15 | specific-lot long_term_only | 196 | VTI_202209_2
+- VTI | 1 | 2022-09-02 | specific-lot long_term_only | 200 | VTI_202209_1
+
+規則（MUST）：
+- lt_shares_sellable 必須為整數且 >0
+- acquired_before_date 必須為 YYYY-MM-DD
+- lot_selection_mode 必須 = "specific-lot long_term_only"   # long-term only
+- lt_cost_basis_per_share 必須為數字或 NA/null
+- lot_id 必須為非空字串（用於 specific-lot 下單）
+- 若此區塊為空：本回合禁止提出任何 sell/trim 訂單與建議（只能做 buy-side 調整）
+
+(4) SELL_POLICY_FLAGS（optional）
+- WASH_SALE_SAFE | false

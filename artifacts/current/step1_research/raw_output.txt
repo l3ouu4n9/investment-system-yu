@@ -1,0 +1,1248 @@
+RESEARCH_JSON_START
+{
+  "schema_version": "1.0",
+  "lane_meta": {
+    "architecture": "dual_lane_single_json",
+    "lane_a_name": "base_decision_lane",
+    "lane_b_name": "extended_candidate_lane",
+    "lane_priority": ["base_decision_lane", "extended_candidate_lane"],
+    "lane_b_note": "Lane B 僅做候選提名、預審與 activation 判定，不得取代 QQQ 的 benchmark carrier 角色。"
+  },
+  "trade_universe": {
+    "allowed_buy_tickers": ["VOO", "VTI", "VT", "QQQ", "SMH", "IGV"],
+    "notes": "Template2 buy-side must restrict to allowed_buy_tickers only."
+  },
+  "user_approved_extended_etf_static_list": ["QUAL", "CIBR", "VUG"],
+  "proposed_extended_etf_candidates": [],
+  "extended_etf_candidate_universe": [
+    {
+      "ticker": "CIBR",
+      "sleeve_role": "measured_tilt",
+      "best_base_alternative": "IGV",
+      "why": "CIBR 具備清楚的 12m+ 資安支出與關鍵基礎設施防護 thesis，且與 IGV 相比更聚焦於網路安全與防禦軟硬體；本回合納入正式預審，但仍不改變 Lane A 以 QQQ 為核心的主線。",
+      "tradeability_evidence": {
+        "avg_dollar_volume_bucket": "high",
+        "aum_bucket": "high",
+        "spread_bucket": "tight",
+        "source_refs": [
+          {
+            "title": "First Trust Nasdaq Cybersecurity ETF (CIBR)",
+            "publisher": "First Trust",
+            "date": "2026-04-17",
+            "domain": "ftportfolios.com",
+            "source_quality": "official"
+          }
+        ]
+      },
+      "event_id_refs": ["pi_us_cyber_strategy_20260306"],
+      "structural_theme_refs": ["th_software_and_cyber_resilience"]
+    },
+    {
+      "ticker": "QUAL",
+      "sleeve_role": "core_completer",
+      "best_base_alternative": "VOO",
+      "why": "QUAL 可作為高品質大型股的防守型補完，但其對現有 QQQ/VOO 架構的新增表達有限；本回合納入正式預審，主要用於檢查是否值得在高利率與去通膨停滯環境中作為小比例 quality overlay。",
+      "tradeability_evidence": {
+        "avg_dollar_volume_bucket": "high",
+        "aum_bucket": "high",
+        "spread_bucket": "tight",
+        "source_refs": [
+          {
+            "title": "iShares MSCI USA Quality Factor ETF | QUAL",
+            "publisher": "iShares",
+            "date": "2026-04-17",
+            "domain": "ishares.com",
+            "source_quality": "official"
+          }
+        ]
+      },
+      "event_id_refs": ["pi_fed_data_dependence_20260318", "se_fomc_20260429", "se_pce_20260430"],
+      "structural_theme_refs": ["th_us_large_cap_quality_compounders"]
+    }
+  ],
+  "validation_summary": {
+    "passed": true,
+    "fail_reasons": [],
+    "auto_fixes_applied": [],
+    "checks": {
+      "formula_reproducibility": true,
+      "top5_window_and_refs": true,
+      "buy_universe_completeness_and_order": true,
+      "extended_etf_tradeability_and_activation": true,
+      "materiality_filter_enforced": true,
+      "scheduled_events_future_window": true,
+      "unscheduled_risks_order_and_rank": true,
+      "extended_etf_disable_reason_consistency": true
+    }
+  },
+  "risk_mode_hint": "balanced",
+  "as_of": "2026-04-19",
+  "event_time_zone_canonical": "America/New_York",
+  "user_time_zone": "America/Los_Angeles",
+  "price_time_zone_basis": "US equities last close in exchange time; display in user_time_zone",
+  "window_days": 45,
+  "regime_inputs": {
+    "macro_regime": "成長降速但未衰退、去通膨停滯、長端利率仍高於對科技估值最舒適的區間；因此本輪更適合以獲利能見度高、現金流強、AI 受益鏈清楚的科技權重股為主，而不是全面押注估值再擴張。",
+    "fed_policy": {
+      "target_range": "3.50-3.75",
+      "stance": "維持利率不變且高度資料依賴",
+      "regime_signal": "中性偏緊"
+    },
+    "inflation": {
+      "cpi_yoy_march_2026": 3.3,
+      "core_cpi_yoy_march_2026": 2.6,
+      "pce_yoy_february_2026": 2.8,
+      "core_pce_yoy_february_2026": 3.0,
+      "regime_signal": "去通膨停滯，能源與服務通膨仍會干擾降息節奏"
+    },
+    "labor": {
+      "nonfarm_payrolls_march_2026": 178000,
+      "unemployment_rate_march_2026": 4.3,
+      "regime_signal": "就業放緩但尚未失速"
+    },
+    "growth": {
+      "real_gdp_q4_2025_saar": 0.5,
+      "real_final_sales_to_private_domestic_purchasers_q4_2025": 1.8,
+      "regime_signal": "實質成長降速，需求韌性仍在"
+    },
+    "rates_curve": {
+      "two_year_treasury_yield_2026_04_17": 3.71,
+      "ten_year_treasury_yield_2026_04_17": 4.26,
+      "curve_shape": "2s10s 正斜率重建",
+      "regime_signal": "長端折現率仍高，科技股需靠獲利領先而非純 multiple expansion"
+    },
+    "bottom_line": "對 benchmark=QQQ 而言，3-5 年主線仍成立；但 12m 執行上，應優先偏向 QQQ 與 AI/半導體鏈，而非提高全球分散或高重疊 grown-style 延伸 ETF 權重。"
+  },
+  "regime_inputs_sources": {
+    "fed_policy": [
+      {
+        "title": "Federal Reserve issues FOMC statement",
+        "publisher": "Federal Reserve",
+        "date": "2026-03-18",
+        "domain": "federalreserve.gov",
+        "source_quality": "official"
+      }
+    ],
+    "inflation": [
+      {
+        "title": "Consumer Price Index News Release - 2026 M03 Results",
+        "publisher": "Bureau of Labor Statistics",
+        "date": "2026-04-10",
+        "domain": "bls.gov",
+        "source_quality": "official"
+      },
+      {
+        "title": "Personal Income and Outlays, February 2026",
+        "publisher": "Bureau of Economic Analysis",
+        "date": "2026-04-09",
+        "domain": "bea.gov",
+        "source_quality": "official"
+      }
+    ],
+    "labor": [
+      {
+        "title": "Employment Situation News Release - 2026 M03 Results",
+        "publisher": "Bureau of Labor Statistics",
+        "date": "2026-04-03",
+        "domain": "bls.gov",
+        "source_quality": "official"
+      }
+    ],
+    "growth": [
+      {
+        "title": "GDP, 4th Quarter and Year 2025, Third Estimate",
+        "publisher": "Bureau of Economic Analysis",
+        "date": "2026-04-09",
+        "domain": "bea.gov",
+        "source_quality": "official"
+      }
+    ],
+    "rates_curve": [
+      {
+        "title": "10 Year Treasury Rate - Real-Time & Historical Yield Trends",
+        "publisher": "YCharts",
+        "date": "2026-04-17",
+        "domain": "ycharts.com",
+        "source_quality": "high_credibility_media"
+      },
+      {
+        "title": "2 Year Treasury Rate - Real-Time & Historical Yield Trends",
+        "publisher": "YCharts",
+        "date": "2026-04-17",
+        "domain": "ycharts.com",
+        "source_quality": "high_credibility_media"
+      },
+      {
+        "title": "Daily Treasury Rates",
+        "publisher": "U.S. Department of the Treasury",
+        "date": "2026-04-17",
+        "domain": "home.treasury.gov",
+        "source_quality": "official"
+      }
+    ]
+  },
+  "policy_items": [
+    {
+      "id": "pi_fed_data_dependence_20260318",
+      "title": "Fed 維持 3.50-3.75 並強調資料依賴",
+      "summary": "對科技股最重要的政策變數仍是折現率。Fed 3 月維持利率不變，代表 2026 上半年科技估值要進一步擴張，必須依賴通膨再降或長端利率回落，而不是單靠政策寬鬆預期。",
+      "why": "這是本輪 Lane A 的最高優先政策因素，直接影響 QQQ、SMH、IGV 的估值彈性，也決定 VOO/VTI/VT 對 benchmark 的緩衝價值。",
+      "direction": "mixed",
+      "horizon": "medium",
+      "time_to_cashflow": "short",
+      "probability": 0.8,
+      "conditional_impact": 4.0,
+      "expected_impact": 3.2,
+      "sector_sensitivity": 1.3,
+      "impact_score": 2.5,
+      "mapped_to_allowed_buy_universe": ["VOO", "VTI", "VT", "QQQ", "SMH", "IGV"],
+      "sources": [
+        {
+          "title": "Federal Reserve issues FOMC statement",
+          "publisher": "Federal Reserve",
+          "date": "2026-03-18",
+          "domain": "federalreserve.gov",
+          "source_quality": "official"
+        }
+      ]
+    },
+    {
+      "id": "pi_semiconductor_tariffs_20260114",
+      "title": "美國半導體進口兩階段 tariff 架構",
+      "summary": "白宮 1 月決定對狹窄類別半導體立即課徵 25% 關稅，並保留後續更廣泛半導體關稅的第二階段架構。這對 SMH 與 QQQ 屬於雙向影響：短中期提高供應鏈與價格不確定性，長期則偏向支持美國在地投資。",
+      "why": "此政策不只影響半導體價格與供應鏈，也改變市場對 AI 硬體毛利、資本支出與國別產能配置的折現方式。",
+      "direction": "mixed",
+      "horizon": "medium",
+      "time_to_cashflow": "medium",
+      "probability": 0.6,
+      "conditional_impact": 4.0,
+      "expected_impact": 2.4,
+      "sector_sensitivity": 1.4,
+      "impact_score": 2.02,
+      "mapped_to_allowed_buy_universe": ["VOO", "VTI", "VT", "QQQ", "SMH"],
+      "sources": [
+        {
+          "title": "ADJUSTING IMPORTS OF SEMICONDUCTORS, SEMICONDUCTOR MANUFACTURING EQUIPMENT, AND THEIR DERIVATIVE PRODUCTS INTO THE UNITED STATES",
+          "publisher": "The White House",
+          "date": "2026-01-14",
+          "domain": "whitehouse.gov",
+          "source_quality": "official"
+        }
+      ]
+    },
+    {
+      "id": "pi_bis_export_license_20260115",
+      "title": "BIS 對部分先進運算晶片改採 case-by-case 審查",
+      "summary": "BIS 1 月修正對中國與澳門部分先進運算晶片的 license review policy，部分品項由 presumption of denial 改為 case-by-case。這降低了極端壓抑情境，但並未解除結構性地緣政治風險。",
+      "why": "對 SMH 與 QQQ 來說，這代表 AI 晶片鏈仍受政策主導，基本面強勁也不能完全脫離出口管制變數。",
+      "direction": "mixed",
+      "horizon": "medium",
+      "time_to_cashflow": "medium",
+      "probability": 0.7,
+      "conditional_impact": 3.5,
+      "expected_impact": 2.45,
+      "sector_sensitivity": 1.3,
+      "impact_score": 1.91,
+      "mapped_to_allowed_buy_universe": ["VOO", "VTI", "VT", "QQQ", "SMH"],
+      "sources": [
+        {
+          "title": "Revision to License Review Policy for Advanced Computing Commodities",
+          "publisher": "Federal Register",
+          "date": "2026-01-15",
+          "domain": "federalregister.gov",
+          "source_quality": "official"
+        }
+      ]
+    },
+    {
+      "id": "pi_us_cyber_strategy_20260306",
+      "title": "美國 2026 Cyber Strategy 強化公私協調與基礎設施防護",
+      "summary": "白宮 3 月發布 Cyber Strategy，明確要求加強政府與民間協調、保護關鍵基礎設施與供應鏈，並提升採用 AI 驅動資安能力。這對軟體與資安支出形成 12m+ 的政策尾風。",
+      "why": "Lane B 中最直接受益的是 CIBR；Lane A 中則主要支持 IGV 的高品質軟體與資安子產業。",
+      "direction": "bull",
+      "horizon": "long",
+      "time_to_cashflow": "medium",
+      "probability": 0.75,
+      "conditional_impact": 2.5,
+      "expected_impact": 1.88,
+      "sector_sensitivity": 1.1,
+      "impact_score": 0.62,
+      "mapped_to_allowed_buy_universe": ["VOO", "VTI", "VT", "QQQ", "IGV"],
+      "sources": [
+        {
+          "title": "White House Unveils President Trump’s Cyber Strategy for America",
+          "publisher": "The White House",
+          "date": "2026-03-06",
+          "domain": "whitehouse.gov",
+          "source_quality": "official"
+        }
+      ]
+    }
+  ],
+  "scheduled_events": [
+    {
+      "id": "se_retail_20260421",
+      "title": "美國 3 月零售銷售",
+      "date_et": "2026-04-21",
+      "time_et": "08:30",
+      "time_precision": "exact",
+      "thesis_linkage_bucket": "macro_discount_rate",
+      "summary": "檢查美國消費韌性是否仍足以支撐成長，但又不至於再推高長端利率。",
+      "why": "若消費過熱，市場可能進一步下修降息想像；若適度放緩而未傷及獲利，對 QQQ 與 IGV 反而較友善。",
+      "direction": "mixed",
+      "horizon": "short",
+      "time_to_cashflow": "short",
+      "probability": 0.65,
+      "conditional_impact": 3.5,
+      "expected_impact": 2.28,
+      "sector_sensitivity": 1.2,
+      "impact_score": 2.73,
+      "mapped_to_allowed_buy_universe": ["VOO", "VTI", "VT", "QQQ", "SMH", "IGV"],
+      "sources": [
+        {
+          "title": "Advance Monthly Sales for Retail and Food Services",
+          "publisher": "U.S. Census Bureau",
+          "date": "2026-04-21",
+          "domain": "census.gov",
+          "source_quality": "official"
+        }
+      ]
+    },
+    {
+      "id": "se_wages_20260422",
+      "title": "美國 Q1 Usual Weekly Earnings",
+      "date_et": "2026-04-22",
+      "time_et": "10:00",
+      "time_precision": "exact",
+      "thesis_linkage_bucket": "macro_discount_rate",
+      "summary": "追蹤薪資壓力是否維持對服務通膨與長端利率的上行壓力。",
+      "why": "對科技估值的意義在於決定市場是否接受更久的高利率環境。",
+      "direction": "mixed",
+      "horizon": "short",
+      "time_to_cashflow": "short",
+      "probability": 0.4,
+      "conditional_impact": 2.0,
+      "expected_impact": 0.8,
+      "sector_sensitivity": 1.1,
+      "impact_score": 0.88,
+      "mapped_to_allowed_buy_universe": ["VOO", "VTI", "VT", "QQQ", "SMH", "IGV"],
+      "sources": [
+        {
+          "title": "Schedule of Selected Releases 2026",
+          "publisher": "Bureau of Labor Statistics",
+          "date": "2026-04-22",
+          "domain": "bls.gov",
+          "source_quality": "official"
+        }
+      ]
+    },
+    {
+      "id": "se_eia_oil_20260422",
+      "title": "EIA Weekly Petroleum Status Report",
+      "date_et": "2026-04-22",
+      "time_et": "10:30",
+      "time_precision": "exact",
+      "thesis_linkage_bucket": "macro_discount_rate",
+      "summary": "油價與庫存對短線通膨預期與長端利率有外溢影響。",
+      "why": "這不是 thesis-changing 事件，但若能源價格再度衝高，科技估值承壓會明顯放大。",
+      "direction": "mixed",
+      "horizon": "short",
+      "time_to_cashflow": "short",
+      "probability": 0.35,
+      "conditional_impact": 2.0,
+      "expected_impact": 0.7,
+      "sector_sensitivity": 0.9,
+      "impact_score": 0.63,
+      "mapped_to_allowed_buy_universe": ["VOO", "VTI", "VT", "QQQ", "SMH", "IGV"],
+      "sources": [
+        {
+          "title": "Weekly Petroleum Status Report Schedule",
+          "publisher": "U.S. Energy Information Administration",
+          "date": "2026-04-22",
+          "domain": "eia.gov",
+          "source_quality": "official"
+        }
+      ]
+    },
+    {
+      "id": "se_tsla_20260422",
+      "title": "Tesla Q1 2026 財報",
+      "date_et": "2026-04-22",
+      "time_et": null,
+      "time_precision": "date_only",
+      "thesis_linkage_bucket": "short_term_only",
+      "summary": "主要反映電動車需求、價格策略與市場風險偏好。",
+      "why": "SHORT_TERM_ONLY: not thesis-changing",
+      "direction": "mixed",
+      "horizon": "short",
+      "time_to_cashflow": "short",
+      "probability": 0.45,
+      "conditional_impact": 2.5,
+      "expected_impact": 1.13,
+      "sector_sensitivity": 0.9,
+      "impact_score": 1.01,
+      "mapped_to_allowed_buy_universe": ["VOO", "VTI", "VT", "QQQ"],
+      "sources": [
+        {
+          "title": "Tesla First Quarter 2026 Production, Deliveries & Deployments",
+          "publisher": "Tesla Investor Relations",
+          "date": "2026-04-02",
+          "domain": "ir.tesla.com",
+          "source_quality": "official"
+        }
+      ]
+    },
+    {
+      "id": "se_intc_20260423",
+      "title": "Intel Q1 2026 財報",
+      "date_et": "2026-04-23",
+      "time_et": null,
+      "time_precision": "date_only",
+      "thesis_linkage_bucket": "theme_12m_plus",
+      "summary": "提供 PC、資料中心與 foundry 需求強弱，以及美國半導體鏈修復節奏的即時讀數。",
+      "why": "對 SMH 不是單一公司事件而已，而是 AI 伺服器之外的半導體廣度與製造端信號。",
+      "direction": "mixed",
+      "horizon": "short",
+      "time_to_cashflow": "short",
+      "probability": 0.55,
+      "conditional_impact": 3.0,
+      "expected_impact": 1.65,
+      "sector_sensitivity": 1.3,
+      "impact_score": 2.15,
+      "mapped_to_allowed_buy_universe": ["VOO", "VTI", "VT", "QQQ", "SMH"],
+      "sources": [
+        {
+          "title": "Intel to Report First-Quarter 2026 Financial Results",
+          "publisher": "Intel",
+          "date": "2026-04-09",
+          "domain": "intc.com",
+          "source_quality": "official"
+        }
+      ]
+    },
+    {
+      "id": "se_fomc_20260429",
+      "title": "FOMC 4 月會議利率決議",
+      "date_et": "2026-04-29",
+      "time_et": "14:00",
+      "time_precision": "exact",
+      "thesis_linkage_bucket": "macro_discount_rate",
+      "summary": "本輪 45 天視窗中對科技估值最重要的事件。",
+      "why": "若 Fed 繼續強調通膨仍偏高，QQQ/IGV 估值壓力將延續；若語氣轉向更平衡，科技 beta 的順風最大。",
+      "direction": "mixed",
+      "horizon": "short",
+      "time_to_cashflow": "short",
+      "probability": 0.8,
+      "conditional_impact": 4.5,
+      "expected_impact": 3.6,
+      "sector_sensitivity": 1.4,
+      "impact_score": 5.04,
+      "mapped_to_allowed_buy_universe": ["VOO", "VTI", "VT", "QQQ", "SMH", "IGV"],
+      "sources": [
+        {
+          "title": "Meeting calendars and information",
+          "publisher": "Federal Reserve",
+          "date": "2026-04-08",
+          "domain": "federalreserve.gov",
+          "source_quality": "official"
+        }
+      ]
+    },
+    {
+      "id": "se_msft_20260429",
+      "title": "Microsoft FY26 Q3 財報",
+      "date_et": "2026-04-29",
+      "time_et": "17:30",
+      "time_precision": "exact",
+      "thesis_linkage_bucket": "theme_12m_plus",
+      "summary": "Azure、Copilot、AI 基礎設施投資與安全業務進展，是 IGV 與 QQQ 的關鍵驗證點。",
+      "why": "Microsoft 是軟體與 hyperscaler AI monetization 的最重要 read-through 之一。",
+      "direction": "mixed",
+      "horizon": "short",
+      "time_to_cashflow": "short",
+      "probability": 0.8,
+      "conditional_impact": 4.0,
+      "expected_impact": 3.2,
+      "sector_sensitivity": 1.4,
+      "impact_score": 4.48,
+      "mapped_to_allowed_buy_universe": ["VOO", "VTI", "VT", "QQQ", "IGV"],
+      "sources": [
+        {
+          "title": "Microsoft announces quarterly earnings release date",
+          "publisher": "Microsoft",
+          "date": "2026-04-08",
+          "domain": "microsoft.com",
+          "source_quality": "official"
+        }
+      ]
+    },
+    {
+      "id": "se_googl_20260429",
+      "title": "Alphabet Q1 2026 財報",
+      "date_et": "2026-04-29",
+      "time_et": "16:30",
+      "time_precision": "exact",
+      "thesis_linkage_bucket": "theme_12m_plus",
+      "summary": "驗證雲端、搜尋廣告與 AI 產品化速度，尤其影響 QQQ 與 IGV。",
+      "why": "Alphabet 的 AI monetization 與 capex 節奏，是 QQQ 內生成長是否能延續的重要指標。",
+      "direction": "mixed",
+      "horizon": "short",
+      "time_to_cashflow": "short",
+      "probability": 0.7,
+      "conditional_impact": 3.5,
+      "expected_impact": 2.45,
+      "sector_sensitivity": 1.3,
+      "impact_score": 3.19,
+      "mapped_to_allowed_buy_universe": ["VOO", "VTI", "VT", "QQQ", "IGV"],
+      "sources": [
+        {
+          "title": "Alphabet Announces Date of First Quarter 2026 Financial Results Conference Call",
+          "publisher": "Alphabet Investor Relations",
+          "date": "2026-04-07",
+          "domain": "abc.xyz",
+          "source_quality": "official"
+        }
+      ]
+    },
+    {
+      "id": "se_gdp_20260430",
+      "title": "美國 Q1 2026 GDP Advance",
+      "date_et": "2026-04-30",
+      "time_et": "08:30",
+      "time_precision": "exact",
+      "thesis_linkage_bucket": "macro_discount_rate",
+      "summary": "檢查 2025Q4 弱成長之後，美國是否進一步走向硬著陸或仍維持緩降。",
+      "why": "成長若太弱，會衝擊 cyclical 與全球廣度；若成長適中、通膨同步放緩，則反而最利 QQQ。",
+      "direction": "mixed",
+      "horizon": "short",
+      "time_to_cashflow": "short",
+      "probability": 0.65,
+      "conditional_impact": 3.5,
+      "expected_impact": 2.28,
+      "sector_sensitivity": 1.2,
+      "impact_score": 2.73,
+      "mapped_to_allowed_buy_universe": ["VOO", "VTI", "VT", "QQQ", "SMH", "IGV"],
+      "sources": [
+        {
+          "title": "Release Schedule",
+          "publisher": "Bureau of Economic Analysis",
+          "date": "2026-04-30",
+          "domain": "bea.gov",
+          "source_quality": "official"
+        }
+      ]
+    },
+    {
+      "id": "se_pce_20260430",
+      "title": "美國 3 月 Personal Income and Outlays",
+      "date_et": "2026-04-30",
+      "time_et": "08:30",
+      "time_precision": "exact",
+      "thesis_linkage_bucket": "macro_discount_rate",
+      "summary": "PCE 與 core PCE 是 Fed 最核心的通膨依據。",
+      "why": "這比很多單一公司財報更直接改變科技股的折現率敘事。",
+      "direction": "mixed",
+      "horizon": "short",
+      "time_to_cashflow": "short",
+      "probability": 0.8,
+      "conditional_impact": 4.0,
+      "expected_impact": 3.2,
+      "sector_sensitivity": 1.4,
+      "impact_score": 4.48,
+      "mapped_to_allowed_buy_universe": ["VOO", "VTI", "VT", "QQQ", "SMH", "IGV"],
+      "sources": [
+        {
+          "title": "Release Schedule",
+          "publisher": "Bureau of Economic Analysis",
+          "date": "2026-04-30",
+          "domain": "bea.gov",
+          "source_quality": "official"
+        }
+      ]
+    },
+    {
+      "id": "se_jobs_20260508",
+      "title": "美國 4 月就業報告",
+      "date_et": "2026-05-08",
+      "time_et": "08:30",
+      "time_precision": "exact",
+      "thesis_linkage_bucket": "macro_discount_rate",
+      "summary": "檢查勞動市場是否由放緩滑向明顯惡化。",
+      "why": "這是 FOMC 之後第一個高權重勞動讀數，會直接影響市場對 6-9 月利率路徑的定價。",
+      "direction": "mixed",
+      "horizon": "short",
+      "time_to_cashflow": "short",
+      "probability": 0.8,
+      "conditional_impact": 4.0,
+      "expected_impact": 3.2,
+      "sector_sensitivity": 1.4,
+      "impact_score": 4.48,
+      "mapped_to_allowed_buy_universe": ["VOO", "VTI", "VT", "QQQ", "SMH", "IGV"],
+      "sources": [
+        {
+          "title": "Schedule of Releases for the Employment Situation",
+          "publisher": "Bureau of Labor Statistics",
+          "date": "2026-05-08",
+          "domain": "bls.gov",
+          "source_quality": "official"
+        }
+      ]
+    },
+    {
+      "id": "se_tsmc_sales_20260508",
+      "title": "TSMC 2026 年 4 月營收",
+      "date_et": "2026-05-08",
+      "time_et": null,
+      "time_precision": "date_only",
+      "thesis_linkage_bucket": "theme_12m_plus",
+      "summary": "月營收是 AI 先進製程與 HPC 需求是否延續的高頻訊號。",
+      "why": "對 SMH 而言，這是比廣泛經濟數據更直接的供應鏈驗證。",
+      "direction": "mixed",
+      "horizon": "short",
+      "time_to_cashflow": "short",
+      "probability": 0.65,
+      "conditional_impact": 3.0,
+      "expected_impact": 1.95,
+      "sector_sensitivity": 1.3,
+      "impact_score": 2.54,
+      "mapped_to_allowed_buy_universe": ["VOO", "VTI", "VT", "QQQ", "SMH"],
+      "sources": [
+        {
+          "title": "Financial Calendar",
+          "publisher": "Taiwan Semiconductor Manufacturing Company",
+          "date": "2026-05-08",
+          "domain": "investor.tsmc.com",
+          "source_quality": "official"
+        }
+      ]
+    },
+    {
+      "id": "se_cpi_20260512",
+      "title": "美國 4 月 CPI",
+      "date_et": "2026-05-12",
+      "time_et": "08:30",
+      "time_precision": "exact",
+      "thesis_linkage_bucket": "macro_discount_rate",
+      "summary": "4 月 CPI 將驗證 3 月能源帶動的再加速是否持續。",
+      "why": "若 CPI 再偏熱，QQQ/IGV/SMH 的估值上限會再被壓縮；若回落，將強化科技主線。",
+      "direction": "mixed",
+      "horizon": "short",
+      "time_to_cashflow": "short",
+      "probability": 0.85,
+      "conditional_impact": 4.5,
+      "expected_impact": 3.83,
+      "sector_sensitivity": 1.5,
+      "impact_score": 5.74,
+      "mapped_to_allowed_buy_universe": ["VOO", "VTI", "VT", "QQQ", "SMH", "IGV"],
+      "sources": [
+        {
+          "title": "Schedule of Releases for the Consumer Price Index",
+          "publisher": "Bureau of Labor Statistics",
+          "date": "2026-05-12",
+          "domain": "bls.gov",
+          "source_quality": "official"
+        }
+      ]
+    },
+    {
+      "id": "se_retail_20260514",
+      "title": "美國 4 月零售銷售",
+      "date_et": "2026-05-14",
+      "time_et": "08:30",
+      "time_precision": "exact",
+      "thesis_linkage_bucket": "macro_discount_rate",
+      "summary": "延續追蹤需求韌性與高利率對消費的壓力。",
+      "why": "若 4 月消費明顯退潮，VTI/VT 相對風險會放大，QQQ 反而可能因降息預期支撐相對表現。",
+      "direction": "mixed",
+      "horizon": "short",
+      "time_to_cashflow": "short",
+      "probability": 0.6,
+      "conditional_impact": 3.0,
+      "expected_impact": 1.8,
+      "sector_sensitivity": 1.1,
+      "impact_score": 1.98,
+      "mapped_to_allowed_buy_universe": ["VOO", "VTI", "VT", "QQQ", "SMH", "IGV"],
+      "sources": [
+        {
+          "title": "Monthly Retail Trade - Release Schedule",
+          "publisher": "U.S. Census Bureau",
+          "date": "2026-05-14",
+          "domain": "census.gov",
+          "source_quality": "official"
+        }
+      ]
+    },
+    {
+      "id": "se_nvda_20260520",
+      "title": "NVIDIA FY27 Q1 財報",
+      "date_et": "2026-05-20",
+      "time_et": null,
+      "time_precision": "date_only",
+      "thesis_linkage_bucket": "theme_12m_plus",
+      "summary": "這是 45 天視窗內對 AI 計算主線最關鍵的公司事件。",
+      "why": "對 QQQ 與尤其 SMH 來說，這將直接驗證 AI capex、資料中心需求與出口限制下的獲利延續性。",
+      "direction": "mixed",
+      "horizon": "short",
+      "time_to_cashflow": "short",
+      "probability": 0.85,
+      "conditional_impact": 5.0,
+      "expected_impact": 4.25,
+      "sector_sensitivity": 1.5,
+      "impact_score": 6.38,
+      "mapped_to_allowed_buy_universe": ["VOO", "VTI", "VT", "QQQ", "SMH"],
+      "sources": [
+        {
+          "title": "Events & Presentations - NVIDIA 1st Quarter FY27 Financial Results",
+          "publisher": "NVIDIA Investor Relations",
+          "date": "2026-05-20",
+          "domain": "investor.nvidia.com",
+          "source_quality": "official"
+        }
+      ]
+    },
+    {
+      "id": "se_pce_20260529",
+      "title": "美國 4 月 Personal Income and Outlays",
+      "date_et": "2026-05-29",
+      "time_et": "08:30",
+      "time_precision": "exact",
+      "thesis_linkage_bucket": "macro_discount_rate",
+      "summary": "在 CPI 與就業後，這是 5 月底確認 Fed 偏好的壓軸通膨事件。",
+      "why": "若 core PCE 不能續降，科技估值將更偏向獲利主導而非估值擴張主導。",
+      "direction": "mixed",
+      "horizon": "short",
+      "time_to_cashflow": "short",
+      "probability": 0.75,
+      "conditional_impact": 4.0,
+      "expected_impact": 3.0,
+      "sector_sensitivity": 1.4,
+      "impact_score": 4.2,
+      "mapped_to_allowed_buy_universe": ["VOO", "VTI", "VT", "QQQ", "SMH", "IGV"],
+      "sources": [
+        {
+          "title": "Personal Income and Outlays",
+          "publisher": "Bureau of Economic Analysis",
+          "date": "2026-04-09",
+          "domain": "bea.gov",
+          "source_quality": "official"
+        }
+      ]
+    }
+  ],
+  "unscheduled_risks": [
+    {
+      "rank": 1,
+      "id": "ur_inflation_real_yields",
+      "title": "通膨再黏著導致長端實質利率維持高檔",
+      "summary": "若能源、住房與服務通膨使 core PCE 降速停滯，科技股未來 12m 的主要逆風仍是折現率，而非需求崩盤。",
+      "why": "這是對 QQQ、IGV、SMH 最直接也最廣泛的非行程風險。",
+      "direction": "bear",
+      "horizon": "medium",
+      "time_to_cashflow": "short",
+      "probability": 0.6,
+      "conditional_impact": 4.0,
+      "expected_impact": 2.4,
+      "sector_sensitivity": 1.4,
+      "impact_score": 2.02,
+      "mapped_to_allowed_buy_universe": ["VOO", "VTI", "VT", "QQQ", "SMH", "IGV"],
+      "sources": [
+        {
+          "title": "Consumer Price Index News Release - 2026 M03 Results",
+          "publisher": "Bureau of Labor Statistics",
+          "date": "2026-04-10",
+          "domain": "bls.gov",
+          "source_quality": "official"
+        },
+        {
+          "title": "Personal Income and Outlays, February 2026",
+          "publisher": "Bureau of Economic Analysis",
+          "date": "2026-04-09",
+          "domain": "bea.gov",
+          "source_quality": "official"
+        }
+      ]
+    },
+    {
+      "rank": 2,
+      "id": "ur_tariff_escalation",
+      "title": "半導體 tariff 第二階段擴大或談判不順",
+      "summary": "若白宮把目前狹窄類別擴大到更廣半導體與設備，SMH 風險會高於 QQQ，而 VOO/VTI/VT 也會承受供應鏈與成本壓力。",
+      "why": "這是政策引發的供給衝擊與估值重定價風險。",
+      "direction": "mixed",
+      "horizon": "medium",
+      "time_to_cashflow": "medium",
+      "probability": 0.45,
+      "conditional_impact": 4.5,
+      "expected_impact": 2.03,
+      "sector_sensitivity": 1.4,
+      "impact_score": 1.7,
+      "mapped_to_allowed_buy_universe": ["VOO", "VTI", "VT", "QQQ", "SMH"],
+      "sources": [
+        {
+          "title": "ADJUSTING IMPORTS OF SEMICONDUCTORS, SEMICONDUCTOR MANUFACTURING EQUIPMENT, AND THEIR DERIVATIVE PRODUCTS INTO THE UNITED STATES",
+          "publisher": "The White House",
+          "date": "2026-01-14",
+          "domain": "whitehouse.gov",
+          "source_quality": "official"
+        }
+      ]
+    },
+    {
+      "rank": 3,
+      "id": "ur_ai_capex_digest",
+      "title": "AI 資本支出消化或產品化變現不及預期",
+      "summary": "若 hyperscaler capex 邊際增速放緩、或 AI 軟體 monetization 低於市場預期，SMH 與 IGV 都可能遭遇同步去評價。",
+      "why": "這不是單一公司風險，而是整個 AI 敘事從硬體到平台軟體的鏈式風險。",
+      "direction": "bear",
+      "horizon": "medium",
+      "time_to_cashflow": "medium",
+      "probability": 0.35,
+      "conditional_impact": 4.0,
+      "expected_impact": 1.4,
+      "sector_sensitivity": 1.5,
+      "impact_score": 1.26,
+      "mapped_to_allowed_buy_universe": ["QQQ", "SMH", "IGV", "VOO", "VTI"],
+      "sources": [
+        {
+          "title": "TSMC 2026 Q1 Quarterly Results",
+          "publisher": "Taiwan Semiconductor Manufacturing Company",
+          "date": "2026-04-16",
+          "domain": "investor.tsmc.com",
+          "source_quality": "official"
+        },
+        {
+          "title": "NVIDIA Announces Financial Results for Fourth Quarter and Fiscal 2026",
+          "publisher": "NVIDIA",
+          "date": "2026-02-25",
+          "domain": "investor.nvidia.com",
+          "source_quality": "official"
+        }
+      ]
+    },
+    {
+      "rank": 4,
+      "id": "ur_growth_downshift",
+      "title": "美國成長由緩降轉為更明顯失速",
+      "summary": "若 2025Q4 的 0.5% SAAR 只是更弱增長的前奏，VTI/VT 與 cyclical 敏感度會先放大，而 QQQ 未必能完全靠降息預期對沖。",
+      "why": "Lane A 需要持續檢查這是否已從溫和減速轉向更差的需求情境。",
+      "direction": "bear",
+      "horizon": "medium",
+      "time_to_cashflow": "medium",
+      "probability": 0.35,
+      "conditional_impact": 3.5,
+      "expected_impact": 1.23,
+      "sector_sensitivity": 1.2,
+      "impact_score": 0.88,
+      "mapped_to_allowed_buy_universe": ["VOO", "VTI", "VT", "QQQ", "SMH", "IGV"],
+      "sources": [
+        {
+          "title": "GDP, 4th Quarter and Year 2025, Third Estimate",
+          "publisher": "Bureau of Economic Analysis",
+          "date": "2026-04-09",
+          "domain": "bea.gov",
+          "source_quality": "official"
+        }
+      ]
+    },
+    {
+      "rank": 5,
+      "id": "ur_cyber_budget_rotation_delay",
+      "title": "資安支出雖結構成長但企業預算落地速度不一",
+      "summary": "資安長線方向清楚，但若企業與政府採購落地延後，CIBR 與 IGV 中的部分安全軟體估值可能先修正再反映基本面。",
+      "why": "這使 Lane B 的資安候選可過預審，但不必然代表本輪一定要啟用 sleeve。",
+      "direction": "mixed",
+      "horizon": "medium",
+      "time_to_cashflow": "medium",
+      "probability": 0.3,
+      "conditional_impact": 2.5,
+      "expected_impact": 0.75,
+      "sector_sensitivity": 1.0,
+      "impact_score": 0.45,
+      "mapped_to_allowed_buy_universe": ["QQQ", "IGV"],
+      "sources": [
+        {
+          "title": "White House Unveils President Trump’s Cyber Strategy for America",
+          "publisher": "The White House",
+          "date": "2026-03-06",
+          "domain": "whitehouse.gov",
+          "source_quality": "official"
+        },
+        {
+          "title": "CrowdStrike Reports Fourth Quarter and Fiscal Year 2026 Financial Results",
+          "publisher": "CrowdStrike",
+          "date": "2026-03-03",
+          "domain": "ir.crowdstrike.com",
+          "source_quality": "official"
+        }
+      ]
+    }
+  ],
+  "structural_themes_6_18m": [
+    {
+      "id": "th_ai_compute_stack",
+      "title": "AI 計算基礎設施仍是科技 alpha 主線",
+      "summary": "TSMC 1Q26 實績與 2Q26 指引仍高，NVIDIA FY26 也延續強勁資料中心需求，顯示 AI 訓練與推論算力投資尚未結束。",
+      "why": "這讓 QQQ 保持 benchmark 核心地位，也讓 SMH 在 12m+ 內保有相對 QQQ 的 alpha 機會；但前提是能承受較高政策與估值波動。",
+      "mapped_to_allowed_buy_universe": ["VOO", "VTI", "VT", "QQQ", "SMH"],
+      "lane_applicability": ["base_decision_lane", "extended_candidate_lane"],
+      "sources": [
+        {
+          "title": "TSMC 2026 Q1 Quarterly Results",
+          "publisher": "Taiwan Semiconductor Manufacturing Company",
+          "date": "2026-04-16",
+          "domain": "investor.tsmc.com",
+          "source_quality": "official"
+        },
+        {
+          "title": "Investors - Taiwan Semiconductor Manufacturing Company Limited",
+          "publisher": "Taiwan Semiconductor Manufacturing Company",
+          "date": "2026-04-16",
+          "domain": "investor.tsmc.com",
+          "source_quality": "official"
+        },
+        {
+          "title": "NVIDIA Announces Financial Results for Fourth Quarter and Fiscal 2026",
+          "publisher": "NVIDIA",
+          "date": "2026-02-25",
+          "domain": "investor.nvidia.com",
+          "source_quality": "official"
+        }
+      ]
+    },
+    {
+      "id": "th_software_and_cyber_resilience",
+      "title": "關鍵軟體與資安支出具 12m+ 韌性",
+      "summary": "白宮 Cyber Strategy 明確要求強化關鍵基礎設施、政府網路與供應鏈防護，企業端則由大型資安廠商持續驗證支出仍屬 mission-critical。",
+      "why": "IGV 的高品質軟體權重仍可受惠；Lane B 中的 CIBR 因角色明確，成為最有機會通過 ticker-level activation 的延伸候選。",
+      "mapped_to_allowed_buy_universe": ["VOO", "VTI", "VT", "QQQ", "IGV"],
+      "lane_applicability": ["base_decision_lane", "extended_candidate_lane"],
+      "sources": [
+        {
+          "title": "White House Unveils President Trump’s Cyber Strategy for America",
+          "publisher": "The White House",
+          "date": "2026-03-06",
+          "domain": "whitehouse.gov",
+          "source_quality": "official"
+        },
+        {
+          "title": "President Trump’s Cyber Strategy for America",
+          "publisher": "The White House",
+          "date": "2026-03-06",
+          "domain": "whitehouse.gov",
+          "source_quality": "official"
+        },
+        {
+          "title": "CrowdStrike Reports Fourth Quarter and Fiscal Year 2026 Financial Results",
+          "publisher": "CrowdStrike",
+          "date": "2026-03-03",
+          "domain": "ir.crowdstrike.com",
+          "source_quality": "official"
+        }
+      ]
+    },
+    {
+      "id": "th_us_large_cap_quality_compounders",
+      "title": "高品質美國大型股比廣泛分散更符合本輪 benchmark 任務",
+      "summary": "在高利率與去通膨停滯環境中，穩定獲利、現金流與資產負債表品質的重要性高於單純擴大地域分散。",
+      "why": "這支持 QQQ 與 VOO 在 Lane A 排名中高於 VT，也讓 QUAL 能進入 Lane B 預審，但未必足以啟用 sleeve。",
+      "mapped_to_allowed_buy_universe": ["VOO", "VTI", "QQQ"],
+      "lane_applicability": ["base_decision_lane", "extended_candidate_lane"],
+      "sources": [
+        {
+          "title": "iShares MSCI USA Quality Factor ETF | QUAL",
+          "publisher": "iShares",
+          "date": "2026-04-17",
+          "domain": "ishares.com",
+          "source_quality": "official"
+        },
+        {
+          "title": "Federal Reserve issues FOMC statement",
+          "publisher": "Federal Reserve",
+          "date": "2026-03-18",
+          "domain": "federalreserve.gov",
+          "source_quality": "official"
+        },
+        {
+          "title": "Personal Income and Outlays, February 2026",
+          "publisher": "Bureau of Economic Analysis",
+          "date": "2026-04-09",
+          "domain": "bea.gov",
+          "source_quality": "official"
+        }
+      ]
+    },
+    {
+      "id": "th_global_breadth_buffer",
+      "title": "全球分散仍有緩衝功能，但不是本輪 alpha 主線",
+      "summary": "VT 的世界股權敞口能在極端政策、單一國家監管或美股估值壓縮時提供緩衝，但它無法有效承載 benchmark=QQQ 的核心任務。",
+      "why": "因此 VT 在 Lane A 仍有存在價值，但排序落後於 QQQ、VOO、VTI。",
+      "mapped_to_allowed_buy_universe": ["VT", "VTI", "VOO"],
+      "lane_applicability": ["base_decision_lane"],
+      "sources": [
+        {
+          "title": "Vanguard Total World Stock ETF",
+          "publisher": "Vanguard",
+          "date": "2026-03-31",
+          "domain": "workplace.vanguard.com",
+          "source_quality": "official"
+        },
+        {
+          "title": "GDP, 4th Quarter and Year 2025, Third Estimate",
+          "publisher": "Bureau of Economic Analysis",
+          "date": "2026-04-09",
+          "domain": "bea.gov",
+          "source_quality": "official"
+        }
+      ]
+    }
+  ],
+  "buy_universe_scorecard": [
+    {
+      "ticker": "QQQ",
+      "category": "core",
+      "role_layer": "benchmark_carrier_core",
+      "role_job": "直接承載 benchmark 與 Nasdaq 科技 beta",
+      "expected_return_profile_12m": 4,
+      "expected_return_profile_3_5y": 5,
+      "regime_fit_score": 4,
+      "valuation_headwind_score": 4,
+      "diversification_utility_score": 1,
+      "execution_priority_this_run": 6,
+      "benchmark_alignment_score": 5,
+      "alpha_upside_score": 1,
+      "liquidity_quality_score": 5,
+      "event_dependency_score": 2,
+      "thesis_duration_score": 5,
+      "best_use_case": "作為科技主線與 benchmark 的主要承載；若要跟上並有機會超越科技大盤，QQQ 必須維持第一順位。",
+      "why": "QQQ 仍是最符合 mandate 的核心工具。短期雖受折現率牽制，但 3-5y 由 AI、平台軟體與 mega-cap 盈利能力支撐，且其角色不可被任何 extended ETF 取代。",
+      "event_id_refs": ["pi_fed_data_dependence_20260318", "se_fomc_20260429", "se_msft_20260429", "se_googl_20260429", "se_nvda_20260520"],
+      "structural_theme_refs": ["th_ai_compute_stack", "th_us_large_cap_quality_compounders"]
+    },
+    {
+      "ticker": "VOO",
+      "category": "core",
+      "role_layer": "diversified_core_buffer",
+      "role_job": "在保留高品質美國大型股敞口下，為 QQQ 提供較低風格偏離的緩衝",
+      "expected_return_profile_12m": 3,
+      "expected_return_profile_3_5y": 4,
+      "regime_fit_score": 4,
+      "valuation_headwind_score": 3,
+      "diversification_utility_score": 4,
+      "execution_priority_this_run": 5,
+      "benchmark_alignment_score": 4,
+      "alpha_upside_score": 1,
+      "liquidity_quality_score": 5,
+      "event_dependency_score": 1,
+      "thesis_duration_score": 5,
+      "best_use_case": "當需要降低單一科技風格波動，但又不想明顯偏離美股主軸時，VOO 是最乾淨的 buffer。",
+      "why": "VOO 與 benchmark 的偏離小於 VT，且比 VTI 更少承受中小型股對利率與景氣的額外敏感度。本輪作為 diversified core buffer 的優先度高於 VTI 與 VT。",
+      "event_id_refs": ["pi_fed_data_dependence_20260318", "se_fomc_20260429", "se_cpi_20260512", "se_pce_20260529"],
+      "structural_theme_refs": ["th_us_large_cap_quality_compounders"]
+    },
+    {
+      "ticker": "VTI",
+      "category": "core",
+      "role_layer": "diversified_core_buffer",
+      "role_job": "保留全美股廣度，作為 QQQ 與 VOO 之間的中間解",
+      "expected_return_profile_12m": 3,
+      "expected_return_profile_3_5y": 4,
+      "regime_fit_score": 3,
+      "valuation_headwind_score": 3,
+      "diversification_utility_score": 4,
+      "execution_priority_this_run": 4,
+      "benchmark_alignment_score": 4,
+      "alpha_upside_score": 2,
+      "liquidity_quality_score": 5,
+      "event_dependency_score": 2,
+      "thesis_duration_score": 4,
+      "best_use_case": "用於押注美股廣度擴散，但仍希望保留 mega-cap 的主要權重。",
+      "why": "VTI 相比 VOO 有更多廣度彈性，但也帶入更多對融資條件與景氣循環敏感的中小型股敞口；在本輪高利率未完全解除下，優先度略低於 VOO。",
+      "event_id_refs": ["pi_fed_data_dependence_20260318", "se_gdp_20260430", "se_jobs_20260508", "se_cpi_20260512"],
+      "structural_theme_refs": ["th_us_large_cap_quality_compounders", "th_global_breadth_buffer"]
+    },
+    {
+      "ticker": "VT",
+      "category": "core",
+      "role_layer": "diversified_core_buffer",
+      "role_job": "提供全球市場分散與單一國家政策風險緩衝",
+      "expected_return_profile_12m": 2,
+      "expected_return_profile_3_5y": 3,
+      "regime_fit_score": 2,
+      "valuation_headwind_score": 2,
+      "diversification_utility_score": 5,
+      "execution_priority_this_run": 3,
+      "benchmark_alignment_score": 3,
+      "alpha_upside_score": 1,
+      "liquidity_quality_score": 4,
+      "event_dependency_score": 1,
+      "thesis_duration_score": 4,
+      "best_use_case": "僅在需要更強分散時作 buffer；不是本輪追趕或超越 QQQ 的主攻工具。",
+      "why": "VT 的分散價值很高，但對本策略最重要的 benchmark 承載度明顯不足，因此仍保留在 base 六檔內，但排序低於 VOO 與 VTI。",
+      "event_id_refs": ["pi_fed_data_dependence_20260318", "se_gdp_20260430", "se_jobs_20260508"],
+      "structural_theme_refs": ["th_global_breadth_buffer"]
+    },
+    {
+      "ticker": "SMH",
+      "category": "satellite",
+      "role_layer": "sector_alpha_tilt",
+      "role_job": "以 AI 晶片、先進製程與設備鏈爭取相對 QQQ 的 alpha",
+      "expected_return_profile_12m": 4,
+      "expected_return_profile_3_5y": 4,
+      "regime_fit_score": 4,
+      "valuation_headwind_score": 5,
+      "diversification_utility_score": 1,
+      "execution_priority_this_run": 2,
+      "benchmark_alignment_score": 2,
+      "alpha_upside_score": 5,
+      "liquidity_quality_score": 5,
+      "event_dependency_score": 3,
+      "thesis_duration_score": 4,
+      "best_use_case": "當 AI compute 與半導體資本循環明確走強時，作為最有效率的 sector alpha 工具。",
+      "why": "SMH 的 alpha 潛力在 base 六檔中最高，但也最受政策、估值與單一供應鏈事件影響。本輪仍值得保留，但只能定位為衛星傾斜，不應取代 QQQ 核心。",
+      "event_id_refs": ["pi_semiconductor_tariffs_20260114", "pi_bis_export_license_20260115", "se_intc_20260423", "se_tsmc_sales_20260508", "se_nvda_20260520"],
+      "structural_theme_refs": ["th_ai_compute_stack"]
+    },
+    {
+      "ticker": "IGV",
+      "category": "satellite",
+      "role_layer": "sector_alpha_tilt",
+      "role_job": "以高毛利軟體、平台與資安子產業爭取相對報酬",
+      "expected_return_profile_12m": 3,
+      "expected_return_profile_3_5y": 4,
+      "regime_fit_score": 3,
+      "valuation_headwind_score": 5,
+      "diversification_utility_score": 2,
+      "execution_priority_this_run": 1,
+      "benchmark_alignment_score": 2,
+      "alpha_upside_score": 4,
+      "liquidity_quality_score": 5,
+      "event_dependency_score": 3,
+      "thesis_duration_score": 4,
+      "best_use_case": "在軟體產品化、雲端與資安支出同步改善時作為 sector alpha tilt。",
+      "why": "IGV 的長線 thesis 仍在，但當前利率環境下其估值對折現率較敏感，且與 QQQ 重疊仍高於很多投資人直覺。相較 SMH，本輪 alpha 彈性略低，因此排序最後。",
+      "event_id_refs": ["pi_us_cyber_strategy_20260306", "se_msft_20260429", "se_googl_20260429", "se_pce_20260529"],
+      "structural_theme_refs": ["th_software_and_cyber_resilience"]
+    }
+  ],
+  "extended_etf_predecision_scorecard": [
+    {
+      "ticker": "CIBR",
+      "sleeve_role": "measured_tilt",
+      "best_base_alternative": "IGV",
+      "benchmark_alignment_score": 1,
+      "alpha_upside_score": 4,
+      "regime_fit_score": 4,
+      "benchmark_drift_risk_score": 4,
+      "diversification_utility_score": 3,
+      "liquidity_quality_score": 4,
+      "thesis_duration_score": 4,
+      "event_dependency_score": 2,
+      "expected_return_profile_3_5y": 4,
+      "execution_priority_this_run": 2,
+      "enable_hurdle_passed": true,
+      "tradeability_evidence": {
+        "avg_dollar_volume_bucket": "high",
+        "aum_bucket": "high",
+        "spread_bucket": "tight",
+        "source_refs": [
+          {
+            "title": "First Trust Nasdaq Cybersecurity ETF (CIBR)",
+            "publisher": "First Trust",
+            "date": "2026-04-17",
+            "domain": "ftportfolios.com",
+            "source_quality": "official"
+          }
+        ]
+      },
+      "why": "CIBR 是 approved list 中角色最清楚的延伸候選。它補足 base 六檔對純資安主題表達不足的缺口，且具有政策與企業支出雙重 12m+ thesis；但若本輪啟用，會增加相對 benchmark 的漂移，因此只通過 ticker-level activation，不自動代表 sleeve-level 必須開啟。",
+      "event_id_refs": ["pi_us_cyber_strategy_20260306"],
+      "structural_theme_refs": ["th_software_and_cyber_resilience"]
+    },
+    {
+      "ticker": "QUAL",
+      "sleeve_role": "core_completer",
+      "best_base_alternative": "VOO",
+      "benchmark_alignment_score": 3,
+      "alpha_upside_score": 2,
+      "regime_fit_score": 4,
+      "benchmark_drift_risk_score": 2,
+      "diversification_utility_score": 4,
+      "liquidity_quality_score": 5,
+      "thesis_duration_score": 4,
+      "event_dependency_score": 2,
+      "expected_return_profile_3_5y": 3,
+      "execution_priority_this_run": 1,
+      "enable_hurdle_passed": false,
+      "tradeability_evidence": {
+        "avg_dollar_volume_bucket": "high",
+        "aum_bucket": "high",
+        "spread_bucket": "tight",
+        "source_refs": [
+          {
+            "title": "iShares MSCI USA Quality Factor ETF | QUAL",
+            "publisher": "iShares",
+            "date": "2026-04-17",
+            "domain": "ishares.com",
+            "source_quality": "official"
+          }
+        ]
+      },
+      "why": "QUAL 是合理的防守型補完，但相對 VOO 的新增 alpha 與角色差異不夠大；它能改善品質因子暴露，卻無法明顯補足 base 六檔無法表達的長線缺口，因此本輪未通過 activation hurdle。",
+      "event_id_refs": ["pi_fed_data_dependence_20260318", "se_fomc_20260429", "se_pce_20260430"],
+      "structural_theme_refs": ["th_us_large_cap_quality_compounders"]
+    }
+  ],
+  "optional_extended_etf_sleeve": {
+    "enabled": false,
+    "top_candidate": "CIBR",
+    "disable_reason": "passed ticker-level activation but failed sleeve-level allocation / benchmark-preservation decision",
+    "why_not_enabled": "CIBR 已通過 ticker-level activation，但本輪 Lane A 的 base 六檔排序已能完整表達科技主線，且 QQQ、SMH、IGV 已提供高科技濃度。此時再開啟延伸 sleeve 的邊際增益不足以抵消 benchmark drift，因此維持不啟用。",
+    "allowed_extended_etf_tickers": [],
+    "notes": "Extended ETF sleeve 為非核心、可選的長線輔助工具；未啟用時，Template2 必須維持在 trade_universe.allowed_buy_tickers 內。"
+  },
+  "extended_etf_scorecard": [],
+  "top5_next_week": [
+    {
+      "rank": 1,
+      "scheduled_event_id_ref": "se_retail_20260421",
+      "thesis_linkage_bucket": "macro_discount_rate",
+      "impact_score": 2.73,
+      "why": "未來 8 天內，這是最早驗證需求韌性是否仍會壓住降息想像的宏觀事件。",
+      "playbook_hint": "若數據偏熱，優先視為 QQQ/IGV 短線折現率逆風；若溫和回落，則視為對 benchmark 更友善。"
+    },
+    {
+      "rank": 2,
+      "scheduled_event_id_ref": "se_wages_20260422",
+      "thesis_linkage_bucket": "macro_discount_rate",
+      "impact_score": 0.88,
+      "why": "薪資韌性會影響服務通膨與長端利率預期，是科技估值的次級但方向明確的 driver。",
+      "playbook_hint": "若薪資增速再抬升，避免把短線反彈誤判為估值重啟。"
+    },
+    {
+      "rank": 3,
+      "scheduled_event_id_ref": "se_eia_oil_20260422",
+      "thesis_linkage_bucket": "macro_discount_rate",
+      "impact_score": 0.63,
+      "why": "油價與庫存變化會放大或緩和市場對通膨再加速的擔憂。",
+      "playbook_hint": "若油價續升，優先把科技波動解讀為折現率問題，而不是基本面惡化。"
+    },
+    {
+      "rank": 4,
+      "scheduled_event_id_ref": "se_intc_20260423",
+      "thesis_linkage_bucket": "theme_12m_plus",
+      "impact_score": 2.15,
+      "why": "這是下週唯一較具半導體廣度代表性的正式財報，對 SMH 的 read-through 高於單純 PC 故事。",
+      "playbook_hint": "重點看資料中心、foundry 進度與非 AI 半導體需求是否拖累整體鏈條。"
+    },
+    {
+      "rank": 5,
+      "scheduled_event_id_ref": "se_tsla_20260422",
+      "thesis_linkage_bucket": "short_term_only",
+      "impact_score": 1.01,
+      "why": "雖然不是 thesis-changing，但 Tesla 對市場風險偏好與高波動成長股情緒仍有短線外溢。",
+      "playbook_hint": "將其視為情緒與 beta 事件，不應改寫 base 六檔的 12m+ 排序。"
+    }
+  ],
+  "data_staleness_note": "宏觀 official data 主要截至 2026-04-17 可取得之最新公開值；ETF 基本資料多為 2026-04-17 或最近月末；公司 earnings 日期以官方 IR 頁面為準，實際公告時點仍可能調整。VUG 雖在使用者核准 static list 中，但本回合未納入 candidate universe，原因是其與 QQQ/VOO 的角色重疊過高，不符合 Lane B 以補足 base 六檔長線缺口為優先的條件。"
+}
+RESEARCH_JSON_END

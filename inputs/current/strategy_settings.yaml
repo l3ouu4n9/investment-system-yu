@@ -1,0 +1,32 @@
+as_of: "2026-04-19"
+benchmark: "QQQ"
+tax_intent: "LTCG_only"
+min_holding_period: ">=12m"
+hard_cap_open_orders_budget: 27534.86
+relative_rotation_enabled: true
+relative_rotation_reference_source: "RESEARCH_JSON.buy_universe_scorecard"
+
+core_universe:
+  - QQQ
+  - VOO
+  - VTI
+  - VT
+
+satellite_universe:
+  - SMH
+  - IGV
+
+user_approved_extended_etf_static_list:
+  - QUAL
+  - CIBR
+  - VUG
+
+
+active_shortlist_size_rule:
+  benchmark_carrier: 1
+  diversified_core_buffer_max: 1
+  sector_alpha_tilt_max: 2
+
+max_new_tickers_per_week:
+  base_universe_new_tickers_per_week: 0
+  extended_etf_sleeve_new_tickers_per_week: 1

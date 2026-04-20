@@ -1,0 +1,562 @@
+# Research Template - Yu (Dual-Lane Version)
+# ChatGPT Deep Research
+# updated 2026-04-19
+
+投資目標：
+以科技大盤（QQQ）為核心基準，願意承擔科技業與科技子產業集中帶來的波動；投資組合以 QQQ 與核心 buy universe 為主要承載，僅在有明確 12m+ thesis、角色清楚且經預先核准時，才以小比例延伸 ETF 作為長線輔助配置。目標是在 3–5 年期至少跟上科技大盤，並在有利環境下透過小幅主動傾斜爭取適度超額報酬；不主動承擔槓桿、低流動性、頻繁交易與純短期事件投機風險。
+
+目標：
+請以「雙 lane」架構完成研究，最後只輸出一份 RESEARCH_JSON：
+- Lane A = Base Decision Lane：服務本輪 base 六檔 ETF（VOO, VTI, VT, QQQ, SMH, IGV）的決策、排序、timing、replacement ranking
+- Lane B = Extended Candidate Lane：服務未來輪次的 extended ETF 候選提名 / 預審 / activation 判定
+- 兩條 lane 可共用事件、regime、theme 研究，但優先級、用途、輸出責任不同
+- 最終仍只輸出單一 RESEARCH_JSON，供下游 Strategy Template 使用
+
+────────────────────────────────────────
+【總則 / Hard Rules】
+
+- strategy_mandate_template1_dual_lane (NEW, MUST):
+  - 本模板所有研究排序必須服務以下投資目標：
+    "以科技大盤（QQQ）為核心基準，願意承擔科技業與科技子產業集中帶來的波動；投資組合以 QQQ 與核心 buy universe 為主要承載，僅在有明確 12m+ thesis、角色清楚且經預先核准時，才以小比例延伸 ETF 作為長線輔助配置。目標是在 3–5 年期至少跟上科技大盤，並在有利環境下透過小幅主動傾斜爭取適度超額報酬；不主動承擔槓桿、低流動性、頻繁交易與純短期事件投機風險。"
+
+- output_shape_rule (NEW, MUST):
+  - 最終只能輸出一份 RESEARCH_JSON
+  - 不得額外輸出第二份 JSON、第二個 packet、摘要段落、說明文字
+  - RESEARCH_JSON 內可新增 lane_meta / research_lanes / packet_origin 等欄位，但不得刪除原本下游會用到的必要欄位
+
+- output_language_rule_template1 (MUST):
+  - 除 sources.title（保持原文）與所有代碼/枚舉/代號外，summary / why / playbook_hint / trigger_conditions / why_not_enabled / mapping_note 等自由文字一律用繁體中文
+
+- source_quality_rule (MUST):
+  - 僅使用官方與高可信來源（Fed / BLS / BEA / Treasury / EIA / WhiteHouse / Federal Register / OPEC / CompanyIR / SEC / USTR / Commerce / State / DOE / 主要財經媒體）
+  - 每條重大事件至少 1 個官方來源；若無官方來源，source_quality 必須標註為 media_only
+
+- formula_rule (MUST):
+  - 每條事件都要有：
+    probability(0-1)
+    conditional_impact(0-5)
+    expected_impact = round(probability * conditional_impact, 2, half_up)
+    direction(bull|bear|mixed)
+    horizon(short|medium|long)
+    time_to_cashflow(short|medium|long)
+  - impact_score = round(probability * conditional_impact * urgency_weight * sector_sensitivity, 2, half_up)
+  - urgency_weight 只允許：
+    short = 1
+    medium = 0.6
+    long = 0.3
+  - impact_score 不得用已四捨五入的 expected_impact 回推
+  - probability ∈ [0,1]
+  - conditional_impact ∈ [0,5]
+  - sector_sensitivity ∈ [0.5,1.5]
+  - 超出範圍視為 FAIL，必須自動修正
+
+- top5_window_rule (MUST):
+  - top5_next_week 一律指 as_of（ET）起算的未來 8 calendar days 視窗 [as_of, as_of+7]
+  - 只能從落在該視窗內的 scheduled_events 抽取
+  - top5_next_week 排名不得只按 impact_score 機械排序；必須先按 thesis_linkage_bucket 分桶，再按 impact_score 排序
+  - thesis_linkage_bucket 優先順序：
+    (1) macro_discount_rate
+    (2) theme_12m_plus
+    (3) short_term_only
+
+- time_zone_rule (MUST):
+  - RESEARCH_JSON.as_of 視為 America/New_York（ET）日期
+  - user_time_zone = America/Los_Angeles
+  - 所有 *_et 日期運算以 ET 為基準
+  - 若 time_et = null，則 time_precision 必須 = "date_only"
+  - 若 time_et != null，則 time_precision 必須 = "exact"
+
+- final_json_text_cleanliness_rule (MUST):
+  - 最終 JSON 的自由文字欄位不得保留任何 citation 標記、腳註符號、工具引用殘留、行號樣式
+  - 來源資訊只允許保留在 sources 結構化欄位內
+
+────────────────────────────────────────
+【Lane A｜Base Decision Lane（主線）】
+
+目標：
+只研究「會改變本輪 base 六檔 ETF 決策」的事件、regime、theme、ranking 與 timing。
+
+Lane A 研究排序優先級（NEW, MUST）：
+(1) 是否影響 benchmark = QQQ / Nasdaq beta 的 3–5y 相對報酬框架
+(2) 是否影響 base 六檔（VOO, VTI, VT, QQQ, SMH, IGV）的 12m+ 相對排序
+(3) 是否影響未來 8 天的可執行 timing / event window / risk management
+
+Lane A 收錄標準（NEW, MUST）：
+- policy_items / scheduled_events / unscheduled_risks 主清單應優先服務 base 六檔與 benchmark
+- 若某事件只影響 1–8 週情緒 / 波動，且無 12m+ thesis linkage，仍可收錄，但 why 必須標註：
+  "SHORT_TERM_ONLY: not thesis-changing"
+- mapped_to_allowed_buy_universe 與 structural_theme_refs 只能作 traceability / mapping，不得單獨構成收錄理由
+- 不符合 materiality_filter_rule 的低訊號事件不得硬塞入主清單
+
+Lane A 必須輸出（MUST）：
+- regime_inputs
+- regime_inputs_sources
+- policy_items
+- scheduled_events
+- unscheduled_risks
+- top5_next_week
+- structural_themes_6_18m
+- buy_universe_scorecard（固定六檔，且必須完整）
+
+buy_universe_scorecard_ready (MUST):
+- RESEARCH_JSON 必須輸出 buy_universe_scorecard，且只能涵蓋：
+  ["VOO","VTI","VT","QQQ","SMH","IGV"]
+- 必須剛好 6 個 item
+- ticker 集合必須與 allowed_buy_tickers 完全一致
+- 每個 ticker 只能出現一次
+- execution_priority_this_run 必須為 1..6 且不得重複
+- 輸出順序必須依 execution_priority_this_run 由大到小排序
+- execution_priority_direction_rule (NEW, MUST):
+  - execution_priority_this_run = 6 表示最高優先，1 表示最低優先。
+
+buy_universe_scorecard 每檔必填欄位（MUST）：
+- ticker
+- category(core|satellite)
+- role_layer
+- role_job
+- expected_return_profile_12m (1-5, integer)
+- expected_return_profile_3_5y (1-5, integer)
+- regime_fit_score (1-5, integer)
+- valuation_headwind_score (1-5, integer)
+- diversification_utility_score (1-5, integer)
+- execution_priority_this_run (1-6, integer)
+- benchmark_alignment_score (1-5, integer)
+- alpha_upside_score (1-5, integer)
+- liquidity_quality_score (1-5, integer)
+- event_dependency_score (1-5, integer)
+- thesis_duration_score (1-5, integer)
+- best_use_case
+- why
+- event_id_refs: []
+- structural_theme_refs: []
+
+- linkage_array_placeholder_rule (NEW, MUST):
+  - 本模板 schema/example 中出現的 event_id_refs: [] / structural_theme_refs: [] 只作欄位示意，不代表實際輸出允許為空。
+  - 實際輸出時：
+    (1) buy_universe_scorecard 每檔必須滿足 event_id_refs 或 structural_theme_refs 至少一者非空
+    (2) 若 extended_etf_candidate_universe 非空，則 extended_etf_predecision_scorecard 每檔必須滿足 event_id_refs 或 structural_theme_refs 至少一者非空
+    (3) 若 optional_extended_etf_sleeve.enabled = true，則 extended_etf_scorecard 每檔必須滿足 event_id_refs 或 structural_theme_refs 至少一者非空
+  - 若兩者皆空：
+    該 item 不得作為本回合可交易、可啟用或可排序依據；why 必須以 "DATA_GAP: no linkage" 開頭。
+
+role_layer_ssot_rule (MUST):
+- QQQ -> benchmark_carrier_core
+- VOO -> diversified_core_buffer
+- VTI -> diversified_core_buffer
+- VT  -> diversified_core_buffer
+- SMH -> sector_alpha_tilt
+- IGV -> sector_alpha_tilt
+
+buy_universe_scorecard_priority_determinism_rule (MUST):
+- execution_priority_this_run 必須依下列順序決定，不得自由心證排序：
+  (1) benchmark_alignment_score 較高者優先
+  (2) thesis_duration_score 較高者優先
+  (3) alpha_upside_score 較高者優先
+  (4) liquidity_quality_score 較高者優先
+  (5) event_dependency_score 較低者優先
+  (6) valuation_headwind_score 較低者優先
+- 若上述仍完全同分，再以 expected_return_profile_3_5y 較高者優先
+- 若仍完全同分，最終依 ticker 字母序固定
+
+buy_universe_score_rubric_ssot (MUST):
+- benchmark_alignment_score:
+  5 = 直接承載 QQQ / Nasdaq beta
+  4 = 與美股 beta 高度一致，但科技濃度低於 QQQ
+  3 = 可部分承載 benchmark，但風格偏離明顯
+  2 = 僅能作輔助曝險
+  1 = 幾乎不承載 benchmark
+- alpha_upside_score:
+  5 = 相對 QQQ 有明確中長線超額報酬潛力
+  4 = 有合理 alpha 機會
+  3 = 可能小幅超額
+  2 = alpha 空間有限
+  1 = 主要不是 alpha 工具
+- liquidity_quality_score:
+  5 = 極高流動性、適合大額限價執行
+  4 = 高流動性、正常執行品質佳
+  3 = 可交易但執行品質一般
+  2 = 流動性或點差有明顯限制
+  1 = 流動性不足
+- event_dependency_score:
+  5 = 高度依賴單一 1–8 週事件
+  4 = 明顯依賴短期事件節奏
+  3 = 部分受短期事件影響
+  2 = 主要由 12m+ thesis 驅動，短期事件只影響 timing
+  1 = 幾乎完全由長線 thesis 驅動
+- thesis_duration_score:
+  5 = 3–5y thesis 非常穩定
+  4 = 12m+ thesis 穩定且可見度高
+  3 = 12m thesis 可成立但可見度一般
+  2 = thesis 較短或脆弱
+  1 = thesis 主要依賴短期事件
+- regime_fit_score:
+  5 = 與當前 growth / inflation / liquidity regime 高度匹配
+  3 = 基本匹配
+  1 = 明顯逆風
+- valuation_headwind_score:
+  5 = 估值逆風最大
+  3 = 估值中性
+  1 = 估值逆風最小
+
+Lane A mapping_rule (MUST):
+- policy_items / scheduled_events / unscheduled_risks 每個 item 必須輸出：
+  mapped_to_allowed_buy_universe: []
+- 只能包含：
+  ["VOO","VTI","VT","QQQ","SMH","IGV"]
+- 若為 broad macro / rate / inflation / liquidity 事件，預設不得為 []
+- 若為 []，必須輸出 mapping_note 說明
+
+────────────────────────────────────────
+【Lane B｜Extended Candidate Lane（副線）】
+
+目標：
+只研究「哪些 extended ETF 值得未來被提名、被放進 static list、被做 predecision、被考慮 activation」。
+Lane B 不是本輪交易主線。
+
+Lane B 研究定位（MUST）：
+- extended ETF sleeve 是「偶爾可用的戰術性長線輔助工具」
+- 不是常態核心配置
+- 不是短期事件交易工具
+- 啟用目的僅限補強 base 六檔無法充分表達的長線輔助曝險
+- 不得取代 QQQ 作 benchmark carrier
+
+Lane B 研究排序優先級（NEW, MUST）：
+(1) 是否補足 base 六檔無法充分表達的長線曝險
+(2) 是否具備 12m+ thesis linkage，而非單一 45 天事件交易
+(3) 是否具備流動性 / AUM / spread 的可交易性
+(4) 是否值得未來加入 user_approved_extended_etf_static_list
+(5) 若已在 static list 中，是否值得通過 activation 進入本回合 allowed_extended_etf_tickers
+
+
+Lane B 必須永遠輸出（MUST）：
+- user_approved_extended_etf_static_list
+- proposed_extended_etf_candidates
+- extended_etf_candidate_universe
+- optional_extended_etf_sleeve
+
+- user_approved_extended_etf_static_list_input_interpretation_rule (NEW, MUST):
+  - user_approved_extended_etf_static_list 是使用者手動維護的已核准 static list，代表：
+    「上週或更早先前 run 已經產生 proposed_extended_etf_candidates，且使用者已完成人工審核，準備給本週/下週 run 使用的已核准 candidate pool」。
+  - 因此，本欄位可以合法為非空；非空不代表模板寫死預設值，也不代表模型可自行新增、沿用、或假設任何未經使用者核准的 ticker。
+  - 同理，本欄位若為空，也不代表模板從未跑過；只代表截至本回合為止，使用者沒有提供任何已核准 static list。
+  - 本欄位的實際值一律以使用者本回合提供內容為準。
+  - 若使用者已手動把前一輪 proposed_extended_etf_candidates 放入本欄位，模型必須把它視為有效的已核准輸入，而不是把它誤判為模板殘留、示例值、或不應存在的內容。
+  - 除非使用者本回合明確新增 / 刪除 / 清空，否則本欄位可視為跨週延續的人工核准清單。
+
+- current_run_user_approved_extended_etf_static_list (INPUT, MUST):
+  - 本欄位是本回合實際輸入，代表：
+    「上週或更早先前 run 已產生 proposed_extended_etf_candidates，且使用者已完成人工審核，批准本回合可進入 Lane B 正式預審 / activation 評估的 static list」。
+  - current_run_user_approved_extended_etf_static_list_value:
+    <injected_at_render_time>
+  - 若本回合沒有已核准名單，則 current_run_user_approved_extended_etf_static_list_value:
+    []
+  - 本欄位不是示例，不是預設值，也不是模型可自行推定的內容。
+  - RESEARCH_JSON.user_approved_extended_etf_static_list 必須 copy-exact 等於本欄位的實際值。
+  - 若本欄位非空：
+    extended_etf_candidate_universe 只能是它的子集合。
+  - 若本欄位為空：
+    extended_etf_candidate_universe 必須 = []
+
+- current_run_static_list_copy_through_rule (NEW, MUST):
+  - Shared RESEARCH_JSON 區塊中出現的
+    "user_approved_extended_etf_static_list": []
+    只作 schema/example 示意。
+  - 最終實際輸出時，
+    RESEARCH_JSON.user_approved_extended_etf_static_list
+    必須 copy-exact 等於 current_run_user_approved_extended_etf_static_list 的實際值。
+  - 不得因 Shared RESEARCH_JSON example 內預設為 []，就忽略本回合已提供的非空 approved static list。
+
+Lane B 條件式輸出（CONDITIONAL）：
+- 若 extended_etf_candidate_universe 非空：
+  必須輸出 extended_etf_predecision_scorecard
+- 若 optional_extended_etf_sleeve.enabled = true：
+  必須輸出 extended_etf_scorecard
+- 若未啟用：
+  extended_etf_scorecard 可省略；若輸出則必須 = []
+
+user_approved_extended_etf_static_list_rule (MUST):
+- user_approved_extended_etf_static_list 是唯一可交易候選來源 SSOT
+- 若提供：
+  extended_etf_candidate_universe 只能是它的子集合
+- 若為空或未提供：
+  extended_etf_candidate_universe 必須 = []
+  proposed_extended_etf_candidates 只能作研究提名，不得視為可交易 candidate universe
+- 本清單預設跨週延續，除非使用者明確新增 / 刪除 / 清空
+
+proposed_extended_etf_candidates_rule (MUST):
+- RESEARCH_JSON 必須永遠輸出 proposed_extended_etf_candidates（可為 []）
+- 若 user_approved_extended_etf_static_list 為空或未提供：
+  - 預設輸出 1–3 檔研究提名
+  - 只有在確實找不到合格候選時才允許輸出 []
+- 若 static list 非空：
+  - proposed_extended_etf_candidates 預設輸出 0–2 檔即可
+  - 輸出 [] 屬正常
+- proposed_extended_etf_candidates 內每檔至少包含：
+  ticker
+  sleeve_role
+  best_base_alternative
+  why
+  event_id_refs: []
+  structural_theme_refs: []
+- proposed candidates 的 ticker 不得與下列集合重複：
+  (1) user_approved_extended_etf_static_list
+  (2) extended_etf_candidate_universe
+  (3) optional_extended_etf_sleeve.allowed_extended_etf_tickers
+
+proposed_extended_etf_candidates_non_tradeable_rule (MUST):
+- proposed_extended_etf_candidates 僅供未來審核
+- 不得直接進入：
+  extended_etf_candidate_universe
+  optional_extended_etf_sleeve.allowed_extended_etf_tickers
+  effective_allowed_buy_universe
+  shortlist
+  buy-side delta
+  BUY_ORDERS
+
+extended_etf_candidate_universe_tradeability_rule (MUST):
+- extended_etf_candidate_universe 內每檔 ETF 必須符合：
+  (1) 非槓桿
+  (2) 非反向
+  (3) 流動性充足
+  (4) AUM 充足
+  (5) 點差合理
+- 每檔都必須輸出 tradeability_evidence：
+  {
+    "avg_dollar_volume_bucket": "high|adequate|insufficient",
+    "aum_bucket": "high|adequate|insufficient",
+    "spread_bucket": "tight|acceptable|wide",
+    "source_refs": []
+  }
+- 若任一條件不足，該 ETF 不得進入 extended_etf_candidate_universe
+
+extended_etf_predecision_scorecard_rule (MUST):
+- 只要 extended_etf_candidate_universe 非空，每次 run 都必須輸出 extended_etf_predecision_scorecard
+- optional_extended_etf_sleeve.enabled 的判定必須完全基於該 predecision scorecard
+- 不得先主觀決定 enabled 再回填分數
+- 即使最終 enabled = false，仍必須輸出：
+  top_candidate
+  disable_reason
+  why_not_enabled
+
+extended_etf_predecision_scorecard 每檔必填欄位（MUST）：
+- ticker
+- sleeve_role
+- best_base_alternative
+- benchmark_alignment_score (1-5, integer)
+- alpha_upside_score (1-5, integer)
+- regime_fit_score (1-5, integer)
+- benchmark_drift_risk_score (1-5, integer)
+- diversification_utility_score (1-5, integer)
+- liquidity_quality_score (1-5, integer)
+- thesis_duration_score (1-5, integer)
+- event_dependency_score (1-5, integer)
+- expected_return_profile_3_5y (1-5, integer)
+- execution_priority_this_run
+- enable_hurdle_passed (true|false)
+- tradeability_evidence
+- why
+- event_id_refs: []
+- structural_theme_refs: []
+
+extended_etf_activation_rule (MUST):
+- optional_extended_etf_sleeve.enabled 只有在以下硬門檻全部成立時，才可進入啟用評估：
+  (1) thesis_duration_score >= 4
+  (2) liquidity_quality_score >= 4
+  (3) event_dependency_score <= 3
+  (4) 啟用理由不得主要來自單一 45 天事件；必須具備 12m+ thesis linkage
+- 在通過硬門檻後，尚需滿足下列加分門檻至少 2 項成立，才可 enabled = true：
+  (a) expected_return_profile_3_5y >= 4
+  (b) alpha_upside_score 相對 best_base_alternative 更優
+  (c) diversification_utility_score 相對 best_base_alternative 更優
+  (d) regime_fit_score 相對 best_base_alternative 更優
+- 若未通過：
+  enabled = false
+  allowed_extended_etf_tickers = []
+
+extended_etf_activation_consistency_rule (MUST):
+- 若任一 extended_etf_predecision_scorecard item 的 enable_hurdle_passed = true，
+  但 optional_extended_etf_sleeve.enabled 仍 = false，
+  disable_reason 必須明確說明：
+  "passed ticker-level activation but failed sleeve-level allocation / benchmark-preservation decision"
+- 不得同時出現：
+  enable_hurdle_passed = true
+  與
+  disable_reason = "no approved candidates passed activation"
+
+extended_etf_scorecard_rule (CONDITIONAL, MUST):
+- 若 optional_extended_etf_sleeve.enabled = true：
+  必須輸出 extended_etf_scorecard
+- ticker 集合必須與 optional_extended_etf_sleeve.allowed_extended_etf_tickers 完全一致
+- 每檔都必須輸出：
+  ticker
+  sleeve_role
+  best_base_alternative
+  benchmark_alignment_score
+  alpha_upside_score
+  regime_fit_score
+  benchmark_drift_risk_score
+  event_dependency_score
+  enable_hurdle_passed
+  tradeability_evidence
+  diversification_utility_score
+  liquidity_quality_score
+  thesis_duration_score
+  expected_return_profile_3_5y
+  execution_priority_this_run
+  why
+  event_id_refs: []
+  structural_theme_refs: []
+
+extended_lane_output_conditionality_rule (MUST):
+- 若 user_approved_extended_etf_static_list 為空或未提供：
+  extended_etf_candidate_universe = []
+  extended_etf_predecision_scorecard = []
+  optional_extended_etf_sleeve.enabled = false
+  optional_extended_etf_sleeve.top_candidate = null
+  optional_extended_etf_sleeve.allowed_extended_etf_tickers = []
+  optional_extended_etf_sleeve.disable_reason = "awaiting user approval for proposed candidates"
+  optional_extended_etf_sleeve.why_not_enabled = "extended ETF sleeve remains non-tradeable until user-approved static candidate list is provided"
+- 若 static list 非空但本回合沒有 ETF 通過 activation：
+  optional_extended_etf_sleeve.enabled = false
+  optional_extended_etf_sleeve.allowed_extended_etf_tickers = []
+  optional_extended_etf_sleeve.disable_reason = "no approved candidates passed activation"
+
+────────────────────────────────────────
+【Lane 關係 / 優先級】
+
+lane_priority_rule (NEW, MUST):
+- Lane A（Base Decision Lane）是本模板主線
+- Lane B（Extended Candidate Lane）是候選提名 / 預審副線
+- 任何研究資源衝突時，先滿足 Lane A，再處理 Lane B
+- 不得因 extended 候選研究而稀釋 base 六檔 ranking 品質
+- 不得為了提出更多 extended candidates 而降低 buy_universe_scorecard 的品質或完整性
+
+cross_lane_consistency_rule (NEW, MUST):
+- Lane A 與 Lane B 可共用 regime_inputs、policy_items、scheduled_events、unscheduled_risks、structural_themes_6_18m
+- 但 buy_universe_scorecard 只能服務 Lane A
+- extended_etf_predecision_scorecard / extended_etf_scorecard / proposed_extended_etf_candidates 只能服務 Lane B
+- Lane B 不得改寫 Lane A 的 role_layer SSOT
+- Lane B 不得把 extended ETF 提升為 benchmark carrier
+
+────────────────────────────────────────
+【共同輸出欄位 / Shared RESEARCH_JSON】
+
+RESEARCH_JSON 必須至少包含以下欄位（可增欄位，但不要少）：
+
+{
+  "schema_version": "1.0",
+  "lane_meta": {
+    "architecture": "dual_lane_single_json",
+    "lane_a_name": "base_decision_lane",
+    "lane_b_name": "extended_candidate_lane",
+    "lane_priority": ["base_decision_lane", "extended_candidate_lane"]
+  },
+  "trade_universe": {
+    "allowed_buy_tickers": ["VOO","VTI","VT","QQQ","SMH","IGV"],
+    "notes": "Template2 buy-side must restrict to allowed_buy_tickers only."
+  },
+  "user_approved_extended_etf_static_list": "<copy_exact_from_current_run_user_approved_extended_etf_static_list>",
+  "proposed_extended_etf_candidates": [
+    {
+      "ticker": "",
+      "sleeve_role": "core_completer|diversifier|measured_tilt",
+      "best_base_alternative": "",
+      "why": "",
+      "event_id_refs": [],
+      "structural_theme_refs": []
+    }
+  ],
+  "extended_etf_candidate_universe": [],
+  "validation_summary": {
+    "passed": true,
+    "fail_reasons": [],
+    "auto_fixes_applied": [],
+    "checks": {
+      "formula_reproducibility": true,
+      "top5_window_and_refs": true,
+      "buy_universe_completeness_and_order": true,
+      "extended_etf_tradeability_and_activation": true,
+      "materiality_filter_enforced": true,
+      "scheduled_events_future_window": true,
+      "unscheduled_risks_order_and_rank": true,
+      "extended_etf_disable_reason_consistency": true
+    }
+  },
+  "risk_mode_hint": "balanced",
+  "as_of": "YYYY-MM-DD",
+  "event_time_zone_canonical": "America/New_York",
+  "user_time_zone": "America/Los_Angeles",
+  "price_time_zone_basis": "US equities last close in exchange time; display in user_time_zone",
+  "window_days": 45,
+  "regime_inputs": {},
+  "regime_inputs_sources": {},
+  "policy_items": [],
+  "scheduled_events": [],
+  "unscheduled_risks": [],
+  "structural_themes_6_18m": [],
+  "buy_universe_scorecard": [],
+  "extended_etf_predecision_scorecard": [],
+  "optional_extended_etf_sleeve": {
+    "enabled": false,
+    "top_candidate": null,
+    "disable_reason": "",
+    "why_not_enabled": "",
+    "allowed_extended_etf_tickers": [],
+    "notes": "Extended ETF sleeve 為非核心、可選的長線輔助工具；未啟用時，Template2 必須維持在 trade_universe.allowed_buy_tickers 內。"
+  },
+  "extended_etf_scorecard": [],
+  "top5_next_week": [],
+  "data_staleness_note": ""
+}
+
+────────────────────────────────────────
+【Validation / 必過檢查】
+
+validation_summary_hard_checks_rule (MUST):
+- validation_summary.passed = true 只有在以下檢查全部通過時才允許：
+  (1) 所有 expected_impact / impact_score 可依公式重算一致
+  (2) top5_next_week 全部落在 [as_of, as_of+7] 視窗內，且 scheduled_event_id_ref 一一對應
+  (3) scheduled_events 全部 date 落在 [as_of, as_of+window_days]
+  (4) buy_universe_scorecard 六檔完整，execution_priority_this_run 為 1..6 唯一值，且輸出順序正確
+  (5) unscheduled_risks 已依 impact_score 由大到小排序，且 rank=1..N 無缺號、無重複
+  (6) extended_etf_candidate_universe 每檔皆有 tradeability_evidence，且未違反 drift / activation 規則
+  (7) 若任一 extended_etf_predecision_scorecard item enable_hurdle_passed = true，disable_reason 不得為 "no approved candidates passed activation"
+  (8) policy_items / scheduled_events 無違反 materiality_filter_rule 的項目
+
+output_completeness_for_rotation (MUST):
+- 若 RESEARCH_JSON 缺 buy_universe_scorecard，視為 FAIL
+- 若因資料限制無法高信心排序，仍必須輸出六檔完整 scorecard，但可在 why 中說明信心限制
+
+────────────────────────────────────────
+【最後輸出格式】
+
+請把最終 JSON 放在以下標記之間，且只放 JSON，不要加任何其他文字：
+
+RESEARCH_JSON_START
+{...}
+RESEARCH_JSON_END
+
+────────────────────────────────────────
+【Current Run Inputs（injected by workflow; rendered prompt must contain actual values, not placeholder notes）】
+
+- current_run_inputs_render_rule (NEW, MUST):
+  - 本區塊在 source template 中可包含 placeholder。
+  - render 後的最終 prompt 必須只保留實際值，不得保留 placeholder 說明文字、debug 區塊、或 placeholder wrapper。
+  - 若同一資訊同時出現在獨立 current-run block 與 strategy_settings.yaml 內：
+    current-run block 優先，視為本回合 SSOT。
+
+CURRENT_RUN_INPUTS_START
+
+CURRENT_RUN_USER_APPROVED_EXTENDED_ETF_STATIC_LIST_START
+{{ current_run_user_approved_extended_etf_static_list_json }}
+CURRENT_RUN_USER_APPROVED_EXTENDED_ETF_STATIC_LIST_END
+
+STRATEGY_SETTINGS_YAML_START
+{{ strategy_settings_yaml }}
+STRATEGY_SETTINGS_YAML_END
+
+PORTFOLIO_SNAPSHOT_START
+{{ portfolio_snapshot }}
+PORTFOLIO_SNAPSHOT_END
+
+CURRENT_RUN_INPUTS_END

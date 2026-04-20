@@ -1,0 +1,8 @@
+Metadata-Version: 2.4
+Name: investment-orchestrator
+Version: 0.1.0
+Summary: Manual Step 1 and Step 2 orchestration workflow for investment-system-yu.
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: jsonschema>=4.23.0
+Requires-Dist: PyYAML>=6.0.2
