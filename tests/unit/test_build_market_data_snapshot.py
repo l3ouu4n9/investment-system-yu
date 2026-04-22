@@ -1,4 +1,4 @@
-from investment_system.market.build_market_data_snapshot import parse_run_timestamp_et
+from investment_orchestrator.market.build_market_data_snapshot import parse_run_timestamp_et
 
 
 def test_parse_run_timestamp_et_attaches_new_york_timezone() -> None:

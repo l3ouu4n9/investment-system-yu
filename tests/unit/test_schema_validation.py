@@ -1,16 +1,24 @@
 import pytest
 
-from investment_system.common.schema_validation import ArtifactSchemaError, validate_artifact_schema
-from investment_system.pipelines.shared import init_run_context
+from investment_orchestrator.common.schema_validation import (
+    ArtifactSchemaError,
+    validate_artifact_schema,
+)
 
 
 def test_validate_artifact_schema_accepts_run_context_payload() -> None:
-    payload = init_run_context(
-        pipeline_name="weekly",
-        as_of_date="2026-04-18",
-        run_timestamp_et="2026-04-18 20:30 ET",
-        extra_fields={"has_live_order": False},
-    )
+    payload = {
+        "schema_version": "1.0",
+        "pipeline": "weekly",
+        "as_of_date": "2026-04-18",
+        "run_timestamp_et": "2026-04-18 20:30 ET",
+        "run_mode": "normal",
+        "blocking_issue": None,
+        "degraded_steps": [],
+        "warnings": [],
+        "step_summary": [],
+        "has_live_order": False,
+    }
 
     validate_artifact_schema(payload, schema_name="run_context.schema.json")
 

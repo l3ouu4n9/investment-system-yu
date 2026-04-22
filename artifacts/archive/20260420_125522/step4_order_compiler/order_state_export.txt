@@ -1,0 +1,41 @@
+(2a) existing_buy_open_orders_summary
+TICKER | budget | template_id | anchor_baseline_last_close | anchor_price_asof | last_refresh_date_et(optional) | highest_live_limit(optional) | lowest_live_limit(optional) | live_step_count(optional) | live_order_steps_summary(optional) | live_order_qtys_summary(optional)
+QQQ | 6000 | T4-E | 611.07 | 2026-04-10 | 2026-04-12 | 608.40 | 582.50 | 5 | starter=608.40;L1=602.00;L2=595.50;L3=589.00;L4=582.50 | starter=3;L1=2;L2=2;L3=2;L4=1
+VOO | 4000 | T4-B | 652.78 | 2026-04-17 | null | 626.34 | 538.22 | 4 | L1=626.34;L2=596.97;L3=567.59;L4=538.22 | L1=1;L2=1;L3=1;L4=1
+SMH | 3000 | T4-B | 464.16 | 2026-04-17 | null | 445.36 | 382.70 | 4 | L1=445.36;L2=424.47;L3=403.59;L4=382.70 | L1=1;L2=1;L3=1;L4=1
+
+(2b) sell_open_orders
+[]
+
+DEFERRED_NOT_YET_LIVE
+[
+{
+"action_date_et": "2026-04-20",
+"ticker": "VTI",
+"action": "CANCEL_EXISTING",
+"current_live_ssot_reference": "PORTFOLIO_SNAPSHOT.existing_buy_open_orders_summary[VTI]",
+"intended_next_ssot_reference": "ORDER_STATE_EXPORT.(2a).existing_buy_open_orders_summary[VTI]=REMOVED",
+"reason": "audited diversified_core_buffer rotation out; current live VTI ladder is canceled and its budget is redeployed to VOO on intended submission date"
+},
+{
+"action_date_et": "2026-04-20",
+"ticker": "VOO",
+"action": "NEW_ORDER",
+"current_live_ssot_reference": "PORTFOLIO_SNAPSHOT.existing_buy_open_orders_summary[VOO]=ABSENT",
+"intended_next_ssot_reference": "ORDER_STATE_EXPORT.(2a).existing_buy_open_orders_summary[VOO]",
+"reason": "audited diversified_core_buffer rotation in; intended new T4-B ladder becomes open-orders SSOT only after actual submission"
+},
+{
+"action_date_et": "2026-04-20",
+"ticker": "SMH",
+"action": "NEW_ORDER",
+"current_live_ssot_reference": "PORTFOLIO_SNAPSHOT.existing_buy_open_orders_summary[SMH]=ABSENT",
+"intended_next_ssot_reference": "ORDER_STATE_EXPORT.(2a).existing_buy_open_orders_summary[SMH]",
+"reason": "audited sector_alpha_tilt funding; intended new T4-B ladder becomes open-orders SSOT only after actual submission"
+}
+]
+
+STATE_TRANSITION_NOTE
+
+* 在 2026-04-20 實際提交前，Portfolio Snapshot 中既有 live orders 仍是 current live SSOT。
+* 只有在 2026-04-20 實際提交後，上述 existing_buy_open_orders_summary / sell_open_orders 才成為新的 open-orders SSOT。

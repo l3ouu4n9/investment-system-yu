@@ -1,23 +1,19 @@
-PATCH_1
-fail_check_id: "1.62"
-fail_reason: "DECISION_PACKET.MARKET_DATA_SNAPSHOT 將非交易日 2026-04-19 寫成 market_data_target_close_date_et 與 tickers[*].price_asof，且 execution_date_et 亦錯寫為週日。"
-patch_action: "將 MARKET_DATA_SNAPSHOT.market_data_target_close_date_et 統一修正為 2026-04-17；將所有 tickers[*].price_asof 修正為 2026-04-17；將 execution_date_et 修正為 next actionable session 2026-04-20。"
-patch_scope: "structure-only"
+1 | check_id | 1.63
+fail_reason | DECISION_PACKET.MARKET_DATA_SNAPSHOT.tickers[*] 缺 provenance_flag / provenance_note；無法滿足 mixed-source provenance hardlock
+patch_action | 對六檔 ticker 全數補齊 provenance_flag="MIXED_SOURCE_PROVENANCE" 與 provenance_note="last_close / price_asof 由 fallback source 提供；technicals 由 primary source 提供"，並保留 last_close_source / price_asof_source / technicals_source / data_gap=false / data_gap_reason=null
+patch_scope | structure-only
 
-PATCH_2
-fail_check_id: "1.61 / 1.63"
-fail_reason: "VT 在 TEMPLATE2_OUTPUT 與 assumptions 明示為 fallback(Stooq) 補 last_close / price_asof，但 DECISION_PACKET 被錯誤 normalize 成 Barchart，且 data_gap=false。"
-patch_action: "保留 VT per-ticker fallback provenance：last_close_source=Stooq、price_asof_source=Stooq、technicals_source=Barchart、data_gap=true、data_gap_reason='VT 的 last_close 與 52w range 以 Stooq 補齊；MA/ATR/avg_volume 仍採 Barchart technical page.'"
-patch_scope: "structure-only"
+2 | check_id | 8.51
+fail_reason | pre-audit packet 僅有 execution_plan_drafts_8_5，缺 final_execution_plans / final_action / compile_ready；尚非 Strategy C compile contract 最終形態
+patch_action | 將三筆 buy-side draft deterministic collapse 為 final_execution_plans；欄位命名收斂為 target_open_order_budget / existing_open_order_budget / final_action；補 compile_ready=true；不改動 shortlist、budget、thesis、event refs
+patch_scope | structure-only
 
-PATCH_3
-fail_check_id: "1.64"
-fail_reason: "DECISION_PACKET.MARKET_DATA_SNAPSHOT 將 Template2 已提供且 execution_plans / diagnostics 引用之 atr / 52w / trend / liquidity / quadrant 等欄位留為 null，造成 compiler derivability fail。"
-patch_action: "依 TEMPLATE2_OUTPUT.MARKET_DATA_TABLE 回填各 ticker 的 atr_20_abs、atr_20_30d_pct、week_52_low、week_52_high、trend_state、liquidity_tier、quadrant；其餘可由 compiler 直接使用的 market-data 欄位全部補齊。"
-patch_scope: "structure-only"
+3 | check_id | 8.6A
+fail_reason | sell_side_delta_table_8_2 使用 HOLD_NO_SELL_DRAFT，屬 pre-audit review-state vocabulary
+patch_action | 將六筆 sell-side rows 全數收斂為 final_action="HOLD_NO_SELL_ACTION"
+patch_scope | structure-only
 
-PATCH_4
-fail_check_id: "8.6"
-fail_reason: "sell_side_delta_table_8_2 含未收斂狀態 HOLD_REVIEW_FOR_AUDIT（VTI、IGV），不符合 compile-ready final-state 規則。"
-patch_action: "在不改動 thesis / ranking / budget / rotation 的前提下，將 VTI 與 IGV 的 sell-side 狀態收斂為 HOLD_NO_SELL_DRAFT，並補明確 why：open-order rotation 或低於 MA200 不足以單獨構成 LTCG trim / sell trigger。"
-patch_scope: "structure-only"
+4 | check_id | 8.6B
+fail_reason | buy_side_delta_table 使用 action_draft / order_intent_draft / anchor_decision_draft，屬 pre-audit draft vocabulary
+patch_action | 將 buy-side rows 收斂為 final_buy_side_delta_table，NEW_ORDER rows 使用 final_action="NEW_ORDER"，其餘使用 final_action="HOLD_NO_NEW_BUDGET"；execution rows 僅保留 compile-ready NEW_ORDER plans
+patch_scope | structure-only

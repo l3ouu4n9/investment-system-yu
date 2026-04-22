@@ -1,0 +1,14 @@
+.venv/
+.uv-cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local artifacts from manual workflow runs
+artifacts/current/
+
+# Windows metadata occasionally copied into the repo
+*.Zone.Identifier

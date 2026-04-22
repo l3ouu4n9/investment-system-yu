@@ -5,12 +5,17 @@ build-backend = "uv_build"
 [project]
 name = "investment-orchestrator"
 version = "0.1.0"
-description = "Manual Step 1 and Step 2 orchestration workflow for investment-system-yu."
+description = "Manual Step 1 through Step 4 orchestration workflow for investment-system-yu."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "jsonschema>=4.23.0",
   "PyYAML>=6.0.2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
 ]
 
 [tool.uv]

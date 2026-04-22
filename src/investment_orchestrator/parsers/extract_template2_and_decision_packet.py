@@ -276,14 +276,14 @@ def normalize_market_data_snapshot(payload: Any, *, context_text: str) -> dict[s
             ticker = str(raw_row.get("ticker", "")).upper().strip()
             if not ticker:
                 continue
-                ticker_rows.append(
-                    _normalize_snapshot_ticker_row(
-                        ticker,
-                        raw_row,
-                        target_close_date_et=target_close_date_et,
-                        primary_source=primary_source,
-                    )
+            ticker_rows.append(
+                _normalize_snapshot_ticker_row(
+                    ticker,
+                    raw_row,
+                    target_close_date_et=target_close_date_et,
+                    primary_source=primary_source,
                 )
+            )
 
     if not ticker_rows:
         top_level_ticker_map: dict[str, dict[str, Any]] = {}

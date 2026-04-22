@@ -1,0 +1,883 @@
+TEMPLATE3_AUDIT_START
+{
+"audit_passed_after_patch": true,
+"order_compiler_ready_after_patch": true,
+"summary": {
+"hard_cap_open_orders_budget": 27534.86,
+"existing_buy_open_order_budget_A": 10000,
+"final_total_open_order_budget": 13000,
+"remaining_headroom_after_audit": 14534.86
+},
+"checks": [
+{
+"id": "0.25",
+"name": "dual-lane boundary integrity",
+"status": "PASS",
+"patched": false,
+"detail": "No proposed or approved extended ETF entered effective_allowed_buy_universe, active_shortlist, buy-side delta, or execution plans."
+},
+{
+"id": "0.26",
+"name": "lane_b promotion gate compliance",
+"status": "PASS",
+"patched": false,
+"detail": "optional_extended_etf_sleeve.enabled=false and allowed_extended_etf_tickers=[]; no Lane B ticker was promoted into buy-side actions."
+},
+{
+"id": "1",
+"name": "hard cap on open orders",
+"status": "PASS",
+"patched": false,
+"detail": "Final audited buy-side open-order budget = 13000 <= 27534.86."
+},
+{
+"id": "1.5",
+"name": "A reconciliation",
+"status": "PASS",
+"patched": false,
+"detail": "existing_buy_open_orders_summary budgets sum to 10000 (QQQ 6000 + VTI 4000), matching TEMPLATE2 existing_buy_open_order_budget_A."
+},
+{
+"id": "1.6",
+"name": "market data source consistency",
+"status": "PASS",
+"patched": true,
+"detail": "TEMPLATE2 MARKET_DATA_TABLE and DECISION_PACKET MARKET_DATA_SNAPSHOT agree on last_close, price_asof, ATR, MA, volume, 52w fields, trend_state, liquidity_tier, and source attribution for all six base tickers; provenance metadata was patched into the audited packet for compiler-derivability."
+},
+{
+"id": "1.61",
+"name": "primary/fallback hardlock",
+"status": "PASS",
+"patched": false,
+"detail": "Global source lock is Barchart primary and Stooq fallback-for-last_close/price_asof-only; no ticker was silently rewritten to fallback provenance."
+},
+{
+"id": "1.62",
+"name": "weekend/holiday close-date canonicalization",
+"status": "PASS",
+"patched": false,
+"detail": "Run is non-trading day; market_data_target_close_date_et=2026-04-17, per-ticker price_asof=2026-04-17, and execution_date_et=2026-04-20 are mutually consistent."
+},
+{
+"id": "1.63",
+"name": "per-ticker source provenance hardlock",
+"status": "PASS",
+"patched": true,
+"detail": "All six tickers are primary-source only; audited packet now preserves provenance_flag and provenance_note explicitly instead of leaving provenance unspecified."
+},
+{
+"id": "1.64",
+"name": "market data field parity / compiler derivability",
+"status": "PASS",
+"patched": true,
+"detail": "Audited MARKET_DATA_SNAPSHOT now retains required compiler-facing fields for each ticker, including provenance_flag and provenance_note."
+},
+{
+"id": "2",
+"name": "whole-share feasibility",
+"status": "PASS",
+"patched": false,
+"detail": "QQQ preserved-live notional remains within budget; VOO and SMH ladders are whole-share feasible at every rung; VTI row is cancel-only."
+},
+{
+"id": "3",
+"name": "risk limits on open orders / core-first discipline",
+"status": "PASS",
+"patched": false,
+"detail": "Core budget share = 10000/13000 = 76.92%; sector-alpha budget share = 3000/13000 = 23.08%. No explicit numeric risk-limit override was provided, and the audited packet remains benchmark/core-first."
+},
+{
+"id": "4",
+"name": "event window concentration",
+"status": "PASS",
+"patched": false,
+"detail": "QQQ, VOO, and VTI state changes cluster around the 2026-04-21 macro window and SMH around the 2026-04-23 theme window, but gross audited budget remains 13000 and is split across benchmark carrier, one core buffer, and one minority sector tilt."
+},
+{
+"id": "5",
+"name": "exposure overlap / drawdown risk",
+"status": "PASS",
+"patched": false,
+"detail": "VTI to VOO same-role upgrade reduces rate-sensitive small/mid-cap breadth while preserving buffer role; SMH remains a minority tilt and does not displace QQQ."
+},
+{
+"id": "6",
+"name": "plan-type audit",
+"status": "PASS",
+"patched": true,
+"detail": "Execution rows were normalized from draft-state to final resolved states without changing thesis, budget, or rotation direction."
+},
+{
+"id": "6.5",
+"name": "LTCG-only holding period constraint",
+"status": "PASS",
+"patched": false,
+"detail": "No sell-side action is proposed; no non-LTCG disposal is introduced."
+},
+{
+"id": "6.52",
+"name": "benchmark alignment + overtrading / event-speculation guard",
+"status": "PASS",
+"patched": false,
+"detail": "QQQ stays funded and ranked first; only one same-role buffer rotation (VTI to VOO) and one minority SMH add are retained; no event-only thesis rewrite occurred."
+},
+{
+"id": "6.521",
+"name": "max_new_tickers_per_week compliance",
+"status": "PASS",
+"patched": false,
+"detail": "No new ticker is introduced to holdings or universe this week; VOO and SMH are already existing base holdings."
+},
+{
+"id": "6.521A",
+"name": "base-first capital allocation discipline",
+"status": "PASS",
+"patched": false,
+"detail": "QQQ benchmark carrier and VOO diversified core buffer are funded before SMH sector tilt; IGV remains held_no_new_budget."
+},
+{
+"id": "6.53",
+"name": "benchmark carrier / active tilt drift",
+"status": "PASS",
+"patched": false,
+"detail": "QQQ remains the sole benchmark carrier with the largest audited buy-side budget and is not replaced by any satellite or extended ETF."
+},
+{
+"id": "6.54",
+"name": "role layering compliance",
+"status": "PASS",
+"patched": false,
+"detail": "1 benchmark_carrier_core, 1 funded diversified_core_buffer, 1 funded sector_alpha_tilt, and 1 watch-only sector_alpha_tilt all comply with active_shortlist_size_rule."
+},
+{
+"id": "6.55",
+"name": "linkage + entry_driver labeling",
+"status": "PASS",
+"patched": false,
+"detail": "All funded rows retain event_id_refs plus structural_theme_refs and are labeled in the audited final tables with explicit entry drivers; 12m+ thesis continuity is preserved."
+},
+{
+"id": "6.56",
+"name": "no-trade primary blocker labeling",
+"status": "PASS",
+"patched": true,
+"detail": "VT and IGV were collapsed to resolved HOLD_NO_NEW_BUDGET states with explicit primary blockers instead of unresolved draft/watch labels."
+},
+{
+"id": "6.57",
+"name": "conditional post-event order preference compliance",
+"status": "PASS",
+"patched": false,
+"detail": "New orders remain configured to place before the nearest macro/theme event per Strategy Settings; no post-event-only override was introduced."
+},
+{
+"id": "6.6",
+"name": "SELL eligibility",
+"status": "PASS",
+"patched": false,
+"detail": "No sell-side delta or sell execution plan is proposed."
+},
+{
+"id": "6.7",
+"name": "SELL linkage + limit + lot selection",
+"status": "PASS",
+"patched": false,
+"detail": "No sell-side row to validate."
+},
+{
+"id": "6.72",
+"name": "intended_shares_to_sell validity",
+"status": "PASS",
+"patched": false,
+"detail": "No sell-side row to validate."
+},
+{
+"id": "6.725",
+"name": "8.15 rotation layer compaction consistency",
+"status": "PASS",
+"patched": false,
+"detail": "Rotation layer VTI to VOO for 4000 matches buy_side_delta_table and execution plans exactly."
+},
+{
+"id": "6.73",
+"name": "8.15 to 8.2 lot expansion consistency",
+"status": "PASS",
+"patched": false,
+"detail": "No sell-side rotation expansion required."
+},
+{
+"id": "6.731",
+"name": "compact lot output consistency",
+"status": "PASS",
+"patched": false,
+"detail": "No sell-side compact lot output present."
+},
+{
+"id": "6.74",
+"name": "replacement target validity",
+"status": "PASS",
+"patched": false,
+"detail": "VOO is a valid replacement target inside RESEARCH_JSON.buy_universe_scorecard and remains within the base six only."
+},
+{
+"id": "6.75",
+"name": "relative expected return rotation validity",
+"status": "PASS",
+"patched": false,
+"detail": "relative_rotation_enabled=true and VOO outranks VTI in RESEARCH_JSON.buy_universe_scorecard for the diversified_core_buffer role."
+},
+{
+"id": "6.8",
+"name": "no same-run redeploy / hard-cap isolation",
+"status": "PASS",
+"patched": false,
+"detail": "No sell proceeds are redeployed into buy budget; buy-side rotation only reuses existing buy open-order capacity and stays within hard cap."
+},
+{
+"id": "6.81",
+"name": "anchor_decision feature-flag / metadata guard",
+"status": "PASS",
+"patched": false,
+"detail": "All actionable rows have deterministic anchor metadata; preserve_live_step_shape rows match existing live step names from the snapshot."
+},
+{
+"id": "6.82",
+"name": "sell redeploy binding",
+"status": "PASS",
+"patched": false,
+"detail": "No sell-side row to validate."
+},
+{
+"id": "7",
+"name": "event-window ladder-rung proximity",
+"status": "PASS",
+"patched": false,
+"detail": "All actionable buy plans remain anchored below current last close and are scheduled for the next actionable session before their respective event windows."
+},
+{
+"id": "8",
+"name": "plan structure consistency",
+"status": "PASS",
+"patched": true,
+"detail": "Draft-state rows were converted into compiler-facing final rows with no unresolved review labels left in final tables."
+},
+{
+"id": "8.5",
+"name": "base / alt execution plan schema consistency",
+"status": "PASS",
+"patched": false,
+"detail": "All retained buy-side execution rows use the correct role template, step names, and offset maps from Strategy Settings."
+},
+{
+"id": "8.51",
+"name": "Strategy C compile contract completeness",
+"status": "PASS",
+"patched": true,
+"detail": "Audited final_execution_plans now include final_action for every retained row, preserve required step metadata, and normalize the QQQ KEEP_EXISTING intended_place_date_et to the actionable execution date for deterministic downstream compilation and state handling."
+},
+{
+"id": "8.51A",
+"name": "upstream compile-blocker terminal handling",
+"status": "PASS",
+"patched": false,
+"detail": "No unpatchable upstream blocker remains after structure-only schema completion patches."
+},
+{
+"id": "8.51B",
+"name": "reanchor notional feasibility / preserve-live-qty consistency",
+"status": "PASS",
+"patched": false,
+"detail": "No retained row uses mini_reanchor_candidate or full_reanchor_candidate logic; this blocker path is not triggered."
+},
+{
+"id": "8.6",
+"name": "final-state resolution / no unresolved review labels",
+"status": "PASS",
+"patched": true,
+"detail": "All buy-side rows are collapsed to final resolved actions; no HOLD_REVIEW_FOR_AUDIT, REVIEW_NEEDED, PENDING_AUDIT, or similar labels remain."
+},
+{
+"id": "8.6A",
+"name": "default review-state collapse",
+"status": "PASS",
+"patched": true,
+"detail": "Watch-only draft rows were deterministically collapsed into HOLD_NO_NEW_BUDGET."
+},
+{
+"id": "10",
+"name": "actionable_window",
+"status": "PASS",
+"patched": true,
+"detail": "Audited packet keeps a single canonical actionable window and aligns its run timestamp representation with the market-data snapshot."
+},
+{
+"id": "10.5",
+"name": "ORDER_STATE_EXPORT derivability and post-Step4 consistency",
+"status": "PASS",
+"patched": false,
+"detail": "Final buy-side states and final execution rows are sufficient for downstream order-state derivation; no half-complete row remains."
+},
+{
+"id": "11",
+"name": "max_total_positions",
+"status": "PASS",
+"patched": false,
+"detail": "No new position slot is created outside the existing base ETF set; extended sleeve remains disabled."
+}
+],
+"patchable_fail_checks_fixed": [
+"1.63",
+"1.64",
+"8.51",
+"8.6",
+"10"
+],
+"unpatchable_upstream_blockers": []
+}
+TEMPLATE3_AUDIT_END
+TEMPLATE2_PATCH_START
+[
+{
+"fail_check_id": "1.63/1.64",
+"fail_reason": "DECISION_PACKET.MARKET_DATA_SNAPSHOT omitted per-ticker provenance_flag and provenance_note, so market-data provenance was not compiler-derivable in audited form.",
+"patch_action": "Added provenance_flag='PRIMARY_SOURCE_ONLY' and provenance_note='last_close / price_asof / technicals all from primary source' to every ticker in AUDITED_DECISION_PACKET.MARKET_DATA_SNAPSHOT.",
+"patch_scope": "structure-only"
+},
+{
+"fail_check_id": "8.51",
+"fail_reason": "Execution drafts were still in draft schema and QQQ KEEP_EXISTING row had intended_place_date_et=null, which did not satisfy the downstream compile contract for retained rows.",
+"patch_action": "Emitted compiler-facing final_execution_plans with final_action fields, preserved required step metadata, and normalized QQQ intended_place_date_et to actionable_window.execution_date_et (2026-04-20) for deterministic downstream handling without changing economic intent.",
+"patch_scope": "structure-only"
+},
+{
+"fail_check_id": "8.6",
+"fail_reason": "Buy-side packet remained in draft/review vocabulary rather than fully resolved final-state vocabulary.",
+"patch_action": "Collapsed buy-side rows to resolved final actions: KEEP_EXISTING / NEW_ORDER / CANCEL_EXISTING / HOLD_NO_NEW_BUDGET.",
+"patch_scope": "structure-only"
+},
+{
+"fail_check_id": "10",
+"fail_reason": "actionable_window.run_timestamp_et used a less-specific date-only representation than MARKET_DATA_SNAPSHOT.run_timestamp_et.",
+"patch_action": "Canonicalized actionable_window.run_timestamp_et to '2026-04-19 00:00 ET' to match the packet-level market-data timestamp convention.",
+"patch_scope": "structure-only"
+}
+]
+TEMPLATE2_PATCH_END
+AUDITED_DECISION_PACKET_START
+{
+"audit_passed": true,
+"order_compiler_ready": true,
+"audit_fail_reasons": [],
+"patches_applied": [
+{
+"fail_check_id": "1.63/1.64",
+"fail_reason": "DECISION_PACKET.MARKET_DATA_SNAPSHOT omitted per-ticker provenance_flag and provenance_note, so market-data provenance was not compiler-derivable in audited form.",
+"patch_action": "Added provenance_flag='PRIMARY_SOURCE_ONLY' and provenance_note='last_close / price_asof / technicals all from primary source' to every ticker in AUDITED_DECISION_PACKET.MARKET_DATA_SNAPSHOT.",
+"patch_scope": "structure-only"
+},
+{
+"fail_check_id": "8.51",
+"fail_reason": "Execution drafts were still in draft schema and QQQ KEEP_EXISTING row had intended_place_date_et=null, which did not satisfy the downstream compile contract for retained rows.",
+"patch_action": "Emitted compiler-facing final_execution_plans with final_action fields, preserved required step metadata, and normalized QQQ intended_place_date_et to actionable_window.execution_date_et (2026-04-20) for deterministic downstream handling without changing economic intent.",
+"patch_scope": "structure-only"
+},
+{
+"fail_check_id": "8.6",
+"fail_reason": "Buy-side packet remained in draft/review vocabulary rather than fully resolved final-state vocabulary.",
+"patch_action": "Collapsed buy-side rows to resolved final actions: KEEP_EXISTING / NEW_ORDER / CANCEL_EXISTING / HOLD_NO_NEW_BUDGET.",
+"patch_scope": "structure-only"
+},
+{
+"fail_check_id": "10",
+"fail_reason": "actionable_window.run_timestamp_et used a less-specific date-only representation than MARKET_DATA_SNAPSHOT.run_timestamp_et.",
+"patch_action": "Canonicalized actionable_window.run_timestamp_et to '2026-04-19 00:00 ET' to match the packet-level market-data timestamp convention.",
+"patch_scope": "structure-only"
+}
+],
+"compiler_blockers": [],
+"effective_allowed_buy_universe": [
+"VOO",
+"VTI",
+"VT",
+"QQQ",
+"SMH",
+"IGV"
+],
+"actionable_window": {
+"run_timestamp_et": "2026-04-19 00:00 ET",
+"is_non_trading_day_run": true,
+"execution_date_et": "2026-04-20",
+"market_data_target_close_date_et": "2026-04-17"
+},
+"MARKET_DATA_SNAPSHOT": {
+"schema_version": "1.0",
+"snapshot_type": "MARKET_DATA_SNAPSHOT",
+"run_timestamp_et": "2026-04-19 00:00 ET",
+"execution_date_et": "2026-04-20",
+"market_data_target_close_date_et": "2026-04-17",
+"close_time_zone": "America/New_York",
+"display_time_zone": "America/Los_Angeles",
+"primary_source": "Barchart",
+"fallback_source_for_last_close_and_price_asof_only": "Stooq",
+"holiday_aware_close_resolution": true,
+"tickers": [
+{
+"ticker": "QQQ",
+"last_close": 648.85,
+"price_asof": "2026-04-17",
+"atr_20_abs": 10.82,
+"atr_20_30d_pct": 1.67,
+"ma50": 602.1,
+"ma200": 598.89,
+"avg_volume_3m": 66076688,
+"week_52_low": 427.93,
+"week_52_high": 650.0,
+"trend_state": "above_ma50_above_ma200",
+"liquidity_tier": "ultra",
+"quadrant": "Q1_leader",
+"last_close_source": "Barchart",
+"price_asof_source": "Barchart",
+"technicals_source": "Barchart",
+"freshness_ok": true,
+"data_gap": false,
+"data_gap_reason": null,
+"provenance_flag": "PRIMARY_SOURCE_ONLY",
+"provenance_note": "last_close / price_asof / technicals all from primary source"
+},
+{
+"ticker": "VOO",
+"last_close": 652.78,
+"price_asof": "2026-04-17",
+"atr_20_abs": 8.57,
+"atr_20_30d_pct": 1.31,
+"ma50": 620.85,
+"ma200": 612.89,
+"avg_volume_3m": 10954348,
+"week_52_low": 467.33,
+"week_52_high": 654.88,
+"trend_state": "above_ma50_above_ma200",
+"liquidity_tier": "high",
+"quadrant": "Q1_leader",
+"last_close_source": "Barchart",
+"price_asof_source": "Barchart",
+"technicals_source": "Barchart",
+"freshness_ok": true,
+"data_gap": false,
+"data_gap_reason": null,
+"provenance_flag": "PRIMARY_SOURCE_ONLY",
+"provenance_note": "last_close / price_asof / technicals all from primary source"
+},
+{
+"ticker": "VTI",
+"last_close": 350.53,
+"price_asof": "2026-04-17",
+"atr_20_abs": 4.73,
+"atr_20_30d_pct": 1.35,
+"ma50": 333.09,
+"ma200": 328.47,
+"avg_volume_3m": 5715288,
+"week_52_low": 249.94,
+"week_52_high": 351.74,
+"trend_state": "above_ma50_above_ma200",
+"liquidity_tier": "high",
+"quadrant": "Q1_leader",
+"last_close_source": "Barchart",
+"price_asof_source": "Barchart",
+"technicals_source": "Barchart",
+"freshness_ok": true,
+"data_gap": false,
+"data_gap_reason": null,
+"provenance_flag": "PRIMARY_SOURCE_ONLY",
+"provenance_note": "last_close / price_asof / technicals all from primary source"
+},
+{
+"ticker": "VT",
+"last_close": 150.84,
+"price_asof": "2026-04-17",
+"atr_20_abs": 2.17,
+"atr_20_30d_pct": 1.44,
+"ma50": 143.58,
+"ma200": 139.16,
+"avg_volume_3m": 5436142,
+"week_52_low": 108.42,
+"week_52_high": 151.44,
+"trend_state": "above_ma50_above_ma200",
+"liquidity_tier": "high",
+"quadrant": "Q1_leader",
+"last_close_source": "Barchart",
+"price_asof_source": "Barchart",
+"technicals_source": "Barchart",
+"freshness_ok": true,
+"data_gap": false,
+"data_gap_reason": null,
+"provenance_flag": "PRIMARY_SOURCE_ONLY",
+"provenance_note": "last_close / price_asof / technicals all from primary source"
+},
+{
+"ticker": "SMH",
+"last_close": 464.16,
+"price_asof": "2026-04-17",
+"atr_20_abs": 12.35,
+"atr_20_30d_pct": 2.66,
+"ma50": 405.46,
+"ma200": 352.43,
+"avg_volume_3m": 9214620,
+"week_52_low": 184.4,
+"week_52_high": 464.58,
+"trend_state": "above_ma50_above_ma200",
+"liquidity_tier": "high",
+"quadrant": "Q1_leader",
+"last_close_source": "Barchart",
+"price_asof_source": "Barchart",
+"technicals_source": "Barchart",
+"freshness_ok": true,
+"data_gap": false,
+"data_gap_reason": null,
+"provenance_flag": "PRIMARY_SOURCE_ONLY",
+"provenance_note": "last_close / price_asof / technicals all from primary source"
+},
+{
+"ticker": "IGV",
+"last_close": 85.08,
+"price_asof": "2026-04-17",
+"atr_20_abs": 2.65,
+"atr_20_30d_pct": 3.12,
+"ma50": 82.14,
+"ma200": 101.87,
+"avg_volume_3m": 28034078,
+"week_52_low": 73.93,
+"week_52_high": 117.99,
+"trend_state": "above_ma50_below_ma200",
+"liquidity_tier": "ultra",
+"quadrant": "Q2_recovery",
+"last_close_source": "Barchart",
+"price_asof_source": "Barchart",
+"technicals_source": "Barchart",
+"freshness_ok": true,
+"data_gap": false,
+"data_gap_reason": null,
+"provenance_flag": "PRIMARY_SOURCE_ONLY",
+"provenance_note": "last_close / price_asof / technicals all from primary source"
+}
+]
+},
+"final_buy_side_delta_table": [
+{
+"ticker": "QQQ",
+"existing_budget": 6000,
+"proposed_budget": 6000,
+"delta_budget": 0,
+"final_action": "KEEP_EXISTING",
+"anchor_decision": "keep_anchor",
+"budget_source": "existing_buy_open_orders_summary",
+"entry_driver_label": "benchmark_carrier_priority",
+"linkage_status": "linked_via_event_and_structural_theme_refs",
+"thesis_horizon": "12m_plus",
+"primary_blocker": null,
+"why": "Maintain benchmark-carrier priority with the current T4-E live ladder; no incremental budget is needed before the 2026-04-21 macro window.",
+"event_id_refs": [
+"pi_fed_data_dependence_20260318",
+"se_fomc_20260429",
+"se_msft_20260429",
+"se_googl_20260429",
+"se_nvda_20260520"
+],
+"structural_theme_refs": [
+"th_ai_compute_stack",
+"th_us_large_cap_quality_compounders"
+]
+},
+{
+"ticker": "VOO",
+"existing_budget": 0,
+"proposed_budget": 4000,
+"delta_budget": 4000,
+"final_action": "NEW_ORDER",
+"anchor_decision": "new_anchor_from_last_close",
+"budget_source": "rotated_from_vti_existing_open_order_budget",
+"entry_driver_label": "same_role_upgrade_rotation",
+"linkage_status": "linked_via_event_and_structural_theme_refs",
+"thesis_horizon": "12m_plus",
+"primary_blocker": null,
+"why": "Fund the single diversified_core_buffer slot with VOO instead of VTI because VOO ranks higher in RESEARCH_JSON.buy_universe_scorecard and carries less small-cap rate sensitivity.",
+"event_id_refs": [
+"pi_fed_data_dependence_20260318",
+"se_fomc_20260429",
+"se_cpi_20260512",
+"se_pce_20260529"
+],
+"structural_theme_refs": [
+"th_us_large_cap_quality_compounders"
+]
+},
+{
+"ticker": "VTI",
+"existing_budget": 4000,
+"proposed_budget": 0,
+"delta_budget": -4000,
+"final_action": "CANCEL_EXISTING",
+"anchor_decision": "cancel_only",
+"budget_source": "existing_buy_open_orders_summary",
+"entry_driver_label": "same_role_rotation_out",
+"linkage_status": "linked_via_event_and_structural_theme_refs",
+"thesis_horizon": "12m_plus",
+"primary_blocker": "replaced_by_higher_ranked_diversified_core_buffer",
+"why": "Cancel the existing VTI live order and redeploy that diversified-core budget to VOO; overlap is high, but VTI ranks below VOO in the current regime.",
+"event_id_refs": [
+"pi_fed_data_dependence_20260318",
+"se_gdp_20260430",
+"se_jobs_20260508",
+"se_cpi_20260512"
+],
+"structural_theme_refs": [
+"th_us_large_cap_quality_compounders",
+"th_global_breadth_buffer"
+]
+},
+{
+"ticker": "VT",
+"existing_budget": 0,
+"proposed_budget": 0,
+"delta_budget": 0,
+"final_action": "HOLD_NO_NEW_BUDGET",
+"anchor_decision": "none",
+"budget_source": "no_new_budget",
+"entry_driver_label": "watch_only_global_buffer",
+"linkage_status": "linked_via_event_and_structural_theme_refs",
+"thesis_horizon": "12m_plus",
+"primary_blocker": "benchmark_alignment_secondary_to_current_mandate",
+"why": "Global breadth remains a secondary buffer rather than a primary funding target for a benchmark=QQQ mandate in this regime.",
+"event_id_refs": [
+"pi_fed_data_dependence_20260318",
+"se_gdp_20260430",
+"se_jobs_20260508"
+],
+"structural_theme_refs": [
+"th_global_breadth_buffer"
+]
+},
+{
+"ticker": "SMH",
+"existing_budget": 0,
+"proposed_budget": 3000,
+"delta_budget": 3000,
+"final_action": "NEW_ORDER",
+"anchor_decision": "new_anchor_from_last_close",
+"budget_source": "incremental_headroom_after_base_first_funding",
+"entry_driver_label": "ai_compute_alpha_tilt",
+"linkage_status": "linked_via_event_and_structural_theme_refs",
+"thesis_horizon": "12m_plus",
+"primary_blocker": null,
+"why": "Add a minority sector_alpha_tilt via SMH after benchmark and core buffer funding because the AI compute stack remains the strongest 12m+ alpha expression in Lane A.",
+"event_id_refs": [
+"pi_semiconductor_tariffs_20260114",
+"pi_bis_export_license_20260115",
+"se_intc_20260423",
+"se_tsmc_sales_20260508",
+"se_nvda_20260520"
+],
+"structural_theme_refs": [
+"th_ai_compute_stack"
+]
+},
+{
+"ticker": "IGV",
+"existing_budget": 0,
+"proposed_budget": 0,
+"delta_budget": 0,
+"final_action": "HOLD_NO_NEW_BUDGET",
+"anchor_decision": "none",
+"budget_source": "no_new_budget",
+"entry_driver_label": "watch_only_existing_satellite",
+"linkage_status": "linked_via_event_and_structural_theme_refs",
+"thesis_horizon": "12m_plus",
+"primary_blocker": "lower_priority_than_smh_under_current_rate_regime",
+"why": "Keep IGV as an existing software/cyber exposure, but do not allocate incremental buy-side budget ahead of the higher-priority SMH tilt.",
+"event_id_refs": [
+"pi_us_cyber_strategy_20260306",
+"se_msft_20260429",
+"se_googl_20260429",
+"se_pce_20260529"
+],
+"structural_theme_refs": [
+"th_software_and_cyber_resilience"
+]
+}
+],
+"final_sell_side_delta_table": [],
+"final_execution_plans": [
+{
+"ticker": "QQQ",
+"template_id": "T4-E",
+"step_blueprint_id": "benchmark_carrier_core_T4-E",
+"final_action": "KEEP_EXISTING",
+"target_open_order_budget": 6000,
+"existing_open_order_budget": 6000,
+"delta_budget": 0,
+"anchor_decision": "keep_anchor",
+"anchor_baseline_last_close": 611.07,
+"anchor_price_asof": "2026-04-10",
+"current_last_close": 648.85,
+"current_last_close_asof": "2026-04-17",
+"draft_packet_shape": "new_5_step_weighted_ladder",
+"preserve_live_step_shape": true,
+"live_step_count": 5,
+"ordered_step_names": [
+"starter",
+"L1",
+"L2",
+"L3",
+"L4"
+],
+"step_offsets_vs_anchor": {
+"starter": -2.67,
+"L1": -9.07,
+"L2": -15.57,
+"L3": -22.07,
+"L4": -28.57
+},
+"preserve_live_qty_vector": {
+"starter": 3,
+"L1": 2,
+"L2": 2,
+"L3": 2,
+"L4": 1
+},
+"event_window_handling": "place_before_nearest_macro_window",
+"event_window_anchor_type": "scheduled_macro_event",
+"event_window_anchor_key_date_et": "2026-04-21",
+"intended_place_date_et": "2026-04-20",
+"actionable_window_cutoff_et": "2026-04-20",
+"compile_ready": true,
+"why": "Keep the existing QQQ ladder unchanged; baseline drift is reviewed but not large enough to justify chasing a higher anchor ahead of the next macro window."
+},
+{
+"ticker": "VOO",
+"template_id": "T4-B",
+"step_blueprint_id": "diversified_core_buffer_T4-B",
+"final_action": "NEW_ORDER",
+"target_open_order_budget": 4000,
+"existing_open_order_budget": 0,
+"delta_budget": 4000,
+"anchor_decision": "new_anchor_from_last_close",
+"anchor_baseline_last_close": 652.78,
+"anchor_price_asof": "2026-04-17",
+"current_last_close": 652.78,
+"current_last_close_asof": "2026-04-17",
+"draft_packet_shape": "new_4_step_weighted_ladder",
+"preserve_live_step_shape": false,
+"live_step_count": 4,
+"ordered_step_names": [
+"L1",
+"L2",
+"L3",
+"L4"
+],
+"step_offsets_vs_anchor": {
+"L1": -4.05,
+"L2": -8.55,
+"L3": -13.05,
+"L4": -17.55
+},
+"step_budget_weights": {
+"L1": 0.25,
+"L2": 0.25,
+"L3": 0.25,
+"L4": 0.25
+},
+"event_window_handling": "place_before_nearest_macro_window",
+"event_window_anchor_type": "scheduled_macro_event",
+"event_window_anchor_key_date_et": "2026-04-21",
+"intended_place_date_et": "2026-04-20",
+"actionable_window_cutoff_et": "2026-04-20",
+"compile_ready": true,
+"why": "Create a new VOO ladder as the sole funded diversified_core_buffer."
+},
+{
+"ticker": "VTI",
+"template_id": "T4-B",
+"step_blueprint_id": "diversified_core_buffer_T4-B",
+"final_action": "CANCEL_EXISTING",
+"target_open_order_budget": 0,
+"existing_open_order_budget": 4000,
+"delta_budget": -4000,
+"anchor_decision": "cancel_only",
+"anchor_baseline_last_close": 335.05,
+"anchor_price_asof": "2026-04-10",
+"current_last_close": 350.53,
+"current_last_close_asof": "2026-04-17",
+"draft_packet_shape": "new_4_step_weighted_ladder",
+"preserve_live_step_shape": true,
+"live_step_count": 4,
+"ordered_step_names": [
+"L1",
+"L2",
+"L3",
+"L4"
+],
+"step_offsets_vs_anchor": {
+"L1": -4.05,
+"L2": -8.55,
+"L3": -13.05,
+"L4": -17.55
+},
+"preserve_live_qty_vector": {
+"L1": 3,
+"L2": 3,
+"L3": 3,
+"L4": 3
+},
+"event_window_handling": "place_before_nearest_macro_window",
+"event_window_anchor_type": "scheduled_macro_event",
+"event_window_anchor_key_date_et": "2026-04-21",
+"intended_place_date_et": "2026-04-20",
+"actionable_window_cutoff_et": "2026-04-20",
+"compile_ready": true,
+"why": "Cancel the existing VTI ladder and rotate its budget to the higher-priority VOO buffer slot."
+},
+{
+"ticker": "SMH",
+"template_id": "T4-B",
+"step_blueprint_id": "sector_alpha_tilt_T4-B",
+"final_action": "NEW_ORDER",
+"target_open_order_budget": 3000,
+"existing_open_order_budget": 0,
+"delta_budget": 3000,
+"anchor_decision": "new_anchor_from_last_close",
+"anchor_baseline_last_close": 464.16,
+"anchor_price_asof": "2026-04-17",
+"current_last_close": 464.16,
+"current_last_close_asof": "2026-04-17",
+"draft_packet_shape": "new_4_step_weighted_ladder",
+"preserve_live_step_shape": false,
+"live_step_count": 4,
+"ordered_step_names": [
+"L1",
+"L2",
+"L3",
+"L4"
+],
+"step_offsets_vs_anchor": {
+"L1": -4.05,
+"L2": -8.55,
+"L3": -13.05,
+"L4": -17.55
+},
+"step_budget_weights": {
+"L1": 0.25,
+"L2": 0.25,
+"L3": 0.25,
+"L4": 0.25
+},
+"event_window_handling": "place_before_nearest_theme_event",
+"event_window_anchor_type": "scheduled_theme_event",
+"event_window_anchor_key_date_et": "2026-04-23",
+"intended_place_date_et": "2026-04-20",
+"actionable_window_cutoff_et": "2026-04-20",
+"compile_ready": true,
+"why": "Create a new minority SMH ladder as the preferred sector alpha tilt."
+}
+],
+"final_sell_execution_plans": []
+}
+AUDITED_DECISION_PACKET_END

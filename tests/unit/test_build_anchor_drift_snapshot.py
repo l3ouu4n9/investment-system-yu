@@ -1,4 +1,7 @@
-from investment_system.market.build_anchor_drift_snapshot import build_snapshot, compute_thresholds
+from investment_orchestrator.market.build_anchor_drift_snapshot import (
+    build_snapshot,
+    compute_thresholds,
+)
 
 
 def test_compute_thresholds_uses_defaults_when_threshold_values_are_missing() -> None:

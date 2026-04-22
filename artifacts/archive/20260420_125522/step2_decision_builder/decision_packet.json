@@ -1,0 +1,694 @@
+{
+  "effective_allowed_buy_universe": [
+    "VOO",
+    "VTI",
+    "VT",
+    "QQQ",
+    "SMH",
+    "IGV"
+  ],
+  "MARKET_DATA_SNAPSHOT": {
+    "schema_version": "1.0",
+    "snapshot_type": "MARKET_DATA_SNAPSHOT",
+    "run_timestamp_et": "2026-04-19 00:00 ET",
+    "execution_date_et": "2026-04-20",
+    "market_data_target_close_date_et": "2026-04-17",
+    "close_time_zone": "America/New_York",
+    "display_time_zone": "America/Los_Angeles",
+    "primary_source": "Barchart",
+    "fallback_source_for_last_close_and_price_asof_only": "Stooq",
+    "holiday_aware_close_resolution": true,
+    "tickers": [
+      {
+        "ticker": "QQQ",
+        "last_close": 648.85,
+        "price_asof": "2026-04-17",
+        "atr_20_30d_pct": 1.67,
+        "ma50": 602.1,
+        "ma200": 598.89,
+        "avg_volume_3m": 66076688,
+        "last_close_source": "Barchart",
+        "price_asof_source": "Barchart",
+        "technicals_source": "Barchart",
+        "retrieved_at_utc": null,
+        "same_day_close_required": false,
+        "freshness_ok": true,
+        "data_gap": false,
+        "data_gap_reason": null,
+        "notes": [
+          "trend_state: above_ma50_above_ma200",
+          "liquidity_tier: ultra"
+        ],
+        "atr_20_abs": 10.82,
+        "range_52w": null,
+        "week_52_high": 650.0,
+        "week_52_low": 427.93,
+        "pct_above_ma50": null,
+        "pct_above_ma200": null,
+        "pct_from_52w_high": null,
+        "pct_above_52w_low": null,
+        "trend_state": "above_ma50_above_ma200",
+        "liquidity_tier": "ultra",
+        "quadrant": "Q1_leader",
+        "liquidity": null
+      },
+      {
+        "ticker": "VOO",
+        "last_close": 652.78,
+        "price_asof": "2026-04-17",
+        "atr_20_30d_pct": 1.31,
+        "ma50": 620.85,
+        "ma200": 612.89,
+        "avg_volume_3m": 10954348,
+        "last_close_source": "Barchart",
+        "price_asof_source": "Barchart",
+        "technicals_source": "Barchart",
+        "retrieved_at_utc": null,
+        "same_day_close_required": false,
+        "freshness_ok": true,
+        "data_gap": false,
+        "data_gap_reason": null,
+        "notes": [
+          "trend_state: above_ma50_above_ma200",
+          "liquidity_tier: high"
+        ],
+        "atr_20_abs": 8.57,
+        "range_52w": null,
+        "week_52_high": 654.88,
+        "week_52_low": 467.33,
+        "pct_above_ma50": null,
+        "pct_above_ma200": null,
+        "pct_from_52w_high": null,
+        "pct_above_52w_low": null,
+        "trend_state": "above_ma50_above_ma200",
+        "liquidity_tier": "high",
+        "quadrant": "Q1_leader",
+        "liquidity": null
+      },
+      {
+        "ticker": "VTI",
+        "last_close": 350.53,
+        "price_asof": "2026-04-17",
+        "atr_20_30d_pct": 1.35,
+        "ma50": 333.09,
+        "ma200": 328.47,
+        "avg_volume_3m": 5715288,
+        "last_close_source": "Barchart",
+        "price_asof_source": "Barchart",
+        "technicals_source": "Barchart",
+        "retrieved_at_utc": null,
+        "same_day_close_required": false,
+        "freshness_ok": true,
+        "data_gap": false,
+        "data_gap_reason": null,
+        "notes": [
+          "trend_state: above_ma50_above_ma200",
+          "liquidity_tier: high"
+        ],
+        "atr_20_abs": 4.73,
+        "range_52w": null,
+        "week_52_high": 351.74,
+        "week_52_low": 249.94,
+        "pct_above_ma50": null,
+        "pct_above_ma200": null,
+        "pct_from_52w_high": null,
+        "pct_above_52w_low": null,
+        "trend_state": "above_ma50_above_ma200",
+        "liquidity_tier": "high",
+        "quadrant": "Q1_leader",
+        "liquidity": null
+      },
+      {
+        "ticker": "VT",
+        "last_close": 150.84,
+        "price_asof": "2026-04-17",
+        "atr_20_30d_pct": 1.44,
+        "ma50": 143.58,
+        "ma200": 139.16,
+        "avg_volume_3m": 5436142,
+        "last_close_source": "Barchart",
+        "price_asof_source": "Barchart",
+        "technicals_source": "Barchart",
+        "retrieved_at_utc": null,
+        "same_day_close_required": false,
+        "freshness_ok": true,
+        "data_gap": false,
+        "data_gap_reason": null,
+        "notes": [
+          "trend_state: above_ma50_above_ma200",
+          "liquidity_tier: high"
+        ],
+        "atr_20_abs": 2.17,
+        "range_52w": null,
+        "week_52_high": 151.44,
+        "week_52_low": 108.42,
+        "pct_above_ma50": null,
+        "pct_above_ma200": null,
+        "pct_from_52w_high": null,
+        "pct_above_52w_low": null,
+        "trend_state": "above_ma50_above_ma200",
+        "liquidity_tier": "high",
+        "quadrant": "Q1_leader",
+        "liquidity": null
+      },
+      {
+        "ticker": "SMH",
+        "last_close": 464.16,
+        "price_asof": "2026-04-17",
+        "atr_20_30d_pct": 2.66,
+        "ma50": 405.46,
+        "ma200": 352.43,
+        "avg_volume_3m": 9214620,
+        "last_close_source": "Barchart",
+        "price_asof_source": "Barchart",
+        "technicals_source": "Barchart",
+        "retrieved_at_utc": null,
+        "same_day_close_required": false,
+        "freshness_ok": true,
+        "data_gap": false,
+        "data_gap_reason": null,
+        "notes": [
+          "trend_state: above_ma50_above_ma200",
+          "liquidity_tier: high"
+        ],
+        "atr_20_abs": 12.35,
+        "range_52w": null,
+        "week_52_high": 464.58,
+        "week_52_low": 184.4,
+        "pct_above_ma50": null,
+        "pct_above_ma200": null,
+        "pct_from_52w_high": null,
+        "pct_above_52w_low": null,
+        "trend_state": "above_ma50_above_ma200",
+        "liquidity_tier": "high",
+        "quadrant": "Q1_leader",
+        "liquidity": null
+      },
+      {
+        "ticker": "IGV",
+        "last_close": 85.08,
+        "price_asof": "2026-04-17",
+        "atr_20_30d_pct": 3.12,
+        "ma50": 82.14,
+        "ma200": 101.87,
+        "avg_volume_3m": 28034078,
+        "last_close_source": "Barchart",
+        "price_asof_source": "Barchart",
+        "technicals_source": "Barchart",
+        "retrieved_at_utc": null,
+        "same_day_close_required": false,
+        "freshness_ok": true,
+        "data_gap": false,
+        "data_gap_reason": null,
+        "notes": [
+          "trend_state: above_ma50_below_ma200",
+          "liquidity_tier: ultra"
+        ],
+        "atr_20_abs": 2.65,
+        "range_52w": null,
+        "week_52_high": 117.99,
+        "week_52_low": 73.93,
+        "pct_above_ma50": null,
+        "pct_above_ma200": null,
+        "pct_from_52w_high": null,
+        "pct_above_52w_low": null,
+        "trend_state": "above_ma50_below_ma200",
+        "liquidity_tier": "ultra",
+        "quadrant": "Q2_recovery",
+        "liquidity": null
+      }
+    ],
+    "session_type": null,
+    "source_note": null
+  },
+  "active_shortlist": [
+    {
+      "rank": 1,
+      "ticker": "QQQ",
+      "role_layer": "benchmark_carrier_core",
+      "selection_status": "selected_primary",
+      "funding_status": "funded",
+      "current_shares": 40,
+      "why": "Benchmark carrier remains first-priority; keep existing live ladder rather than chase a fresh reanchor before the next macro window.",
+      "event_id_refs": [
+        "pi_fed_data_dependence_20260318",
+        "se_fomc_20260429",
+        "se_msft_20260429",
+        "se_googl_20260429",
+        "se_nvda_20260520"
+      ],
+      "structural_theme_refs": [
+        "th_ai_compute_stack",
+        "th_us_large_cap_quality_compounders"
+      ]
+    },
+    {
+      "rank": 2,
+      "ticker": "VOO",
+      "role_layer": "diversified_core_buffer",
+      "selection_status": "selected_primary",
+      "funding_status": "funded",
+      "current_shares": 51,
+      "why": "Chosen as the sole funded diversified_core_buffer because it ranks above VTI and VT under the current higher-rate regime while preserving closer U.S. large-cap alignment to the benchmark task.",
+      "event_id_refs": [
+        "pi_fed_data_dependence_20260318",
+        "se_fomc_20260429",
+        "se_cpi_20260512",
+        "se_pce_20260529"
+      ],
+      "structural_theme_refs": [
+        "th_us_large_cap_quality_compounders"
+      ]
+    },
+    {
+      "rank": 3,
+      "ticker": "SMH",
+      "role_layer": "sector_alpha_tilt",
+      "selection_status": "selected_primary",
+      "funding_status": "funded",
+      "current_shares": 11,
+      "why": "AI compute stack remains the highest-alpha sector tilt in Lane A, but funded as a minority sleeve after benchmark and core buffer allocations.",
+      "event_id_refs": [
+        "pi_semiconductor_tariffs_20260114",
+        "pi_bis_export_license_20260115",
+        "se_intc_20260423",
+        "se_tsmc_sales_20260508",
+        "se_nvda_20260520"
+      ],
+      "structural_theme_refs": [
+        "th_ai_compute_stack"
+      ]
+    },
+    {
+      "rank": 4,
+      "ticker": "IGV",
+      "role_layer": "sector_alpha_tilt",
+      "selection_status": "selected_watch_only",
+      "funding_status": "held_no_new_budget",
+      "current_shares": 5,
+      "why": "NO_NEW_BUDGET: software/cyber thesis remains valid, but rate sensitivity and overlap with QQQ keep IGV behind SMH for incremental buy-side funding this run.",
+      "event_id_refs": [
+        "pi_us_cyber_strategy_20260306",
+        "se_msft_20260429",
+        "se_googl_20260429",
+        "se_pce_20260529"
+      ],
+      "structural_theme_refs": [
+        "th_software_and_cyber_resilience"
+      ]
+    }
+  ],
+  "buy_side_delta_table": [
+    {
+      "ticker": "QQQ",
+      "existing_budget": 6000,
+      "proposed_budget": 6000,
+      "delta_budget": 0,
+      "action_draft": "keep_candidate",
+      "order_intent_draft": "KEEP_EXISTING",
+      "anchor_decision_draft": "keep_anchor",
+      "budget_source": "existing_buy_open_orders_summary",
+      "why": "Maintain benchmark-carrier priority with the current T4-E live ladder; no incremental budget is needed before the 2026-04-21 macro window.",
+      "event_id_refs": [
+        "pi_fed_data_dependence_20260318",
+        "se_fomc_20260429",
+        "se_msft_20260429",
+        "se_googl_20260429",
+        "se_nvda_20260520"
+      ],
+      "structural_theme_refs": [
+        "th_ai_compute_stack",
+        "th_us_large_cap_quality_compounders"
+      ]
+    },
+    {
+      "ticker": "VOO",
+      "existing_budget": 0,
+      "proposed_budget": 4000,
+      "delta_budget": 4000,
+      "action_draft": "add_candidate",
+      "order_intent_draft": "NEW_ORDER",
+      "anchor_decision_draft": "new_anchor_from_last_close",
+      "budget_source": "rotated_from_vti_existing_open_order_budget",
+      "why": "Fund the single diversified_core_buffer slot with VOO instead of VTI because VOO ranks higher in RESEARCH_JSON.buy_universe_scorecard and carries less small-cap rate sensitivity.",
+      "event_id_refs": [
+        "pi_fed_data_dependence_20260318",
+        "se_fomc_20260429",
+        "se_cpi_20260512",
+        "se_pce_20260529"
+      ],
+      "structural_theme_refs": [
+        "th_us_large_cap_quality_compounders"
+      ]
+    },
+    {
+      "ticker": "VTI",
+      "existing_budget": 4000,
+      "proposed_budget": 0,
+      "delta_budget": -4000,
+      "action_draft": "rotate_out_candidate",
+      "order_intent_draft": "CANCEL_EXISTING",
+      "anchor_decision_draft": "cancel_only",
+      "budget_source": "existing_buy_open_orders_summary",
+      "why": "Cancel the existing VTI live order and redeploy that diversified-core budget to VOO; overlap is high, but VTI ranks below VOO in the current regime.",
+      "event_id_refs": [
+        "pi_fed_data_dependence_20260318",
+        "se_gdp_20260430",
+        "se_jobs_20260508",
+        "se_cpi_20260512"
+      ],
+      "structural_theme_refs": [
+        "th_us_large_cap_quality_compounders",
+        "th_global_breadth_buffer"
+      ]
+    },
+    {
+      "ticker": "VT",
+      "existing_budget": 0,
+      "proposed_budget": 0,
+      "delta_budget": 0,
+      "action_draft": "hold_watch_only",
+      "order_intent_draft": "NONE",
+      "anchor_decision_draft": "none",
+      "budget_source": "no_new_budget",
+      "why": "Global breadth remains a secondary buffer rather than a primary funding target for a benchmark=QQQ mandate in this regime.",
+      "event_id_refs": [
+        "pi_fed_data_dependence_20260318",
+        "se_gdp_20260430",
+        "se_jobs_20260508"
+      ],
+      "structural_theme_refs": [
+        "th_global_breadth_buffer"
+      ]
+    },
+    {
+      "ticker": "SMH",
+      "existing_budget": 0,
+      "proposed_budget": 3000,
+      "delta_budget": 3000,
+      "action_draft": "add_candidate",
+      "order_intent_draft": "NEW_ORDER",
+      "anchor_decision_draft": "new_anchor_from_last_close",
+      "budget_source": "incremental_headroom_after_base_first_funding",
+      "why": "Add a minority sector_alpha_tilt via SMH after benchmark and core buffer funding because the AI compute stack remains the strongest 12m+ alpha expression in Lane A.",
+      "event_id_refs": [
+        "pi_semiconductor_tariffs_20260114",
+        "pi_bis_export_license_20260115",
+        "se_intc_20260423",
+        "se_tsmc_sales_20260508",
+        "se_nvda_20260520"
+      ],
+      "structural_theme_refs": [
+        "th_ai_compute_stack"
+      ]
+    },
+    {
+      "ticker": "IGV",
+      "existing_budget": 0,
+      "proposed_budget": 0,
+      "delta_budget": 0,
+      "action_draft": "hold_watch_only",
+      "order_intent_draft": "NONE",
+      "anchor_decision_draft": "none",
+      "budget_source": "no_new_budget",
+      "why": "NO_NEW_BUDGET: keep IGV on the active shortlist as a held software/cyber exposure, but do not allocate incremental buy-side budget ahead of the higher-priority SMH tilt.",
+      "event_id_refs": [
+        "pi_us_cyber_strategy_20260306",
+        "se_msft_20260429",
+        "se_googl_20260429",
+        "se_pce_20260529"
+      ],
+      "structural_theme_refs": [
+        "th_software_and_cyber_resilience"
+      ]
+    }
+  ],
+  "rotation_decision_layer_8_15": [
+    {
+      "from_ticker": "VTI",
+      "to_ticker": "VOO",
+      "rotation_type": "same_role_upgrade",
+      "budget_amount": 4000,
+      "why": "Relative rotation is enabled and VOO is the preferred diversified_core_buffer over VTI in RESEARCH_JSON.buy_universe_scorecard for the current regime.",
+      "event_id_refs": [
+        "pi_fed_data_dependence_20260318",
+        "se_fomc_20260429",
+        "se_cpi_20260512",
+        "se_pce_20260529"
+      ],
+      "structural_theme_refs": [
+        "th_us_large_cap_quality_compounders"
+      ]
+    }
+  ],
+  "sell_side_delta_table_8_2": [],
+  "execution_plan_drafts_8_5": [
+    {
+      "ticker": "QQQ",
+      "template_id": "T4-E",
+      "action_draft": "keep_candidate",
+      "existing_budget": 6000,
+      "proposed_budget": 6000,
+      "delta_budget": 0,
+      "order_intent": "KEEP_EXISTING",
+      "anchor_decision": "keep_anchor",
+      "anchor_baseline_last_close": 611.07,
+      "anchor_price_asof": "2026-04-10",
+      "current_last_close": 648.85,
+      "current_last_close_asof": "2026-04-17",
+      "draft_packet_shape": "new_5_step_weighted_ladder",
+      "preserve_live_step_shape": true,
+      "live_step_count": 5,
+      "ordered_step_names": [
+        "starter",
+        "L1",
+        "L2",
+        "L3",
+        "L4"
+      ],
+      "step_offsets_vs_anchor": {
+        "starter": -2.67,
+        "L1": -9.07,
+        "L2": -15.57,
+        "L3": -22.07,
+        "L4": -28.57
+      },
+      "preserve_live_qty_vector": {
+        "starter": 3,
+        "L1": 2,
+        "L2": 2,
+        "L3": 2,
+        "L4": 1
+      },
+      "event_window_handling": "place_before_nearest_macro_window",
+      "event_window_anchor_type": "scheduled_macro_event",
+      "event_window_anchor_key_date_et": "2026-04-21",
+      "intended_place_date_et": null,
+      "actionable_window_cutoff_et": "2026-04-20",
+      "why": "Keep the existing QQQ ladder unchanged; baseline drift is reviewed but not large enough to justify chasing a higher anchor ahead of the next macro window."
+    },
+    {
+      "ticker": "VOO",
+      "template_id": "T4-B",
+      "action_draft": "add_candidate",
+      "existing_budget": 0,
+      "proposed_budget": 4000,
+      "delta_budget": 4000,
+      "order_intent": "NEW_ORDER",
+      "anchor_decision": "new_anchor_from_last_close",
+      "anchor_baseline_last_close": 652.78,
+      "anchor_price_asof": "2026-04-17",
+      "current_last_close": 652.78,
+      "current_last_close_asof": "2026-04-17",
+      "draft_packet_shape": "new_4_step_weighted_ladder",
+      "preserve_live_step_shape": false,
+      "live_step_count": 4,
+      "ordered_step_names": [
+        "L1",
+        "L2",
+        "L3",
+        "L4"
+      ],
+      "step_offsets_vs_anchor": {
+        "L1": -4.05,
+        "L2": -8.55,
+        "L3": -13.05,
+        "L4": -17.55
+      },
+      "step_budget_weights": {
+        "L1": 0.25,
+        "L2": 0.25,
+        "L3": 0.25,
+        "L4": 0.25
+      },
+      "event_window_handling": "place_before_nearest_macro_window",
+      "event_window_anchor_type": "scheduled_macro_event",
+      "event_window_anchor_key_date_et": "2026-04-21",
+      "intended_place_date_et": "2026-04-20",
+      "actionable_window_cutoff_et": "2026-04-20",
+      "why": "Create a new VOO ladder as the sole funded diversified_core_buffer."
+    },
+    {
+      "ticker": "VTI",
+      "template_id": "T4-B",
+      "action_draft": "rotate_out_candidate",
+      "existing_budget": 4000,
+      "proposed_budget": 0,
+      "delta_budget": -4000,
+      "order_intent": "CANCEL_EXISTING",
+      "anchor_decision": "cancel_only",
+      "anchor_baseline_last_close": 335.05,
+      "anchor_price_asof": "2026-04-10",
+      "current_last_close": 350.53,
+      "current_last_close_asof": "2026-04-17",
+      "draft_packet_shape": "new_4_step_weighted_ladder",
+      "preserve_live_step_shape": true,
+      "live_step_count": 4,
+      "ordered_step_names": [
+        "L1",
+        "L2",
+        "L3",
+        "L4"
+      ],
+      "step_offsets_vs_anchor": {
+        "L1": -4.05,
+        "L2": -8.55,
+        "L3": -13.05,
+        "L4": -17.55
+      },
+      "preserve_live_qty_vector": {
+        "L1": 3,
+        "L2": 3,
+        "L3": 3,
+        "L4": 3
+      },
+      "event_window_handling": "place_before_nearest_macro_window",
+      "event_window_anchor_type": "scheduled_macro_event",
+      "event_window_anchor_key_date_et": "2026-04-21",
+      "intended_place_date_et": "2026-04-20",
+      "actionable_window_cutoff_et": "2026-04-20",
+      "why": "Cancel the existing VTI ladder and rotate its budget to the higher-priority VOO buffer slot."
+    },
+    {
+      "ticker": "SMH",
+      "template_id": "T4-B",
+      "action_draft": "add_candidate",
+      "existing_budget": 0,
+      "proposed_budget": 3000,
+      "delta_budget": 3000,
+      "order_intent": "NEW_ORDER",
+      "anchor_decision": "new_anchor_from_last_close",
+      "anchor_baseline_last_close": 464.16,
+      "anchor_price_asof": "2026-04-17",
+      "current_last_close": 464.16,
+      "current_last_close_asof": "2026-04-17",
+      "draft_packet_shape": "new_4_step_weighted_ladder",
+      "preserve_live_step_shape": false,
+      "live_step_count": 4,
+      "ordered_step_names": [
+        "L1",
+        "L2",
+        "L3",
+        "L4"
+      ],
+      "step_offsets_vs_anchor": {
+        "L1": -4.05,
+        "L2": -8.55,
+        "L3": -13.05,
+        "L4": -17.55
+      },
+      "step_budget_weights": {
+        "L1": 0.25,
+        "L2": 0.25,
+        "L3": 0.25,
+        "L4": 0.25
+      },
+      "event_window_handling": "place_before_nearest_theme_event",
+      "event_window_anchor_type": "scheduled_theme_event",
+      "event_window_anchor_key_date_et": "2026-04-23",
+      "intended_place_date_et": "2026-04-20",
+      "actionable_window_cutoff_et": "2026-04-20",
+      "why": "Create a new minority SMH ladder as the preferred sector alpha tilt."
+    }
+  ],
+  "sell_execution_plan_drafts_8_6": [],
+  "existing_buy_order_diagnostics": [
+    {
+      "ticker": "QQQ",
+      "current_last_close": 648.85,
+      "last_close_asof_et": "2026-04-17",
+      "anchor_baseline_last_close": 611.07,
+      "anchor_price_asof": "2026-04-10",
+      "baseline_drift_pct": 6.18,
+      "highest_live_limit": 608.4,
+      "lowest_live_limit": 582.5,
+      "distance_to_highest_live_limit_pct": 6.65,
+      "distance_to_lowest_live_limit_pct": 11.39,
+      "live_step_count": 5,
+      "structure_data_gap_flag": false,
+      "anchor_review_flag": true,
+      "suggested_anchor_action": "keep_anchor"
+    },
+    {
+      "ticker": "VTI",
+      "current_last_close": 350.53,
+      "last_close_asof_et": "2026-04-17",
+      "anchor_baseline_last_close": 335.05,
+      "anchor_price_asof": "2026-04-10",
+      "baseline_drift_pct": 4.62,
+      "highest_live_limit": 331.0,
+      "lowest_live_limit": 317.5,
+      "distance_to_highest_live_limit_pct": 5.9,
+      "distance_to_lowest_live_limit_pct": 10.4,
+      "live_step_count": 4,
+      "structure_data_gap_flag": false,
+      "anchor_review_flag": true,
+      "suggested_anchor_action": "cancel_only"
+    }
+  ],
+  "assumptions_and_data_gaps": [
+    {
+      "type": "ASSUMPTION",
+      "detail": "run_timestamp_et was normalized from date-only as_of because no intraday ET timestamp was provided in the prompt.",
+      "affected_tickers": [
+        "QQQ",
+        "VOO",
+        "VTI",
+        "VT",
+        "SMH",
+        "IGV"
+      ]
+    },
+    {
+      "type": "ASSUMPTION",
+      "detail": "avg_volume_3m is proxied with Barchart 50-day average share volume because the parsed Barchart pages exposed 5/20/50/100/200-day averages rather than a 3-month average.",
+      "affected_tickers": [
+        "QQQ",
+        "VOO",
+        "VTI",
+        "VT",
+        "SMH",
+        "IGV"
+      ]
+    },
+    {
+      "type": "ASSUMPTION",
+      "detail": "No current_holdings_extended or sell_open_orders rows were provided, so existing extended ETF holdings and existing sell-side open orders were normalized to empty sets.",
+      "affected_tickers": [
+        "QQQ",
+        "VOO",
+        "VTI",
+        "VT",
+        "SMH",
+        "IGV"
+      ]
+    }
+  ],
+  "decision_builder_ready_for_audit": true,
+  "actionable_window": {
+    "run_timestamp_et": "2026-04-19",
+    "is_non_trading_day_run": true,
+    "execution_date_et": "2026-04-20",
+    "market_data_target_close_date_et": "2026-04-17"
+  }
+}

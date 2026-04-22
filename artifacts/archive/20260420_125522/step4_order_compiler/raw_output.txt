@@ -1,0 +1,418 @@
+TEMPLATE4_ORDERS_START
+SELL_ORDERS
+[]
+
+BUY_ORDERS
+[
+{
+"ticker": "VTI",
+"template_id": "T4-B",
+"plan_type": "cancel_existing_ladder",
+"step_name": "L1",
+"shares": 3,
+"limit_price": 331.00,
+"limit_price_rule": "copy_from_existing_live_order_for_cancel",
+"time_in_force": "GTC",
+"expiry_if_gtd": null,
+"order_intent": "CANCEL_EXISTING",
+"event_id_refs": [
+"pi_fed_data_dependence_20260318",
+"se_gdp_20260430",
+"se_jobs_20260508",
+"se_cpi_20260512"
+],
+"structural_theme_refs": [
+"th_us_large_cap_quality_compounders",
+"th_global_breadth_buffer"
+],
+"event_window_handling": "place_before_nearest_macro_window",
+"event_window_anchor_type": "scheduled_macro_event",
+"event_window_anchor_key_date_et": "2026-04-21",
+"intended_place_date_et": "2026-04-20",
+"actionable_window_cutoff_et": "2026-04-20",
+"note": "此列為取消既有 live buy order，不是新買單；rotated_out_to=VOO"
+},
+{
+"ticker": "VTI",
+"template_id": "T4-B",
+"plan_type": "cancel_existing_ladder",
+"step_name": "L2",
+"shares": 3,
+"limit_price": 326.50,
+"limit_price_rule": "copy_from_existing_live_order_for_cancel",
+"time_in_force": "GTC",
+"expiry_if_gtd": null,
+"order_intent": "CANCEL_EXISTING",
+"event_id_refs": [
+"pi_fed_data_dependence_20260318",
+"se_gdp_20260430",
+"se_jobs_20260508",
+"se_cpi_20260512"
+],
+"structural_theme_refs": [
+"th_us_large_cap_quality_compounders",
+"th_global_breadth_buffer"
+],
+"event_window_handling": "place_before_nearest_macro_window",
+"event_window_anchor_type": "scheduled_macro_event",
+"event_window_anchor_key_date_et": "2026-04-21",
+"intended_place_date_et": "2026-04-20",
+"actionable_window_cutoff_et": "2026-04-20",
+"note": "此列為取消既有 live buy order，不是新買單；rotated_out_to=VOO"
+},
+{
+"ticker": "VTI",
+"template_id": "T4-B",
+"plan_type": "cancel_existing_ladder",
+"step_name": "L3",
+"shares": 3,
+"limit_price": 322.00,
+"limit_price_rule": "copy_from_existing_live_order_for_cancel",
+"time_in_force": "GTC",
+"expiry_if_gtd": null,
+"order_intent": "CANCEL_EXISTING",
+"event_id_refs": [
+"pi_fed_data_dependence_20260318",
+"se_gdp_20260430",
+"se_jobs_20260508",
+"se_cpi_20260512"
+],
+"structural_theme_refs": [
+"th_us_large_cap_quality_compounders",
+"th_global_breadth_buffer"
+],
+"event_window_handling": "place_before_nearest_macro_window",
+"event_window_anchor_type": "scheduled_macro_event",
+"event_window_anchor_key_date_et": "2026-04-21",
+"intended_place_date_et": "2026-04-20",
+"actionable_window_cutoff_et": "2026-04-20",
+"note": "此列為取消既有 live buy order，不是新買單；rotated_out_to=VOO"
+},
+{
+"ticker": "VTI",
+"template_id": "T4-B",
+"plan_type": "cancel_existing_ladder",
+"step_name": "L4",
+"shares": 3,
+"limit_price": 317.50,
+"limit_price_rule": "copy_from_existing_live_order_for_cancel",
+"time_in_force": "GTC",
+"expiry_if_gtd": null,
+"order_intent": "CANCEL_EXISTING",
+"event_id_refs": [
+"pi_fed_data_dependence_20260318",
+"se_gdp_20260430",
+"se_jobs_20260508",
+"se_cpi_20260512"
+],
+"structural_theme_refs": [
+"th_us_large_cap_quality_compounders",
+"th_global_breadth_buffer"
+],
+"event_window_handling": "place_before_nearest_macro_window",
+"event_window_anchor_type": "scheduled_macro_event",
+"event_window_anchor_key_date_et": "2026-04-21",
+"intended_place_date_et": "2026-04-20",
+"actionable_window_cutoff_et": "2026-04-20",
+"note": "此列為取消既有 live buy order，不是新買單；rotated_out_to=VOO"
+},
+{
+"ticker": "VOO",
+"template_id": "T4-B",
+"plan_type": "new_4_step_weighted_ladder",
+"step_name": "L1",
+"shares": 1,
+"limit_price": 626.34,
+"limit_price_rule": "round_half_up(anchor_baseline_last_close * (1 + -4.05/100), 2)",
+"time_in_force": "GTC",
+"expiry_if_gtd": null,
+"order_intent": "NEW_ORDER",
+"event_id_refs": [
+"pi_fed_data_dependence_20260318",
+"se_fomc_20260429",
+"se_cpi_20260512",
+"se_pce_20260529"
+],
+"structural_theme_refs": [
+"th_us_large_cap_quality_compounders"
+],
+"event_window_handling": "place_before_nearest_macro_window",
+"event_window_anchor_type": "scheduled_macro_event",
+"event_window_anchor_key_date_et": "2026-04-21",
+"intended_place_date_et": "2026-04-20",
+"actionable_window_cutoff_et": "2026-04-20",
+"note": "new diversified_core_buffer ladder; compiled_notional_total=2329.12 <= target_open_order_budget=4000.00; residual_cash_not_allocated=1670.88"
+},
+{
+"ticker": "VOO",
+"template_id": "T4-B",
+"plan_type": "new_4_step_weighted_ladder",
+"step_name": "L2",
+"shares": 1,
+"limit_price": 596.97,
+"limit_price_rule": "round_half_up(anchor_baseline_last_close * (1 + -8.55/100), 2)",
+"time_in_force": "GTC",
+"expiry_if_gtd": null,
+"order_intent": "NEW_ORDER",
+"event_id_refs": [
+"pi_fed_data_dependence_20260318",
+"se_fomc_20260429",
+"se_cpi_20260512",
+"se_pce_20260529"
+],
+"structural_theme_refs": [
+"th_us_large_cap_quality_compounders"
+],
+"event_window_handling": "place_before_nearest_macro_window",
+"event_window_anchor_type": "scheduled_macro_event",
+"event_window_anchor_key_date_et": "2026-04-21",
+"intended_place_date_et": "2026-04-20",
+"actionable_window_cutoff_et": "2026-04-20",
+"note": "new diversified_core_buffer ladder; compiled_notional_total=2329.12 <= target_open_order_budget=4000.00; residual_cash_not_allocated=1670.88"
+},
+{
+"ticker": "VOO",
+"template_id": "T4-B",
+"plan_type": "new_4_step_weighted_ladder",
+"step_name": "L3",
+"shares": 1,
+"limit_price": 567.59,
+"limit_price_rule": "round_half_up(anchor_baseline_last_close * (1 + -13.05/100), 2)",
+"time_in_force": "GTC",
+"expiry_if_gtd": null,
+"order_intent": "NEW_ORDER",
+"event_id_refs": [
+"pi_fed_data_dependence_20260318",
+"se_fomc_20260429",
+"se_cpi_20260512",
+"se_pce_20260529"
+],
+"structural_theme_refs": [
+"th_us_large_cap_quality_compounders"
+],
+"event_window_handling": "place_before_nearest_macro_window",
+"event_window_anchor_type": "scheduled_macro_event",
+"event_window_anchor_key_date_et": "2026-04-21",
+"intended_place_date_et": "2026-04-20",
+"actionable_window_cutoff_et": "2026-04-20",
+"note": "new diversified_core_buffer ladder; compiled_notional_total=2329.12 <= target_open_order_budget=4000.00; residual_cash_not_allocated=1670.88"
+},
+{
+"ticker": "VOO",
+"template_id": "T4-B",
+"plan_type": "new_4_step_weighted_ladder",
+"step_name": "L4",
+"shares": 1,
+"limit_price": 538.22,
+"limit_price_rule": "round_half_up(anchor_baseline_last_close * (1 + -17.55/100), 2)",
+"time_in_force": "GTC",
+"expiry_if_gtd": null,
+"order_intent": "NEW_ORDER",
+"event_id_refs": [
+"pi_fed_data_dependence_20260318",
+"se_fomc_20260429",
+"se_cpi_20260512",
+"se_pce_20260529"
+],
+"structural_theme_refs": [
+"th_us_large_cap_quality_compounders"
+],
+"event_window_handling": "place_before_nearest_macro_window",
+"event_window_anchor_type": "scheduled_macro_event",
+"event_window_anchor_key_date_et": "2026-04-21",
+"intended_place_date_et": "2026-04-20",
+"actionable_window_cutoff_et": "2026-04-20",
+"note": "new diversified_core_buffer ladder; compiled_notional_total=2329.12 <= target_open_order_budget=4000.00; residual_cash_not_allocated=1670.88"
+},
+{
+"ticker": "SMH",
+"template_id": "T4-B",
+"plan_type": "new_4_step_weighted_ladder",
+"step_name": "L1",
+"shares": 1,
+"limit_price": 445.36,
+"limit_price_rule": "round_half_up(anchor_baseline_last_close * (1 + -4.05/100), 2)",
+"time_in_force": "GTC",
+"expiry_if_gtd": null,
+"order_intent": "NEW_ORDER",
+"event_id_refs": [
+"pi_semiconductor_tariffs_20260114",
+"pi_bis_export_license_20260115",
+"se_intc_20260423",
+"se_tsmc_sales_20260508",
+"se_nvda_20260520"
+],
+"structural_theme_refs": [
+"th_ai_compute_stack"
+],
+"event_window_handling": "place_before_nearest_theme_event",
+"event_window_anchor_type": "scheduled_theme_event",
+"event_window_anchor_key_date_et": "2026-04-23",
+"intended_place_date_et": "2026-04-20",
+"actionable_window_cutoff_et": "2026-04-20",
+"note": "new sector_alpha_tilt ladder; compiled_notional_total=1656.12 <= target_open_order_budget=3000.00; residual_cash_not_allocated=1343.88"
+},
+{
+"ticker": "SMH",
+"template_id": "T4-B",
+"plan_type": "new_4_step_weighted_ladder",
+"step_name": "L2",
+"shares": 1,
+"limit_price": 424.47,
+"limit_price_rule": "round_half_up(anchor_baseline_last_close * (1 + -8.55/100), 2)",
+"time_in_force": "GTC",
+"expiry_if_gtd": null,
+"order_intent": "NEW_ORDER",
+"event_id_refs": [
+"pi_semiconductor_tariffs_20260114",
+"pi_bis_export_license_20260115",
+"se_intc_20260423",
+"se_tsmc_sales_20260508",
+"se_nvda_20260520"
+],
+"structural_theme_refs": [
+"th_ai_compute_stack"
+],
+"event_window_handling": "place_before_nearest_theme_event",
+"event_window_anchor_type": "scheduled_theme_event",
+"event_window_anchor_key_date_et": "2026-04-23",
+"intended_place_date_et": "2026-04-20",
+"actionable_window_cutoff_et": "2026-04-20",
+"note": "new sector_alpha_tilt ladder; compiled_notional_total=1656.12 <= target_open_order_budget=3000.00; residual_cash_not_allocated=1343.88"
+},
+{
+"ticker": "SMH",
+"template_id": "T4-B",
+"plan_type": "new_4_step_weighted_ladder",
+"step_name": "L3",
+"shares": 1,
+"limit_price": 403.59,
+"limit_price_rule": "round_half_up(anchor_baseline_last_close * (1 + -13.05/100), 2)",
+"time_in_force": "GTC",
+"expiry_if_gtd": null,
+"order_intent": "NEW_ORDER",
+"event_id_refs": [
+"pi_semiconductor_tariffs_20260114",
+"pi_bis_export_license_20260115",
+"se_intc_20260423",
+"se_tsmc_sales_20260508",
+"se_nvda_20260520"
+],
+"structural_theme_refs": [
+"th_ai_compute_stack"
+],
+"event_window_handling": "place_before_nearest_theme_event",
+"event_window_anchor_type": "scheduled_theme_event",
+"event_window_anchor_key_date_et": "2026-04-23",
+"intended_place_date_et": "2026-04-20",
+"actionable_window_cutoff_et": "2026-04-20",
+"note": "new sector_alpha_tilt ladder; compiled_notional_total=1656.12 <= target_open_order_budget=3000.00; residual_cash_not_allocated=1343.88"
+},
+{
+"ticker": "SMH",
+"template_id": "T4-B",
+"plan_type": "new_4_step_weighted_ladder",
+"step_name": "L4",
+"shares": 1,
+"limit_price": 382.70,
+"limit_price_rule": "round_half_up(anchor_baseline_last_close * (1 + -17.55/100), 2)",
+"time_in_force": "GTC",
+"expiry_if_gtd": null,
+"order_intent": "NEW_ORDER",
+"event_id_refs": [
+"pi_semiconductor_tariffs_20260114",
+"pi_bis_export_license_20260115",
+"se_intc_20260423",
+"se_tsmc_sales_20260508",
+"se_nvda_20260520"
+],
+"structural_theme_refs": [
+"th_ai_compute_stack"
+],
+"event_window_handling": "place_before_nearest_theme_event",
+"event_window_anchor_type": "scheduled_theme_event",
+"event_window_anchor_key_date_et": "2026-04-23",
+"intended_place_date_et": "2026-04-20",
+"actionable_window_cutoff_et": "2026-04-20",
+"note": "new sector_alpha_tilt ladder; compiled_notional_total=1656.12 <= target_open_order_budget=3000.00; residual_cash_not_allocated=1343.88"
+}
+]
+TEMPLATE4_ORDERS_END
+
+ORDER_STATE_EXPORT_START
+(2a) existing_buy_open_orders_summary
+TICKER | budget | template_id | anchor_baseline_last_close | anchor_price_asof | last_refresh_date_et(optional) | highest_live_limit(optional) | lowest_live_limit(optional) | live_step_count(optional) | live_order_steps_summary(optional) | live_order_qtys_summary(optional)
+QQQ | 6000 | T4-E | 611.07 | 2026-04-10 | 2026-04-12 | 608.40 | 582.50 | 5 | starter=608.40;L1=602.00;L2=595.50;L3=589.00;L4=582.50 | starter=3;L1=2;L2=2;L3=2;L4=1
+VOO | 4000 | T4-B | 652.78 | 2026-04-17 | null | 626.34 | 538.22 | 4 | L1=626.34;L2=596.97;L3=567.59;L4=538.22 | L1=1;L2=1;L3=1;L4=1
+SMH | 3000 | T4-B | 464.16 | 2026-04-17 | null | 445.36 | 382.70 | 4 | L1=445.36;L2=424.47;L3=403.59;L4=382.70 | L1=1;L2=1;L3=1;L4=1
+
+(2b) sell_open_orders
+[]
+
+DEFERRED_NOT_YET_LIVE
+[
+{
+"action_date_et": "2026-04-20",
+"ticker": "VTI",
+"action": "CANCEL_EXISTING",
+"current_live_ssot_reference": "PORTFOLIO_SNAPSHOT.existing_buy_open_orders_summary[VTI]",
+"intended_next_ssot_reference": "ORDER_STATE_EXPORT.(2a).existing_buy_open_orders_summary[VTI]=REMOVED",
+"reason": "audited diversified_core_buffer rotation out; current live VTI ladder is canceled and its budget is redeployed to VOO on intended submission date"
+},
+{
+"action_date_et": "2026-04-20",
+"ticker": "VOO",
+"action": "NEW_ORDER",
+"current_live_ssot_reference": "PORTFOLIO_SNAPSHOT.existing_buy_open_orders_summary[VOO]=ABSENT",
+"intended_next_ssot_reference": "ORDER_STATE_EXPORT.(2a).existing_buy_open_orders_summary[VOO]",
+"reason": "audited diversified_core_buffer rotation in; intended new T4-B ladder becomes open-orders SSOT only after actual submission"
+},
+{
+"action_date_et": "2026-04-20",
+"ticker": "SMH",
+"action": "NEW_ORDER",
+"current_live_ssot_reference": "PORTFOLIO_SNAPSHOT.existing_buy_open_orders_summary[SMH]=ABSENT",
+"intended_next_ssot_reference": "ORDER_STATE_EXPORT.(2a).existing_buy_open_orders_summary[SMH]",
+"reason": "audited sector_alpha_tilt funding; intended new T4-B ladder becomes open-orders SSOT only after actual submission"
+}
+]
+
+STATE_TRANSITION_NOTE
+
+* 在 2026-04-20 實際提交前，Portfolio Snapshot 中既有 live orders 仍是 current live SSOT。
+* 只有在 2026-04-20 實際提交後，上述 existing_buy_open_orders_summary / sell_open_orders 才成為新的 open-orders SSOT。
+  ORDER_STATE_EXPORT_END
+
+TEMPLATE5_EXEC_SUMMARY_START
+
+1. 本回合編譯來源僅使用 RESEARCH_JSON、Portfolio Snapshot、Strategy Settings、以及 AUDITED_DECISION_PACKET。
+2. market-data SSOT 採用 AUDITED_DECISION_PACKET.MARKET_DATA_SNAPSHOT。
+3. audit_passed=true。
+4. order_compiler_ready=true。
+5. actionable_window 顯示本回合為 non-trading day run。
+6. execution_date_et = 2026-04-20。
+7. buy-side 最重要的 keep = QQQ。
+8. QQQ 維持既有 T4-E live ladder。
+9. QQQ 不新增預算，target_open_order_budget 維持 6000。
+10. QQQ anchor_decision = keep_anchor。
+11. buy-side 最重要的 rotation = 取消 VTI、改掛 VOO。
+12. VTI 既有 4000 預算的 T4-B ladder 全數取消。
+13. VTI 的取消不是賣出持股，只是取消既有 live buy orders。
+14. VOO 新建 4000 預算的 T4-B diversified_core_buffer ladder。
+15. VOO 為唯一被資助的 diversified_core_buffer。
+16. buy-side 另一個新增 = SMH。
+17. SMH 新建 3000 預算的 T4-B sector_alpha_tilt ladder。
+18. SMH 是本回合 Lane A 中優先於 IGV 的 alpha tilt。
+19. IGV 本回合為 HOLD_NO_NEW_BUDGET。
+20. VT 本回合為 HOLD_NO_NEW_BUDGET。
+21. SELL_ORDERS = 空。
+22. SELL_NO_ACTION_SUMMARY.primary_reason = AUDITED_DECISION_PACKET.final_sell_execution_plans 為空，因此本回合沒有任何 sell_all 或 trim 可編譯。
+23. 本回合沒有 enabled extended ETF。
+24. optional_extended_etf_sleeve.enabled = false。
+25. allowed_extended_etf_tickers = 空陣列。
+26. proposed_extended_etf_candidates 沒有任何標的被直接編譯成 buy order。
+27. DEFERRED_NOT_YET_LIVE 包含 3 筆 intended actions：VTI cancel、VOO new、SMH new。
+28. 因 intended_place_date_et = 2026-04-20 且 run date = 2026-04-19，ORDER_STATE_EXPORT 代表 post-submission intended end-state。
+29. 在 2026-04-20 實際提交前，Portfolio Snapshot 中既有 live orders 仍是 current live SSOT。
+30. 實際提交完成後，新的 buy-side open-orders SSOT 將只保留 QQQ、VOO、SMH 三個 ticker。
+    TEMPLATE5_EXEC_SUMMARY_END

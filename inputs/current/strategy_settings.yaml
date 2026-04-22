@@ -1,10 +1,121 @@
-as_of: "2026-04-19"
+as_of: "2026-04-20"
+run_timestamp_et: "2026-04-20 20:46 ET"
 benchmark: "QQQ"
 tax_intent: "LTCG_only"
 min_holding_period: ">=12m"
-hard_cap_open_orders_budget: 27534.86
+hard_cap_open_orders_budget: 50534.86
 relative_rotation_enabled: true
+
+relative_rotation_guardrails:
+  require_same_role_for_rotation: true
+  min_score_gap_to_rotate: 1
+  do_not_rotate_if_current_holding_still_role_valid: true
+
 relative_rotation_reference_source: "RESEARCH_JSON.buy_universe_scorecard"
+
+buy_order_template_map:
+  benchmark_carrier_core:
+    template_id: "T4-E"
+    draft_packet_shape: "new_5_step_weighted_ladder"
+    ordered_step_names:
+      - starter
+      - L1
+      - L2
+      - L3
+      - L4
+    step_offsets_vs_anchor:
+      starter: -0.015
+      L1: -0.045
+      L2: -0.085
+      L3: -0.130
+      L4: -0.180
+    step_budget_weights:
+      starter: 0.34
+      L1: 0.24
+      L2: 0.18
+      L3: 0.14
+      L4: 0.10
+    default_event_window_handling: "place_before_nearest_macro_window"
+    default_event_window_anchor_type: "scheduled_macro_event"
+    default_intended_place_timing: "execution_date_et"
+    default_plan_type: "new_limit_ladder"
+    default_time_in_force: "DAY"
+    default_expiry_if_gtd: null
+
+  diversified_core_buffer:
+    template_id: "T4-B"
+    draft_packet_shape: "new_4_step_weighted_ladder"
+    ordered_step_names:
+      - L1
+      - L2
+      - L3
+      - L4
+    step_offsets_vs_anchor:
+      L1: -0.035
+      L2: -0.075
+      L3: -0.120
+      L4: -0.165
+    step_budget_weights:
+      L1: 0.30
+      L2: 0.27
+      L3: 0.23
+      L4: 0.20
+    default_event_window_handling: "place_before_nearest_macro_window"
+    default_event_window_anchor_type: "scheduled_macro_event"
+    default_intended_place_timing: "execution_date_et"
+    default_plan_type: "new_limit_ladder"
+    default_time_in_force: "DAY"
+    default_expiry_if_gtd: null
+
+  sector_alpha_tilt:
+    template_id: "T4-B"
+    draft_packet_shape: "new_4_step_weighted_ladder"
+    ordered_step_names:
+      - L1
+      - L2
+      - L3
+      - L4
+    step_offsets_vs_anchor:
+      L1: -0.050
+      L2: -0.100
+      L3: -0.160
+      L4: -0.230
+    step_budget_weights:
+      L1: 0.20
+      L2: 0.24
+      L3: 0.27
+      L4: 0.29
+    default_event_window_handling: "place_before_nearest_theme_event"
+    default_event_window_anchor_type: "scheduled_theme_event"
+    default_intended_place_timing: "execution_date_et"
+    default_plan_type: "new_limit_ladder"
+    default_time_in_force: "DAY"
+    default_expiry_if_gtd: null
+
+  extended_etf_minority_sleeve:
+    template_id: "T4-B"
+    draft_packet_shape: "new_4_step_weighted_ladder"
+    ordered_step_names:
+      - L1
+      - L2
+      - L3
+      - L4
+    step_offsets_vs_anchor:
+      L1: -0.060
+      L2: -0.110
+      L3: -0.170
+      L4: -0.240
+    step_budget_weights:
+      L1: 0.15
+      L2: 0.20
+      L3: 0.30
+      L4: 0.35
+    default_event_window_handling: "place_before_nearest_theme_event"
+    default_event_window_anchor_type: "scheduled_theme_event"
+    default_intended_place_timing: "execution_date_et"
+    default_plan_type: "new_limit_ladder"
+    default_time_in_force: "DAY"
+    default_expiry_if_gtd: null
 
 core_universe:
   - QQQ
@@ -25,8 +136,21 @@ user_approved_extended_etf_static_list:
 active_shortlist_size_rule:
   benchmark_carrier: 1
   diversified_core_buffer_max: 1
-  sector_alpha_tilt_max: 2
+  sector_alpha_tilt_max: 1
 
 max_new_tickers_per_week:
   base_universe_new_tickers_per_week: 0
   extended_etf_sleeve_new_tickers_per_week: 1
+
+extended_etf_constraints:
+  sleeve_budget_cap_pct_of_total_open_orders: 0.18
+  single_extended_etf_budget_cap_pct_of_total_open_orders: 0.12
+
+sell_execution_policy_defaults:
+  default_plan_type: "single_limit_sell"
+  default_time_in_force: "DAY"
+  default_expiry_if_gtd: null
+  default_limit_price_rule: "last_close_plus_1atr_rounded_2dp"
+  default_future_cap_add_if_filled: 0
+  default_redeploy_timing: "next_weekly_run_only"
+  default_redeploy_to: null

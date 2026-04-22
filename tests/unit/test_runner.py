@@ -2,7 +2,7 @@ from textwrap import dedent
 
 import pytest
 
-from investment_system.llm.runner import (
+from investment_orchestrator.llm.manual_output import (
     ManualOutputValidationError,
     PromptRenderError,
     ensure_manual_output_metadata_template,

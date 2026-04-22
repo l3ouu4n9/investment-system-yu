@@ -1,9 +1,9 @@
 # Research Template - Yu (Dual-Lane Version)
 # ChatGPT Deep Research
-# updated 2026-04-19
+# updated 2026-04-20
 
 投資目標：
-以科技大盤（QQQ）為核心基準，願意承擔科技業與科技子產業集中帶來的波動；投資組合以 QQQ 與核心 buy universe 為主要承載，僅在有明確 12m+ thesis、角色清楚且經預先核准時，才以小比例延伸 ETF 作為長線輔助配置。目標是在 3–5 年期至少跟上科技大盤，並在有利環境下透過小幅主動傾斜爭取適度超額報酬；不主動承擔槓桿、低流動性、頻繁交易與純短期事件投機風險。
+以科技大盤（QQQ）為核心基準，願意承擔較高的科技業與科技子產業集中波動，以及相對 benchmark 更高的階段性回撤與 tracking error；投資組合仍以 QQQ 與核心 buy universe 為主要承載，但在有明確 12m+ thesis、角色清楚且經預先核准時，可對 sector alpha tilt 與延伸 ETF 給予有節制的中小比例主動傾斜。目標是在 3–5 年期不僅跟上科技大盤，並在多數有利環境下爭取明確、可辨識的中度超額報酬；不主動承擔槓桿、低流動性、頻繁交易與純短期事件投機風險。
 
 目標：
 請以「雙 lane」架構完成研究，最後只輸出一份 RESEARCH_JSON：
@@ -17,7 +17,7 @@
 
 - strategy_mandate_template1_dual_lane (NEW, MUST):
   - 本模板所有研究排序必須服務以下投資目標：
-    "以科技大盤（QQQ）為核心基準，願意承擔科技業與科技子產業集中帶來的波動；投資組合以 QQQ 與核心 buy universe 為主要承載，僅在有明確 12m+ thesis、角色清楚且經預先核准時，才以小比例延伸 ETF 作為長線輔助配置。目標是在 3–5 年期至少跟上科技大盤，並在有利環境下透過小幅主動傾斜爭取適度超額報酬；不主動承擔槓桿、低流動性、頻繁交易與純短期事件投機風險。"
+    "以科技大盤（QQQ）為核心基準，願意承擔較高的科技業與科技子產業集中波動，以及相對 benchmark 更高的階段性回撤與 tracking error；投資組合仍以 QQQ 與核心 buy universe 為主要承載，但在有明確 12m+ thesis、角色清楚且經預先核准時，可對 sector alpha tilt 與延伸 ETF 給予有節制的中小比例主動傾斜。目標是在 3–5 年期不僅跟上科技大盤，並在多數有利環境下爭取明確、可辨識的中度超額報酬；不主動承擔槓桿、低流動性、頻繁交易與純短期事件投機風險。"
 
 - output_shape_rule (NEW, MUST):
   - 最終只能輸出一份 RESEARCH_JSON
@@ -65,6 +65,13 @@
   - 所有 *_et 日期運算以 ET 為基準
   - 若 time_et = null，則 time_precision 必須 = "date_only"
   - 若 time_et != null，則 time_precision 必須 = "exact"
+
+- as_of_ssot_copy_through_rule (NEW, MUST):
+  - CURRENT_RUN_INPUTS 內 STRATEGY_SETTINGS_YAML.as_of 是本回合 as_of 的唯一 SSOT
+  - RESEARCH_JSON.as_of 必須 copy-exact 等於 STRATEGY_SETTINGS_YAML.as_of
+  - 不得因週末 / 假日 / 時區換日 / 研究執行時間，而自行把 as_of 前後移動一天
+  - top5_next_week、scheduled_events 的 future window、validation_summary.checks.top5_window_and_refs、validation_summary.checks.scheduled_events_future_window，皆必須以 copy-through 後的 RESEARCH_JSON.as_of 為唯一日期基準
+  - 若 RESEARCH_JSON.as_of 與 STRATEGY_SETTINGS_YAML.as_of 不一致，視為 FAIL，必須自動修正
 
 - final_json_text_cleanliness_rule (MUST):
   - 最終 JSON 的自由文字欄位不得保留任何 citation 標記、腳註符號、工具引用殘留、行號樣式
@@ -129,6 +136,7 @@ buy_universe_scorecard 每檔必填欄位（MUST）：
 - why
 - event_id_refs: []
 - structural_theme_refs: []
+- preferred_scheduled_theme_event_id (string|null; 若目前沒有可 deterministic 對應的 future scheduled theme event，則必須 = null)
 
 - linkage_array_placeholder_rule (NEW, MUST):
   - 本模板 schema/example 中出現的 event_id_refs: [] / structural_theme_refs: [] 只作欄位示意，不代表實際輸出允許為空。
@@ -214,7 +222,7 @@ Lane A mapping_rule (MUST):
 Lane B 不是本輪交易主線。
 
 Lane B 研究定位（MUST）：
-- extended ETF sleeve 是「偶爾可用的戰術性長線輔助工具」
+- extended ETF sleeve 是「受上限約束的非核心長線輔助工具」
 - 不是常態核心配置
 - 不是短期事件交易工具
 - 啟用目的僅限補強 base 六檔無法充分表達的長線輔助曝險
@@ -233,6 +241,19 @@ Lane B 必須永遠輸出（MUST）：
 - proposed_extended_etf_candidates
 - extended_etf_candidate_universe
 - optional_extended_etf_sleeve
+
+- approved_static_list_screening_log_rule (NEW, SHOULD):
+  - RESEARCH_JSON 應新增 approved_static_list_screening_log，且每回合永遠輸出（可為 []）
+  - 對 current_run_user_approved_extended_etf_static_list 中每個 ticker，必須輸出一筆 screening 結果，至少包含：
+    ticker
+    admitted_to_candidate_universe (true|false)
+    admitted_to_predecision_scorecard (true|false)
+    top_candidate_eligible (true|false)
+    best_base_alternative
+    why_not_admitted_or_not_top_candidate
+    event_id_refs
+    structural_theme_refs
+  - 不得把 approved static list member 被排除的主要理由只埋在 data_staleness_note
 
 - user_approved_extended_etf_static_list_input_interpretation_rule (NEW, MUST):
   - user_approved_extended_etf_static_list 是使用者手動維護的已核准 static list，代表：
@@ -298,6 +319,7 @@ proposed_extended_etf_candidates_rule (MUST):
   why
   event_id_refs: []
   structural_theme_refs: []
+  preferred_scheduled_theme_event_id (string|null; 若目前沒有可 deterministic 對應的 future scheduled theme event，則必須 = null)
 - proposed candidates 的 ticker 不得與下列集合重複：
   (1) user_approved_extended_etf_static_list
   (2) extended_etf_candidate_universe
@@ -357,6 +379,7 @@ extended_etf_predecision_scorecard 每檔必填欄位（MUST）：
 - why
 - event_id_refs: []
 - structural_theme_refs: []
+- preferred_scheduled_theme_event_id (string|null; 若目前沒有可 deterministic 對應的 future scheduled theme event，則必須 = null)
 
 extended_etf_activation_rule (MUST):
 - optional_extended_etf_sleeve.enabled 只有在以下硬門檻全部成立時，才可進入啟用評估：
@@ -406,6 +429,7 @@ extended_etf_scorecard_rule (CONDITIONAL, MUST):
   why
   event_id_refs: []
   structural_theme_refs: []
+  preferred_scheduled_theme_event_id (string|null; 若目前沒有可 deterministic 對應的 future scheduled theme event，則必須 = null)
 
 extended_lane_output_conditionality_rule (MUST):
 - 若 user_approved_extended_etf_static_list 為空或未提供：
@@ -438,6 +462,26 @@ cross_lane_consistency_rule (NEW, MUST):
 - Lane B 不得改寫 Lane A 的 role_layer SSOT
 - Lane B 不得把 extended ETF 提升為 benchmark carrier
 
+- scheduled_theme_anchor_derivability_rule (NEW, MUST):
+  - 對任何 downstream 可能使用 "scheduled_theme_event" 作為 event_window_anchor_type 的 ticker / item，RESEARCH_JSON 必須提供 deterministic 可解析的 future theme anchor
+  - 適用範圍至少包含：
+    (1) buy_universe_scorecard 中 role_layer = "sector_alpha_tilt" 的 ticker
+    (2) extended_etf_candidate_universe 每檔
+    (3) extended_etf_predecision_scorecard 每檔
+    (4) 若 optional_extended_etf_sleeve.enabled = true，則 extended_etf_scorecard 每檔
+    (5) proposed_extended_etf_candidates 每檔
+  - 每檔必須新增：
+    preferred_scheduled_theme_event_id
+  - preferred_scheduled_theme_event_id 必須同時滿足：
+    (a) 對應 RESEARCH_JSON.scheduled_events 內存在的 id
+    (b) 該 scheduled event 的 date_et >= RESEARCH_JSON.as_of
+    (c) 與該 ticker 的 thesis / why / structural_theme_refs 有實質關聯
+  - event_id_refs 可以同時包含 policy_items / scheduled_events，但不得只有 policy_items 而沒有任何可供 downstream 當作 scheduled_theme_event anchor 的 future scheduled event
+  - 若某檔目前沒有合適的 future scheduled theme event：
+    (a) preferred_scheduled_theme_event_id = null
+    (b) why 必須以 "DATA_GAP: no future scheduled theme anchor" 開頭
+    (c) 該 item 不得作為本回合或未來 compile-ready 的 scheduled_theme_event NEW_ORDER 依據
+
 ────────────────────────────────────────
 【共同輸出欄位 / Shared RESEARCH_JSON】
 
@@ -455,13 +499,15 @@ RESEARCH_JSON 必須至少包含以下欄位（可增欄位，但不要少）：
     "allowed_buy_tickers": ["VOO","VTI","VT","QQQ","SMH","IGV"],
     "notes": "Template2 buy-side must restrict to allowed_buy_tickers only."
   },
-  "user_approved_extended_etf_static_list": "<copy_exact_from_current_run_user_approved_extended_etf_static_list>",
+  "user_approved_extended_etf_static_list": [],
+  "approved_static_list_screening_log": [],
   "proposed_extended_etf_candidates": [
     {
       "ticker": "",
       "sleeve_role": "core_completer|diversifier|measured_tilt",
       "best_base_alternative": "",
       "why": "",
+      "preferred_scheduled_theme_event_id": null,
       "event_id_refs": [],
       "structural_theme_refs": []
     }
@@ -482,7 +528,7 @@ RESEARCH_JSON 必須至少包含以下欄位（可增欄位，但不要少）：
       "extended_etf_disable_reason_consistency": true
     }
   },
-  "risk_mode_hint": "balanced",
+  "risk_mode_hint": "moderately_aggressive",
   "as_of": "YYYY-MM-DD",
   "event_time_zone_canonical": "America/New_York",
   "user_time_zone": "America/Los_Angeles",
@@ -502,7 +548,7 @@ RESEARCH_JSON 必須至少包含以下欄位（可增欄位，但不要少）：
     "disable_reason": "",
     "why_not_enabled": "",
     "allowed_extended_etf_tickers": [],
-    "notes": "Extended ETF sleeve 為非核心、可選的長線輔助工具；未啟用時，Template2 必須維持在 trade_universe.allowed_buy_tickers 內。"
+    "notes": "Extended ETF sleeve 為受上限約束的非核心長線輔助工具；未啟用時，Template2 必須維持在 trade_universe.allowed_buy_tickers 內。"
   },
   "extended_etf_scorecard": [],
   "top5_next_week": [],
@@ -546,13 +592,111 @@ CURRENT_RUN_USER_APPROVED_EXTENDED_ETF_STATIC_LIST_START
 CURRENT_RUN_USER_APPROVED_EXTENDED_ETF_STATIC_LIST_END
 
 STRATEGY_SETTINGS_YAML_START
-as_of: "2026-04-19"
+as_of: "2026-04-20"
 benchmark: "QQQ"
 tax_intent: "LTCG_only"
 min_holding_period: ">=12m"
-hard_cap_open_orders_budget: 27534.86
+hard_cap_open_orders_budget: 50534.86
 relative_rotation_enabled: true
+
+relative_rotation_guardrails:
+  require_same_role_for_rotation: true
+  min_score_gap_to_rotate: 1
+  do_not_rotate_if_current_holding_still_role_valid: true
+
 relative_rotation_reference_source: "RESEARCH_JSON.buy_universe_scorecard"
+
+buy_order_template_map:
+  benchmark_carrier_core:
+    template_id: "T4-E"
+    draft_packet_shape: "new_5_step_weighted_ladder"
+    ordered_step_names:
+      - starter
+      - L1
+      - L2
+      - L3
+      - L4
+    step_offsets_vs_anchor:
+      starter: -0.015
+      L1: -0.045
+      L2: -0.085
+      L3: -0.130
+      L4: -0.180
+    step_budget_weights:
+      starter: 0.34
+      L1: 0.24
+      L2: 0.18
+      L3: 0.14
+      L4: 0.10
+    default_event_window_handling: "place_before_nearest_macro_window"
+    default_event_window_anchor_type: "scheduled_macro_event"
+    default_intended_place_timing: "execution_date_et"
+
+  diversified_core_buffer:
+    template_id: "T4-B"
+    draft_packet_shape: "new_4_step_weighted_ladder"
+    ordered_step_names:
+      - L1
+      - L2
+      - L3
+      - L4
+    step_offsets_vs_anchor:
+      L1: -0.035
+      L2: -0.075
+      L3: -0.120
+      L4: -0.165
+    step_budget_weights:
+      L1: 0.30
+      L2: 0.27
+      L3: 0.23
+      L4: 0.20
+    default_event_window_handling: "place_before_nearest_macro_window"
+    default_event_window_anchor_type: "scheduled_macro_event"
+    default_intended_place_timing: "execution_date_et"
+
+  sector_alpha_tilt:
+    template_id: "T4-B"
+    draft_packet_shape: "new_4_step_weighted_ladder"
+    ordered_step_names:
+      - L1
+      - L2
+      - L3
+      - L4
+    step_offsets_vs_anchor:
+      L1: -0.050
+      L2: -0.100
+      L3: -0.160
+      L4: -0.230
+    step_budget_weights:
+      L1: 0.20
+      L2: 0.24
+      L3: 0.27
+      L4: 0.29
+    default_event_window_handling: "place_before_nearest_theme_event"
+    default_event_window_anchor_type: "scheduled_theme_event"
+    default_intended_place_timing: "execution_date_et"
+
+  extended_etf_minority_sleeve:
+    template_id: "T4-B"
+    draft_packet_shape: "new_4_step_weighted_ladder"
+    ordered_step_names:
+      - L1
+      - L2
+      - L3
+      - L4
+    step_offsets_vs_anchor:
+      L1: -0.060
+      L2: -0.110
+      L3: -0.170
+      L4: -0.240
+    step_budget_weights:
+      L1: 0.15
+      L2: 0.20
+      L3: 0.30
+      L4: 0.35
+    default_event_window_handling: "place_before_nearest_theme_event"
+    default_event_window_anchor_type: "scheduled_theme_event"
+    default_intended_place_timing: "execution_date_et"
 
 core_universe:
   - QQQ
@@ -573,16 +717,20 @@ user_approved_extended_etf_static_list:
 active_shortlist_size_rule:
   benchmark_carrier: 1
   diversified_core_buffer_max: 1
-  sector_alpha_tilt_max: 2
+  sector_alpha_tilt_max: 1
 
 max_new_tickers_per_week:
   base_universe_new_tickers_per_week: 0
   extended_etf_sleeve_new_tickers_per_week: 1
+
+extended_etf_constraints:
+  sleeve_budget_cap_pct_of_total_open_orders: 0.18
+  single_extended_etf_budget_cap_pct_of_total_open_orders: 0.12
 STRATEGY_SETTINGS_YAML_END
 
 PORTFOLIO_SNAPSHOT_START
 【輸入 2｜Portfolio Snapshot（PATCH: base ETF holdings required; extended ETF holdings optional）】
-# updated 2026-04-19
+# updated 2026-04-20
 
 (1) current_holdings_base（REQUIRED；六檔 base ETF 必填）
 格式：TICKER | shares | avg_cost
@@ -648,7 +796,47 @@ FID | QQQ | 3 | 608.4
     視為 DATA_GAP；本回合該 ticker 允許 keep / reduce / cancel，但不得觸發 mini-reanchor / reanchor
 
 格式（UPDATED）：
-TICKER | budget | template_id | anchor_baseline_last_close | anchor_price_asof | last_refresh_date_et(optional) | highest_live_limit(optional) | lowest_live_limit(optional) | live_step_count(optional) | live_order_steps_summary(optional) | live_order_qtys_summary(optional)
+
+TICKER | budget | compiled_open_order_notional(optional) | residual_cash_not_allocated(optional) | template_id | anchor_baseline_last_close | anchor_price_asof | last_refresh_date_et(optional) | highest_live_limit(optional) | lowest_live_limit(optional) | live_step_count(optional) | live_order_steps_summary(optional) | live_order_qtys_summary(optional)
+
+- column_position_preservation_rule (NEW, MUST):
+  - existing_buy_open_orders_summary 的每一資料列都必須嚴格維持欄位順序
+  - 即使 compiled_open_order_notional / residual_cash_not_allocated / last_refresh_date_et 等 optional 欄位缺值，也必須保留空欄位置，不得省略分隔欄位
+  - 不得因 optional middle fields 缺值而讓 template_id、anchor_baseline_last_close 或後續欄位左移
+  - 若資料列欄位數與格式定義不一致，Strategy C 必須視為 DATA_GAP / PARSE_BLOCKED
+
+- budget_vs_live_notional_rule (NEW, MUST):
+  - budget = 該 ticker 的 target / reserved open-order budget bucket
+  - compiled_open_order_notional = 目前 live buy orders 的實際名目金額總和
+  - residual_cash_not_allocated = budget - compiled_open_order_notional
+  - Strategy C 不得把 budget 與 compiled_open_order_notional 視為必然相等
+  - 若存在整股限制、weighted ladder、preserve_live_qty_vector 或 top_up_rule 缺失，compiled_open_order_notional 可以明顯低於 budget；此差額必須保留，不得默默吞掉
+
+- compiled_open_order_notional_reconstruction_rule (NEW, MUST):
+  - 若 live_order_steps_summary 與 live_order_qtys_summary 可 deterministic 解析：
+    compiled_open_order_notional = Σ(step_shares_i × step_limit_price_i)
+  - residual_cash_not_allocated = budget - compiled_open_order_notional
+  - Strategy C 與後續 Portfolio Snapshot / ORDER_STATE_EXPORT 應優先保留這兩個欄位，而不是只保留 budget
+
+- new_order_state_export_rule (NEW, MUST):
+  - 對於本回合由 Strategy C 新生成、且要寫入 ORDER_STATE_EXPORT 的 buy open orders：
+    - 必須輸出 compiled_open_order_notional
+    - 必須輸出 residual_cash_not_allocated
+  - 不得只輸出 budget 而省略實際已編譯出的 live notional
+  - 若因資料格式限制暫時無法輸出，必須在 TEMPLATE5_EXEC_SUMMARY 明確列為 DATA_GAP / EXPORT_GAP
+
+- keep_existing_state_carry_forward_rule (NEW, MUST):
+  - 若某 ticker 在 current live SSOT 已存在，且本回合 final_action = "KEEP_EXISTING"：
+    - compiled_open_order_notional
+    - residual_cash_not_allocated
+    - highest_live_limit
+    - lowest_live_limit
+    - live_step_count
+    - live_order_steps_summary
+    - live_order_qtys_summary
+    應優先沿用 current live SSOT 的既有值
+  - 不得因為輸出 post-submission intended SSOT，就省略、重算或改寫上述欄位
+  - 除非 AUDITED_DECISION_PACKET 已明示 replace / reanchor / cancel，否則 KEEP_EXISTING 不得改變上述 live-state 欄位
 
 - live_buy_order_structure_rule (NEW, MUST):
   - existing_buy_open_orders_summary 除了 baseline 外，還必須盡量保留目前 live 買單價格結構摘要：
@@ -679,6 +867,7 @@ TICKER | budget | template_id | anchor_baseline_last_close | anchor_price_asof |
       action 必須 = cancel
       new_budget 必須 = 0
       且不得輸出該 ticker 的 Execution Plan / BUY_ORDERS
+
 
 
 (2b) sell_open_orders（optional, lot-aware open sell orders summary）
@@ -734,9 +923,6 @@ TICKER | shares_to_sell | limit_price | tax_lot_source | lot_selection_mode | ac
   - 若 existing_buy_open_orders_summary 未提供：
       A_from_snapshot = 0
       並標註 ASSUMPTION: no existing buy-side open orders provided
-
-- QQQ | 6000 | T4-E | 611.07 | 2026-04-10 | 2026-04-12 | 608.40 | 582.50 | 5 | starter=608.40;L1=602.00;L2=595.50;L3=589.00;L4=582.50 | starter=3;L1=2;L2=2;L3=2;L4=1
-- VTI | 4000 | T4-B | 335.05 | 2026-04-10 | 2026-04-12 | 331.00 | 317.50 | 4 | L1=331.00;L2=326.50;L3=322.00;L4=317.50 | L1=3;L2=3;L3=3;L4=3
 
 (3) LTCG_ELIGIBLE_SELLABLE（你提供可賣 long-term lots；本回合只允許從這裡賣）
 格式（UPDATED）：
