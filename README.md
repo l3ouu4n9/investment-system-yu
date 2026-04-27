@@ -22,6 +22,27 @@ PYTHONPATH=src .venv/bin/python -m investment_orchestrator.cli.run_step1 parse
 ```
 
 Swap `run_step1` for `run_step2`, `run_step3`, or `run_step4` as needed.
+If you prefer `uv`, the equivalent runtime form is:
+
+```bash
+PYTHONPATH=src uv run python -m investment_orchestrator.cli.run_step1 render
+PYTHONPATH=src uv run python -m investment_orchestrator.cli.run_step1 parse
+```
+
+## Daily Execution Check
+
+Weekday execution maintenance is a separate manual workflow. It reads the latest
+weekly artifacts and writes only to `artifacts/daily/YYYY-MM-DD/daily_execution_check/`.
+See [Daily Execution Check Runbook](docs/daily_execution_check_runbook.md) for the operating procedure.
+
+```bash
+PYTHONPATH=src .venv/bin/python -m investment_orchestrator.cli.run_daily_execution_check render
+PYTHONPATH=src .venv/bin/python -m investment_orchestrator.cli.run_daily_execution_check parse
+```
+
+Use `--date YYYY-MM-DD` to render or parse a specific daily check date.
+The same commands can be run through `uv` with `PYTHONPATH=src uv run python -m ...`.
+Add `--generate-market-data` to `render` to attempt daily market data generation before prompt rendering.
 
 ## Tests
 
@@ -32,6 +53,11 @@ PYTHONPATH=src .venv/bin/python -m pytest -q
 ```
 
 If `pytest` is missing in the local environment, install the dev extras or add `pytest` to the virtualenv first.
+With `uv`, use:
+
+```bash
+PYTHONPATH=src uv run --extra dev pytest -q
+```
 
 ## Artifact housekeeping
 

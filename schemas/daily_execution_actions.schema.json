@@ -1,0 +1,228 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "as_of",
+    "workflow",
+    "scope",
+    "weekly_sources",
+    "actions",
+    "blocked_items",
+    "operator_notes"
+  ],
+  "properties": {
+    "as_of": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "workflow": {
+      "const": "daily_execution_check"
+    },
+    "scope": {
+      "const": "execution_only"
+    },
+    "weekly_sources": {
+      "type": "object",
+      "required": [
+        "audited_decision_packet_path",
+        "template4_orders_path",
+        "order_state_export_path"
+      ],
+      "properties": {
+        "audited_decision_packet_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "template4_orders_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "order_state_export_path": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "actions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/action_item"
+      }
+    },
+    "blocked_items": {
+      "type": "array",
+      "items": {}
+    },
+    "operator_notes": {
+      "type": "array",
+      "items": {}
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "action_item": {
+      "type": "object",
+      "required": [
+        "ticker",
+        "side",
+        "action",
+        "reason_code",
+        "execution_only",
+        "weekly_intent_preserved",
+        "no_new_thesis",
+        "no_ranking_change",
+        "no_budget_increase",
+        "source_evidence",
+        "replace_packet"
+      ],
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "minLength": 1
+        },
+        "side": {
+          "enum": ["BUY", "SELL"]
+        },
+        "action": {
+          "enum": [
+            "KEEP",
+            "REPLACE",
+            "CANCEL",
+            "HOLD_FOR_WEEKLY_REVIEW",
+            "DATA_GAP"
+          ]
+        },
+        "reason_code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "execution_only": {
+          "const": true
+        },
+        "weekly_intent_preserved": {
+          "type": "boolean"
+        },
+        "no_new_thesis": {
+          "const": true
+        },
+        "no_ranking_change": {
+          "const": true
+        },
+        "no_budget_increase": {
+          "const": true
+        },
+        "source_evidence": {
+          "type": "string",
+          "minLength": 1
+        },
+        "replace_packet": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/replace_packet"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "REPLACE"
+              }
+            },
+            "required": ["action"]
+          },
+          "then": {
+            "properties": {
+              "replace_packet": {
+                "$ref": "#/$defs/replace_packet"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "replace_packet": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "enum": ["KEEP", "REPLACE", "CANCEL"]
+              }
+            },
+            "required": ["action"]
+          },
+          "then": {
+            "properties": {
+              "weekly_intent_preserved": {
+                "const": true
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": true
+    },
+    "replace_packet": {
+      "type": "object",
+      "required": [
+        "ticker",
+        "same_ticker",
+        "remaining_budget_before",
+        "remaining_budget_after",
+        "budget_delta",
+        "preserve_weekly_role",
+        "preserve_event_binding",
+        "replacement_reason",
+        "proposed_anchor_source",
+        "notes_for_replace_packet_synthesis"
+      ],
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "minLength": 1
+        },
+        "same_ticker": {
+          "const": true
+        },
+        "remaining_budget_before": {
+          "type": "number"
+        },
+        "remaining_budget_after": {
+          "type": "number"
+        },
+        "budget_delta": {
+          "const": 0
+        },
+        "preserve_weekly_role": {
+          "const": true
+        },
+        "preserve_event_binding": {
+          "const": true
+        },
+        "replacement_reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "proposed_anchor_source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "notes_for_replace_packet_synthesis": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

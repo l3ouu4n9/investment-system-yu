@@ -8,7 +8,7 @@ __pycache__/
 .ruff_cache/
 
 # Local artifacts from manual workflow runs
-artifacts/current/
+artifacts/
 
 # Windows metadata occasionally copied into the repo
 *.Zone.Identifier

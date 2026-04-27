@@ -1,5 +1,5 @@
 # Strategy C - Order Compiler
-# ChatGPT-5.4 Thinking
+# ChatGPT-5.5 Thinking
 # derived from Strategy Template - Yu (Dual-Lane Full Version)
 # updated 2026-04-21
 

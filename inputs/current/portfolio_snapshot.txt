@@ -1,5 +1,5 @@
 【輸入 2｜Portfolio Snapshot（PATCH: base ETF holdings required; extended ETF holdings optional）】
-# updated 2026-04-20
+# updated 2026-04-26
 
 (1) current_holdings_base（REQUIRED；六檔 base ETF 必填）
 格式：TICKER | shares | avg_cost
@@ -139,7 +139,7 @@ TICKER | budget | compiled_open_order_notional(optional) | residual_cash_not_all
 
 QQQ | 30320.92 | 28905.03 | 1415.89 | T4-E | 646.79 | 2026-04-20 |  | 637.09 | 530.37 | 5 | starter@637.09;L1@617.68;L2@591.81;L3@562.71;L4@530.37 | starter:16;L1:11;L2:9;L3:7;L4:5
 VOO | 12633.71 | 11828.75 | 804.96 | T4-B | 651.54 | 2026-04-20 |  | 628.74 | 544.04 | 4 | L1@628.74;L2@602.67;L3@573.36;L4@544.04 | L1:6;L2:5;L3:5;L4:4
-SMH | 7580.23 | 7084.67 | 495.56 | T4-B | 463.96 | 2026-04-20 |  | 440.76 | 357.25 | 4 | L1@440.76;L2@417.56;L3@389.73;L4@357.25 | L1:3;L2:4;L3:5;L4:6
+SMH | 7580.23 | 6462.20 | 1118.03 | T4-B | 506.44 | 2026-04-24 |  | 481.12 | 389.96 | 4 | L1@481.12;L2@455.80;L3@425.41;L4@389.96 | L1:3;L2:3;L3:4;L4:5
 
 
 (2b) sell_open_orders（optional, lot-aware open sell orders summary）
