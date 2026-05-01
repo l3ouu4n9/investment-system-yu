@@ -1,7 +1,7 @@
 # Strategy C - Order Compiler
 # ChatGPT-5.5 Thinking
 # derived from Strategy Template - Yu (Dual-Lane Full Version)
-# updated 2026-04-21
+# updated 2026-04-27
 
 投資目標：
 以科技大盤（QQQ）為核心基準，願意承擔較高的科技業與科技子產業集中波動，以及相對 benchmark 更高的階段性回撤與 tracking error；投資組合仍以 QQQ 與核心 buy universe 為主要承載，但在有明確 12m+ thesis、角色清楚且經預先核准時，可對 sector alpha tilt 與延伸 ETF 給予有節制的中小比例主動傾斜。目標是在 3–5 年期不僅跟上科技大盤，並在多數有利環境下爭取明確、可辨識的中度超額報酬；不主動承擔槓桿、低流動性、頻繁交易與純短期事件投機風險。
@@ -381,6 +381,70 @@ TEMPLATE5_EXEC_SUMMARY_END
   - 不得把 KEEP_EXISTING 偽裝成可提交訂單
   - 若需要保留 keep 的原因、anchor_decision 或 why，應只在 ORDER_STATE_EXPORT 與 TEMPLATE5_EXEC_SUMMARY 中表達
 
+【BUY_ORDERS for REPLACE_EXISTING（NEW, MUST）】
+- 若 buy-side execution plan 的 final_action / order_intent = "REPLACE_EXISTING"：
+  - Strategy C 必須把 replace 拆成兩組 BUY_ORDERS rows，且順序固定為：
+    (a) REPLACE_EXISTING_CANCEL_LEG：先取消既有 live buy ladder
+    (b) REPLACE_EXISTING_SUBMIT_LEG：再提交新的 replacement buy ladder
+  - 不得只輸出新的 replacement submit rows
+  - 不得只在 note 裡寫「cancel prior ladder」而不輸出 cancel leg rows
+  - 不得把 replace 語意只藏在 natural-language note 中
+
+- REPLACE_EXISTING_CANCEL_LEG rows 規則：
+  - 必須逐 step 對應 current live SSOT 的 existing_buy_open_orders_summary：
+      live_order_steps_summary
+      live_order_qtys_summary
+  - ticker 必須等於被 replace 的 ticker
+  - template_id 必須沿用 existing_buy_open_orders_summary 中該 ticker 的 template_id
+  - plan_type 必須 = "cancel_existing_ladder_for_replace"
+  - step_name / shares / limit_price 必須逐 step 取自 current live SSOT
+  - limit_price_rule 必須 = "copy_from_existing_live_order_for_cancel"
+  - time_in_force 必須沿用 upstream execution plan 的 time_in_force，以維持 canonical row 欄位完整
+  - expiry_if_gtd 必須沿用 upstream execution plan 的 expiry_if_gtd；若 time_in_force != GTD，必須為 null
+  - order_intent 必須 = "REPLACE_EXISTING_CANCEL_LEG"
+  - event_id_refs / structural_theme_refs 必須沿用該 execution plan
+  - event_window_handling / event_window_anchor_type / event_window_anchor_key_date_et / intended_place_date_et / actionable_window_cutoff_et 必須沿用該 execution plan
+  - note 必須明確寫：
+      "此列為取消既有 live buy order 的 replace cancel leg，不是新買單"
+
+- REPLACE_EXISTING_SUBMIT_LEG rows 規則：
+  - 必須逐 step 對應 audited replacement execution plan 的 deterministic compiled result
+  - plan_type 必須沿用 upstream execution plan 的 plan_type
+  - step_name 必須來自 upstream execution plan 的 ordered_step_names
+  - limit_price 必須依 Limit-price reconstruction rule deterministic 生成
+  - shares 必須依 Budget-fit compile rule deterministic 生成
+  - limit_price_rule 必須 = "anchor_baseline_last_close_x_1_plus_step_offset_rounded_2dp"
+  - order_intent 必須 = "REPLACE_EXISTING_SUBMIT_LEG"
+  - note 必須明確寫：
+      "此列為 replace submit leg；僅在舊 live buy order 取消後提交"
+
+- REPLACE_EXISTING sequencing rule：
+  - TEMPLATE4_ORDERS.BUY_ORDERS 中必須先列出所有 REPLACE_EXISTING_CANCEL_LEG rows
+  - 再列出同 ticker 的所有 REPLACE_EXISTING_SUBMIT_LEG rows
+  - 同一 ticker 的 cancel leg 與 submit leg 不得交錯
+  - 若同一回合有多個 ticker 需要 replace，必須逐 ticker 完成 cancel leg + submit leg 後再進入下一 ticker
+
+- REPLACE_EXISTING compile blocker：
+  - 若 existing_buy_open_orders_summary 無法可靠解析既有 live_order_steps_summary / live_order_qtys_summary：
+      - 不得輸出 replace cancel leg
+      - 不得輸出 replacement submit leg
+      - 必須輸出 DATA_GAP / COMPILER_BLOCKED
+      - 問題歸因標記為 "UPSTREAM_OR_PORTFOLIO_LIVE_STATE_GAP"
+  - 若 replacement submit leg 的 compiled_notional > target_open_order_budget：
+      - 不得硬編
+      - 必須輸出 DATA_GAP / COMPILER_BLOCKED
+      - 除非 AUDITED_DECISION_PACKET 已明示 override_rule / budget_tolerance_rule / top_up_rule
+
+- ORDER_STATE_EXPORT 對 REPLACE_EXISTING 的處理：
+  - existing_buy_open_orders_summary 必須表達 replacement submit leg 實際提交完成後的 final intended end-state
+  - cancel leg 不得被寫入 existing_buy_open_orders_summary 作為新的 live state
+  - 若本回合為 non-trading day run，或 intended_place_date_et > run date：
+      - 必須在 DEFERRED_NOT_YET_LIVE 逐 ticker 列出 REPLACE_EXISTING_CANCEL_AND_SUBMIT
+      - current_live_ssot_reference 必須指向 Portfolio Snapshot 中被取消的 current live row
+      - intended_next_ssot_reference 必須指向 ORDER_STATE_EXPORT 中 replacement 後的新 row
+      - reason 必須明確說明：
+          "Before actual manual submission, Portfolio Snapshot current live row remains the live SSOT; ORDER_STATE_EXPORT becomes SSOT only after cancel-and-submit is completed."
+
 【BUY_ORDERS for CANCEL_EXISTING（NEW, MUST）】
 - 若 buy-side execution plan 的 final_action / order_intent = CANCEL_EXISTING：
   - 仍須輸出 BUY_ORDERS rows，用於逐 step 表示要取消的既有 live buy orders
@@ -465,6 +529,60 @@ TEMPLATE5_EXEC_SUMMARY_END
     - TEMPLATE5_EXEC_SUMMARY 必須額外標註：
       "UPSTREAM_REVIEW_NEEDED: budget materially under-deployed due to whole-share / ladder geometry / missing top_up_rule"
   - 不得只把 residual cash 藏在 BUY_ORDERS.note 中而不在 TEMPLATE5_EXEC_SUMMARY 明確摘要
+
+- buy_open_order_state_summary_rule (NEW, MUST):
+  - TEMPLATE5_EXEC_SUMMARY 必須彙總所有 final intended buy open-order state，包括：
+      ticker
+      final_action
+      target_open_order_budget
+      compiled_open_order_notional
+      residual_cash_not_allocated
+      residual_cash_pct
+      anchor_price_asof
+      live_step_count
+      state_status
+  - 對 final_action = KEEP_EXISTING 的 ticker：
+      - compiled_open_order_notional 必須沿用 current live SSOT / AUDITED_DECISION_PACKET 的 existing_compiled_open_order_notional
+      - residual_cash_not_allocated 必須沿用 current live SSOT / AUDITED_DECISION_PACKET 的 existing_residual_cash_not_allocated
+      - state_status 必須 = "carried_forward_current_live_state"
+  - 對 final_action = REPLACE_EXISTING 的 ticker：
+      - compiled_open_order_notional 必須使用 replacement submit leg 的 final intended compiled_notional
+      - residual_cash_not_allocated 必須使用 target_open_order_budget - replacement compiled_notional
+      - state_status 必須 = "final_intended_state_after_replace_submission"
+  - aggregate_notional_counting_rule (NEW, MUST):
+      - TEMPLATE5_EXEC_SUMMARY 的 total_compiled_open_order_notional 必須只計入「final intended buy open-order state」。
+      - 不得直接加總 TEMPLATE4_ORDERS.BUY_ORDERS 裡所有 rows 的 shares × limit_price。
+      - 對 REPLACE_EXISTING：
+          - REPLACE_EXISTING_CANCEL_LEG rows 只代表人工取消舊 live buy orders 的操作指令
+          - REPLACE_EXISTING_CANCEL_LEG rows 不得計入 compiled_open_order_notional
+          - REPLACE_EXISTING_CANCEL_LEG rows 不得計入 total_compiled_open_order_notional
+          - 只可計入 REPLACE_EXISTING_SUBMIT_LEG rows 形成的 final intended compiled_notional
+      - 對 KEEP_EXISTING：
+          - 不得因為沒有 BUY_ORDERS rows 就把 compiled_open_order_notional 視為 0
+          - 必須沿用 current live SSOT / AUDITED_DECISION_PACKET 的 existing_compiled_open_order_notional
+      - 對 NEW_ORDER：
+          - 只計入實際 submit rows 的 compiled_notional
+      - 對 CANCEL_EXISTING：
+          - cancel rows 不得計入 final intended compiled_open_order_notional
+          - final intended compiled_open_order_notional 必須 = 0
+          - residual_cash_not_allocated 必須依 target_open_order_budget / post-cancel budget state 計算；若 upstream 未定義 post-cancel budget state，必須輸出 DATA_GAP / COMPILER_BLOCKED
+  - TEMPLATE5_EXEC_SUMMARY 必須另外輸出 aggregate summary：
+      total_target_open_order_budget
+      total_compiled_open_order_notional
+      total_residual_cash_not_allocated
+      hard_cap_open_orders_budget
+      target_budget_vs_hard_cap_check
+  - 若 total_target_open_order_budget > hard_cap_open_orders_budget：
+      - 必須輸出 DATA_GAP / COMPILER_BLOCKED
+  - 若 total_compiled_open_order_notional > total_target_open_order_budget：
+      - 必須輸出 DATA_GAP / COMPILER_BLOCKED
+  - 若任一 ticker residual_cash_pct >= 20%：
+      - 必須標註：
+          "UPSTREAM_REVIEW_NEEDED: budget materially under-deployed due to whole-share / ladder geometry / missing top_up_rule"
+  - 若 total_residual_cash_not_allocated 明顯偏高但沒有任何單一 ticker residual_cash_pct >= 20%：
+      - 不阻擋下單
+      - 但 TEMPLATE5_EXEC_SUMMARY 必須標註：
+          "INFO: residual cash exists due to whole-share ladder geometry; no top_up_rule applied"
 
 【最後提醒】
 - Order Compiler 只做編譯，不做新判斷。

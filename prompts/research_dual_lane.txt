@@ -1,6 +1,6 @@
 # Research Template - Yu (Dual-Lane Version)
 # ChatGPT Deep Research
-# updated 2026-04-22
+# updated 2026-04-27
 
 投資目標：
 以科技大盤（QQQ）為核心基準，願意承擔較高的科技業與科技子產業集中波動，以及相對 benchmark 更高的階段性回撤與 tracking error；投資組合仍以 QQQ 與核心 buy universe 為主要承載，但在有明確 12m+ thesis、角色清楚且經預先核准時，可對 sector alpha tilt 與延伸 ETF 給予有節制的中小比例主動傾斜。目標是在 3–5 年期不僅跟上科技大盤，並在多數有利環境下爭取明確、可辨識的中度超額報酬；不主動承擔槓桿、低流動性、頻繁交易與純短期事件投機風險。
@@ -138,6 +138,100 @@ buy_universe_scorecard 每檔必填欄位（MUST）：
 - structural_theme_refs: []
 - preferred_scheduled_theme_event_id (string|null; 若目前沒有可 deterministic 對應的 future scheduled theme event，則必須 = null)
 
+- downstream_actionability_fields_rule (NEW, MUST):
+  - buy_universe_scorecard 每檔必須額外輸出下列欄位，供 Strategy A deterministic 判斷是否可進入 shortlist / delta / execution draft：
+    - actionability_status
+    - entry_driver
+    - primary_anchor_type
+    - primary_anchor_event_id
+    - primary_anchor_date_et
+    - thesis_12m_plus_supported
+    - thesis_12m_plus_summary
+    - thesis_linkage_quality
+    - compile_blocker_if_any
+
+  - actionability_status 只能是：
+    - "actionable_this_run"
+    - "ranking_hold_watch_only"
+    - "compile_blocked"
+    - "research_only"
+
+  - entry_driver 只能是：
+    - "macro_discount_rate"
+    - "theme_12m_plus"
+    - "short_term_timing_only"
+    - "data_gap"
+
+  - primary_anchor_type 只能是：
+    - "scheduled_macro_event"
+    - "scheduled_theme_event"
+    - null
+
+  - primary_anchor_event_id:
+    - 若 primary_anchor_type != null，必須對應 RESEARCH_JSON.scheduled_events 內唯一存在的 id
+    - 若 primary_anchor_type = null，必須 = null
+
+  - primary_anchor_date_et:
+    - 若 primary_anchor_event_id != null，必須等於該 scheduled_event.date_et
+    - 若 primary_anchor_event_id = null，必須 = null
+
+  - thesis_12m_plus_supported 必須為 true / false。
+  - thesis_12m_plus_summary 必須用繁體中文一句話說明該 ticker 的 12m+ thesis；若 thesis_12m_plus_supported=false，必須以 "DATA_GAP:" 或 "SHORT_TERM_ONLY:" 開頭。
+  - thesis_linkage_quality 只能是：
+    - "strong"
+    - "adequate"
+    - "weak"
+    - "none"
+
+  - compile_blocker_if_any:
+    - 若 actionability_status = "actionable_this_run"，必須 = null
+    - 若 actionability_status = "compile_blocked"，必須為非空字串，且只能描述 research-side blocker，不得描述 Strategy A/B/C 的 order sizing 問題
+    - 常見值包含：
+      - "missing_future_scheduled_macro_anchor"
+      - "missing_future_scheduled_theme_anchor"
+      - "missing_12m_plus_thesis_linkage"
+      - "event_refs_or_structural_refs_empty"
+      - "short_term_only_not_thesis_changing"
+      - "extended_lane_not_enabled"
+      - "data_gap_no_linkage"
+
+- downstream_actionability_status_assignment_rule (NEW, MUST):
+  - 若某 ticker 被標為 actionability_status = "actionable_this_run"，必須同時滿足：
+    (1) thesis_12m_plus_supported = true
+    (2) thesis_linkage_quality ∈ ["strong","adequate"]
+    (3) event_id_refs 或 structural_theme_refs 至少一者非空
+    (4) primary_anchor_event_id != null
+    (5) primary_anchor_date_et >= RESEARCH_JSON.as_of
+    (6) compile_blocker_if_any = null
+
+  - role_layer = "benchmark_carrier_core" 或 "diversified_core_buffer" 的 ticker：
+    - 若 actionability_status = "actionable_this_run"，primary_anchor_type 應優先為 "scheduled_macro_event"
+    - primary_anchor_event_id 必須對應 thesis_linkage_bucket = "macro_discount_rate" 的 future scheduled_event
+    - 若找不到 future scheduled macro anchor，不得標為 actionability_status = "actionable_this_run"
+
+  - role_layer = "sector_alpha_tilt" 的 ticker：
+    - 若 actionability_status = "actionable_this_run"，primary_anchor_type 必須 = "scheduled_theme_event"
+    - primary_anchor_event_id 必須等於 preferred_scheduled_theme_event_id
+    - 若 preferred_scheduled_theme_event_id = null，不得標為 actionability_status = "actionable_this_run"
+    - 此時 actionability_status 必須 = "compile_blocked" 或 "ranking_hold_watch_only"
+    - why 必須以 "DATA_GAP: no future scheduled theme anchor" 開頭
+
+  - 若某 ticker 只有研究價值、長線 ranking 價值、或持有診斷價值，但本輪不應作為 new-money / increase destination：
+    - actionability_status 必須 = "ranking_hold_watch_only"
+    - 不得用自由文字暗示其 compile-ready
+
+  - 若某 ticker 只受 1–8 週事件影響，且無 12m+ thesis linkage：
+    - actionability_status 必須 = "research_only"
+    - entry_driver 必須 = "short_term_timing_only"
+    - thesis_12m_plus_supported 必須 = false
+    - why 必須包含 "SHORT_TERM_ONLY: not thesis-changing"
+
+- no_free_text_actionability_inference_rule (NEW, MUST):
+  - Strategy A 不應被迫從 why / best_use_case 自由文字反推 actionability。
+  - 因此，只要 buy_universe_scorecard item 缺少 actionability_status / entry_driver / primary_anchor_type / primary_anchor_event_id / primary_anchor_date_et / thesis_12m_plus_supported / thesis_linkage_quality / compile_blocker_if_any 任一欄位：
+    - validation_summary.passed 必須 = false
+    - validation_summary.fail_reasons 必須包含 "MISSING_DOWNSTREAM_ACTIONABILITY_FIELDS"
+
 - linkage_array_placeholder_rule (NEW, MUST):
   - 本模板 schema/example 中出現的 event_id_refs: [] / structural_theme_refs: [] 只作欄位示意，不代表實際輸出允許為空。
   - 實際輸出時：
@@ -221,6 +315,103 @@ Lane A mapping_rule (MUST):
 - 若為 broad macro / rate / inflation / liquidity 事件，預設不得為 []
 - 若為 []，必須輸出 mapping_note 說明
 
+scheduled_event_anchor_contract_rule (NEW, MUST):
+- scheduled_events 每個 item 除既有欄位外，必須額外輸出：
+  - anchor_eligible_for
+  - anchor_role_scope
+  - linked_structural_theme_ids
+  - is_future_anchor_eligible
+  - anchor_disqualification_reason
+
+- anchor_eligible_for 必須是 array，且元素只能是：
+  - "scheduled_macro_event"
+  - "scheduled_theme_event"
+  - "short_term_monitor_only"
+
+- anchor_role_scope 必須是 array，且元素只能是：
+  - "benchmark_carrier_core"
+  - "diversified_core_buffer"
+  - "sector_alpha_tilt"
+  - "extended_etf_minority_sleeve"
+  - "macro_monitor_only"
+  - "theme_monitor_only"
+
+- linked_structural_theme_ids 必須是 array：
+  - 若該 scheduled_event 用於 theme anchor，linked_structural_theme_ids 不得為 []
+  - 若該 scheduled_event 只屬 macro discount-rate / inflation / liquidity anchor，可為 []，但 thesis_linkage_bucket 必須 = "macro_discount_rate"
+
+- is_future_anchor_eligible 必須為 true / false：
+  - 若 date_et >= RESEARCH_JSON.as_of，且該事件可作為 downstream event_window anchor，則為 true
+  - 若 date_et < RESEARCH_JSON.as_of，必須為 false
+  - 若事件只是 short-term monitor、不是 downstream anchor，必須為 false
+
+- anchor_disqualification_reason:
+  - 若 is_future_anchor_eligible = true，必須 = null
+  - 若 is_future_anchor_eligible = false，必須為非空字串
+  - 常見值包含：
+    - "past_event"
+    - "short_term_monitor_only"
+    - "no_12m_plus_thesis_linkage"
+    - "no_mapped_buy_universe"
+    - "date_only_context_not_anchorable"
+    - "insufficient_theme_specificity"
+
+scheduled_macro_anchor_derivability_rule (NEW, MUST):
+- 若 buy_universe_scorecard 中任一 role_layer ∈ ["benchmark_carrier_core","diversified_core_buffer"] 的 ticker 被標為 actionability_status = "actionable_this_run"：
+  - RESEARCH_JSON.scheduled_events 中必須至少存在一筆：
+    - date_et >= RESEARCH_JSON.as_of
+    - thesis_linkage_bucket = "macro_discount_rate"
+    - anchor_eligible_for 包含 "scheduled_macro_event"
+    - is_future_anchor_eligible = true
+  - 否則該 ticker 不得標為 actionability_status = "actionable_this_run"
+  - 該 ticker 必須降級為 actionability_status = "compile_blocked"
+  - compile_blocker_if_any 必須 = "missing_future_scheduled_macro_anchor"
+
+scheduled_theme_anchor_derivability_rule_v2 (NEW, MUST):
+- 若 buy_universe_scorecard 中任一 role_layer = "sector_alpha_tilt" 的 ticker 被標為 actionability_status = "actionable_this_run"：
+  - preferred_scheduled_theme_event_id 必須非空
+  - preferred_scheduled_theme_event_id 必須對應 scheduled_events 內唯一存在的 id
+  - 該 scheduled_event 必須同時滿足：
+    - date_et >= RESEARCH_JSON.as_of
+    - anchor_eligible_for 包含 "scheduled_theme_event"
+    - anchor_role_scope 包含 "sector_alpha_tilt"
+    - is_future_anchor_eligible = true
+    - linked_structural_theme_ids 與該 ticker.structural_theme_refs 至少有一個交集
+  - 若不滿足，該 ticker 不得標為 actionability_status = "actionable_this_run"
+  - 該 ticker 必須降級為 actionability_status = "compile_blocked"
+  - compile_blocker_if_any 必須 = "missing_future_scheduled_theme_anchor"
+
+anchor_ref_integrity_rule (NEW, MUST):
+- RESEARCH_JSON 內所有以下欄位若為非 null event id：
+  - buy_universe_scorecard[*].primary_anchor_event_id
+  - buy_universe_scorecard[*].preferred_scheduled_theme_event_id
+  - extended_etf_candidate_universe[*].preferred_scheduled_theme_event_id
+  - extended_etf_predecision_scorecard[*].preferred_scheduled_theme_event_id
+  - extended_etf_scorecard[*].preferred_scheduled_theme_event_id
+  - proposed_extended_etf_candidates[*].preferred_scheduled_theme_event_id
+  則必須在 scheduled_events 內唯一存在。
+
+- 若上述任一非 null event id 找不到、重複、或對應 scheduled_event.date_et < RESEARCH_JSON.as_of：
+  - validation_summary.passed 必須 = false
+  - validation_summary.fail_reasons 必須包含 "INVALID_OR_NON_FUTURE_ANCHOR_REF"
+
+- 若上述欄位為 null，則不視為 anchor ref lookup failure；但 null 是否允許，必須由該 item 的 actionability_status / lane_b_status / activation_blocker / compile_blocker_if_any 判定。
+
+- null anchor 合法情境：
+  - buy_universe_scorecard[*].actionability_status ∈ ["ranking_hold_watch_only","compile_blocked","research_only"]
+  - proposed_extended_etf_candidates[*].lane_b_status = "proposed_only"
+  - approved_static_list_screening_log[*].can_enter_effective_allowed_buy_universe_this_run = false
+  - extended_etf_predecision_scorecard[*].can_enter_effective_allowed_buy_universe_this_run = false
+
+- null anchor 非法情境：
+  - buy_universe_scorecard[*].actionability_status = "actionable_this_run"
+  - extended_etf_scorecard[*].can_enter_effective_allowed_buy_universe_this_run = true
+  - optional_extended_etf_sleeve.enabled = true 且該 ticker 出現在 optional_extended_etf_sleeve.allowed_extended_etf_tickers
+
+- 若 null anchor 出現在非法情境：
+  - validation_summary.passed 必須 = false
+  - validation_summary.fail_reasons 必須包含 "NULL_ANCHOR_STATUS_INCONSISTENT"
+
 ────────────────────────────────────────
 【Lane B｜Extended Candidate Lane（副線）】
 
@@ -261,6 +452,96 @@ Lane B 必須永遠輸出（MUST）：
     event_id_refs
     structural_theme_refs
   - 不得把 approved static list member 被排除的主要理由只埋在 data_staleness_note
+
+- extended_lane_explicit_status_rule (NEW, MUST):
+  - approved_static_list_screening_log 每筆必須額外輸出：
+    - lane_b_status
+    - activation_blocker
+    - can_enter_effective_allowed_buy_universe_this_run
+    - relative_base_advantage_summary
+    - downstream_tradeability_status
+
+  - lane_b_status 只能是：
+    - "approved_but_excluded"
+    - "predecision_only"
+    - "activated_tradeable"
+    - "existing_holding_monitor_only"
+    - "proposed_only"
+
+  - lane_b_status 使用限制：
+    - approved_static_list_screening_log 與 extended_etf_predecision_scorecard 不得使用 "proposed_only"
+    - "proposed_only" 僅允許出現在 proposed_extended_etf_candidates
+    - 若 proposed_extended_etf_candidates 以外的區塊出現 "proposed_only"，validation_summary.passed 必須 = false，且 fail_reasons 必須包含 "PROPOSED_ONLY_STATUS_LEAKED_OUTSIDE_PROPOSED_CANDIDATES"
+
+  - activation_blocker 只能是：
+    - "missing_future_scheduled_theme_anchor"
+    - "failed_tradeability"
+    - "failed_thesis_duration"
+    - "event_dependency_too_high"
+    - "failed_relative_base_advantage"
+    - "benchmark_drift_too_high"
+    - "no_approved_static_list"
+    - "data_gap_no_linkage"
+    - null
+
+  - downstream_tradeability_status 只能是：
+    - "tradeable_this_run"
+    - "screening_only"
+    - "watch_only"
+    - "blocked"
+
+  - can_enter_effective_allowed_buy_universe_this_run 必須為 true / false。
+  - can_enter_effective_allowed_buy_universe_this_run = true 只有在以下全部成立時才允許：
+    (1) lane_b_status = "activated_tradeable"
+    (2) activation_blocker = null
+    (3) downstream_tradeability_status = "tradeable_this_run"
+    (4) ticker 已出現在 current_run_user_approved_extended_etf_static_list
+    (5) ticker 已出現在 optional_extended_etf_sleeve.allowed_extended_etf_tickers
+    (6) optional_extended_etf_sleeve.enabled = true
+    (7) thesis_duration_score >= 4
+    (8) liquidity_quality_score >= 4
+    (9) event_dependency_score <= 3
+    (10) preferred_scheduled_theme_event_id != null
+    (11) event_id_refs 或 structural_theme_refs 至少一者非空
+
+  - 若 can_enter_effective_allowed_buy_universe_this_run = false：
+    - lane_b_status 不得為 "activated_tradeable"
+    - optional_extended_etf_sleeve.allowed_extended_etf_tickers 不得包含該 ticker
+    - why_not_admitted_or_not_top_candidate 必須明確說明 blocker，不得只寫 generic "not enabled"
+
+- extended_predecision_status_consistency_rule (NEW, MUST):
+  - extended_etf_predecision_scorecard 每檔必須額外輸出：
+    - lane_b_status
+    - activation_blocker
+    - can_enter_effective_allowed_buy_universe_this_run
+    - relative_base_advantage_summary
+    - downstream_tradeability_status
+
+  - 若 enable_hurdle_passed = true，但 can_enter_effective_allowed_buy_universe_this_run = false：
+    - activation_blocker 必須非空
+    - optional_extended_etf_sleeve.disable_reason 不得寫 "no approved candidates passed activation"
+    - disable_reason 必須明確說明：
+      "passed ticker-level activation but failed sleeve-level allocation / benchmark-preservation decision"
+
+  - 若 optional_extended_etf_sleeve.enabled = true：
+    - optional_extended_etf_sleeve.allowed_extended_etf_tickers 必須剛好等於所有 can_enter_effective_allowed_buy_universe_this_run = true 的 ticker 集合
+    - optional_extended_etf_sleeve.top_candidate 必須屬於 allowed_extended_etf_tickers
+    - extended_etf_scorecard ticker 集合必須與 allowed_extended_etf_tickers 完全一致
+
+  - 若 optional_extended_etf_sleeve.enabled = false：
+    - optional_extended_etf_sleeve.allowed_extended_etf_tickers 必須 = []
+    - 所有 approved_static_list_screening_log[*].can_enter_effective_allowed_buy_universe_this_run 必須 = false
+    - 所有 extended_etf_predecision_scorecard[*].lane_b_status 不得為 "activated_tradeable"
+
+- proposed_extended_candidates_status_rule (NEW, MUST):
+  - proposed_extended_etf_candidates 每檔必須額外輸出：
+    - lane_b_status
+    - activation_blocker
+    - can_enter_effective_allowed_buy_universe_this_run
+  - proposed_extended_etf_candidates[*].lane_b_status 必須固定為 "proposed_only"
+  - proposed_extended_etf_candidates[*].can_enter_effective_allowed_buy_universe_this_run 必須固定為 false
+  - proposed_extended_etf_candidates[*].activation_blocker 必須固定為 "no_approved_static_list"
+  - proposed_extended_etf_candidates 不得因研究分數高而進入 extended_etf_candidate_universe / optional_extended_etf_sleeve.allowed_extended_etf_tickers
 
 - user_approved_extended_etf_static_list_input_interpretation_rule (NEW, MUST):
   - user_approved_extended_etf_static_list 是使用者手動維護的已核准 static list，代表：
@@ -451,6 +732,17 @@ extended_etf_scorecard_rule (CONDITIONAL, MUST):
   event_id_refs: []
   structural_theme_refs: []
   preferred_scheduled_theme_event_id (string|null; 若目前沒有可 deterministic 對應的 future scheduled theme event，則必須 = null)
+  lane_b_status
+  activation_blocker
+  can_enter_effective_allowed_buy_universe_this_run
+  relative_base_advantage_summary
+  downstream_tradeability_status
+
+- 若 optional_extended_etf_sleeve.enabled = true，extended_etf_scorecard 每檔必須滿足：
+  - lane_b_status = "activated_tradeable"
+  - activation_blocker = null
+  - can_enter_effective_allowed_buy_universe_this_run = true
+  - downstream_tradeability_status = "tradeable_this_run"
 
 extended_lane_output_conditionality_rule (MUST):
 - 若 user_approved_extended_etf_static_list 為空或未提供：
@@ -542,7 +834,12 @@ RESEARCH_JSON 必須至少包含以下欄位（可增欄位，但不要少）：
       "best_base_alternative": "",
       "why_not_admitted_or_not_top_candidate": "",
       "event_id_refs": [],
-      "structural_theme_refs": []
+      "structural_theme_refs": [],
+      "lane_b_status": "approved_but_excluded|predecision_only|activated_tradeable|existing_holding_monitor_only",
+      "activation_blocker": "missing_future_scheduled_theme_anchor|failed_tradeability|failed_thesis_duration|event_dependency_too_high|failed_relative_base_advantage|benchmark_drift_too_high|no_approved_static_list|data_gap_no_linkage|null",
+      "can_enter_effective_allowed_buy_universe_this_run": false,
+      "relative_base_advantage_summary": "",
+      "downstream_tradeability_status": "tradeable_this_run|screening_only|watch_only|blocked"
     }
   ],
   "proposed_extended_etf_candidates": [
@@ -553,7 +850,10 @@ RESEARCH_JSON 必須至少包含以下欄位（可增欄位，但不要少）：
       "why": "",
       "preferred_scheduled_theme_event_id": null,
       "event_id_refs": [],
-      "structural_theme_refs": []
+      "structural_theme_refs": [],
+      "lane_b_status": "proposed_only",
+      "activation_blocker": "no_approved_static_list",
+      "can_enter_effective_allowed_buy_universe_this_run": false
     }
   ],
   "extended_etf_candidate_universe": [],
@@ -573,7 +873,14 @@ RESEARCH_JSON 必須至少包含以下欄位（可增欄位，但不要少）：
       "downstream_actionability_gate_enforced": true,
       "sector_alpha_execution_readiness_tiebreak_enforced": true,
       "approved_static_list_screening_log_complete": true,
-      "user_approved_extended_etf_static_list_copy_through": true
+      "user_approved_extended_etf_static_list_copy_through": true,
+      "downstream_actionability_fields_complete": true,
+      "scheduled_event_anchor_fields_complete": true,
+      "primary_anchor_refs_valid": true,
+      "scheduled_macro_anchor_derivable": true,
+      "scheduled_theme_anchor_derivable": true,
+      "extended_lane_status_consistent": true,
+      "proposed_extended_candidates_non_tradeable": true
     }
   },
   "risk_mode_hint": "moderately_aggressive",
@@ -620,6 +927,93 @@ validation_summary_hard_checks_rule (MUST):
   (10) sector_alpha_execution_readiness_tiebreak_rule 已被實際執行；若同 role_layer 存在 future scheduled theme anchor 非空與為 null 的 ticker，則 null 者不得排在前面
   (11) approved_static_list_screening_log 對 current_run_user_approved_extended_etf_static_list 的每個 ticker 皆有一筆 screening 結果，且 admitted / top_candidate eligibility 與 extended_etf_candidate_universe / extended_etf_predecision_scorecard / optional_extended_etf_sleeve 一致
   (12) user_approved_extended_etf_static_list copy-through 與 current_run_user_approved_extended_etf_static_list 完全一致
+
+downstream_handoff_validation_rule (NEW, MUST):
+- validation_summary.passed = true 還必須額外滿足以下檢查：
+
+  (13) buy_universe_scorecard 每檔皆具備 downstream actionability 欄位：
+    - actionability_status
+    - entry_driver
+    - primary_anchor_type
+    - primary_anchor_event_id
+    - primary_anchor_date_et
+    - thesis_12m_plus_supported
+    - thesis_12m_plus_summary
+    - thesis_linkage_quality
+    - compile_blocker_if_any
+
+  (14) 若 buy_universe_scorecard[*].actionability_status = "actionable_this_run"：
+    - thesis_12m_plus_supported 必須 = true
+    - thesis_linkage_quality 必須 ∈ ["strong","adequate"]
+    - event_id_refs 或 structural_theme_refs 至少一者非空
+    - primary_anchor_event_id 必須非空
+    - primary_anchor_date_et 必須 >= RESEARCH_JSON.as_of
+    - compile_blocker_if_any 必須 = null
+
+  (15) scheduled_events 每筆皆具備 deterministic anchor 欄位：
+    - anchor_eligible_for
+    - anchor_role_scope
+    - linked_structural_theme_ids
+    - is_future_anchor_eligible
+    - anchor_disqualification_reason
+
+  (16) 所有非 null 的 primary_anchor_event_id / preferred_scheduled_theme_event_id 引用皆必須：
+    - 在 scheduled_events 內唯一存在
+    - date_et >= RESEARCH_JSON.as_of
+    - 與該 ticker 的 role_layer / structural_theme_refs / thesis_linkage_bucket 一致
+  - 若 primary_anchor_event_id / preferred_scheduled_theme_event_id 為 null：
+    - 不得直接視為 INVALID_OR_NON_FUTURE_ANCHOR_REF
+    - 必須改依該 item 的 actionability_status / lane_b_status / activation_blocker / compile_blocker_if_any 判定是否允許為 null
+  - 若 actionability_status = "actionable_this_run" 或 can_enter_effective_allowed_buy_universe_this_run = true，則 primary_anchor_event_id / preferred_scheduled_theme_event_id 不得為 null
+
+  (17) 若 role_layer = "sector_alpha_tilt" 且 preferred_scheduled_theme_event_id = null：
+    - actionability_status 不得為 "actionable_this_run"
+    - why 必須以 "DATA_GAP: no future scheduled theme anchor" 開頭
+    - best_use_case 必須明確標示 ranking / hold / watch only
+
+  (18) approved_static_list_screening_log 對每個 current_run_user_approved_extended_etf_static_list ticker 皆必須具備：
+    - lane_b_status
+    - activation_blocker
+    - can_enter_effective_allowed_buy_universe_this_run
+    - relative_base_advantage_summary
+    - downstream_tradeability_status
+
+  (19) optional_extended_etf_sleeve.allowed_extended_etf_tickers 必須剛好等於所有：
+    - current_run_user_approved_extended_etf_static_list 內
+    - can_enter_effective_allowed_buy_universe_this_run = true
+    - lane_b_status = "activated_tradeable"
+    - activation_blocker = null
+    的 ticker 集合。
+
+  (20) proposed_extended_etf_candidates 不得出現在：
+    - extended_etf_candidate_universe
+    - optional_extended_etf_sleeve.allowed_extended_etf_tickers
+    - extended_etf_scorecard
+    除非該 ticker 同時已存在於 current_run_user_approved_extended_etf_static_list。
+
+- 若上述任一檢查失敗：
+  - validation_summary.passed 必須 = false
+  - validation_summary.fail_reasons 必須加入對應 label：
+    - "MISSING_DOWNSTREAM_ACTIONABILITY_FIELDS"
+    - "INVALID_ACTIONABLE_THIS_RUN_STATUS"
+    - "MISSING_SCHEDULED_EVENT_ANCHOR_FIELDS"
+    - "INVALID_OR_NON_FUTURE_ANCHOR_REF"
+    - "SECTOR_ALPHA_ACTIONABLE_WITHOUT_THEME_ANCHOR"
+    - "EXTENDED_LANE_STATUS_INCONSISTENT"
+    - "PROPOSED_EXTENDED_CANDIDATE_LEAKED_INTO_TRADEABLE_UNIVERSE"
+    - "NULL_ANCHOR_STATUS_INCONSISTENT"
+    - "PROPOSED_ONLY_STATUS_LEAKED_OUTSIDE_PROPOSED_CANDIDATES"
+
+validation_summary_checks_extension_rule (NEW, MUST):
+- validation_summary.checks 必須額外包含以下 boolean checks：
+  - downstream_actionability_fields_complete
+  - scheduled_event_anchor_fields_complete
+  - primary_anchor_refs_valid
+  - scheduled_macro_anchor_derivable
+  - scheduled_theme_anchor_derivable
+  - extended_lane_status_consistent
+  - proposed_extended_candidates_non_tradeable
+- 只有全部為 true 時，validation_summary.passed 才可為 true。
 
 output_completeness_for_rotation (MUST):
 - 若 RESEARCH_JSON 缺 buy_universe_scorecard，視為 FAIL

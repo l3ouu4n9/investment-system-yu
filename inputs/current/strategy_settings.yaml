@@ -138,6 +138,92 @@ active_shortlist_size_rule:
   diversified_core_buffer_max: 1
   sector_alpha_tilt_max: 1
 
+daily_execution_drift_policy:
+  enabled: true
+  applies_to: "weekly_approved_open_orders_only"
+  purpose: "weekday execution maintenance only; not research, not ranking, not new buy/sell decision"
+
+  source_priority:
+    current_open_order_state: "PORTFOLIO_SNAPSHOT.existing_buy_open_orders_summary"
+    daily_price: "DAILY_MARKET_DATA_SNAPSHOT"
+    weekly_intended_state_reference_only: "ORDER_STATE_EXPORT"
+    weekly_compile_contract: "AUDITED_DECISION_PACKET.final_execution_plans / TEMPLATE4_ORDERS"
+
+  role_resolution_priority:
+    - "AUDITED_DECISION_PACKET.final_execution_plans role/template context"
+    - "AUDITED_DECISION_PACKET.final_buy_side_delta_table order_intent / why"
+    - "buy_order_template_map template_id plus ticker universe fallback"
+  ticker_role_fallback:
+    QQQ: "benchmark_carrier_core"
+    VOO: "diversified_core_buffer"
+    VTI: "diversified_core_buffer"
+    VT: "diversified_core_buffer"
+    SMH: "sector_alpha_tilt"
+    IGV: "sector_alpha_tilt"
+
+  calculations_required:
+    anchor_drift_pct: "(daily_last_close - anchor_baseline_last_close) / anchor_baseline_last_close * 100"
+    distance_to_highest_live_limit_pct: "(highest_live_limit - daily_last_close) / daily_last_close * 100"
+    distance_to_lowest_live_limit_pct: "(lowest_live_limit - daily_last_close) / daily_last_close * 100"
+
+  keep_tolerance:
+    method: "role_static_pct_or_atr_multiple_more_permissive"
+    anchor_drift_abs_pct_static_cap:
+      benchmark_carrier_core: 4.5
+      diversified_core_buffer: 4.5
+      sector_alpha_tilt: 7.0
+      extended_etf_minority_sleeve: 8.0
+    anchor_drift_atr_multiple_cap:
+      benchmark_carrier_core: 2.5
+      diversified_core_buffer: 2.5
+      sector_alpha_tilt: 2.75
+      extended_etf_minority_sleeve: 3.0
+    max_negative_distance_to_highest_live_limit_pct:
+      benchmark_carrier_core: 6.0
+      diversified_core_buffer: 6.0
+      sector_alpha_tilt: 9.0
+      extended_etf_minority_sleeve: 10.0
+
+  action_rules:
+    keep_if:
+      - "Portfolio Snapshot current row is reconciled with weekly-approved state"
+      - "no override event notes require hold/review/cancel"
+      - "required live ladder fields are present"
+      - "abs(anchor_drift_pct) is within role tolerance"
+      - "distance_to_highest_live_limit_pct is not more negative than role max_negative_distance_to_highest_live_limit_pct"
+    replace_if:
+      - "same ticker only"
+      - "same remaining budget only"
+      - "weekly thesis / role / event binding preserved"
+      - "no ranking change"
+      - "no budget increase"
+      - "Portfolio Snapshot current row is complete and parseable"
+      - "drift/reachability threshold is breached under this policy"
+      - "replace can be computed deterministically from existing weekly-approved role/template and current same-budget constraints"
+    hold_for_weekly_review_if:
+      - "threshold breach appears thesis/event/role-related rather than execution-only"
+      - "override event notes indicate possible thesis or event-window issue"
+      - "required role/template mapping is ambiguous"
+      - "replace would require changing budget, ticker, ranking, thesis, or weekly role"
+    data_gap_if:
+      - "daily price missing or stale"
+      - "anchor_baseline_last_close missing"
+      - "anchor_price_asof missing"
+      - "live_order_steps_summary or live_order_qtys_summary missing when replacement/reachability judgment is required"
+      - "Portfolio Snapshot cannot be reconciled against weekly-approved state"
+
+  evidence_required_in_source_evidence:
+    - "Portfolio Snapshot vs weekly-approved state reconciliation conclusion"
+    - "daily_last_close and price_asof"
+    - "anchor_baseline_last_close and anchor_price_asof"
+    - "anchor_drift_pct"
+    - "highest_live_limit / lowest_live_limit / live_step_count"
+    - "distance_to_highest_live_limit_pct"
+    - "distance_to_lowest_live_limit_pct"
+    - "role tolerance used"
+    - "override_event_notes status"
+    - "ORDER_STATE_EXPORT used only as weekly intended state / audit trail, not live broker truth"
+
 max_new_tickers_per_week:
   base_universe_new_tickers_per_week: 0
   extended_etf_sleeve_new_tickers_per_week: 1

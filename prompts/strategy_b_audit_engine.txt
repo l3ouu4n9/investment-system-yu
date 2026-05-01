@@ -1,7 +1,7 @@
 # Strategy B - Audit Engine
 # ChatGPT-5.5 Thinking
 # derived from Strategy Template - Yu (Dual-Lane Full Version)
-# updated 2026-04-20
+# updated 2026-04-27
 
 投資目標：
 以科技大盤（QQQ）為核心基準，願意承擔較高的科技業與科技子產業集中波動，以及相對 benchmark 更高的階段性回撤與 tracking error；投資組合仍以 QQQ 與核心 buy universe 為主要承載，但在有明確 12m+ thesis、角色清楚且經預先核准時，可對 sector alpha tilt 與延伸 ETF 給予有節制的中小比例主動傾斜。目標是在 3–5 年期不僅跟上科技大盤，並在多數有利環境下爭取明確、可辨識的中度超額報酬；不主動承擔槓桿、低流動性、頻繁交易與純短期事件投機風險。
@@ -337,15 +337,232 @@ DECISION_PACKET_END
   - preserve_live_qty_vector 存在
   - current_last_close 與 step_offsets_vs_anchor 可取得
 - Audit 必須以 current_last_close 作為新 anchor，依 step_offsets_vs_anchor 重算各 rung limit price，並用 preserve_live_qty_vector 重算 reanchored_estimated_total_notional。
-- 若 reanchored_estimated_total_notional > target_open_order_budget：
+- 若 reanchored_estimated_total_notional <= target_open_order_budget：
+  - 該 row 可繼續使用 preserve_live_qty_vector 進入 compile-ready 審核
+  - Audit 仍必須在 8.51D 預演 compiled_step_preview / compiled_open_order_notional / residual_cash_not_allocated
+
+- 若 reanchored_estimated_total_notional > target_open_order_budget，但已存在可 deterministic 驗證的 step_budget_weights fallback：
+  - Audit 不得讓該 row 繼續使用 preserve_live_qty_vector 作為 executable sizing
+  - Audit 必須以 structure-only patch 將 executable sizing 收斂為 step_budget_weights
+  - Audit 必須在 execution row 明確寫入：
+    - notional_feasibility_resolution = "fallback_to_deterministic_step_budget_weights"
+    - reanchored_estimated_total_notional_using_preserve_live_qty_vector
+    - compiled_step_preview
+    - compiled_open_order_notional
+    - residual_cash_not_allocated
+    - residual_cash_pct
+  - 若 fallback 後 compiled_open_order_notional <= target_open_order_budget，該 row 可繼續進入 compile-ready 審核
+  - 此情況不得加入 "REANCHOR_NOTIONAL_INFEASIBLE_FROM_STRATEGY_A" blocker
+
+- 若 reanchored_estimated_total_notional > target_open_order_budget，且無 deterministic step_budget_weights fallback / override_rule / budget_tolerance_rule 可由允許輸入推導：
   - 該 row 不得標記為 compile_ready
   - 視為 MUST PASS FAIL
-  - 若無 deterministic step_budget_weights fallback 可由允許輸入推導，必須分類為 unpatchable_upstream_blocker
+  - 必須分類為 unpatchable_upstream_blocker
+  - order_compiler_ready 必須 = false
   - compiler_blockers 必須加入 "REANCHOR_NOTIONAL_INFEASIBLE_FROM_STRATEGY_A"
-  - final_execution_plans 不得輸出該 row
-- 只有在以下任一成立時，該 row 才可繼續進入 compile-ready 審核：
-  (a) reanchored_estimated_total_notional <= target_open_order_budget
-  (b) 已存在可 deterministic 驗證的 step_budget_weights fallback
+  - final_execution_plans 不得輸出該半完成 row
+8.51D. Strategy C Compiled Preview / ORDER_STATE_EXPORT Derivability Gate（NEW, MUST）
+- Audit 不得只以「欄位存在」判定 compile_ready；對於任何 AUDITED_DECISION_PACKET.final_execution_plans 中 compile_ready = true 的 buy-side execution plan，Audit 必須進一步確認 Strategy C 可 deterministic 產出：
+  (a) TEMPLATE4_ORDERS rows
+  (b) ORDER_STATE_EXPORT fixed-column rows
+  (c) TEMPLATE5_EXEC_SUMMARY 的 compiled_notional / residual_cash 摘要
+- Audit 必須在每個 final_execution_plans row 直接補入下列 compile-support 欄位：
+  - order_submission_required
+  - buy_orders_generation_allowed
+  - state_export_required
+  - compiled_open_order_notional
+  - residual_cash_not_allocated
+  - residual_cash_pct
+  - state_status
+
+- 若 final_action = "KEEP_EXISTING"：
+  - order_submission_required = false
+  - buy_orders_generation_allowed = false
+  - state_export_required = true
+  - compiled_open_order_notional 必須沿用 current live SSOT / Portfolio Snapshot / AUDITED_DECISION_PACKET 中既有的 compiled_open_order_notional
+  - residual_cash_not_allocated 必須沿用 current live SSOT / Portfolio Snapshot / AUDITED_DECISION_PACKET 中既有的 residual_cash_not_allocated
+  - residual_cash_pct = residual_cash_not_allocated / target_open_order_budget
+  - state_status = "carried_forward_current_live_state"
+  - Audit 必須明確保留 current live state carry-forward 欄位：
+    - current_live_ssot_reference
+    - current_live_order_steps_summary
+    - current_live_order_qtys_summary
+    - highest_live_limit
+    - lowest_live_limit
+  - KEEP_EXISTING row 雖可保留在 final_execution_plans 中供 state export / summary 使用，但不得暗示 Strategy C 應產生新的 BUY_ORDERS rows。
+
+- 若 final_action = "REPLACE_EXISTING"：
+  - order_submission_required = true
+  - buy_orders_generation_allowed = true
+  - state_export_required = true
+  - replace_cancel_leg_required = true
+  - replace_submit_leg_required = true
+  - Audit 必須從 existing_buy_open_orders_summary / Portfolio Snapshot deterministic copy-forward 下列欄位到 execution row：
+    - current_live_ssot_reference
+    - current_live_order_steps_summary
+    - current_live_order_qtys_summary
+    - current_live_template_id
+    - current_live_anchor_baseline_last_close
+    - current_live_anchor_price_asof
+    - current_live_highest_live_limit
+    - current_live_lowest_live_limit
+    - current_live_step_count
+  - current_live_order_steps_summary 與 current_live_order_qtys_summary 必須可 deterministic 解析，且 step names 必須一一對應；否則：
+    - 該 row 不得 compile_ready
+    - order_compiler_ready 必須 = false
+    - compiler_blockers 必須加入 "UPSTREAM_OR_PORTFOLIO_LIVE_STATE_GAP"
+    - final_execution_plans 不得輸出該半完成 row
+
+
+- 若 final_action = "NEW_ORDER"：
+  - order_submission_required = true
+  - buy_orders_generation_allowed = true
+  - state_export_required = true
+  - replace_cancel_leg_required = false
+  - replace_submit_leg_required = false
+  - current_live_ssot_reference = "none_currently_no_existing_buy_open_order_row"
+  - current_live_order_steps_summary = null
+  - current_live_order_qtys_summary = null
+  - state_status = "final_intended_state_after_new_order_submission"
+  - Audit 必須預演 Strategy C 的 deterministic compile 結果，並直接放入 execution row：
+    - compiled_step_preview
+    - compiled_open_order_notional
+    - residual_cash_not_allocated
+    - residual_cash_pct
+    - highest_live_limit_after_submission
+    - lowest_live_limit_after_submission
+    - live_step_count_after_submission
+    - intended_next_ssot_reference
+    - deferred_not_yet_live_required
+  - 若 deferred_not_yet_live_required = true：
+    - deferred_action_date_et 不得為 null
+    - deferred_action 必須 = "NEW_ORDER_SUBMIT"
+    - deferred_reason 不得為 null
+    - current_live_ssot_reference 必須 = "none_currently_no_existing_buy_open_order_row"
+    - intended_next_ssot_reference 不得為 null
+  - 若 deferred_not_yet_live_required = false：
+    - deferred_action_date_et = null
+    - deferred_action = null
+    - deferred_reason = null
+  - 若缺少 template_id / ordered_step_names / step_offsets_vs_anchor / step_budget_weights / event refs / plan_type / time_in_force / expiry_if_gtd：
+    - 該 row 不得 compile_ready
+    - order_compiler_ready 必須 = false
+    - compiler_blockers 必須加入 "UPSTREAM_DATA_GAP_FROM_STRATEGY_B"
+
+- 若 final_action = "CANCEL_EXISTING"：
+  - order_submission_required = true
+  - buy_orders_generation_allowed = true
+  - state_export_required = true
+  - replace_cancel_leg_required = false
+  - replace_submit_leg_required = false
+  - compiled_open_order_notional = 0
+  - residual_cash_not_allocated 必須依 target_open_order_budget / post-cancel budget state deterministic 計算；若 upstream 未定義 post-cancel budget state，必須視為 DATA_GAP
+  - state_status = "final_intended_state_after_cancel_submission"
+  - Audit 必須從 existing_buy_open_orders_summary / Portfolio Snapshot deterministic copy-forward 下列欄位到 execution row：
+    - current_live_ssot_reference
+    - current_live_order_steps_summary
+    - current_live_order_qtys_summary
+    - current_live_template_id
+    - current_live_anchor_baseline_last_close
+    - current_live_anchor_price_asof
+    - current_live_highest_live_limit
+    - current_live_lowest_live_limit
+    - current_live_step_count
+  - current_live_order_steps_summary 與 current_live_order_qtys_summary 必須可 deterministic 解析，且 step names 必須一一對應；否則：
+    - 該 row 不得 compile_ready
+    - order_compiler_ready 必須 = false
+    - compiler_blockers 必須加入 "UPSTREAM_OR_PORTFOLIO_LIVE_STATE_GAP"
+  - intended_next_ssot_reference 必須明確指向 post-cancel state；若該 ticker 應從 existing_buy_open_orders_summary 移除，必須明確寫 "removed_from_existing_buy_open_orders_summary_after_cancel"
+
+- 對於 REPLACE_EXISTING 的 submit leg，Audit 必須預演 Strategy C 的 deterministic compile 結果，並直接放入 execution row：
+  - compiled_step_preview
+  - compiled_open_order_notional
+  - residual_cash_not_allocated
+  - residual_cash_pct
+  - highest_live_limit_after_submission
+  - lowest_live_limit_after_submission
+  - live_step_count_after_submission
+  - intended_next_ssot_reference
+  - deferred_not_yet_live_required
+
+- compiled_step_preview 每個 step 至少必須包含：
+  - step_name
+  - step_offset_vs_anchor
+  - limit_price
+  - shares
+  - step_notional
+  - compile_source
+- 若使用 step_budget_weights：
+  - Audit 必須驗證 Σ(step_budget_weights) = 1.0（允許 ±0.001 浮點誤差）
+  - 每階 limit_price 必須依：
+      raw_limit_price_i = anchor_baseline_last_close × (1 + step_offset_i)
+      limit_price_i = round_half_up(raw_limit_price_i, 2)
+  - 每階 shares 必須依：
+      step_budget_i = target_open_order_budget × step_budget_weight_i
+      shares_i = floor(step_budget_i / limit_price_i)
+  - compiled_open_order_notional = Σ(shares_i × limit_price_i)
+  - residual_cash_not_allocated = target_open_order_budget - compiled_open_order_notional
+  - residual_cash_pct = residual_cash_not_allocated / target_open_order_budget
+  - 若 compiled_open_order_notional > target_open_order_budget：
+      - 該 row 不得 compile_ready
+      - order_compiler_ready 必須 = false
+      - compiler_blockers 必須加入 "COMPILED_NOTIONAL_EXCEEDS_TARGET_BUDGET"
+
+- 若使用 preserve_live_qty_vector：
+  - Audit 必須以 anchor_baseline_last_close 與 step_offsets_vs_anchor 預演 reanchored limit_price
+  - compiled_open_order_notional = Σ(preserve_live_qty_vector_i × reanchored_limit_price_i)
+  - 若 compiled_open_order_notional > target_open_order_budget，且沒有 deterministic step_budget_weights fallback / override_rule / budget_tolerance_rule：
+      - 該 row 不得 compile_ready
+      - order_compiler_ready 必須 = false
+      - compiler_blockers 必須加入 "REANCHOR_NOTIONAL_INFEASIBLE_FROM_STRATEGY_A"
+
+- ORDER_STATE_EXPORT derivability：
+  - Audit 必須確認每個 final_execution_plans row 都可 deterministic 生成 final intended existing_buy_open_orders_summary row。
+  - 對 KEEP_EXISTING：
+    - intended_next_ssot_reference 必須指向 current live row carry-forward
+    - post-submission intended state 必須等於 current live SSOT
+  - 對 REPLACE_EXISTING：
+    - intended_next_ssot_reference 必須指向 replacement submit leg 完成後的新 intended row
+    - final intended existing_buy_open_orders_summary row 必須可由 compiled_step_preview deterministic 生成
+  - 對 NEW_ORDER：
+    - current_live_ssot_reference 必須明確寫為 "none_currently_no_existing_buy_open_order_row"
+    - intended_next_ssot_reference 必須指向 new order submit 完成後的新 intended row
+    - final intended existing_buy_open_orders_summary row 必須可由 compiled_step_preview deterministic 生成
+  - 對 CANCEL_EXISTING：
+    - current_live_ssot_reference 必須指向 current live row
+    - intended_next_ssot_reference 必須明確指向 post-cancel state
+    - 若該 ticker 應從 existing_buy_open_orders_summary 移除，必須明確寫 "removed_from_existing_buy_open_orders_summary_after_cancel"
+  - deferred_not_yet_live_required 只適用於「需要未來人工提交或取消的 action」，不得僅因 run_timestamp_et 是非交易日就套用到 KEEP_EXISTING。
+  - 若 final_action = "KEEP_EXISTING"：
+    - deferred_not_yet_live_required 必須 = false
+    - 不得要求 deferred_action_date_et / deferred_action / deferred_reason
+    - intended_next_ssot_reference 必須指向 current live row carry-forward
+  - 若 final_action 屬於 "NEW_ORDER" / "REPLACE_EXISTING" / "CANCEL_EXISTING"，且 run_timestamp_et 是非交易日，或 intended_place_date_et 晚於 run date：
+    - deferred_not_yet_live_required 必須 = true
+    - execution row 必須提供：
+      - deferred_action_date_et
+      - deferred_action
+      - current_live_ssot_reference
+      - intended_next_ssot_reference
+      - deferred_reason
+  - 若 final_action 屬於 "NEW_ORDER" / "REPLACE_EXISTING" / "CANCEL_EXISTING"，且 action 已可於同一交易日立即提交：
+    - deferred_not_yet_live_required 必須 = false
+  - 若無法產生上述 deferred state reference：
+    - order_compiler_ready 必須 = false
+    - compiler_blockers 必須加入 "ORDER_STATE_EXPORT_DERIVABILITY_GAP"
+
+8.51E. SELL_NO_ACTION_SUMMARY Requirement（NEW, MUST）
+- 若 final_sell_execution_plans = []，且 final_sell_side_delta_table 中沒有 SELL_ALL / TRIM：
+  - AUDITED_DECISION_PACKET 必須輸出 sell_no_action_summary
+  - sell_no_action_summary 至少包含：
+    - sell_all_or_trim
+    - primary_reason
+    - ltcg_only_constraint_respected
+    - no_same_run_redeploy_respected
+    - affected_tickers
+- primary_reason 必須是 consolidated reason，不得只要求 Strategy C 自行綜合逐 ticker sell-side reason。
+- 若存在 sell execution plan，則每筆 sell-side compile_ready row 必須具備 Strategy C 所需的完整 sell-side compile metadata；不得用 sell_no_action_summary 取代 sell execution plan。
+
 8.6. final-state resolution / no unresolved review labels
 - AUDITED_DECISION_PACKET 不得保留任何未收斂的中間狀態，例如：
   HOLD_REVIEW_FOR_AUDIT
@@ -549,6 +766,26 @@ DECISION_PACKET_END
 - patches_applied
 - compiler_blockers
 
+- compile_support_summary（REQUIRED）
+  - all_compile_ready_rows_self_contained: true / false
+  - all_order_state_export_rows_derivable: true / false
+  - all_template5_residual_summaries_derivable: true / false
+  - replace_existing_rows_have_cancel_and_submit_leg_support: true / false
+  - keep_existing_rows_marked_no_new_buy_orders: true / false
+  - total_target_open_order_budget
+  - total_compiled_open_order_notional
+  - total_residual_cash_not_allocated
+  - hard_cap_open_orders_budget
+  - target_budget_vs_hard_cap_check
+  - compiled_notional_vs_target_budget_check
+
+- sell_no_action_summary（REQUIRED when no SELL_ALL / TRIM）
+  - sell_all_or_trim: true / false
+  - primary_reason
+  - ltcg_only_constraint_respected: true / false
+  - no_same_run_redeploy_respected: true / false
+  - affected_tickers
+
 - actionable_window（REQUIRED；不得省略）
   - run_timestamp_et
   - is_non_trading_day_run
@@ -592,6 +829,138 @@ DECISION_PACKET_END
   - plan_type 不得以 draft_packet_shape 取代
   - 若 time_in_force != "GTD"，則 expiry_if_gtd 必須 = null
   - 若 time_in_force = "GTD"，則 expiry_if_gtd 必須為明示日期
+
+
+  - compile-support 欄位（REQUIRED；每筆 compile_ready = true 的 buy-side row 必須直接具備）
+    - order_submission_required
+    - buy_orders_generation_allowed
+    - state_export_required
+    - compiled_open_order_notional
+    - residual_cash_not_allocated
+    - residual_cash_pct
+    - state_status
+
+  - 若 final_action = "KEEP_EXISTING"，該 row 必須額外具備：
+    - order_submission_required = false
+    - buy_orders_generation_allowed = false
+    - state_export_required = true
+    - current_live_ssot_reference
+    - current_live_order_steps_summary
+    - current_live_order_qtys_summary
+    - highest_live_limit
+    - lowest_live_limit
+    - existing_compiled_open_order_notional
+    - existing_residual_cash_not_allocated
+    - intended_next_ssot_reference
+    - state_status = "carried_forward_current_live_state"
+
+  - 若 final_action = "REPLACE_EXISTING"，該 row 必須額外具備：
+    - order_submission_required = true
+    - buy_orders_generation_allowed = true
+    - state_export_required = true
+    - replace_cancel_leg_required = true
+    - replace_submit_leg_required = true
+    - current_live_ssot_reference
+    - current_live_order_steps_summary
+    - current_live_order_qtys_summary
+    - current_live_template_id
+    - current_live_anchor_baseline_last_close
+    - current_live_anchor_price_asof
+    - current_live_highest_live_limit
+    - current_live_lowest_live_limit
+    - current_live_step_count
+    - compiled_step_preview
+    - compiled_open_order_notional
+    - residual_cash_not_allocated
+    - residual_cash_pct
+    - highest_live_limit_after_submission
+    - lowest_live_limit_after_submission
+    - live_step_count_after_submission
+    - intended_next_ssot_reference
+    - deferred_not_yet_live_required
+    - state_status = "final_intended_state_after_replace_submission"
+    - 若 deferred_not_yet_live_required = true：
+      - deferred_action_date_et
+      - deferred_action = "REPLACE_EXISTING_CANCEL_AND_SUBMIT"
+      - deferred_reason
+    - 若 deferred_not_yet_live_required = false：
+      - deferred_action_date_et = null
+      - deferred_action = null
+      - deferred_reason = null
+
+  - 若 final_action = "NEW_ORDER"，該 row 必須額外具備：
+    - order_submission_required = true
+    - buy_orders_generation_allowed = true
+    - state_export_required = true
+    - replace_cancel_leg_required = false
+    - replace_submit_leg_required = false
+    - current_live_ssot_reference = "none_currently_no_existing_buy_open_order_row"
+    - current_live_order_steps_summary = null
+    - current_live_order_qtys_summary = null
+    - compiled_step_preview
+    - compiled_open_order_notional
+    - residual_cash_not_allocated
+    - residual_cash_pct
+    - highest_live_limit_after_submission
+    - lowest_live_limit_after_submission
+    - live_step_count_after_submission
+    - intended_next_ssot_reference
+    - deferred_not_yet_live_required
+    - state_status = "final_intended_state_after_new_order_submission"
+    - 若 deferred_not_yet_live_required = true：
+      - deferred_action_date_et
+      - deferred_action = "NEW_ORDER_SUBMIT"
+      - deferred_reason
+    - 若 deferred_not_yet_live_required = false：
+      - deferred_action_date_et = null
+      - deferred_action = null
+      - deferred_reason = null
+
+  - 若 final_action = "CANCEL_EXISTING"，該 row 必須額外具備：
+    - order_submission_required = true
+    - buy_orders_generation_allowed = true
+    - state_export_required = true
+    - replace_cancel_leg_required = false
+    - replace_submit_leg_required = false
+    - current_live_ssot_reference
+    - current_live_order_steps_summary
+    - current_live_order_qtys_summary
+    - current_live_template_id
+    - current_live_anchor_baseline_last_close
+    - current_live_anchor_price_asof
+    - current_live_highest_live_limit
+    - current_live_lowest_live_limit
+    - current_live_step_count
+    - compiled_open_order_notional = 0
+    - residual_cash_not_allocated
+    - residual_cash_pct
+    - intended_next_ssot_reference
+    - deferred_not_yet_live_required
+    - state_status = "final_intended_state_after_cancel_submission"
+    - 若 deferred_not_yet_live_required = true：
+      - deferred_action_date_et
+      - deferred_action
+      - deferred_reason
+  - compiled_step_preview 每個 step object 必須至少包含：
+    - step_name
+    - step_offset_vs_anchor
+    - limit_price
+    - shares
+    - step_notional
+    - compile_source
+
+  - 若 deferred_not_yet_live_required = true：
+    - current_live_ssot_reference 不得為 null
+    - intended_next_ssot_reference 不得為 null
+    - deferred_action_date_et 不得為 null
+    - deferred_action 不得為 null
+    - deferred_reason 不得為 null
+
+  - 若上述 compile-support 欄位無法由允許輸入 deterministic 推導：
+    - 該 row 不得標記為 compile_ready
+    - order_compiler_ready 必須 = false
+    - compiler_blockers 必須加入 "ORDER_STATE_EXPORT_DERIVABILITY_GAP" 或 "UPSTREAM_OR_PORTFOLIO_LIVE_STATE_GAP"
+    - 不得輸出半完成的 final_execution_plans row
 
 - final_sell_execution_plans（REQUIRED；每筆 compile_ready = true 的 row 必須具備下列欄位）
   - ticker
