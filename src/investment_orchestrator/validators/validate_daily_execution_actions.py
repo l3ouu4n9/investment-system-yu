@@ -17,6 +17,40 @@ ACTION_VALUES = {
     "HOLD_FOR_WEEKLY_REVIEW",
     "DATA_GAP",
 }
+REASON_CODE_VALUES = {
+    "execution_drift_within_tolerance",
+    "execution_reanchor_required",
+    "execution_state_cancel_required",
+    "weekly_review_required",
+    "daily_market_data_gap",
+    "live_order_state_data_gap",
+    "weekly_source_data_gap",
+    "operator_override_hold",
+    "operator_override_cancel",
+    "manual_smoke_test_keep",
+}
+ACTION_REASON_CODE_VALUES = {
+    "KEEP": {
+        "execution_drift_within_tolerance",
+        "manual_smoke_test_keep",
+    },
+    "REPLACE": {
+        "execution_reanchor_required",
+    },
+    "CANCEL": {
+        "execution_state_cancel_required",
+        "operator_override_cancel",
+    },
+    "HOLD_FOR_WEEKLY_REVIEW": {
+        "weekly_review_required",
+        "operator_override_hold",
+    },
+    "DATA_GAP": {
+        "daily_market_data_gap",
+        "live_order_state_data_gap",
+        "weekly_source_data_gap",
+    },
+}
 FORBIDDEN_REPLACE_KEYS = {
     "new_budget",
     "added_budget",
@@ -174,6 +208,16 @@ def validate_daily_execution_actions(
 
         action = action_item.get("action")
         _require(action in ACTION_VALUES, f"{label}.action must be one of {sorted(ACTION_VALUES)}.")
+
+        reason_code = action_item.get("reason_code")
+        _require(
+            reason_code in REASON_CODE_VALUES,
+            f"{label}.reason_code must be one of {sorted(REASON_CODE_VALUES)}.",
+        )
+        _require(
+            reason_code in ACTION_REASON_CODE_VALUES[action],
+            f"{label}.reason_code {reason_code!r} is not valid for action {action!r}.",
+        )
 
         _require(action_item.get("execution_only") is True, f"{label}.execution_only must be true.")
         _require(action_item.get("no_budget_increase") is True, f"{label}.no_budget_increase must be true.")

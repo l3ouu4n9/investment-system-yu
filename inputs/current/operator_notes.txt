@@ -1,0 +1,4 @@
+Currently unused by the repo CLIs.
+
+For Daily Execution Check overrides, use override_event_notes.txt in the daily
+artifact directory or inputs/current/override_event_notes.txt.

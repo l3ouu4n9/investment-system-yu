@@ -1,0 +1,2 @@
+# This project manages runtime dependencies in pyproject.toml.
+# Use `uv sync` or `uv run ...` instead of installing from this file.

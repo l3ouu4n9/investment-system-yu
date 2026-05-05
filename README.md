@@ -10,6 +10,15 @@ Transitional manual workflow for the investment research and decision pipeline.
 - `src/investment_orchestrator/`: workflow, parser, validator, and market-data code
 - `tests/unit/`: lightweight unit tests for repo-local helpers
 
+## Current Inputs
+
+The active workflow reads `inputs/current/portfolio_snapshot.txt` and
+`inputs/current/strategy_settings.yaml`. Daily Execution Check can also read
+`override_event_notes.txt` from the daily artifact directory or `inputs/current/`.
+
+`inputs/current/current_run_state.json` and `inputs/current/operator_notes.txt`
+are reserved operator scratch files; they are not consumed by the current CLIs.
+
 ## Environment
 
 Core runtime dependencies live in `pyproject.toml`.
@@ -32,7 +41,9 @@ PYTHONPATH=src uv run python -m investment_orchestrator.cli.run_step1 parse
 ## Daily Execution Check
 
 Weekday execution maintenance is a separate manual workflow. It reads the latest
-weekly artifacts and writes only to `artifacts/daily/YYYY-MM-DD/daily_execution_check/`.
+weekly artifacts and writes check artifacts to `artifacts/daily/YYYY-MM-DD/daily_execution_check/`.
+When `--generate-market-data` is used, generated market data and generation errors are written
+under `artifacts/daily/YYYY-MM-DD/`. The workflow must not write to `artifacts/current/`.
 See [Daily Execution Check Runbook](docs/daily_execution_check_runbook.md) for the operating procedure.
 
 ```bash
@@ -41,6 +52,8 @@ PYTHONPATH=src .venv/bin/python -m investment_orchestrator.cli.run_daily_executi
 ```
 
 Use `--date YYYY-MM-DD` to render or parse a specific daily check date.
+That date is the daily execution-check date. `inputs/current/strategy_settings.yaml`
+may still carry the weekly Step1-Step4 source run timestamp until the next weekly cycle.
 The same commands can be run through `uv` with `PYTHONPATH=src uv run python -m ...`.
 Add `--generate-market-data` to `render` to attempt daily market data generation before prompt rendering.
 

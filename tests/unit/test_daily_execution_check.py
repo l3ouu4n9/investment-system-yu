@@ -13,6 +13,8 @@ from investment_orchestrator.parsers.extract_daily_execution_check import (
     parse_daily_execution_actions_text,
 )
 from investment_orchestrator.validators.validate_daily_execution_actions import (
+    ACTION_REASON_CODE_VALUES,
+    REASON_CODE_VALUES,
     validate_daily_execution_actions,
 )
 from investment_orchestrator.workflow.daily_execution_check import render_daily_execution_check_prompt
@@ -34,7 +36,13 @@ def audited_packet(*, ticker: str = "QQQ") -> dict:
     }
 
 
-def valid_action_payload(*, action: str = "KEEP", ticker: str = "QQQ", replace_packet=None) -> dict:
+def valid_action_payload(
+    *,
+    action: str = "KEEP",
+    ticker: str = "QQQ",
+    replace_packet=None,
+    reason_code: str = "execution_drift_within_tolerance",
+) -> dict:
     return {
         "as_of": "2026-04-22",
         "workflow": "daily_execution_check",
@@ -49,7 +57,7 @@ def valid_action_payload(*, action: str = "KEEP", ticker: str = "QQQ", replace_p
                 "ticker": ticker,
                 "side": "BUY",
                 "action": action,
-                "reason_code": "execution_drift_within_tolerance",
+                "reason_code": reason_code,
                 "execution_only": True,
                 "weekly_intent_preserved": action not in {"DATA_GAP", "HOLD_FOR_WEEKLY_REVIEW"},
                 "no_new_thesis": True,
@@ -85,6 +93,18 @@ def wrap(payload: dict) -> str:
         + json.dumps(payload, indent=2)
         + "\nDAILY_EXECUTION_ACTIONS_END\n"
     )
+
+
+def test_reason_code_schema_and_validator_stay_in_sync() -> None:
+    schema_path = Path(__file__).resolve().parents[2] / "schemas" / "daily_execution_actions.schema.json"
+    schema = read_json(schema_path)
+    schema_reason_codes = set(
+        schema["$defs"]["action_item"]["properties"]["reason_code"]["enum"]
+    )
+    mapped_reason_codes = set().union(*ACTION_REASON_CODE_VALUES.values())
+
+    assert schema_reason_codes == REASON_CODE_VALUES
+    assert mapped_reason_codes == REASON_CODE_VALUES
 
 
 def write_weekly_sources(tmp_path: Path, *, ticker: str = "QQQ") -> tuple[Path, Path, Path]:
@@ -141,8 +161,24 @@ def test_unknown_action_fails() -> None:
         validate_daily_execution_actions(payload, audited_decision_packet=audited_packet())
 
 
+def test_unknown_reason_code_fails() -> None:
+    payload = valid_action_payload(reason_code="weekly_replace_already_reflected_and_execution_drift_within_tolerance")
+    with pytest.raises(ValueError, match="reason_code"):
+        validate_daily_execution_actions(payload, audited_decision_packet=audited_packet())
+
+
+def test_reason_code_must_match_action() -> None:
+    payload = valid_action_payload(action="CANCEL", reason_code="execution_drift_within_tolerance")
+    with pytest.raises(ValueError, match="not valid for action"):
+        validate_daily_execution_actions(payload, audited_decision_packet=audited_packet())
+
+
 def test_replace_without_replace_packet_fails() -> None:
-    payload = valid_action_payload(action="REPLACE", replace_packet=None)
+    payload = valid_action_payload(
+        action="REPLACE",
+        replace_packet=None,
+        reason_code="execution_reanchor_required",
+    )
     with pytest.raises(ValueError):
         validate_daily_execution_actions(payload, audited_decision_packet=audited_packet())
 
@@ -154,7 +190,11 @@ def test_non_replace_with_replace_packet_fails() -> None:
 
 
 def test_replace_with_budget_delta_above_zero_fails() -> None:
-    payload = valid_action_payload(action="REPLACE", replace_packet=valid_replace_packet(budget_delta=1))
+    payload = valid_action_payload(
+        action="REPLACE",
+        replace_packet=valid_replace_packet(budget_delta=1),
+        reason_code="execution_reanchor_required",
+    )
     with pytest.raises(ValueError):
         validate_daily_execution_actions(payload, audited_decision_packet=audited_packet())
 
@@ -164,13 +204,18 @@ def test_replace_with_ticker_not_in_weekly_allowlist_fails() -> None:
         action="REPLACE",
         ticker="SMH",
         replace_packet=valid_replace_packet(ticker="SMH"),
+        reason_code="execution_reanchor_required",
     )
     with pytest.raises(ValueError, match="not in weekly-approved"):
         validate_daily_execution_actions(payload, audited_decision_packet=audited_packet(ticker="QQQ"))
 
 
 def test_data_gap_allowed_without_replacement() -> None:
-    payload = valid_action_payload(action="DATA_GAP", replace_packet=None)
+    payload = valid_action_payload(
+        action="DATA_GAP",
+        replace_packet=None,
+        reason_code="live_order_state_data_gap",
+    )
 
     parsed = validate_daily_execution_actions(payload, audited_decision_packet=audited_packet())
 

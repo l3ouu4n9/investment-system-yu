@@ -22,6 +22,9 @@ inputs/current/strategy_settings.yaml
 ```
 
 The operator must update `inputs/current/portfolio_snapshot.txt` with the latest open orders and fills state before running the check.
+The `--date` argument is the daily execution-check date. `inputs/current/strategy_settings.yaml`
+may retain the latest weekly Step1-Step4 run's `as_of` and `run_timestamp_et` until the next
+weekly cycle; do not rewrite those fields solely because a weekday Daily Execution Check is run.
 
 If the check needs to reason about price drift, gap-to-order distance, or missed-fill risk, provide or generate a daily market snapshot first. Without that data, price-drift analysis is incomplete.
 

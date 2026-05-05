@@ -1,9 +1,9 @@
 # Research Template - Yu (Dual-Lane Version)
 # ChatGPT Deep Research
-# updated 2026-04-27
+# updated 2026-05-04
 
 投資目標：
-以科技大盤（QQQ）為核心基準，願意承擔較高的科技業與科技子產業集中波動，以及相對 benchmark 更高的階段性回撤與 tracking error；投資組合仍以 QQQ 與核心 buy universe 為主要承載，但在有明確 12m+ thesis、角色清楚且經預先核准時，可對 sector alpha tilt 與延伸 ETF 給予有節制的中小比例主動傾斜。目標是在 3–5 年期不僅跟上科技大盤，並在多數有利環境下爭取明確、可辨識的中度超額報酬；不主動承擔槓桿、低流動性、頻繁交易與純短期事件投機風險。
+以科技大盤（QQQ）為核心基準與主要長期承載，願意承擔高於傳統大盤配置的科技業、半導體、軟體、AI infrastructure、資安、資料中心與其他科技子產業集中波動，以及相對 QQQ 更高的階段性回撤與 tracking error。投資組合仍以 QQQ 與核心 buy universe 為主體，但在具備明確 12m+ thesis、角色清楚、流動性充足、相對 base ETF 有可辨識增量曝險，且經預先核准時，可使用非槓桿、非反向的 sector / thematic / factor ETF 作為受上限約束的 minority alpha sleeve。 目標是在 3–5 年期不僅跟上科技大盤，並在 AI、半導體、企業軟體、資安、資料中心基礎設施或其他結構性科技週期有利時，透過較積極但仍受控的 ETF 主動傾斜，爭取明確、可辨識的中度至較高超額報酬。可接受因主題集中、估值波動與 sector rotation 造成的短中期相對落後，但不主動承擔槓桿、反向 ETF、低流動性、過度窄化、頻繁交易與純短期事件投機風險。
 
 目標：
 請以「雙 lane」架構完成研究，最後只輸出一份 RESEARCH_JSON：
@@ -17,7 +17,7 @@
 
 - strategy_mandate_template1_dual_lane (NEW, MUST):
   - 本模板所有研究排序必須服務以下投資目標：
-    "以科技大盤（QQQ）為核心基準，願意承擔較高的科技業與科技子產業集中波動，以及相對 benchmark 更高的階段性回撤與 tracking error；投資組合仍以 QQQ 與核心 buy universe 為主要承載，但在有明確 12m+ thesis、角色清楚且經預先核准時，可對 sector alpha tilt 與延伸 ETF 給予有節制的中小比例主動傾斜。目標是在 3–5 年期不僅跟上科技大盤，並在多數有利環境下爭取明確、可辨識的中度超額報酬；不主動承擔槓桿、低流動性、頻繁交易與純短期事件投機風險。"
+    "以科技大盤（QQQ）為核心基準與主要長期承載，願意承擔高於傳統大盤配置的科技業、半導體、軟體、AI infrastructure、資安、資料中心與其他科技子產業集中波動，以及相對 QQQ 更高的階段性回撤與 tracking error。投資組合仍以 QQQ 與核心 buy universe 為主體，但在具備明確 12m+ thesis、角色清楚、流動性充足、相對 base ETF 有可辨識增量曝險，且經預先核准時，可使用非槓桿、非反向的 sector / thematic / factor ETF 作為受上限約束的 minority alpha sleeve。目標是在 3–5 年期不僅跟上科技大盤，並在 AI、半導體、企業軟體、資安、資料中心基礎設施或其他結構性科技週期有利時，透過較積極但仍受控的 ETF 主動傾斜，爭取明確、可辨識的中度至較高超額報酬。可接受因主題集中、估值波動與 sector rotation 造成的短中期相對落後，但不主動承擔槓桿、反向 ETF、低流動性、過度窄化、頻繁交易與純短期事件投機風險。"
 
 - output_shape_rule (NEW, MUST):
   - 最終只能輸出一份 RESEARCH_JSON
@@ -420,18 +420,31 @@ anchor_ref_integrity_rule (NEW, MUST):
 Lane B 不是本輪交易主線。
 
 Lane B 研究定位（MUST）：
-- extended ETF sleeve 是「受上限約束的非核心長線輔助工具」
+- extended ETF sleeve 是「受上限約束的非核心長線 alpha sleeve」，不是純防守性 diversifier，也不是象徵性小配置。
 - 不是常態核心配置
 - 不是短期事件交易工具
-- 啟用目的僅限補強 base 六檔無法充分表達的長線輔助曝險
-- 不得取代 QQQ 作 benchmark carrier
+- 啟用目的包含：
+  (1) 補強 base 六檔無法充分表達的長線輔助曝險
+  (2) 更精準表達 base 六檔雖有曝險、但表達不夠純或不夠集中的 12m+ 結構性趨勢
+  (3) 在不取代 QQQ / SMH / IGV 的前提下，提名可被未來人工審核的主題型 minority alpha sleeve
+- 熱門主題本身不是排除理由；AI、半導體、資安、資料中心、電力基礎設施、機器人、自動化、雲端與企業 AI 軟體等熱門主題，只要具備 12m+ thesis、角色清楚、流動性足夠、且相對 base 有增量價值，即可進入 proposed_extended_etf_candidates。
+- 但不得僅因 1–8 週熱度、單一事件、價格動能或媒體敘事而提名。
+- 在符合 12m+ thesis、流動性、role clarity、非槓桿、非反向與 approved-static-list gate 的前提下，不得僅因某 ETF 比 base ETF 更窄、tracking error 更高、或主題集中度更高，就自動排除；應依其相對 base 的 incremental exposure、alpha asymmetry、benchmark drift risk 與 sleeve cap 判斷。
+- 不得取代 QQQ 作 benchmark carrier。
 
 Lane B 研究排序優先級（NEW, MUST）：
-(1) 是否補足 base 六檔無法充分表達的長線曝險
+(1) 是否補足或更精準表達 base 六檔無法充分表達的 12m+ 結構性趨勢曝險
 (2) 是否具備 12m+ thesis linkage，而非單一 45 天事件交易
-(3) 是否具備流動性 / AUM / spread 的可交易性
-(4) 是否值得未來加入 user_approved_extended_etf_static_list
-(5) 若已在 static list 中，是否值得通過 activation 進入本回合 allowed_extended_etf_tickers
+(3) 若主題近期熱門，是否仍能用 fundamentals / capex / earnings / policy / adoption data 支撐，而不是只靠 price momentum
+(4) 是否相對 best_base_alternative 具備清楚增量價值：
+    - exposure purity
+    - alpha asymmetry
+    - diversification utility
+    - thesis specificity
+    - role clarity
+(5) 是否具備流動性 / AUM / spread 的可交易性
+(6) 是否值得未來加入 user_approved_extended_etf_static_list
+(7) 若已在 static list 中，是否值得通過 activation 進入本回合 allowed_extended_etf_tickers
 
 
 Lane B 必須永遠輸出（MUST）：
@@ -598,20 +611,70 @@ proposed_extended_etf_candidates_rule (MUST):
   - 預設輸出 1–3 檔研究提名
   - 只有在確實找不到合格候選時才允許輸出 []
 - 若 static list 非空：
-  - proposed_extended_etf_candidates 預設輸出 0–2 檔即可
-  - 輸出 [] 屬正常
+  - proposed_extended_etf_candidates 預設仍應輸出 1–3 檔研究提名，除非明確找不到任何比現有 static list 或 base 六檔更有增量價值的候選。
+  - 輸出 [] 不再視為正常預設；只有在完成 trend_candidate_scan 且所有候選皆被明確拒絕後，才允許 proposed_extended_etf_candidates = []。
+  - 若 proposed_extended_etf_candidates = []，不得另建 rejected_extended_etf_theme_scan；必須改由 trend_candidate_scan 承載 rejected items，且 trend_candidate_scan 必須至少包含 3 筆 decision != "propose_for_user_approval" 的 rejected items，逐筆說明被評估但未提名的主題 / ETF / 類型與拒絕理由。
 - proposed_extended_etf_candidates 內每檔至少包含：
   ticker
   sleeve_role
   best_base_alternative
   why
+  incremental_exposure_vs_base
+  why_not_just_buy_base_alternative
+  hot_theme_risk
+  thesis_12m_plus_summary
+  expected_role_if_approved
   event_id_refs: []
   structural_theme_refs: []
   preferred_scheduled_theme_event_id (string|null; 若目前沒有可 deterministic 對應的 future scheduled theme event，則必須 = null)
+
+- incremental_exposure_vs_base 必須說明該 ETF 相對 QQQ / SMH / IGV / VOO / VTI / VT 的增量曝險。
+- why_not_just_buy_base_alternative 必須明確回答：為何不是直接買 QQQ、SMH 或 IGV 就足夠。
+- hot_theme_risk 只能是 "low" / "medium" / "high"，且若為 "high"，why 必須說明為何仍只作 proposed_only，而非本輪啟用。
+- expected_role_if_approved 只能是：
+  - "future_ai_semiconductor_precision_tilt"
+  - "future_ai_infrastructure_tilt"
+  - "future_cybersecurity_tilt"
+  - "future_enterprise_ai_software_tilt"
+  - "future_robotics_automation_tilt"
+  - "future_other_measured_tilt"
 - proposed candidates 的 ticker 不得與下列集合重複：
   (1) user_approved_extended_etf_static_list
   (2) extended_etf_candidate_universe
   (3) optional_extended_etf_sleeve.allowed_extended_etf_tickers
+
+trend_candidate_scan_rule (NEW, MUST):
+- RESEARCH_JSON 必須永遠輸出 trend_candidate_scan，可為 []，但不建議為 []。
+- trend_candidate_scan 的用途是避免 Research Template 因 static list 非空、或 base universe 已有 SMH / IGV，而完全忽略新的熱門但可能有 12m+ thesis 的 extended ETF 候選。
+- 每回合至少應掃描下列 theme buckets：
+  (1) AI / semiconductor / custom silicon / advanced packaging
+  (2) AI infrastructure / data center / networking / power / grid
+  (3) cybersecurity / AI security / identity / zero trust
+  (4) enterprise AI software / cloud automation / agentic workflow
+  (5) robotics / automation / industrial AI
+- 每個 bucket 可輸出 0–3 個 candidate ETF 或 candidate type。
+- trend_candidate_scan 每筆至少包含：
+  {
+    "theme_bucket": "",
+    "candidate_ticker_or_type": "",
+    "best_base_alternative": "",
+    "incremental_exposure_claim": "",
+    "hot_theme_risk": "low|medium|high",
+    "twelve_month_plus_thesis_supported": true,
+    "tradeability_initial_view": "likely_tradeable|needs_check|likely_insufficient",
+    "decision": "propose_for_user_approval|reject_duplicate_base_exposure|reject_short_term_only|reject_tradeability_gap|reject_benchmark_drift|reject_unclear_role",
+    "why": "",
+    "event_id_refs": [],
+    "structural_theme_refs": []
+  }
+- twelve_month_plus_thesis_supported 必須為 true / false。
+- 若 decision = "propose_for_user_approval"，twelve_month_plus_thesis_supported 必須 = true。
+- 若 decision = "reject_short_term_only"，twelve_month_plus_thesis_supported 必須 = false。
+- 若 decision = "propose_for_user_approval"，該 ticker 必須出現在 proposed_extended_etf_candidates。
+- 若 decision = "propose_for_user_approval"，candidate_ticker_or_type 必須是具體 ETF ticker，不得只是 ETF type / theme description。
+- 若 candidate_ticker_or_type 只是 type / theme description，decision 不得為 "propose_for_user_approval"，只能使用 reject_* decision，或另行找到具體 ETF ticker 後再 propose。
+- 若 proposed_extended_etf_candidates = []，trend_candidate_scan 必須至少包含 3 筆 decision != "propose_for_user_approval" 的 rejected items，且 why 必須明確說明為何不提名。
+- trend_candidate_scan 不得進入 effective_allowed_buy_universe，不得進入 optional_extended_etf_sleeve.allowed_extended_etf_tickers，不得形成 BUY_ORDERS。
 
 proposed_extended_etf_candidates_non_tradeable_rule (MUST):
 - proposed_extended_etf_candidates 僅供未來審核
@@ -753,10 +816,16 @@ extended_lane_output_conditionality_rule (MUST):
   optional_extended_etf_sleeve.allowed_extended_etf_tickers = []
   optional_extended_etf_sleeve.disable_reason = "awaiting user approval for proposed candidates"
   optional_extended_etf_sleeve.why_not_enabled = "extended ETF sleeve remains non-tradeable until user-approved static candidate list is provided"
-- 若 static list 非空但本回合沒有 ETF 通過 activation：
+
+- 若 static list 非空但本回合沒有任何 extended_etf_predecision_scorecard item.enable_hurdle_passed = true：
   optional_extended_etf_sleeve.enabled = false
   optional_extended_etf_sleeve.allowed_extended_etf_tickers = []
   optional_extended_etf_sleeve.disable_reason = "no approved candidates passed activation"
+
+- 若 static list 非空，且任一 extended_etf_predecision_scorecard item.enable_hurdle_passed = true，但 optional_extended_etf_sleeve.enabled 仍 = false：
+  optional_extended_etf_sleeve.enabled = false
+  optional_extended_etf_sleeve.allowed_extended_etf_tickers = []
+  optional_extended_etf_sleeve.disable_reason = "passed ticker-level activation but failed sleeve-level allocation / benchmark-preservation decision"
 
 ────────────────────────────────────────
 【Lane 關係 / 優先級】
@@ -807,6 +876,162 @@ cross_lane_consistency_rule (NEW, MUST):
     (b) Lane B: screening only / proposed only
   - 不得把「研究上值得追蹤」與「本輪 downstream 可 deterministic hand-off」視為同義。
 
+strategy_a_research_handoff_contract_rule (NEW, MUST):
+- RESEARCH_JSON 必須新增頂層欄位 strategy_a_research_handoff。
+- strategy_a_research_handoff 的用途是讓 Strategy A deterministic 消費 Research 結果；它不是 order instruction，不是 final shortlist，不是 buy-side delta，也不是 execution draft。
+- Strategy A 仍必須依 Portfolio Snapshot、Strategy Settings、market data、role cap、existing open orders、hard cap、template map 與 audit handoff rules 決定：
+  - effective_allowed_buy_universe
+  - active_shortlist
+  - buy_side_delta_table
+  - rotation_decision_layer
+  - execution_plan_drafts
+- Research 不得把 actionability_status = "actionable_this_run" 寫成等同於 NEW_ORDER、REPLACE_EXISTING、positive delta、或 funded shortlist。
+- strategy_a_research_handoff 必須至少包含：
+  {
+    "handoff_version": "strategy_a_research_handoff_v1",
+    "handoff_scope": "research_to_decision_builder_only",
+    "not_order_instruction": true,
+    "strategy_a_must_still_apply": [
+      "Portfolio Snapshot",
+      "Strategy Settings",
+      "market data",
+      "role caps",
+      "existing open orders",
+      "hard cap",
+      "template map",
+      "compile contract"
+    ],
+    "base_shortlist_eligible_by_role": {},
+    "base_watch_only_by_role": {},
+    "positive_delta_research_supported": [],
+    "positive_delta_not_implied_for": [],
+    "replacement_ranking_by_role": {},
+    "rotation_handoff": [],
+    "buy_side_no_action_hints": [],
+    "extended_lane_downstream_gate": {},
+    "sell_side_research_boundary": {}
+  }
+
+- base_shortlist_eligible_by_role:
+  - key 必須只能是：
+    - "benchmark_carrier_core"
+    - "diversified_core_buffer"
+    - "sector_alpha_tilt"
+  - value 必須是 ticker array。
+  - ticker 只能來自 trade_universe.allowed_buy_tickers。
+  - base_shortlist_eligible_by_role 只能包含 actionability_status = "actionable_this_run" 的 ticker。
+  - 若 ticker.actionability_status = "ranking_hold_watch_only" / "compile_blocked" / "research_only"，不得放入 base_shortlist_eligible_by_role；應放入 base_watch_only_by_role，並同步放入 positive_delta_not_implied_for。
+  - 此欄位只代表 Research 層級下，該 ticker 有資格被 Strategy A 納入 active_shortlist 候選；不代表一定入選，也不代表 funded。
+
+- base_watch_only_by_role:
+  - key 必須只能是：
+    - "benchmark_carrier_core"
+    - "diversified_core_buffer"
+    - "sector_alpha_tilt"
+  - value 必須是 ticker array。
+  - ticker 只能來自 trade_universe.allowed_buy_tickers。
+  - 此欄位代表 Research 層級仍值得追蹤 / 持有診斷 / 排序保留，但本輪不應被 Research 視為 positive delta 優先來源。
+
+- positive_delta_research_supported:
+  - ticker 只能來自 trade_universe.allowed_buy_tickers。
+  - positive_delta_research_supported 只能包含 actionability_status = "actionable_this_run" 的 ticker。
+  - 若 ticker.actionability_status != "actionable_this_run"，不得出現在 positive_delta_research_supported，即使其長線 ranking 較高或仍具持有診斷價值。
+  - 僅代表 Research 層級支援 Strategy A 進一步評估 positive delta；不代表 proposed_budget > 0。
+  - 若某 ticker 未出現在此欄位，Strategy A 不得僅因 buy_universe_scorecard 排名高而把它視為 Research-supported positive delta。
+  - 若某 ticker 出現在此欄位，仍須 Strategy A 通過 role cap、open-order state、market data、hard cap、template map 與 compile-closed checks 後才可輸出 executable buy-side row。
+
+- positive_delta_not_implied_for:
+  - 必須包含所有 actionability_status != "actionable_this_run" 的 base tickers。
+  - 此欄位不得使用 buy_side_no_action_hints 作為替代；buy_side_no_action_hints 只能補充原因，不能取代本欄位的完整 coverage。
+  - 此欄位用途是防止 Strategy A 從 why / best_use_case / ranking 自由文字錯誤推導成 positive delta。
+  - 若 positive_delta_not_implied_for 遺漏任何 actionability_status != "actionable_this_run" 的 base ticker，validation_summary.passed 必須 = false，fail_reasons 必須包含 "STRATEGY_A_RESEARCH_HANDOFF_INCONSISTENT"。
+
+- replacement_ranking_by_role:
+  - 必須輸出三個 role key：
+    - "benchmark_carrier_core"
+    - "diversified_core_buffer"
+    - "sector_alpha_tilt"
+  - 每個 role 內的 tickers 必須只包含該 role_layer 的 base tickers。
+  - 排序必須完全依 buy_universe_scorecard.execution_priority_this_run 由高到低。
+  - 此欄位是 Strategy A / Strategy B relative rotation 的 research-side ordering helper；不得包含 extended ETF。
+  - 若某 role 只有一檔，也必須輸出單元素 array。
+
+- rotation_handoff:
+  - 必須是 array，可為 []。
+  - 只允許輸出 same-role 的 possible rotation pair。
+  - 每個 item 必須包含：
+    {
+      "from_ticker": "",
+      "to_ticker": "",
+      "role_layer": "",
+      "same_role": true,
+      "score_gap_basis": "execution_priority_this_run",
+      "score_gap": 0,
+      "research_rotation_supported": true,
+      "requires_strategy_a_guardrail_check": true,
+      "why": "",
+      "event_id_refs": [],
+      "structural_theme_refs": []
+    }
+  - from_ticker / to_ticker 只能來自 trade_universe.allowed_buy_tickers。
+  - from_ticker 與 to_ticker 必須同 role_layer。
+  - score_gap = to_ticker.execution_priority_this_run - from_ticker.execution_priority_this_run。
+  - score_gap <= 0 的 pair 不得輸出。
+  - research_rotation_supported = true 只代表 Research 層級可能支持 rotation；Strategy A 仍必須套用 relative_rotation_guardrails，尤其是 do_not_rotate_if_current_holding_still_role_valid。
+  - 若沒有明確 same-role replacement advantage，rotation_handoff 必須 = []。
+
+- buy_side_no_action_hints:
+  - 必須是 array，可為 []。
+  - 對所有不應在 Research 層級作為 positive-delta 優先來源的 base ticker，建議輸出一筆。
+  - 每個 item 必須包含：
+    {
+      "ticker": "",
+      "research_status": "ranking_hold_watch_only|compile_blocked|research_only",
+      "strategy_a_allowed_action_hint": "HOLD_NO_NEW_BUDGET_OR_WATCHLIST_NO_TRADE|KEEP_EXISTING_OR_HOLD_NO_NEW_BUDGET|COMPILE_BLOCKED_NO_NEW_ORDER",
+      "primary_reason": "",
+      "event_id_refs": [],
+      "structural_theme_refs": []
+    }
+  - 此欄位不得要求 Strategy A 產生 BUY_ORDERS；它只限制 Strategy A 不應把該 ticker 誤判成 positive-delta research target。
+
+- extended_lane_downstream_gate:
+  - 必須是 object，至少包含：
+    {
+      "effective_allowed_extended_etf_tickers_this_run": [],
+      "predecision_only_tickers": [],
+      "proposed_only_tickers": [],
+      "approved_but_excluded_tickers": [],
+      "must_not_enter_strategy_a_effective_universe": [],
+      "disable_reason": "",
+      "why_not_enabled": ""
+    }
+  - effective_allowed_extended_etf_tickers_this_run 必須 copy-exact 等於 optional_extended_etf_sleeve.allowed_extended_etf_tickers。
+  - extended_lane_downstream_gate.disable_reason 必須 copy-exact 等於 optional_extended_etf_sleeve.disable_reason。
+  - extended_lane_downstream_gate.why_not_enabled 必須 copy-exact 等於 optional_extended_etf_sleeve.why_not_enabled。
+  - 若 optional_extended_etf_sleeve.enabled = false，effective_allowed_extended_etf_tickers_this_run 必須 = []。
+  - predecision_only_tickers 必須包含 extended_etf_predecision_scorecard 中 lane_b_status = "predecision_only" 的 tickers。
+  - proposed_only_tickers 必須包含 proposed_extended_etf_candidates 中所有 tickers。
+  - approved_but_excluded_tickers 必須包含 approved_static_list_screening_log 中 lane_b_status = "approved_but_excluded" 的 tickers。
+  - must_not_enter_strategy_a_effective_universe 必須包含所有不在 effective_allowed_extended_etf_tickers_this_run 內、但出現在 user_approved_extended_etf_static_list / proposed_extended_etf_candidates / extended_etf_predecision_scorecard 的 tickers。
+  - Strategy A 只能把 effective_allowed_extended_etf_tickers_this_run 內的 ticker 加入 effective_allowed_buy_universe；不得從 proposed_only / predecision_only / approved_but_excluded 推導交易資格。
+
+- sell_side_research_boundary:
+  - 必須是 object，至少包含：
+    {
+      "research_template_sell_decision_scope": "base_etf_research_only_unless_current_portfolio_sell_diagnostics_provided",
+      "sell_side_full_diagnostic_inputs_present": false,
+      "portfolio_snapshot_ltcg_lots_are_eligibility_not_sell_thesis": true,
+      "sell_side_positive_action_supported_tickers": [],
+      "sell_side_watch_only_tickers": [],
+      "sell_side_data_gap_note": ""
+    }
+  - LTCG_ELIGIBLE_SELLABLE 只能證明 lot eligibility，不足以單獨構成 sell / trim thesis。
+  - sell_side_full_diagnostic_inputs_present 必須為 true / false。
+  - 若 sell_side_full_diagnostic_inputs_present = false，sell_side_positive_action_supported_tickers 必須 = []。
+  - 若 sell_side_full_diagnostic_inputs_present = true，sell_side_positive_action_supported_tickers 可為非空，但每檔仍必須具備完整 thesis invalidation / replacement advantage / tax-lot eligibility / event or structural linkage。
+  - 若 Research Template 沒有完整分析 current holdings、position weight、thesis invalidation、replacement advantage 與 tax constraints，sell_side_positive_action_supported_tickers 必須 = []。
+  - 若 sell_side_positive_action_supported_tickers 非空，該 ticker 必須具備 event_id_refs 或 structural_theme_refs，且必須明確輸出 replacement target 限於 base buy universe；不得把 extended ETF 作為 replacement target。
+
 ────────────────────────────────────────
 【共同輸出欄位 / Shared RESEARCH_JSON】
 
@@ -824,7 +1049,73 @@ RESEARCH_JSON 必須至少包含以下欄位（可增欄位，但不要少）：
     "allowed_buy_tickers": ["VOO","VTI","VT","QQQ","SMH","IGV"],
     "notes": "Template2 buy-side must restrict to allowed_buy_tickers only."
   },
+  "strategy_a_research_handoff": {
+    "handoff_version": "strategy_a_research_handoff_v1",
+    "handoff_scope": "research_to_decision_builder_only",
+    "not_order_instruction": true,
+    "strategy_a_must_still_apply": [
+      "Portfolio Snapshot",
+      "Strategy Settings",
+      "market data",
+      "role caps",
+      "existing open orders",
+      "hard cap",
+      "template map",
+      "compile contract"
+    ],
+    "base_shortlist_eligible_by_role": {
+      "benchmark_carrier_core": [],
+      "diversified_core_buffer": [],
+      "sector_alpha_tilt": []
+    },
+    "base_watch_only_by_role": {
+      "benchmark_carrier_core": [],
+      "diversified_core_buffer": [],
+      "sector_alpha_tilt": []
+    },
+    "positive_delta_research_supported": [],
+    "positive_delta_not_implied_for": [],
+    "replacement_ranking_by_role": {
+      "benchmark_carrier_core": [],
+      "diversified_core_buffer": [],
+      "sector_alpha_tilt": []
+    },
+    "rotation_handoff": [],
+    "buy_side_no_action_hints": [],
+    "extended_lane_downstream_gate": {
+      "effective_allowed_extended_etf_tickers_this_run": [],
+      "predecision_only_tickers": [],
+      "proposed_only_tickers": [],
+      "approved_but_excluded_tickers": [],
+      "must_not_enter_strategy_a_effective_universe": [],
+      "disable_reason": "",
+      "why_not_enabled": ""
+    },
+    "sell_side_research_boundary": {
+      "research_template_sell_decision_scope": "base_etf_research_only_unless_current_portfolio_sell_diagnostics_provided",
+      "sell_side_full_diagnostic_inputs_present": false,
+      "portfolio_snapshot_ltcg_lots_are_eligibility_not_sell_thesis": true,
+      "sell_side_positive_action_supported_tickers": [],
+      "sell_side_watch_only_tickers": [],
+      "sell_side_data_gap_note": ""
+    }
+  },
   "user_approved_extended_etf_static_list": [],
+  "trend_candidate_scan": [
+    {
+      "theme_bucket": "",
+      "candidate_ticker_or_type": "",
+      "best_base_alternative": "",
+      "incremental_exposure_claim": "",
+      "hot_theme_risk": "low|medium|high",
+      "twelve_month_plus_thesis_supported": true,
+      "tradeability_initial_view": "likely_tradeable|needs_check|likely_insufficient",
+      "decision": "propose_for_user_approval|reject_duplicate_base_exposure|reject_short_term_only|reject_tradeability_gap|reject_benchmark_drift|reject_unclear_role",
+      "why": "",
+      "event_id_refs": [],
+      "structural_theme_refs": []
+    }
+  ],
   "approved_static_list_screening_log": [
     {
       "ticker": "",
@@ -848,6 +1139,11 @@ RESEARCH_JSON 必須至少包含以下欄位（可增欄位，但不要少）：
       "sleeve_role": "core_completer|diversifier|measured_tilt",
       "best_base_alternative": "",
       "why": "",
+      "incremental_exposure_vs_base": "",
+      "why_not_just_buy_base_alternative": "",
+      "hot_theme_risk": "low|medium|high",
+      "thesis_12m_plus_summary": "",
+      "expected_role_if_approved": "future_ai_semiconductor_precision_tilt|future_ai_infrastructure_tilt|future_cybersecurity_tilt|future_enterprise_ai_software_tilt|future_robotics_automation_tilt|future_other_measured_tilt",
       "preferred_scheduled_theme_event_id": null,
       "event_id_refs": [],
       "structural_theme_refs": [],
@@ -880,7 +1176,13 @@ RESEARCH_JSON 必須至少包含以下欄位（可增欄位，但不要少）：
       "scheduled_macro_anchor_derivable": true,
       "scheduled_theme_anchor_derivable": true,
       "extended_lane_status_consistent": true,
-      "proposed_extended_candidates_non_tradeable": true
+      "proposed_extended_candidates_non_tradeable": true,
+      "trend_candidate_scan_complete": true,
+      "proposed_extended_candidates_have_incremental_base_advantage": true,
+      "strategy_a_research_handoff_complete": true,
+      "strategy_a_research_handoff_consistent": true,
+      "extended_lane_downstream_gate_consistent": true,
+      "sell_side_research_boundary_explicit": true
     }
   },
   "risk_mode_hint": "moderately_aggressive",
@@ -991,6 +1293,79 @@ downstream_handoff_validation_rule (NEW, MUST):
     - extended_etf_scorecard
     除非該 ticker 同時已存在於 current_run_user_approved_extended_etf_static_list。
 
+  (21) strategy_a_research_handoff 必須存在且完整：
+    - handoff_version = "strategy_a_research_handoff_v1"
+    - handoff_scope = "research_to_decision_builder_only"
+    - not_order_instruction = true
+    - base_shortlist_eligible_by_role 必須包含 benchmark_carrier_core / diversified_core_buffer / sector_alpha_tilt 三個 key
+    - base_watch_only_by_role 必須包含 benchmark_carrier_core / diversified_core_buffer / sector_alpha_tilt 三個 key
+    - replacement_ranking_by_role 必須包含 benchmark_carrier_core / diversified_core_buffer / sector_alpha_tilt 三個 key
+    - extended_lane_downstream_gate 必須存在
+    - sell_side_research_boundary 必須存在
+
+  (22) strategy_a_research_handoff 與 buy_universe_scorecard 必須一致：
+    - base_shortlist_eligible_by_role / base_watch_only_by_role / positive_delta_research_supported / positive_delta_not_implied_for / buy_side_no_action_hints 內所有 base ticker 必須屬於 trade_universe.allowed_buy_tickers。
+    - base_shortlist_eligible_by_role 只能包含 actionability_status = "actionable_this_run" 的 ticker。
+    - base_watch_only_by_role 必須包含所有 actionability_status ∈ ["ranking_hold_watch_only","compile_blocked","research_only"] 且仍具 ranking / hold / watch 價值的 base ticker。
+    - replacement_ranking_by_role 只能包含 base tickers，且每個 role 內排序必須依 buy_universe_scorecard.execution_priority_this_run 由高到低。
+    - replacement_ranking_by_role.benchmark_carrier_core 必須只包含 role_layer = "benchmark_carrier_core" 的 ticker。
+    - replacement_ranking_by_role.diversified_core_buffer 必須只包含 role_layer = "diversified_core_buffer" 的 ticker。
+    - replacement_ranking_by_role.sector_alpha_tilt 必須只包含 role_layer = "sector_alpha_tilt" 的 ticker。
+    - actionability_status != "actionable_this_run" 的 ticker，不得只留在 base_shortlist_eligible_by_role；必須同時出現在 positive_delta_not_implied_for 或 buy_side_no_action_hints。
+    - positive_delta_research_supported 不得包含 actionability_status = "compile_blocked" 或 "research_only" 的 ticker。
+    - positive_delta_research_supported 只能包含 actionability_status = "actionable_this_run" 的 ticker。
+    - 若 ticker.actionability_status != "actionable_this_run"，不得出現在 positive_delta_research_supported，即使其長線 ranking 較高或仍具持有診斷價值。
+    - positive_delta_research_supported 是 research-side positive-delta eligibility，不是 Strategy A 的 funded delta；Strategy A 仍須套用 role cap / market data / existing open orders / hard cap / compile contract。
+    - 若 positive_delta_research_supported 包含 role_layer = "sector_alpha_tilt" 的 ticker，該 ticker 必須有 non-null preferred_scheduled_theme_event_id，且該 event 必須符合 scheduled_theme_anchor_derivability_rule_v2。
+    - rotation_handoff 每筆 from_ticker / to_ticker 必須同 role_layer，且 score_gap 必須 > 0。
+    - rotation_handoff 不得包含 extended ETF。
+
+  (23) extended_lane_downstream_gate 必須與 Lane B 狀態一致：
+    - extended_lane_downstream_gate.effective_allowed_extended_etf_tickers_this_run 必須 copy-exact 等於 optional_extended_etf_sleeve.allowed_extended_etf_tickers。
+    - extended_lane_downstream_gate.disable_reason 必須 copy-exact 等於 optional_extended_etf_sleeve.disable_reason。
+    - extended_lane_downstream_gate.why_not_enabled 必須 copy-exact 等於 optional_extended_etf_sleeve.why_not_enabled。
+    - 若 optional_extended_etf_sleeve.enabled = false，effective_allowed_extended_etf_tickers_this_run 必須 = []。
+    - proposed_only_tickers 必須包含 proposed_extended_etf_candidates 內所有 tickers。
+    - predecision_only_tickers 必須包含 extended_etf_predecision_scorecard 中 lane_b_status = "predecision_only" 的 tickers。
+    - approved_but_excluded_tickers 必須包含 approved_static_list_screening_log 中 lane_b_status = "approved_but_excluded" 的 tickers。
+    - must_not_enter_strategy_a_effective_universe 必須包含所有不在 effective_allowed_extended_etf_tickers_this_run 內、但出現在 user_approved_extended_etf_static_list / proposed_extended_etf_candidates / extended_etf_predecision_scorecard 的 tickers。
+    - optional_extended_etf_sleeve.enabled = false 時，must_not_enter_strategy_a_effective_universe 不得為空，除非 user_approved_extended_etf_static_list、proposed_extended_etf_candidates、extended_etf_predecision_scorecard 全部為空。
+
+  (24) sell_side_research_boundary 必須明確限制 sell-side 推論：
+    - portfolio_snapshot_ltcg_lots_are_eligibility_not_sell_thesis 必須 = true。
+    - sell_side_full_diagnostic_inputs_present 必須為 true / false。
+    - 若 sell_side_full_diagnostic_inputs_present = false，sell_side_positive_action_supported_tickers 必須 = []。
+    - 若 sell_side_full_diagnostic_inputs_present = true，sell_side_positive_action_supported_tickers 可為非空，但每檔仍必須具備完整 thesis invalidation / replacement advantage / tax-lot eligibility / event or structural linkage。
+    - 若 sell_side_positive_action_supported_tickers 非空，則每檔必須有 event_id_refs 或 structural_theme_refs，且必須能對應 RESEARCH_JSON 內既有事件或 structural theme。
+    - 若 Research 本回合沒有完整 current holdings / position weight / thesis invalidation / replacement advantage / tax constraint 分析，sell_side_positive_action_supported_tickers 必須 = []。
+
+  (25) trend_candidate_scan 必須完整：
+    - RESEARCH_JSON 必須輸出 trend_candidate_scan。
+    - trend_candidate_scan 必須至少覆蓋下列 5 個 theme_bucket，每個 bucket 至少 1 筆 scan item，除非 data_staleness_note 明確說明該 bucket 本回合無足夠資料：
+      - "AI / semiconductor / custom silicon / advanced packaging"
+      - "AI infrastructure / data center / networking / power / grid"
+      - "cybersecurity / AI security / identity / zero trust"
+      - "enterprise AI software / cloud automation / agentic workflow"
+      - "robotics / automation / industrial AI"
+    - 若 proposed_extended_etf_candidates = []，trend_candidate_scan 必須至少包含 3 筆 rejected items。
+    - trend_candidate_scan 每筆 decision 只能是：
+      - "propose_for_user_approval"
+      - "reject_duplicate_base_exposure"
+      - "reject_short_term_only"
+      - "reject_tradeability_gap"
+      - "reject_benchmark_drift"
+      - "reject_unclear_role"
+    - 若 trend_candidate_scan[*].decision = "propose_for_user_approval"，該 ticker 必須出現在 proposed_extended_etf_candidates。
+    - trend_candidate_scan 不得直接進入 extended_etf_candidate_universe / optional_extended_etf_sleeve.allowed_extended_etf_tickers / effective_allowed_buy_universe。
+
+  (26) proposed_extended_etf_candidates 每檔必須具備 incremental base advantage：
+    - incremental_exposure_vs_base 必須為非空字串。
+    - why_not_just_buy_base_alternative 必須為非空字串。
+    - thesis_12m_plus_summary 必須為非空字串。
+    - hot_theme_risk 必須為 "low" / "medium" / "high"。
+    - expected_role_if_approved 必須屬於允許枚舉。
+    - 若 best_base_alternative ∈ ["QQQ","SMH","IGV"]，why_not_just_buy_base_alternative 必須明確說明為何 base exposure 不足。
+
 - 若上述任一檢查失敗：
   - validation_summary.passed 必須 = false
   - validation_summary.fail_reasons 必須加入對應 label：
@@ -1003,7 +1378,12 @@ downstream_handoff_validation_rule (NEW, MUST):
     - "PROPOSED_EXTENDED_CANDIDATE_LEAKED_INTO_TRADEABLE_UNIVERSE"
     - "NULL_ANCHOR_STATUS_INCONSISTENT"
     - "PROPOSED_ONLY_STATUS_LEAKED_OUTSIDE_PROPOSED_CANDIDATES"
-
+    - "MISSING_STRATEGY_A_RESEARCH_HANDOFF"
+    - "STRATEGY_A_RESEARCH_HANDOFF_INCONSISTENT"
+    - "EXTENDED_LANE_DOWNSTREAM_GATE_INCONSISTENT"
+    - "SELL_SIDE_RESEARCH_BOUNDARY_MISSING_OR_INCONSISTENT"
+    - "TREND_CANDIDATE_SCAN_MISSING_OR_INCOMPLETE"
+    - "PROPOSED_EXTENDED_CANDIDATE_MISSING_INCREMENTAL_BASE_ADVANTAGE"
 validation_summary_checks_extension_rule (NEW, MUST):
 - validation_summary.checks 必須額外包含以下 boolean checks：
   - downstream_actionability_fields_complete
@@ -1013,11 +1393,33 @@ validation_summary_checks_extension_rule (NEW, MUST):
   - scheduled_theme_anchor_derivable
   - extended_lane_status_consistent
   - proposed_extended_candidates_non_tradeable
+  - trend_candidate_scan_complete
+  - proposed_extended_candidates_have_incremental_base_advantage
+  - strategy_a_research_handoff_complete
+  - strategy_a_research_handoff_consistent
+  - extended_lane_downstream_gate_consistent
+  - sell_side_research_boundary_explicit
 - 只有全部為 true 時，validation_summary.passed 才可為 true。
 
 output_completeness_for_rotation (MUST):
 - 若 RESEARCH_JSON 缺 buy_universe_scorecard，視為 FAIL
 - 若因資料限制無法高信心排序，仍必須輸出六檔完整 scorecard，但可在 why 中說明信心限制
+
+output_completeness_for_strategy_a_handoff (NEW, MUST):
+- 若 RESEARCH_JSON 缺 strategy_a_research_handoff，視為 FAIL。
+- 若 strategy_a_research_handoff 缺任一必要欄位：
+  - validation_summary.passed 必須 = false
+  - validation_summary.fail_reasons 必須包含 "MISSING_STRATEGY_A_RESEARCH_HANDOFF"
+- 若 strategy_a_research_handoff 與 buy_universe_scorecard / optional_extended_etf_sleeve / extended_etf_predecision_scorecard / approved_static_list_screening_log 不一致：
+  - validation_summary.passed 必須 = false
+  - validation_summary.fail_reasons 必須包含 "STRATEGY_A_RESEARCH_HANDOFF_INCONSISTENT" 或 "EXTENDED_LANE_DOWNSTREAM_GATE_INCONSISTENT"
+- strategy_a_research_handoff 不能使 Strategy A 繞過：
+  - active_shortlist_size_rule
+  - relative_rotation_guardrails
+  - effective_allowed_buy_universe rules
+  - proposed_extended_candidates_non_tradeable_rule
+  - buy-side compile contract
+- strategy_a_research_handoff 內任何 "eligible" / "supported" / "ranking" 字樣都不得被解讀成 order_intent、funded shortlist、positive budget、或 compile-ready order。
 
 ────────────────────────────────────────
 【最後輸出格式】

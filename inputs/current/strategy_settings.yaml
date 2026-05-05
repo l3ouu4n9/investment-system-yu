@@ -1,9 +1,9 @@
-as_of: "2026-04-26"
-run_timestamp_et: "2026-04-26 22:32 ET"
+as_of: "2026-05-03"
+run_timestamp_et: "2026-05-03 17:41 ET"
 benchmark: "QQQ"
 tax_intent: "LTCG_only"
 min_holding_period: ">=12m"
-hard_cap_open_orders_budget: 50534.86
+hard_cap_open_orders_budget: 54552.39
 relative_rotation_enabled: true
 
 relative_rotation_guardrails:
@@ -137,6 +137,7 @@ active_shortlist_size_rule:
   benchmark_carrier: 1
   diversified_core_buffer_max: 1
   sector_alpha_tilt_max: 1
+  extended_etf_minority_sleeve_max: 1
 
 daily_execution_drift_policy:
   enabled: true
@@ -229,8 +230,12 @@ max_new_tickers_per_week:
   extended_etf_sleeve_new_tickers_per_week: 1
 
 extended_etf_constraints:
-  sleeve_budget_cap_pct_of_total_open_orders: 0.18
-  single_extended_etf_budget_cap_pct_of_total_open_orders: 0.12
+  sleeve_budget_cap_pct_of_total_open_orders: 0.22
+  single_extended_etf_budget_cap_pct_of_total_open_orders: 0.15
+  sleeve_budget_posture: "meaningful_but_capped_alpha_sleeve"
+  cap_interpretation: "upper_bound_not_target"
+  activation_minimum_effective_budget_pct_of_total_open_orders: 0.04
+  activation_priority_note: "If an approved extended ETF passes activation and has stronger 12m+ alpha upside / incremental exposure than diversified_core_buffer, Strategy A may allocate meaningful but capped budget after preserving QQQ benchmark-carrier role; cap headroom alone must not force allocation."
 
 sell_execution_policy_defaults:
   default_plan_type: "single_limit_sell"
