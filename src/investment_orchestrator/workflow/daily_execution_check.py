@@ -20,6 +20,7 @@ from investment_orchestrator.validators.validate_daily_execution_actions import 
 from investment_orchestrator.validators.validate_audited_decision_packet import (
     validate_audited_decision_packet,
 )
+from investment_orchestrator.validators.strategy_settings import parse_strategy_settings_text
 
 
 DAILY_STEP_DIRNAME = "daily_execution_check"
@@ -172,6 +173,276 @@ def load_optional_daily_market_data_snapshot(
     )
 
 
+def _optional_json_object(candidates: list[Path]) -> dict[str, Any] | None:
+    for path in candidates:
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            payload = read_json(path)
+        except (json.JSONDecodeError, OSError):
+            return None
+        return payload if isinstance(payload, dict) else None
+    return None
+
+
+def load_optional_daily_market_data_snapshot_json(
+    as_of_date: str,
+    *,
+    root: str | Path | None = None,
+) -> dict[str, Any] | None:
+    """Load optional daily market data snapshot JSON for deterministic diagnostics."""
+    base = _daily_root(as_of_date, root=root)
+    current_inputs = current_inputs_dir(root=root)
+    return _optional_json_object(
+        [
+            base / "market_data_snapshot.json",
+            base / "daily_market_data_snapshot.json",
+            base / DAILY_STEP_DIRNAME / "daily_market_data_snapshot.json",
+            current_inputs / "daily_market_data_snapshot.json",
+        ]
+    )
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        text = str(value).strip().replace(",", "")
+        if not text or text.upper() in {"NA", "N/A", "NONE", "NULL"}:
+            return None
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _round_pct(value: float | None) -> float | None:
+    return round(value, 2) if value is not None else None
+
+
+def _daily_price_rows(snapshot: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    if not isinstance(snapshot, dict):
+        return {}
+    rows = snapshot.get("tickers")
+    if not isinstance(rows, list):
+        return {}
+    output: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        ticker = str(row.get("ticker", "")).strip().upper()
+        if ticker:
+            output[ticker] = row
+    return output
+
+
+def _parse_existing_buy_open_orders_summary(portfolio_snapshot: str) -> list[dict[str, Any]]:
+    columns = [
+        "ticker",
+        "budget",
+        "compiled_open_order_notional",
+        "residual_cash_not_allocated",
+        "template_id",
+        "anchor_baseline_last_close",
+        "anchor_price_asof",
+        "last_refresh_date_et",
+        "highest_live_limit",
+        "lowest_live_limit",
+        "live_step_count",
+        "live_order_steps_summary",
+        "live_order_qtys_summary",
+    ]
+    rows: list[dict[str, Any]] = []
+    in_section = False
+    for raw_line in portfolio_snapshot.splitlines():
+        line = raw_line.strip()
+        if "(2a) existing_buy_open_orders_summary" in line:
+            in_section = True
+            continue
+        if in_section and (line.startswith("(2b)") or line.startswith("sell_open_orders")):
+            break
+        if not in_section or "|" not in line:
+            continue
+        parts = [part.strip() for part in line.split("|")]
+        if not parts or parts[0].upper() in {"TICKER", "NONE"}:
+            continue
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9.\-]{0,9}", parts[0]):
+            continue
+        padded = parts[: len(columns)] + [""] * max(0, len(columns) - len(parts))
+        row = dict(zip(columns, padded, strict=False))
+        row["ticker"] = str(row["ticker"]).upper()
+        rows.append(row)
+    return rows
+
+
+def _role_for_ticker(
+    ticker: str,
+    *,
+    row: dict[str, Any],
+    audited_packet: dict[str, Any],
+    settings: dict[str, Any],
+) -> str | None:
+    for section_name in ("final_execution_plans", "final_buy_side_delta_table"):
+        section = audited_packet.get(section_name)
+        if not isinstance(section, list):
+            continue
+        for item in section:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("ticker", "")).strip().upper() != ticker:
+                continue
+            for key in ("role_layer", "role_used", "role", "role_bucket", "template_role"):
+                value = item.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+    drift_policy = settings.get("daily_execution_drift_policy")
+    if isinstance(drift_policy, dict):
+        fallback = drift_policy.get("ticker_role_fallback")
+        if isinstance(fallback, dict):
+            value = fallback.get(ticker)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    template_id = str(row.get("template_id") or "").strip()
+    template_map = settings.get("buy_order_template_map")
+    if isinstance(template_map, dict) and template_id:
+        for role, config in template_map.items():
+            if isinstance(config, dict) and str(config.get("template_id") or "").strip() == template_id:
+                return str(role)
+    return None
+
+
+def _role_number(settings: dict[str, Any], path: tuple[str, ...], role: str | None) -> float | None:
+    value: Any = settings
+    for key in path:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(key)
+    if not isinstance(value, dict) or role is None:
+        return None
+    return _float_or_none(value.get(role))
+
+
+def build_daily_execution_precomputed_diagnostics(
+    *,
+    portfolio_snapshot: str,
+    daily_market_data_snapshot: dict[str, Any] | None,
+    audited_packet: dict[str, Any],
+    settings: dict[str, Any],
+) -> dict[str, Any]:
+    """Precompute Daily Execution Check diagnostics for model aid and parser guardrails."""
+    price_rows = _daily_price_rows(daily_market_data_snapshot)
+    diagnostics: list[dict[str, Any]] = []
+
+    for row in _parse_existing_buy_open_orders_summary(portfolio_snapshot):
+        ticker = str(row.get("ticker", "")).upper()
+        price_row = price_rows.get(ticker, {})
+        daily_last_close = _float_or_none(price_row.get("last_close"))
+        anchor_baseline = _float_or_none(row.get("anchor_baseline_last_close"))
+        highest_live_limit = _float_or_none(row.get("highest_live_limit"))
+        lowest_live_limit = _float_or_none(row.get("lowest_live_limit"))
+        role = _role_for_ticker(ticker, row=row, audited_packet=audited_packet, settings=settings)
+        atr_pct = _float_or_none(price_row.get("atr_20_30d_pct"))
+
+        anchor_static_cap = _role_number(
+            settings,
+            ("daily_execution_drift_policy", "keep_tolerance", "anchor_drift_abs_pct_static_cap"),
+            role,
+        )
+        anchor_atr_multiple = _role_number(
+            settings,
+            ("daily_execution_drift_policy", "keep_tolerance", "anchor_drift_atr_multiple_cap"),
+            role,
+        )
+        anchor_atr_cap = anchor_atr_multiple * atr_pct if anchor_atr_multiple is not None and atr_pct is not None else None
+        anchor_tolerance_candidates = [item for item in (anchor_static_cap, anchor_atr_cap) if item is not None]
+        anchor_drift_tolerance = max(anchor_tolerance_candidates) if anchor_tolerance_candidates else None
+        highest_cap = _role_number(
+            settings,
+            (
+                "daily_execution_drift_policy",
+                "keep_tolerance",
+                "max_negative_distance_to_highest_live_limit_pct",
+            ),
+            role,
+        )
+        anchor_band = _role_number(
+            settings,
+            ("daily_execution_drift_policy", "near_edge_monitor_band", "anchor_drift_pct_band"),
+            role,
+        )
+        highest_band = _role_number(
+            settings,
+            ("daily_execution_drift_policy", "near_edge_monitor_band", "highest_live_limit_distance_pct_band"),
+            role,
+        )
+
+        anchor_drift = None
+        if daily_last_close is not None and anchor_baseline not in (None, 0):
+            anchor_drift = (daily_last_close - anchor_baseline) / anchor_baseline * 100
+        distance_highest = None
+        if daily_last_close not in (None, 0) and highest_live_limit is not None:
+            distance_highest = (highest_live_limit - daily_last_close) / daily_last_close * 100
+        distance_lowest = None
+        if daily_last_close not in (None, 0) and lowest_live_limit is not None:
+            distance_lowest = (lowest_live_limit - daily_last_close) / daily_last_close * 100
+
+        remaining_anchor = (
+            anchor_drift_tolerance - abs(anchor_drift)
+            if anchor_drift_tolerance is not None and anchor_drift is not None
+            else None
+        )
+        remaining_highest = (
+            distance_highest - (-1 * highest_cap)
+            if distance_highest is not None and highest_cap is not None
+            else None
+        )
+        near_anchor = (
+            remaining_anchor is not None and anchor_band is not None and remaining_anchor <= anchor_band
+        )
+        near_highest = (
+            remaining_highest is not None and highest_band is not None and remaining_highest <= highest_band
+        )
+        data_gap_fields = [
+            name
+            for name, value in (
+                ("daily_last_close", daily_last_close),
+                ("daily_price_asof", price_row.get("price_asof")),
+                ("anchor_baseline_last_close", anchor_baseline),
+                ("anchor_price_asof", row.get("anchor_price_asof")),
+                ("role_used", role),
+                ("anchor_drift_tolerance", anchor_drift_tolerance),
+                ("max_negative_distance_to_highest_live_limit_pct", highest_cap),
+            )
+            if value is None or value == ""
+        ]
+
+        diagnostics.append(
+            {
+                "ticker": ticker,
+                "daily_last_close": daily_last_close,
+                "daily_price_asof": price_row.get("price_asof"),
+                "anchor_baseline_last_close": anchor_baseline,
+                "anchor_price_asof": row.get("anchor_price_asof") or None,
+                "anchor_drift_pct": _round_pct(anchor_drift),
+                "distance_to_highest_live_limit_pct": _round_pct(distance_highest),
+                "distance_to_lowest_live_limit_pct": _round_pct(distance_lowest),
+                "role_used": role,
+                "anchor_drift_tolerance": _round_pct(anchor_drift_tolerance),
+                "max_negative_distance_to_highest_live_limit_pct": _round_pct(highest_cap),
+                "remaining_anchor_margin_pct": _round_pct(remaining_anchor),
+                "remaining_highest_distance_margin_pct": _round_pct(remaining_highest),
+                "near_anchor_edge": near_anchor,
+                "near_highest_live_limit_edge": near_highest,
+                "data_gap": bool(data_gap_fields),
+                "data_gap_fields": data_gap_fields,
+            }
+        )
+
+    return {
+        "purpose": "model aid and parser guardrail only; not a replacement for final DAILY_EXECUTION_ACTIONS",
+        "diagnostics": diagnostics,
+    }
+
+
 def generate_daily_market_data_snapshot(
     as_of_date: str,
     *,
@@ -289,6 +560,14 @@ def build_daily_execution_check_prompt_text(
         current_inputs_dir(root=root) / "strategy_settings.yaml",
         label="strategy settings YAML input",
     )
+    strategy_settings_payload = parse_strategy_settings_text(strategy_settings)
+    daily_market_data_snapshot_payload = load_optional_daily_market_data_snapshot_json(as_of_date, root=root)
+    precomputed_diagnostics = build_daily_execution_precomputed_diagnostics(
+        portfolio_snapshot=portfolio_snapshot,
+        daily_market_data_snapshot=daily_market_data_snapshot_payload,
+        audited_packet=audited_packet,
+        settings=strategy_settings_payload,
+    )
 
     rendered = render_prompt(
         prompt_template,
@@ -303,6 +582,11 @@ def build_daily_execution_check_prompt_text(
             "portfolio_snapshot": portfolio_snapshot,
             "strategy_settings": strategy_settings,
             "daily_market_data_snapshot": load_optional_daily_market_data_snapshot(as_of_date, root=root),
+            "daily_execution_precomputed_diagnostics": json.dumps(
+                precomputed_diagnostics,
+                ensure_ascii=False,
+                indent=2,
+            ),
             "override_event_notes": load_optional_override_event_notes(as_of_date, root=root),
         },
     )
@@ -363,6 +647,21 @@ def parse_daily_execution_check_output(
         audited_decision_packet_path=weekly_audited_decision_packet_path(root=root),
         template4_orders_path=weekly_template4_orders_path(root=root),
         order_state_export_path=weekly_order_state_export_path(root=root),
+        strategy_settings_path=current_inputs_dir(root=root) / "strategy_settings.yaml",
+        precomputed_diagnostics=build_daily_execution_precomputed_diagnostics(
+            portfolio_snapshot=_require_non_empty_text(
+                current_inputs_dir(root=root) / "portfolio_snapshot.txt",
+                label="portfolio snapshot input",
+            ),
+            daily_market_data_snapshot=load_optional_daily_market_data_snapshot_json(resolved_date, root=root),
+            audited_packet=load_weekly_audited_decision_packet(root=root),
+            settings=parse_strategy_settings_text(
+                _require_non_empty_text(
+                    current_inputs_dir(root=root) / "strategy_settings.yaml",
+                    label="strategy settings YAML input",
+                )
+            ),
+        ),
     )
     return {
         "daily_execution_actions_path": str(daily_execution_actions_path(resolved_date, root=root)),

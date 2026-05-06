@@ -204,6 +204,7 @@ def parse_step4_output() -> dict[str, str]:
         template4_orders_path=step4_template4_orders_path(),
         order_state_export_path=step4_order_state_export_path(),
         exec_summary_path=step4_exec_summary_path(),
+        audited_decision_packet=audited_packet,
     )
     return {
         "template4_orders_path": str(step4_template4_orders_path()),

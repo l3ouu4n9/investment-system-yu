@@ -5,6 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 from investment_orchestrator.common.schema_validation import validate_artifact_schema
+from investment_orchestrator.validators.core_deployment_diagnostics import (
+    validate_core_deployment_diagnostics,
+)
 
 
 REQUIRED_DECISION_PACKET_KEYS = (
@@ -59,5 +62,7 @@ def validate_decision_packet(payload: Any) -> dict[str, Any]:
         "assumptions_and_data_gaps",
     ):
         _require(isinstance(payload[key], list), f"{key} must be a list.")
+
+    validate_core_deployment_diagnostics(payload, step="strategy_a")
 
     return payload

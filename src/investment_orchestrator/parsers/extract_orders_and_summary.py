@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from investment_orchestrator.common.io import read_text, write_text
 from investment_orchestrator.validators.validate_orders_output import validate_orders_output
@@ -49,6 +50,7 @@ def extract_orders_and_summary(
     template4_orders_path: str | Path,
     order_state_export_path: str | Path,
     exec_summary_path: str | Path,
+    audited_decision_packet: Any | None = None,
 ) -> tuple[str, str, str]:
     """Read, parse, validate, and write Step 4 text artifacts."""
     template4_orders_text, order_state_export_text, exec_summary_text = parse_step4_output_text(
@@ -63,6 +65,7 @@ def extract_orders_and_summary(
         template4_orders_path=template4_orders_path,
         order_state_export_path=order_state_export_path,
         exec_summary_path=exec_summary_path,
+        audited_decision_packet=audited_decision_packet,
     )
     return template4_orders_text, order_state_export_text, exec_summary_text
 

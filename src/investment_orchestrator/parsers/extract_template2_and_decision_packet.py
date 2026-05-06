@@ -460,6 +460,11 @@ def parse_outline_decision_packet(text: str, *, context_text: str) -> dict[str, 
         "sell_execution_plan_drafts_8_6": _parse_structured_list(sections["sell_execution_plan_drafts_8_6"]),
         "assumptions_and_data_gaps": _parse_structured_list(sections["assumptions_and_data_gaps"]),
         "decision_builder_ready_for_audit": ready,
+        **(
+            {"core_deployment_diagnostics": _parse_structured_list(sections["core_deployment_diagnostics"])}
+            if "core_deployment_diagnostics" in sections
+            else {}
+        ),
     }
 
 

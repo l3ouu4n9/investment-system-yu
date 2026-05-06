@@ -1,5 +1,5 @@
-as_of: "2026-05-03"
-run_timestamp_et: "2026-05-03 17:41 ET"
+as_of: "2026-05-05"
+run_timestamp_et: "2026-05-05 17:41 ET"
 benchmark: "QQQ"
 tax_intent: "LTCG_only"
 min_holding_period: ">=12m"
@@ -139,6 +139,69 @@ active_shortlist_size_rule:
   sector_alpha_tilt_max: 1
   extended_etf_minority_sleeve_max: 1
 
+etf_layer_execution_policy:
+  purpose: "Separate long-term ETF allocation style from weekday open-order maintenance; keep Daily execution-only while making Weekly responsible for ETF layer suitability and underdeployment review."
+  mandate_alignment:
+    benchmark: "QQQ"
+    benchmark_carrier_priority: true
+    base_first_but_alpha_sleeve_allowed: true
+    avoid_chronic_underinvestment_for_core_etfs: true
+    daily_must_not_make_research_or_budget_decisions: true
+
+  layers:
+    benchmark_carrier_core:
+      tickers:
+        - QQQ
+      long_term_best_style: "prioritize_staying_invested; avoid chronic underinvestment; use ladders for execution discipline but not as a reason to leave core exposure persistently under-deployed"
+      new_budget_posture: "deploy core exposure more readily than deep value ladders; if QQQ exposure is under-deployed, Weekly must explicitly review whether to reanchor, add budget within cap, or hold with reason"
+      execution_style: "shallow_to_moderate_ladder"
+      weekly_review_focus:
+        - "core exposure adequacy"
+        - "open-order budget stuck too far below market"
+        - "whether QQQ is under-deployed relative to mandate"
+        - "whether hard-cap headroom exists but core benchmark exposure is not being carried"
+      daily_maintenance_style: "execution-only same-budget reanchor only when stale; no thesis/ranking/budget change"
+
+    diversified_core_buffer:
+      tickers:
+        - VOO
+        - VTI
+        - VT
+      long_term_best_style: "steady broad-market buffer; avoid unnecessary overlap; do not let lower-volatility buffer crowd out QQQ or qualified alpha sleeves"
+      new_budget_posture: "select at most one same-role buffer per weekly run; cap is not a forced deployment target"
+      execution_style: "moderate_ladder"
+      weekly_review_focus:
+        - "overlap control among VOO/VTI/VT"
+        - "buffer role validity"
+        - "whether broad-market buffer is crowding out QQQ or alpha sleeve"
+      daily_maintenance_style: "conservative reanchor only if ladder stale under daily_execution_drift_policy"
+
+    sector_alpha_tilt:
+      tickers:
+        - SMH
+        - IGV
+      long_term_best_style: "controlled active ETF tilt with wider volatility tolerance and clear 12m+ thesis"
+      new_budget_posture: "meaningful but capped when 12m+ thesis, incremental exposure, liquidity, event/theme linkage, and compile contract are strong"
+      execution_style: "wider_ladder_accepting_sector_volatility"
+      weekly_review_focus:
+        - "12m+ thesis durability"
+        - "incremental exposure versus QQQ/base ETFs"
+        - "sector concentration within cap"
+        - "whether volatility is normal for role or thesis/event risk has changed"
+      daily_maintenance_style: "wider execution tolerance; avoid reacting to normal sector volatility"
+
+    extended_etf_minority_sleeve:
+      long_term_best_style: "pre-approved minority alpha sleeve only; not a core replacement and not a short-term event trade"
+      new_budget_posture: "only after approved static-list, liquidity, linkage, incremental exposure, event anchor, and cap gates"
+      execution_style: "widest_ladder_and_cap_constrained"
+      weekly_review_focus:
+        - "incremental exposure versus base ETF"
+        - "hot-theme risk"
+        - "benchmark drift"
+        - "single ETF sleeve cap"
+        - "whether the ETF remains non-levered, non-inverse, liquid, and role-clear"
+      daily_maintenance_style: "execution-only; no new activation from Daily"
+
 daily_execution_drift_policy:
   enabled: true
   applies_to: "weekly_approved_open_orders_only"
@@ -170,20 +233,54 @@ daily_execution_drift_policy:
   keep_tolerance:
     method: "role_static_pct_or_atr_multiple_more_permissive"
     anchor_drift_abs_pct_static_cap:
-      benchmark_carrier_core: 4.5
+      benchmark_carrier_core: 4.0
       diversified_core_buffer: 4.5
       sector_alpha_tilt: 7.0
       extended_etf_minority_sleeve: 8.0
     anchor_drift_atr_multiple_cap:
-      benchmark_carrier_core: 2.5
+      benchmark_carrier_core: 2.25
       diversified_core_buffer: 2.5
       sector_alpha_tilt: 2.75
       extended_etf_minority_sleeve: 3.0
     max_negative_distance_to_highest_live_limit_pct:
-      benchmark_carrier_core: 6.0
+      benchmark_carrier_core: 5.5
       diversified_core_buffer: 6.0
       sector_alpha_tilt: 9.0
       extended_etf_minority_sleeve: 10.0
+
+
+  near_edge_monitor_band:
+    enabled: true
+    action_effect: "operator_notes_only"
+    must_not_change_action: true
+    must_not_change_reason_code: true
+    must_not_trigger_replace_without_threshold_breach: true
+
+    anchor_drift_pct_band:
+      benchmark_carrier_core: 0.75
+      diversified_core_buffer: 1.0
+      sector_alpha_tilt: 1.5
+      extended_etf_minority_sleeve: 2.0
+
+    highest_live_limit_distance_pct_band:
+      benchmark_carrier_core: 0.75
+      diversified_core_buffer: 1.0
+      sector_alpha_tilt: 1.5
+      extended_etf_minority_sleeve: 2.0
+
+  lowest_live_limit_policy:
+    distance_to_lowest_live_limit_pct:
+      required_for_evidence: true
+      action_threshold_role: "none"
+      note: "Lowest live limit is reported as required evidence only and is not a KEEP/REPLACE threshold unless a separate explicit crash-bid stale rule is added."
+
+  repeated_near_edge_policy:
+    enabled: true
+    lookback_daily_checks: 2
+    benchmark_carrier_core_action: "operator_note_for_next_weekly_review"
+    action_effect: "operator_notes_only"
+    must_not_trigger_replace_without_threshold_breach: true
+    must_not_change_budget_or_ranking_or_thesis: true
 
   action_rules:
     keep_if:
@@ -219,9 +316,13 @@ daily_execution_drift_policy:
     - "anchor_baseline_last_close and anchor_price_asof"
     - "anchor_drift_pct"
     - "highest_live_limit / lowest_live_limit / live_step_count"
+    - "live_order_steps_summary and live_order_qtys_summary copied from Portfolio Snapshot current row"
     - "distance_to_highest_live_limit_pct"
     - "distance_to_lowest_live_limit_pct"
-    - "role tolerance used"
+    - "anchor drift tolerance used; must be described as applying only to abs(anchor_drift_pct)"
+    - "highest live limit reachability tolerance used; must be described as applying only to distance_to_highest_live_limit_pct"
+    - "distance_to_lowest_live_limit_pct evidence-only status when lowest_live_limit_policy.action_threshold_role = none"
+    - "near_edge_monitor_band status and whether operator_notes were required"
     - "override_event_notes status"
     - "ORDER_STATE_EXPORT used only as weekly intended state / audit trail, not live broker truth"
 

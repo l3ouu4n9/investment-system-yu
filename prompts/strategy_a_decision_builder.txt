@@ -1,7 +1,7 @@
 # Strategy A - Decision Builder
 # ChatGPT-5.5 Thinking
 # derived from Strategy Template - Yu (Dual-Lane Full Version)
-# updated 2026-05-04
+# updated 2026-05-05
 
 投資目標：
 以科技大盤（QQQ）為核心基準與主要長期承載，願意承擔高於傳統大盤配置的科技業、半導體、軟體、AI infrastructure、資安、資料中心與其他科技子產業集中波動，以及相對 QQQ 更高的階段性回撤與 tracking error。投資組合仍以 QQQ 與核心 buy universe 為主體，但在具備明確 12m+ thesis、角色清楚、流動性充足、相對 base ETF 有可辨識增量曝險，且經預先核准時，可使用非槓桿、非反向的 sector / thematic / factor ETF 作為受上限約束的 minority alpha sleeve。 目標是在 3–5 年期不僅跟上科技大盤，並在 AI、半導體、企業軟體、資安、資料中心基礎設施或其他結構性科技週期有利時，透過較積極但仍受控的 ETF 主動傾斜，爭取明確、可辨識的中度至較高超額報酬。可接受因主題集中、估值波動與 sector rotation 造成的短中期相對落後，但不主動承擔槓桿、反向 ETF、低流動性、過度窄化、頻繁交易與純短期事件投機風險。
@@ -196,6 +196,67 @@ Lane 邊界硬規則：
 - diversified_core_buffer 的主要作用是 broad-market / diversification buffer；不得僅因其波動較低或較容易 compile，就自動壓過具備 12m+ thesis 的 sector_alpha_tilt 或 enabled extended ETF alpha sleeve。
 - enabled extended ETF 仍必須通過 optional_extended_etf_sleeve.allowed_extended_etf_tickers gate、approved static list gate、cap gate、liquidity gate、linkage gate 與 compile-closed gate；本條不得被解讀為允許 proposed_only ETF 直接進入交易。
 - 若因 hard_cap_open_orders_budget 不足而無法同時資助 diversified_core_buffer、sector_alpha_tilt 與 enabled extended ETF，Strategy A 必須以 RESEARCH_JSON 的 actionability、execution_priority_this_run、alpha_upside_score、thesis_duration_score、incremental exposure 與 Strategy Settings caps 共同決定，而不是固定讓 diversified_core_buffer 先吃滿預算。
+
+8B) Core ETF Deployment Adequacy Guardrail（NEW, MUST）
+
+- Strategy A 必須區分三層：
+  (a) long-term allocation decision：是否需要維持 / 增強核心 ETF exposure；
+  (b) weekly execution planning：是否應 keep existing / same-budget reanchor / new budget within cap / hold no new budget；
+  (c) daily maintenance：是否只需 carry forward / same-budget execution-only reanchor。
+
+- 對 benchmark_carrier_core ticker（QQQ），Daily Execution Check 的 KEEP 只代表前一個 daily run 尚未超過 execution drift threshold；不得被 Strategy A 解讀為 weekly 層面必然沒有 underdeployment risk。
+
+- 若 Strategy Settings.etf_layer_execution_policy.layers.benchmark_carrier_core 存在，Strategy A 必須使用該 policy 判斷 QQQ 是否需要 core_deployment_diagnostic。
+
+- 對 QQQ，若以下任一情況成立，Strategy A 必須在 DECISION_PACKET 中輸出 core_deployment_diagnostics：
+  1. existing buy open order 的 highest_live_limit 已接近 daily policy near-edge，或 recent_daily_execution_diagnostics 明確顯示 near-edge；
+  2. QQQ target / reserved open-order budget 長期存在，但 compiled_open_order_notional 或 fill progress 顯示部署不足；
+  3. QQQ 是 benchmark carrier，但 open-order ladder 過深，導致實際 exposure deployment 可能低於策略意圖；
+  4. hard_cap_open_orders_budget 有 headroom，但 QQQ 核心承載未被充分承接，且無明確風控理由；
+  5. Daily / prior artifacts 明確輸出 repeated near-edge weekly review note。
+
+- core_deployment_diagnostics 每筆至少包含：
+  - ticker
+  - role_layer
+  - current_holding_shares
+  - existing_open_order_budget
+  - compiled_open_order_notional
+  - residual_cash_not_allocated
+  - highest_live_limit
+  - current_last_close
+  - distance_to_highest_live_limit_pct
+  - anchor_drift_pct
+  - near_edge_flags
+  - deployment_status:
+      "adequately_deployed"
+      "watch_near_underdeployment"
+      "underdeployment_review_required"
+  - weekly_allowed_responses:
+      "keep_existing"
+      "same_budget_reanchor"
+      "new_budget_if_hard_cap_and_strategy_allow"
+      "hold_no_new_budget_with_explicit_reason"
+  - why
+
+- 若 deployment_status = "underdeployment_review_required"：
+  - Strategy A 不得靜默輸出 KEEP_EXISTING 而不解釋。
+  - Strategy A 必須在 final buy-side delta / execution draft / assumptions_and_data_gaps 中明確說明為何採取：
+    - KEEP_EXISTING；
+    - REPLACE_EXISTING；
+    - NEW_ORDER / budget increase within hard cap；
+    - HOLD_NO_NEW_BUDGET。
+  - 任何 NEW_ORDER 或 budget increase 仍必須遵守 hard_cap_open_orders_budget、compile contract、event linkage、12m+ thesis、role cap 與 Strategy Settings。
+
+- 對 diversified_core_buffer：
+  - Strategy A 不得僅因波動較低或容易 compile，就讓 VOO / VTI / VT 自動壓過 QQQ benchmark carrier 或具 12m+ thesis 的 sector_alpha_tilt / enabled extended ETF。
+
+- 對 sector_alpha_tilt：
+  - Strategy A 不得僅因 SMH / IGV 波動較高、tracking error 較高、主題較集中，就把其降為 no-trade / watch-only。
+  - 若 12m+ thesis、incremental exposure、event/theme linkage、liquidity、cap、compile contract 均成立，應依 alpha upside / thesis duration / benchmark drift risk 做受控評估。
+
+- 對 enabled extended_etf_minority_sleeve：
+  - Strategy A 必須確認 ticker 已在 optional_extended_etf_sleeve.allowed_extended_etf_tickers，且通過 approved static list / activation / liquidity / linkage / cap gates。
+  - proposed_only ETF 不得因 core_deployment_diagnostic 或 alpha sleeve policy 而進入交易。
 
 9) Diversified Core Buffer Overlap
 VOO / VTI / VT 視為高度重疊。

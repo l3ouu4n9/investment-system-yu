@@ -10,6 +10,7 @@ from investment_orchestrator.common.io import read_json, read_text, write_json, 
 from investment_orchestrator.validators.validate_daily_execution_actions import (
     validate_daily_execution_actions,
 )
+from investment_orchestrator.validators.strategy_settings import load_strategy_settings
 
 
 class DailyExecutionCheckExtractionError(ValueError):
@@ -65,6 +66,8 @@ def extract_daily_execution_check(
     audited_decision_packet_path: str | Path,
     template4_orders_path: str | Path,
     order_state_export_path: str | Path,
+    strategy_settings_path: str | Path | None = None,
+    precomputed_diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Read, parse, validate, and write Daily Execution Check artifacts."""
     raw_text = read_text(raw_output_path)
@@ -78,11 +81,14 @@ def extract_daily_execution_check(
     audited_packet = read_json(audited_decision_packet_path)
     template4_orders_text = read_text(template4_orders_path)
     order_state_export_text = read_text(order_state_export_path)
+    strategy_settings = load_strategy_settings(strategy_settings_path) if strategy_settings_path is not None else None
     validate_daily_execution_actions(
         payload,
         audited_decision_packet=audited_packet,
         template4_orders_text=template4_orders_text,
         order_state_export_text=order_state_export_text,
+        strategy_settings=strategy_settings,
+        precomputed_diagnostics=precomputed_diagnostics,
     )
 
     write_text(daily_execution_check_text_path, block_text.rstrip() + "\n")

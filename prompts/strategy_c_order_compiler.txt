@@ -1,7 +1,7 @@
 # Strategy C - Order Compiler
 # ChatGPT-5.5 Thinking
 # derived from Strategy Template - Yu (Dual-Lane Full Version)
-# updated 2026-05-04
+# updated 2026-05-05
 
 投資目標：
 以科技大盤（QQQ）為核心基準與主要長期承載，願意承擔高於傳統大盤配置的科技業、半導體、軟體、AI infrastructure、資安、資料中心與其他科技子產業集中波動，以及相對 QQQ 更高的階段性回撤與 tracking error。投資組合仍以 QQQ 與核心 buy universe 為主體，但在具備明確 12m+ thesis、角色清楚、流動性充足、相對 base ETF 有可辨識增量曝險，且經預先核准時，可使用非槓桿、非反向的 sector / thematic / factor ETF 作為受上限約束的 minority alpha sleeve。 目標是在 3–5 年期不僅跟上科技大盤，並在 AI、半導體、企業軟體、資安、資料中心基礎設施或其他結構性科技週期有利時，透過較積極但仍受控的 ETF 主動傾斜，爭取明確、可辨識的中度至較高超額報酬。可接受因主題集中、估值波動與 sector rotation 造成的短中期相對落後，但不主動承擔槓桿、反向 ETF、低流動性、過度窄化、頻繁交易與純短期事件投機風險。
@@ -588,6 +588,7 @@ TEMPLATE5_EXEC_SUMMARY_END
   - actionable_window
   - MARKET_DATA_SNAPSHOT metadata
   - assumptions_and_data_gaps
+  - core_deployment_diagnostics
 - 允許引用 Strategy Settings 中的 hard_cap_open_orders_budget，僅用於 aggregate summary / cap check。
 - 上述引用只能用於：
   - compiler_status
@@ -666,6 +667,17 @@ TEMPLATE5_EXEC_SUMMARY_END
       - 不阻擋下單
       - 但 TEMPLATE5_EXEC_SUMMARY 必須標註：
           "INFO: residual cash exists due to whole-share ladder geometry; no top_up_rule applied"
+
+
+- core_deployment_diagnostic_summary_rule（NEW, MUST）：
+  - 若 AUDITED_DECISION_PACKET.core_deployment_diagnostics 存在且非空：
+    - TEMPLATE5_EXEC_SUMMARY 必須摘要每筆 diagnostic：
+      ticker / role_layer / deployment_status / highest_live_limit / current_last_close / distance_to_highest_live_limit_pct / why
+    - 若 deployment_status = "underdeployment_review_required"：
+      TEMPLATE5_EXEC_SUMMARY 必須標註：
+        "WEEKLY_REVIEW_NEEDED: core ETF deployment adequacy requires weekly decision; Strategy C did not change orders."
+  - Strategy C 不得因 core_deployment_diagnostics 自行新增 BUY_ORDERS、REPLACE、CANCEL、budget increase 或 ticker。
+  - core_deployment_diagnostics 只能作 summary / audit carry-through，不是 compiler action source。
 
 【最後提醒】
 - Order Compiler 只做編譯，不做新判斷。

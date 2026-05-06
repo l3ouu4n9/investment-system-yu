@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from investment_orchestrator.validators.core_deployment_diagnostics import (
+    validate_core_deployment_diagnostics,
+)
+
 
 REQUIRED_AUDITED_PACKET_KEYS = (
     "audit_passed",
@@ -46,5 +50,7 @@ def validate_audited_decision_packet(payload: Any) -> dict[str, Any]:
         "final_sell_execution_plans",
     ):
         _require(isinstance(payload[key], list), f"{key} must exist and be a list.")
+
+    validate_core_deployment_diagnostics(payload, step="strategy_b")
 
     return payload

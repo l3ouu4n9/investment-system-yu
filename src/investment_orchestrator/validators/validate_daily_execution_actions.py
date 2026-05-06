@@ -8,6 +8,10 @@ import re
 from typing import Any
 
 from investment_orchestrator.common.schema_validation import validate_artifact_schema
+from investment_orchestrator.validators.strategy_settings import (
+    is_near_edge_monitor_enabled,
+    lowest_live_limit_is_evidence_only,
+)
 
 
 ACTION_VALUES = {
@@ -168,12 +172,67 @@ def _contains_forbidden_key(mapping: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _operator_note_matches(note: Any, ticker: str, note_types: set[str]) -> bool:
+    if isinstance(note, Mapping):
+        note_ticker = _normalize_ticker(note.get("ticker", ""))
+        note_type = str(note.get("note_type", "")).strip()
+        return note_ticker == ticker and note_type in note_types
+    text = str(note).lower()
+    return ticker.lower() in text and any(note_type.lower() in text for note_type in note_types)
+
+
+def _diagnostic_rows(precomputed_diagnostics: Any) -> dict[str, Mapping[str, Any]]:
+    if not isinstance(precomputed_diagnostics, Mapping):
+        return {}
+    rows = precomputed_diagnostics.get("diagnostics")
+    if not isinstance(rows, list):
+        return {}
+    output: dict[str, Mapping[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        ticker = _normalize_ticker(row.get("ticker", ""))
+        if ticker:
+            output[ticker] = row
+    return output
+
+
+def _evidence_sentences(text: str) -> list[str]:
+    return [part.strip().lower() for part in re.split(r"[.;\n]+", text) if part.strip()]
+
+
+def _forbidden_lowest_limit_comparison(source_evidence: str, tolerance_name: str) -> bool:
+    comparison_terms = ("<=", ">=", "less than", "greater than", "within", "threshold", "cap", "compare")
+    for sentence in _evidence_sentences(source_evidence):
+        if "distance_to_lowest_live_limit_pct" not in sentence or tolerance_name not in sentence:
+            continue
+        if "not" in sentence or "不得" in sentence or "only" in sentence:
+            continue
+        if any(term in sentence for term in comparison_terms):
+            return True
+    return False
+
+
+def _has_lowest_evidence_only_statement(source_evidence: str) -> bool:
+    text = source_evidence.lower()
+    return (
+        "distance_to_lowest_live_limit_pct" in text
+        and (
+            "evidence only" in text
+            or "evidence-only" in text
+            or "not an action threshold" in text
+        )
+    )
+
+
 def validate_daily_execution_actions(
     payload: Any,
     *,
     audited_decision_packet: Any | None = None,
     template4_orders_text: str | None = None,
     order_state_export_text: str | None = None,
+    strategy_settings: Any | None = None,
+    precomputed_diagnostics: Any | None = None,
 ) -> dict[str, Any]:
     """Validate DAILY_EXECUTION_ACTIONS payload against schema and weekly-source guardrails."""
     validate_artifact_schema(payload, schema_name="daily_execution_actions.schema.json")
@@ -199,6 +258,12 @@ def validate_daily_execution_actions(
             "actions is empty; blocked_items or operator_notes must explain why no rows were emitted.",
         )
 
+    operator_notes = payload.get("operator_notes")
+    _require(isinstance(operator_notes, list), "operator_notes must be a list.")
+    diagnostic_rows = _diagnostic_rows(precomputed_diagnostics)
+    near_edge_enabled = is_near_edge_monitor_enabled(strategy_settings)
+    lowest_limit_evidence_only = lowest_live_limit_is_evidence_only(strategy_settings)
+
     for index, action_item in enumerate(actions):
         label = f"actions[{index}]"
         _require(isinstance(action_item, dict), f"{label} must be an object.")
@@ -218,6 +283,11 @@ def validate_daily_execution_actions(
             reason_code in ACTION_REASON_CODE_VALUES[action],
             f"{label}.reason_code {reason_code!r} is not valid for action {action!r}.",
         )
+        if action == "KEEP":
+            _require(
+                reason_code in {"execution_drift_within_tolerance", "manual_smoke_test_keep"},
+                f"{label}.reason_code must be execution_drift_within_tolerance for KEEP outside manual smoke tests.",
+            )
 
         _require(action_item.get("execution_only") is True, f"{label}.execution_only must be true.")
         _require(action_item.get("no_budget_increase") is True, f"{label}.no_budget_increase must be true.")
@@ -256,5 +326,42 @@ def validate_daily_execution_actions(
             _require(after == before, f"{label}.replace_packet must preserve remaining budget.")
         else:
             _require(replace_packet is None, f"{label}.replace_packet must be null for non-REPLACE actions.")
+
+        source_evidence = str(action_item.get("source_evidence", ""))
+        _require(
+            not _forbidden_lowest_limit_comparison(source_evidence, "anchor_drift_tolerance"),
+            f"{label}.source_evidence must not compare anchor_drift_tolerance to distance_to_lowest_live_limit_pct.",
+        )
+        _require(
+            not _forbidden_lowest_limit_comparison(
+                source_evidence,
+                "max_negative_distance_to_highest_live_limit_pct",
+            ),
+            (
+                f"{label}.source_evidence must not compare "
+                "max_negative_distance_to_highest_live_limit_pct to distance_to_lowest_live_limit_pct."
+            ),
+        )
+        if lowest_limit_evidence_only:
+            _require(
+                _has_lowest_evidence_only_statement(source_evidence),
+                (
+                    f"{label}.source_evidence must state distance_to_lowest_live_limit_pct is "
+                    "evidence-only / not an action threshold."
+                ),
+            )
+
+        diagnostic = diagnostic_rows.get(ticker)
+        if near_edge_enabled and diagnostic is not None:
+            required_note_types: set[str] = set()
+            if diagnostic.get("near_anchor_edge") is True:
+                required_note_types.add("near_anchor_drift_edge")
+            if diagnostic.get("near_highest_live_limit_edge") is True:
+                required_note_types.add("near_highest_live_limit_edge")
+            for note_type in required_note_types:
+                _require(
+                    any(_operator_note_matches(note, ticker, {note_type}) for note in operator_notes),
+                    f"{label} computed {note_type} but operator_notes is missing a matching note.",
+                )
 
     return payload

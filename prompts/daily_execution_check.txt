@@ -1,6 +1,6 @@
 # Daily Execution Check Template - Weekday Execution Maintenance
 # ChatGPT-5.5 Thinking
-# updated 2026-05-04
+# updated 2026-05-05
 
 投資目標：
 以科技大盤（QQQ）為核心基準與主要長期承載，願意承擔高於傳統大盤配置的科技業、半導體、軟體、AI infrastructure、資安、資料中心與其他科技子產業集中波動，以及相對 QQQ 更高的階段性回撤與 tracking error。投資組合仍以 QQQ 與核心 buy universe 為主體，但在具備明確 12m+ thesis、角色清楚、流動性充足、相對 base ETF 有可辨識增量曝險，且經預先核准時，可使用非槓桿、非反向的 sector / thematic / factor ETF 作為受上限約束的 minority alpha sleeve。 目標是在 3–5 年期不僅跟上科技大盤，並在 AI、半導體、企業軟體、資安、資料中心基礎設施或其他結構性科技週期有利時，透過較積極但仍受控的 ETF 主動傾斜，爭取明確、可辨識的中度至較高超額報酬。可接受因主題集中、估值波動與 sector rotation 造成的短中期相對落後，但不主動承擔槓桿、反向 ETF、低流動性、過度窄化、頻繁交易與純短期事件投機風險。
@@ -91,6 +91,49 @@ Daily market drift / ladder reachability policy（MUST）：
    - 不得把正數 cap 直接與負數 distance 做同向大小比較。
 
 
+3A. near_edge_monitor_band 判定（MUST；operator_notes only）：
+
+- 若 STRATEGY_SETTINGS.daily_execution_drift_policy.near_edge_monitor_band.enabled = true：
+  - Daily Execution Check 必須在 KEEP / REPLACE / CANCEL / HOLD_FOR_WEEKLY_REVIEW / DATA_GAP 判定完成後，額外判斷 near_edge 狀態。
+  - near_edge 不得改變 action。
+  - near_edge 不得改變 reason_code。
+  - near_edge 不得觸發 REPLACE。
+  - near_edge 不得增加或減少 budget。
+  - near_edge 不得改 thesis / alpha ranking / weekly role / event binding。
+  - near_edge 只能寫入 operator_notes。
+
+- anchor near edge:
+  - remaining_anchor_margin_pct =
+      anchor_drift_tolerance - abs(anchor_drift_pct)
+  - 若 remaining_anchor_margin_pct <= role 的 near_edge_monitor_band.anchor_drift_pct_band，
+    則 operator_notes 必須加入：
+      "{ticker}: KEEP but near anchor drift edge; remaining_anchor_margin_pct={...}; action remains KEEP because this is operator_notes_only."
+
+- highest live limit near edge:
+  - remaining_highest_distance_margin_pct =
+      distance_to_highest_live_limit_pct - (-1 * max_negative_distance_to_highest_live_limit_pct)
+  - 若 remaining_highest_distance_margin_pct <= role 的 near_edge_monitor_band.highest_live_limit_distance_pct_band，
+    則 operator_notes 必須加入：
+      "{ticker}: KEEP but near highest-live-limit reachability edge; remaining_highest_distance_margin_pct={...}; action remains KEEP because this is operator_notes_only."
+
+- 若 ticker role = benchmark_carrier_core，且 repeated_near_edge_policy.enabled = true：
+  - Daily Execution Check 不得自行讀取未提供的歷史 daily artifacts。
+  - 只有在本回合 INPUTS 明確提供 recent_daily_execution_diagnostics / prior near-edge evidence 時，才可判斷 repeated near-edge。
+  - 若已提供且連續 near_edge 次數 >= repeated_near_edge_policy.lookback_daily_checks：
+    operator_notes 必須加入：
+      "{ticker}: repeated near-edge condition; next weekly review should check core deployment adequacy / chronic underinvestment risk."
+  - 若未提供 recent_daily_execution_diagnostics，不得假設 repeated near-edge；只可針對本回合 near-edge 輸出單次 note。
+
+3B. distance_to_lowest_live_limit_pct evidence-only rule（MUST）：
+
+- distance_to_lowest_live_limit_pct 必須計算並寫入 source_evidence。
+- 除非 STRATEGY_SETTINGS.daily_execution_drift_policy.lowest_live_limit_policy 明確定義 action threshold，distance_to_lowest_live_limit_pct 不得用於 KEEP / REPLACE / CANCEL / HOLD_FOR_WEEKLY_REVIEW 判斷。
+- 若 lowest_live_limit_policy.distance_to_lowest_live_limit_pct.action_threshold_role = "none"：
+  - source_evidence 必須明確寫：
+    "distance_to_lowest_live_limit_pct is required evidence only and is not an action threshold under the supplied policy."
+- 不得把 anchor_drift_tolerance 拿來比較 distance_to_lowest_live_limit_pct。
+- 不得把 max_negative_distance_to_highest_live_limit_pct 拿來比較 distance_to_lowest_live_limit_pct。
+
 4. REPLACE 僅能是 execution-only same-budget reanchor：
    - 只能 same ticker。
    - remaining budget 不得改變。
@@ -171,9 +214,14 @@ Portfolio Snapshot / ORDER_STATE_EXPORT reconciliation rule（MUST）：
        e) highest_live_limit、lowest_live_limit、live_step_count。
        f) live_order_steps_summary 與 live_order_qtys_summary，必須完整照抄 Portfolio Snapshot current row；不得只寫 highest / lowest / step_count。
        g) distance_to_highest_live_limit_pct 與 distance_to_lowest_live_limit_pct，四捨五入到小數點後兩位。
-       h) 使用的 role tolerance：anchor drift tolerance 與 max_negative_distance_to_highest_live_limit_pct。
-       i) override_event_notes 狀態。
-       j) ORDER_STATE_EXPORT 的使用角色：只能寫成 weekly intended state / historical compiler output / audit trail，不得寫成 live broker truth。
+       h) 使用的 role tolerance 必須分開寫：
+          - anchor drift tolerance：只用來判斷 abs(anchor_drift_pct)
+          - highest live limit reachability tolerance：只用來判斷 distance_to_highest_live_limit_pct
+       i) 若 STRATEGY_SETTINGS.lowest_live_limit_policy 或 daily_execution_drift_policy.lowest_live_limit_policy 表示 distance_to_lowest_live_limit_pct 為 evidence-only，source_evidence 必須明確寫：
+          "distance_to_lowest_live_limit_pct is required evidence only and is not an action threshold under the supplied policy."
+       j) override_event_notes 狀態。
+       k) ORDER_STATE_EXPORT 的使用角色：只能寫成 weekly intended state / historical compiler output / audit trail，不得寫成 live broker truth。
+       l) near_edge_monitor_band 狀態；若 near-edge 成立，必須說明該狀態只寫入 operator_notes，不改變 action / reason_code / budget / thesis / ranking / role。
 
    - 對 KEEP_EXISTING ticker：
        a) 指出 Portfolio Snapshot live/current row 與 weekly-approved state 是否一致。
@@ -247,13 +295,19 @@ JSON minimum shape:
       "no_new_thesis": true,
       "no_ranking_change": true,
       "no_budget_increase": true,
-      "source_evidence": "PORTFOLIO_SNAPSHOT is treated as the current-run operator-provided latest open-order SSOT; no stale/pre_submission/unknown live-state marker was provided. Portfolio Snapshot live/current row reconciles with weekly-approved state. daily_last_close=...; daily_price_asof=...; anchor_baseline_last_close=...; anchor_price_asof=...; anchor_drift_pct=...; highest_live_limit=...; lowest_live_limit=...; live_step_count=...; live_order_steps_summary=...; live_order_qtys_summary=...; distance_to_highest_live_limit_pct=...; distance_to_lowest_live_limit_pct=...; role tolerance used: anchor_drift_tolerance=..., max_negative_distance_to_highest_live_limit_pct=...; override_event_notes=...; ORDER_STATE_EXPORT used only as weekly intended state / historical compiler output / audit trail, not live broker truth",
+      "source_evidence": "PORTFOLIO_SNAPSHOT is treated as the current-run operator-provided latest open-order SSOT; no stale/pre_submission/unknown live-state marker was provided. Portfolio Snapshot live/current row reconciles with weekly-approved state. daily_last_close=...; daily_price_asof=...; anchor_baseline_last_close=...; anchor_price_asof=...; anchor_drift_pct=...; highest_live_limit=...; lowest_live_limit=...; live_step_count=...; live_order_steps_summary=...; live_order_qtys_summary=...; distance_to_highest_live_limit_pct=...; distance_to_lowest_live_limit_pct=...; anchor drift check: anchor_drift_tolerance=... applies only to abs(anchor_drift_pct), pass/fail=...; highest live limit reachability check: max_negative_distance_to_highest_live_limit_pct=... applies only to distance_to_highest_live_limit_pct using distance_to_highest_live_limit_pct >= -1 * cap, pass/fail=...; distance_to_lowest_live_limit_pct is required evidence only and is not an action threshold under the supplied policy; near_edge_monitor_band status=..., operator_notes_required=...; override_event_notes=...; ORDER_STATE_EXPORT used only as weekly intended state / historical compiler output / audit trail, not live broker truth",
       "replace_packet": null
     }
   ],
   "blocked_items": [],
   "operator_notes": []
 }
+
+operator_notes rule（MUST）：
+- operator_notes 必須為 array。
+- near_edge_monitor_band 只能寫入 operator_notes，不得改 action / reason_code。
+- operator_notes 可為 []。
+- 若 ticker within tolerance 但 near-edge 成立，action 仍應為 KEEP，reason_code 仍應為 execution_drift_within_tolerance，near-edge 詳細原因寫入 operator_notes 與 source_evidence。
 
 For REPLACE only:
 - replace_packet must be non-null.

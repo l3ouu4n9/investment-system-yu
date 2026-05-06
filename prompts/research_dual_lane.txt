@@ -1,6 +1,6 @@
 # Research Template - Yu (Dual-Lane Version)
 # ChatGPT Deep Research
-# updated 2026-05-04
+# updated 2026-05-05
 
 投資目標：
 以科技大盤（QQQ）為核心基準與主要長期承載，願意承擔高於傳統大盤配置的科技業、半導體、軟體、AI infrastructure、資安、資料中心與其他科技子產業集中波動，以及相對 QQQ 更高的階段性回撤與 tracking error。投資組合仍以 QQQ 與核心 buy universe 為主體，但在具備明確 12m+ thesis、角色清楚、流動性充足、相對 base ETF 有可辨識增量曝險，且經預先核准時，可使用非槓桿、非反向的 sector / thematic / factor ETF 作為受上限約束的 minority alpha sleeve。 目標是在 3–5 年期不僅跟上科技大盤，並在 AI、半導體、企業軟體、資安、資料中心基礎設施或其他結構性科技週期有利時，透過較積極但仍受控的 ETF 主動傾斜，爭取明確、可辨識的中度至較高超額報酬。可接受因主題集中、估值波動與 sector rotation 造成的短中期相對落後，但不主動承擔槓桿、反向 ETF、低流動性、過度窄化、頻繁交易與純短期事件投機風險。
@@ -137,7 +137,21 @@ buy_universe_scorecard 每檔必填欄位（MUST）：
 - event_id_refs: []
 - structural_theme_refs: []
 - preferred_scheduled_theme_event_id (string|null; 若目前沒有可 deterministic 對應的 future scheduled theme event，則必須 = null)
-
+- etf_layer_fit:
+  {
+    "best_layer": "benchmark_carrier_core|diversified_core_buffer|sector_alpha_tilt|extended_etf_minority_sleeve",
+    "best_execution_style": "stay_invested|steady_buffer|volatility_tolerant_ladder|capped_alpha_sleeve",
+    "underdeployment_sensitivity": "high|medium|low",
+    "why": "繁體中文一句話"
+  }
+- etf_layer_fit_rule（NEW, MUST）：
+  - QQQ.best_layer 必須 = "benchmark_carrier_core"
+  - VOO / VTI / VT.best_layer 必須 = "diversified_core_buffer"
+  - SMH / IGV.best_layer 必須 = "sector_alpha_tilt"
+  - QQQ.underdeployment_sensitivity 必須 = "high"
+  - diversified_core_buffer.underdeployment_sensitivity 可為 "medium"
+  - sector_alpha_tilt.underdeployment_sensitivity 可為 "medium" 或 "low"，但不得用 underdeployment_sensitivity 取代 alpha_upside / thesis_duration / event linkage 判斷
+  - etf_layer_fit 只提供下游 role/execution style metadata，不得單獨構成 buy/sell decision。
 - downstream_actionability_fields_rule (NEW, MUST):
   - buy_universe_scorecard 每檔必須額外輸出下列欄位，供 Strategy A deterministic 判斷是否可進入 shortlist / delta / execution draft：
     - actionability_status

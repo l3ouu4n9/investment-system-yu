@@ -63,7 +63,11 @@ def valid_action_payload(
                 "no_new_thesis": True,
                 "no_ranking_change": True,
                 "no_budget_increase": True,
-                "source_evidence": "weekly compile-ready QQQ row and current live state",
+                "source_evidence": (
+                    "weekly compile-ready QQQ row and current live state; "
+                    "distance_to_lowest_live_limit_pct is required evidence only and is not an action threshold "
+                    "under the supplied policy"
+                ),
                 "replace_packet": replace_packet,
             }
         ],
@@ -221,6 +225,116 @@ def test_data_gap_allowed_without_replacement() -> None:
 
     assert parsed["actions"][0]["action"] == "DATA_GAP"
     assert parsed["actions"][0]["replace_packet"] is None
+
+
+def near_edge_settings() -> dict:
+    return {
+        "daily_execution_drift_policy": {
+            "near_edge_monitor_band": {"enabled": True},
+            "lowest_live_limit_policy": {
+                "distance_to_lowest_live_limit_pct": {"action_threshold_role": "none"}
+            },
+        }
+    }
+
+
+def near_edge_diagnostics() -> dict:
+    return {
+        "diagnostics": [
+            {
+                "ticker": "QQQ",
+                "near_anchor_edge": True,
+                "near_highest_live_limit_edge": True,
+            }
+        ]
+    }
+
+
+def test_keep_near_edge_remains_keep_with_canonical_reason_code() -> None:
+    payload = valid_action_payload()
+    payload["operator_notes"] = [
+        {"ticker": "QQQ", "note_type": "near_anchor_drift_edge", "message": "near edge"},
+        {"ticker": "QQQ", "note_type": "near_highest_live_limit_edge", "message": "near edge"},
+    ]
+
+    parsed = validate_daily_execution_actions(
+        payload,
+        audited_decision_packet=audited_packet(),
+        strategy_settings=near_edge_settings(),
+        precomputed_diagnostics=near_edge_diagnostics(),
+    )
+
+    assert parsed["actions"][0]["action"] == "KEEP"
+    assert parsed["actions"][0]["reason_code"] == "execution_drift_within_tolerance"
+
+
+def test_near_edge_requires_operator_note() -> None:
+    payload = valid_action_payload()
+
+    with pytest.raises(ValueError, match="operator_notes"):
+        validate_daily_execution_actions(
+            payload,
+            audited_decision_packet=audited_packet(),
+            strategy_settings=near_edge_settings(),
+            precomputed_diagnostics=near_edge_diagnostics(),
+        )
+
+
+def test_lowest_limit_evidence_only_statement_required_when_policy_none() -> None:
+    payload = valid_action_payload()
+    payload["actions"][0]["source_evidence"] = "distance_to_lowest_live_limit_pct=-12.0"
+
+    with pytest.raises(ValueError, match="evidence-only"):
+        validate_daily_execution_actions(
+            payload,
+            audited_decision_packet=audited_packet(),
+            strategy_settings=near_edge_settings(),
+        )
+
+
+def test_anchor_drift_tolerance_must_not_be_used_for_lowest_limit() -> None:
+    payload = valid_action_payload()
+    payload["actions"][0]["source_evidence"] = (
+        "anchor_drift_tolerance threshold compared to distance_to_lowest_live_limit_pct; "
+        "distance_to_lowest_live_limit_pct is required evidence only and is not an action threshold "
+        "under the supplied policy"
+    )
+
+    with pytest.raises(ValueError, match="anchor_drift_tolerance"):
+        validate_daily_execution_actions(
+            payload,
+            audited_decision_packet=audited_packet(),
+            strategy_settings=near_edge_settings(),
+        )
+
+
+def test_highest_live_limit_cap_must_not_be_used_for_lowest_limit() -> None:
+    payload = valid_action_payload()
+    payload["actions"][0]["source_evidence"] = (
+        "max_negative_distance_to_highest_live_limit_pct threshold compared to "
+        "distance_to_lowest_live_limit_pct; distance_to_lowest_live_limit_pct is required evidence only "
+        "and is not an action threshold under the supplied policy"
+    )
+
+    with pytest.raises(ValueError, match="max_negative_distance_to_highest_live_limit"):
+        validate_daily_execution_actions(
+            payload,
+            audited_decision_packet=audited_packet(),
+            strategy_settings=near_edge_settings(),
+        )
+
+
+def test_old_settings_without_near_edge_keeps_feature_disabled() -> None:
+    payload = valid_action_payload()
+
+    parsed = validate_daily_execution_actions(
+        payload,
+        audited_decision_packet=audited_packet(),
+        strategy_settings={"hard_cap_open_orders_budget": 1000},
+        precomputed_diagnostics=near_edge_diagnostics(),
+    )
+
+    assert parsed["actions"][0]["action"] == "KEEP"
 
 
 def test_workflow_render_writes_to_daily_artifacts_not_current(tmp_path: Path) -> None:

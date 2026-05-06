@@ -56,7 +56,16 @@
     },
     "operator_notes": {
       "type": "array",
-      "items": {}
+      "items": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "$ref": "#/$defs/operator_note"
+          }
+        ]
+      }
     }
   },
   "additionalProperties": true,
@@ -180,6 +189,38 @@
           }
         }
       ],
+      "additionalProperties": true
+    },
+    "operator_note": {
+      "type": "object",
+      "required": [
+        "ticker",
+        "note_type",
+        "message"
+      ],
+      "properties": {
+        "ticker": {
+          "type": "string",
+          "minLength": 1
+        },
+        "note_type": {
+          "enum": [
+            "near_anchor_drift_edge",
+            "near_highest_live_limit_edge",
+            "repeated_near_edge_weekly_review",
+            "lowest_live_limit_evidence_only",
+            "core_underdeployment_watch"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "metrics": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
       "additionalProperties": true
     },
     "replace_packet": {

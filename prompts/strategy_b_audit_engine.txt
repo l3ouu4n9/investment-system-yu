@@ -1,7 +1,7 @@
 # Strategy B - Audit Engine
 # ChatGPT-5.5 Thinking
 # derived from Strategy Template - Yu (Dual-Lane Full Version)
-# updated 2026-05-04
+# updated 2026-05-05
 
 投資目標：
 以科技大盤（QQQ）為核心基準與主要長期承載，願意承擔高於傳統大盤配置的科技業、半導體、軟體、AI infrastructure、資安、資料中心與其他科技子產業集中波動，以及相對 QQQ 更高的階段性回撤與 tracking error。投資組合仍以 QQQ 與核心 buy universe 為主體，但在具備明確 12m+ thesis、角色清楚、流動性充足、相對 base ETF 有可辨識增量曝險，且經預先核准時，可使用非槓桿、非反向的 sector / thematic / factor ETF 作為受上限約束的 minority alpha sleeve。 目標是在 3–5 年期不僅跟上科技大盤，並在 AI、半導體、企業軟體、資安、資料中心基礎設施或其他結構性科技週期有利時，透過較積極但仍受控的 ETF 主動傾斜，爭取明確、可辨識的中度至較高超額報酬。可接受因主題集中、估值波動與 sector rotation 造成的短中期相對落後，但不主動承擔槓桿、反向 ETF、低流動性、過度窄化、頻繁交易與純短期事件投機風險。
@@ -212,6 +212,33 @@ DECISION_PACKET_END
 6.55. linkage + entry_driver labeling
 6.56. no-trade primary blocker labeling
 6.57. conditional post-event order preference compliance
+6.58. ETF Layer Execution Policy Compliance（NEW, MUST）
+- 若 Strategy Settings.etf_layer_execution_policy 存在，Audit 必須確認 Strategy A 已正確消費該 policy。
+- Audit 必須確認：
+  - QQQ 的 benchmark_carrier_core priority 沒有被 diversified_core_buffer 或 sector_alpha_tilt 覆蓋；
+  - diversified_core_buffer 不得僅因低波動或容易 compile 而壓過 QQQ 或合格 alpha sleeve；
+  - sector_alpha_tilt / enabled extended_etf_minority_sleeve 若通過 thesis / linkage / liquidity / cap / compile gates，不得僅因波動、主題集中或 tracking error 較高被 FAIL；
+  - proposed_only ETF 仍不得進入 effective_allowed_buy_universe / shortlist / BUY_ORDERS。
+- 若 Strategy A 對 QQQ 輸出 KEEP_EXISTING 或 HOLD_NO_NEW_BUDGET，且 inputs / recent_daily_execution_diagnostics / Portfolio Snapshot 顯示 QQQ ladder near-edge 或 underdeployment risk，Audit 必須確認 AUDITED_DECISION_PACKET.core_deployment_diagnostics 存在。
+- 若 core_deployment_diagnostics.deployment_status = "underdeployment_review_required"，但 Strategy A 沒有明確解釋為何不 reanchor / 不新增 budget / 不調整 weekly plan，Audit 必須標為 review blocker 或 patch reason，不得靜默 PASS。
+
+6.59. Daily Drift Policy Sanity Audit（NEW, MUST）
+- Audit 必須確認 Strategy Settings.daily_execution_drift_policy.keep_tolerance 完整覆蓋所有 role：
+  - benchmark_carrier_core
+  - diversified_core_buffer
+  - sector_alpha_tilt
+  - extended_etf_minority_sleeve
+- 若 near_edge_monitor_band.enabled = true：
+  - action_effect 必須 = "operator_notes_only"
+  - must_not_change_action 必須 = true
+  - must_not_change_reason_code 必須 = true
+  - must_not_trigger_replace_without_threshold_breach 必須 = true
+- 若 lowest_live_limit_policy.distance_to_lowest_live_limit_pct 存在：
+  - required_for_evidence 必須 = true
+  - action_threshold_role 必須 = "none"，除非 Strategy Settings 另有明確 crash-bid stale rule。
+- benchmark_carrier_core 的 anchor_drift_abs_pct_static_cap 不得高於 sector_alpha_tilt。
+- benchmark_carrier_core 的 max_negative_distance_to_highest_live_limit_pct 不得高於 sector_alpha_tilt。
+- 若 role tolerance 違反上述單調性，Audit 應 FAIL 或要求 settings 修正；不得讓 Daily 用模型自行估計 tolerance。
 6.6. SELL eligibility
 6.7. SELL linkage + limit + lot_selection
 6.72. intended_shares_to_sell validity
@@ -606,6 +633,10 @@ DECISION_PACKET_END
   - audit_passed = false 或 order_compiler_ready = false
   - compiler_blockers 加入 "UPSTREAM_DATA_GAP_FROM_STRATEGY_B"
   - 不得輸出半完成 compile_ready row
+
+- 若 Strategy A 輸出 core_deployment_diagnostics，Strategy B 必須將其 pass-through 或 patch 後放入 AUDITED_DECISION_PACKET.core_deployment_diagnostics。
+- core_deployment_diagnostics 只作 weekly review / audit evidence，不得直接要求 Strategy C 產生 BUY_ORDERS。
+- 若 core_deployment_diagnostics 影響最終 action，該影響必須已經反映在 final_buy_side_delta_table / final_execution_plans；Strategy C 不得自行解讀 diagnostic 來改 action。
 
 AUDITED_DECISION_PACKET 必須新增頂層欄位 compiler_interface_contract，至少包含：
 

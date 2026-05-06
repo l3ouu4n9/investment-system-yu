@@ -7,8 +7,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from investment_orchestrator.common.io import ensure_dir, file_exists, read_text, write_text
 from investment_orchestrator.common.paths import repo_root, require_prompt_path
 from investment_orchestrator.llm.manual_output import (
@@ -17,6 +15,7 @@ from investment_orchestrator.llm.manual_output import (
     write_rendered_prompt,
 )
 from investment_orchestrator.parsers.extract_research_json import extract_research_json
+from investment_orchestrator.validators.strategy_settings import parse_strategy_settings_text
 
 
 STEP1_DIRNAME = "step1_research"
@@ -82,10 +81,7 @@ def load_strategy_settings_yaml_text() -> str:
 
 def load_strategy_settings() -> dict[str, Any]:
     """Parse the operator-maintained strategy settings YAML."""
-    raw = yaml.safe_load(load_strategy_settings_yaml_text())
-    if not isinstance(raw, dict):
-        raise ValueError("inputs/current/strategy_settings.yaml must parse to a mapping/object.")
-    return raw
+    return parse_strategy_settings_text(load_strategy_settings_yaml_text())
 
 
 def load_portfolio_snapshot_text() -> str:

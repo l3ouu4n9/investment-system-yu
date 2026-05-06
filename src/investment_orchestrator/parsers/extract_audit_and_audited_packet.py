@@ -199,7 +199,12 @@ def parse_outline_audited_decision_packet(text: str) -> dict[str, Any]:
         "final_sell_execution_plans": _parse_structured_list(sections["final_sell_execution_plans"]),
     }
 
-    for optional_key in ("audit_fail_reasons", "patches_applied", "compiler_blockers"):
+    for optional_key in (
+        "audit_fail_reasons",
+        "patches_applied",
+        "compiler_blockers",
+        "core_deployment_diagnostics",
+    ):
         if optional_key in sections:
             packet[optional_key] = _parse_structured_list(sections[optional_key])
 
