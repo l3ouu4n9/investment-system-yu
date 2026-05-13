@@ -1,4 +1,4 @@
-# Daily Execution Check Template - Weekday Execution Maintenance
+# Daily Execution Check Template - Weekday Execution Maintenance - Yu
 # ChatGPT-5.5 Thinking
 # updated 2026-05-05
 
@@ -102,27 +102,48 @@ Daily market drift / ladder reachability policy（MUST）：
   - near_edge 不得改 thesis / alpha ranking / weekly role / event binding。
   - near_edge 只能寫入 operator_notes。
 
+- near_edge diagnostics 是 independent annotation。
+  - deterministic / precomputed diagnostics 若顯示 near_anchor_edge=true 或 near_highest_live_limit_edge=true，operator_notes 必須輸出 matching note。
+  - 這個 matching note 要求適用所有 action，包括 KEEP、REPLACE、CANCEL、HOLD_FOR_WEEKLY_REVIEW、DATA_GAP。
+  - near_edge note 不得改變 action / reason_code / budget / thesis / ranking / role。
+  - 即使 action 已經是 REPLACE / CANCEL / HOLD_FOR_WEEKLY_REVIEW / DATA_GAP，只要 diagnostics 顯示 near-edge=true，仍必須在 operator_notes 補對應 note。
+
 - anchor near edge:
   - remaining_anchor_margin_pct =
       anchor_drift_tolerance - abs(anchor_drift_pct)
-  - 若 remaining_anchor_margin_pct <= role 的 near_edge_monitor_band.anchor_drift_pct_band，
-    則 operator_notes 必須加入：
-      "{ticker}: KEEP but near anchor drift edge; remaining_anchor_margin_pct={...}; action remains KEEP because this is operator_notes_only."
+  - 若 remaining_anchor_margin_pct <= role 的 near_edge_monitor_band.anchor_drift_pct_band，或 deterministic / precomputed diagnostics 顯示 near_anchor_edge=true，
+    則 operator_notes 必須加入 object 格式 matching note：
+      {
+        "ticker": "{ticker}",
+        "note_type": "near_anchor_drift_edge",
+        "message": "{ticker} computed near_anchor_edge=true; action remains {action} because near-edge annotation is operator_notes_only."
+      }
+  - note_type 必須使用 schema enum：near_anchor_drift_edge。
+  - message 不得暗示只有 KEEP 才需要 note；所有 action 都適用。
 
 - highest live limit near edge:
   - remaining_highest_distance_margin_pct =
       distance_to_highest_live_limit_pct - (-1 * max_negative_distance_to_highest_live_limit_pct)
-  - 若 remaining_highest_distance_margin_pct <= role 的 near_edge_monitor_band.highest_live_limit_distance_pct_band，
-    則 operator_notes 必須加入：
-      "{ticker}: KEEP but near highest-live-limit reachability edge; remaining_highest_distance_margin_pct={...}; action remains KEEP because this is operator_notes_only."
+  - 若 remaining_highest_distance_margin_pct <= role 的 near_edge_monitor_band.highest_live_limit_distance_pct_band，或 deterministic / precomputed diagnostics 顯示 near_highest_live_limit_edge=true，
+    則 operator_notes 必須加入 object 格式 matching note：
+      {
+        "ticker": "{ticker}",
+        "note_type": "near_highest_live_limit_edge",
+        "message": "{ticker} computed near_highest_live_limit_edge=true; action remains {action} because near-edge annotation is operator_notes_only."
+      }
+  - note_type 必須使用 schema enum：near_highest_live_limit_edge。
+  - message 不得暗示只有 KEEP 才需要 note；所有 action 都適用。
 
 - 若 ticker role = benchmark_carrier_core，且 repeated_near_edge_policy.enabled = true：
   - Daily Execution Check 不得自行讀取未提供的歷史 daily artifacts。
   - 只有在本回合 INPUTS 明確提供 recent_daily_execution_diagnostics / prior near-edge evidence 時，才可判斷 repeated near-edge。
   - 若已提供且連續 near_edge 次數 >= repeated_near_edge_policy.lookback_daily_checks：
-    operator_notes 必須加入：
-      "{ticker}: repeated near-edge condition; next weekly review should check core deployment adequacy / chronic underinvestment risk."
-  - 若未提供 recent_daily_execution_diagnostics，不得假設 repeated near-edge；只可針對本回合 near-edge 輸出單次 note。
+    - 不得新增 string operator_note。
+    - 不得輸出 schema 未允許的 standalone repeated_near_edge note_type。
+    - 必須將以下 reminder 併入同 ticker 已存在的 near_anchor_drift_edge 或 near_highest_live_limit_edge matching object 的 message：
+      " repeated near-edge condition; next weekly review should check core deployment adequacy / chronic underinvestment risk."
+    - 若同 ticker 同時沒有 near_anchor_edge=true 且沒有 near_highest_live_limit_edge=true，則不得新增 repeated-near-edge operator_notes object；改在 source_evidence 說明 repeated_near_edge evidence was present but no schema-supported near-edge operator_note was emitted.
+  - 若未提供 recent_daily_execution_diagnostics，不得假設 repeated near-edge；只可針對本回合 near-edge 輸出單次 schema-supported matching note。
 
 3B. distance_to_lowest_live_limit_pct evidence-only rule（MUST）：
 
@@ -141,6 +162,19 @@ Daily market drift / ladder reachability policy（MUST）：
    - 不得新增 event binding。
    - 不得改 thesis / alpha ranking / weekly role。
    - 必須能用 weekly-approved role/template + current daily price + same remaining budget deterministic 生成 replace_packet。
+   - 若 action=REPLACE，replace_packet 必須額外包含可審核的 replace synthesis metadata：
+       - replacement_reason
+       - proposed_anchor_source
+       - notes_for_replace_packet_synthesis
+   - replacement_reason 只能描述 execution-only replacement 的直接原因，不得取代外層 canonical reason_code。
+   - replacement_reason 建議使用以下穩定值之一：
+       - daily_anchor_drift_threshold_breach
+       - daily_highest_live_limit_reachability_threshold_breach
+       - daily_anchor_and_highest_live_limit_threshold_breach
+       - weekly_approved_replace_pending_submission
+   - replacement_reason 不得使用 schemas/daily_execution_actions.schema.json 的外層 reason_code 以外的新 action reason_code；外層 reason_code 仍必須是 execution_reanchor_required。
+   - proposed_anchor_source 必須明確指出新 anchor 來源，例如 DAILY_MARKET_DATA_SNAPSHOT.tickers[ticker].last_close 與 price_asof；不得使用未提供的 intraday quote 或模型估計價格。
+   - notes_for_replace_packet_synthesis 必須明確寫出 same ticker、same remaining budget、preserve weekly role / thesis / ranking / event binding、deterministic from approved weekly template，且不得包含任何新增 ticker、budget increase、ranking change、role change 或 thesis change。
    - 若 threshold breach 需要改變 ticker、budget、role、ranking、thesis 或 event binding，則不得 REPLACE，必須 HOLD_FOR_WEEKLY_REVIEW。
 
 4A. CANCEL 僅能用於明確 execution-state violation，不得用於重新做投資決策：
@@ -245,6 +279,10 @@ DAILY_EXECUTION_ACTIONS_END
 - 禁止 Markdown code fence。
 - JSON 必須是單一合法 object。
 - JSON 必須符合 schemas/daily_execution_actions.schema.json。
+- portfolio_snapshot_existing_buy_open_orders_patch 是 required top-level field；即使本回合沒有新買單或改既有買單，也必須輸出 []，不得省略。
+- 若本回合 action=REPLACE 且 replace_packet 完整可生成，portfolio_snapshot_existing_buy_open_orders_patch 必須包含同 ticker 的 REPLACE_EXISTING_BUY_ORDER row。
+- 若本回合有多個 action=REPLACE 且各自 replace_packet 完整可生成，portfolio_snapshot_existing_buy_open_orders_patch 必須為每個 REPLACE ticker 各輸出一筆 REPLACE_EXISTING_BUY_ORDER row；不得漏掉任一 REPLACE ticker，也不得輸出非 REPLACE / 非 deterministic weekly-approved new BUY order packet 的額外 ticker。
+- 若本回合沒有 action=REPLACE，且沒有 deterministic weekly-approved new BUY order packet，portfolio_snapshot_existing_buy_open_orders_patch 必須為 []。
 
 Canonical reason_code / schema validity rule（MUST）：
 
@@ -300,27 +338,70 @@ JSON minimum shape:
     }
   ],
   "blocked_items": [],
-  "operator_notes": []
+  "portfolio_snapshot_existing_buy_open_orders_patch": [],
+  "operator_notes": [
+    {
+      "ticker": "VOO",
+      "note_type": "near_highest_live_limit_edge",
+      "message": "VOO computed near_highest_live_limit_edge=true; action remains KEEP because this is operator_notes_only."
+    }
+  ]
 }
 
 operator_notes rule（MUST）：
 - operator_notes 必須為 array。
-- near_edge_monitor_band 只能寫入 operator_notes，不得改 action / reason_code。
-- operator_notes 可為 []。
+- operator_notes item 必須使用 object 格式；本模板不得輸出 string operator_notes。
+- near-edge notes 必須使用 object 格式。
+- near-edge operator_notes object 必須包含：
+  - ticker
+  - note_type
+  - message
+- note_type 必須使用 schema enum：
+  - near_anchor_drift_edge
+  - near_highest_live_limit_edge
+- near_edge_monitor_band 只能寫入 operator_notes，不得改 action / reason_code / budget / thesis / ranking / role。
+- operator_notes 可為 []，但只有在本回合計算結果與 deterministic / precomputed diagnostics 都沒有 near_anchor_edge=true 且都沒有 near_highest_live_limit_edge=true 時才可為 []。
+- 若 deterministic / precomputed diagnostics 顯示 near_anchor_edge=true，operator_notes 必須包含 matching object note：
+  {
+    "ticker": "{ticker}",
+    "note_type": "near_anchor_drift_edge",
+    "message": "{ticker} computed near_anchor_edge=true; action remains {action} because near-edge annotation is operator_notes_only."
+  }
+- 若 deterministic / precomputed diagnostics 顯示 near_highest_live_limit_edge=true，operator_notes 必須包含 matching object note：
+  {
+    "ticker": "{ticker}",
+    "note_type": "near_highest_live_limit_edge",
+    "message": "{ticker} computed near_highest_live_limit_edge=true; action remains {action} because near-edge annotation is operator_notes_only."
+  }
+- 這個 matching note 要求適用所有 action，包括 KEEP、REPLACE、CANCEL、HOLD_FOR_WEEKLY_REVIEW、DATA_GAP。
 - 若 ticker within tolerance 但 near-edge 成立，action 仍應為 KEEP，reason_code 仍應為 execution_drift_within_tolerance，near-edge 詳細原因寫入 operator_notes 與 source_evidence。
+- 若 ticker action=REPLACE / CANCEL / HOLD_FOR_WEEKLY_REVIEW / DATA_GAP 且 near-edge 成立，action 與 reason_code 不因 near-edge 改變；仍必須輸出 matching operator_notes object。
 
 For REPLACE only:
 - replace_packet must be non-null.
+- replace_packet.replacement_reason must be present and non-empty.
+- replace_packet.proposed_anchor_source must be present and non-empty.
+- replace_packet.notes_for_replace_packet_synthesis must be present and non-empty.
 - replace_packet.same_ticker must be true.
 - replace_packet.remaining_budget_after must equal remaining_budget_before.
 - replace_packet.budget_delta must be 0.
 - replace_packet.preserve_weekly_role must be true.
 - replace_packet.preserve_event_binding must be true.
-
+- replace_packet.replacement_reason must be non-empty and must describe only the execution-only trigger for replacement.
+- replace_packet.proposed_anchor_source must be non-empty and must identify the supplied data source used for the new anchor.
+- replace_packet.notes_for_replace_packet_synthesis must be non-empty and must state that the replacement preserves same ticker, same remaining budget, weekly role, thesis, ranking, and event binding.
+- If action=REPLACE but any required replace_packet field cannot be deterministically populated from supplied INPUTS and weekly-approved artifacts, do not output an incomplete replace_packet. Use DATA_GAP if the missing field is due to missing daily price / anchor / live order / template data; use HOLD_FOR_WEEKLY_REVIEW if completion would require changing ticker, budget, weekly role, thesis, ranking, or event binding.
+- A REPLACE action with a null replace_packet, missing replacement_reason, missing proposed_anchor_source, or missing notes_for_replace_packet_synthesis is schema-invalid and prohibited.
 - replace_packet must also include enough execution detail to be independently reviewable:
   - ticker
   - side
   - reason_code
+  - same_ticker
+  - preserve_weekly_role
+  - preserve_event_binding
+  - replacement_reason
+  - proposed_anchor_source
+  - notes_for_replace_packet_synthesis
   - remaining_budget_before
   - remaining_budget_after
   - budget_delta
@@ -348,6 +429,132 @@ For REPLACE only:
 
 For non-REPLACE:
 - replace_packet must be null.
+
+Portfolio Snapshot paste-back patch rule（MUST）：
+
+- Daily Execution Check 若輸出任何會導致 Portfolio Snapshot existing_buy_open_orders_summary 需要更新的 buy-side action，必須額外輸出 portfolio_snapshot_existing_buy_open_orders_patch array。
+- 這個 patch array 的用途是讓 operator 在實際送出新買單 / replacement 買單，並確認 remaining quantities 後，可以直接複製 row 貼回下一次 PORTFOLIO_SNAPSHOT.existing_buy_open_orders_summary section。
+- portfolio_snapshot_existing_buy_open_orders_patch 只能反映 Daily 本回合已核准的 execution-only output，不得新增 ticker、不得增加 budget、不得改 thesis、不得改 alpha ranking、不得改 weekly role、不得新增 event binding。
+
+觸發條件：
+- 若 action=REPLACE，必須為該 ticker 輸出一筆 portfolio_snapshot_existing_buy_open_orders_patch row。
+- 若 Daily 本回合處理的是 weekly-approved new BUY order，且該 new BUY order 已在 Daily output 中形成可送單的 deterministic order packet，必須為該 ticker 輸出一筆 portfolio_snapshot_existing_buy_open_orders_patch row。
+- 若 action=KEEP / CANCEL / HOLD_FOR_WEEKLY_REVIEW / DATA_GAP，且沒有新的 buy order 或 replacement buy order row 可貼回 Portfolio Snapshot，則不得輸出該 ticker 的 patch row。
+- 若本回合沒有任何新買單或改既有買單，portfolio_snapshot_existing_buy_open_orders_patch 必須為 []。
+
+- consistency rule（MUST）：
+  - 若 actions 中存在一個或多個 action=REPLACE 的 buy-side ticker，且各自 replace_packet 完整可生成，portfolio_snapshot_existing_buy_open_orders_patch 必須對每個 REPLACE ticker 各包含一筆 REPLACE_EXISTING_BUY_ORDER row；patch array 不得漏掉任何完整 REPLACE ticker，也不得包含非 REPLACE / 非 deterministic weekly-approved new BUY order packet 的額外 ticker。
+  - 若 actions 中不存在 action=REPLACE，且 Daily 本回合沒有 deterministic weekly-approved new BUY order packet，portfolio_snapshot_existing_buy_open_orders_patch 必須為 []。
+  - portfolio_snapshot_existing_buy_open_orders_patch 不得包含 action=KEEP / CANCEL / HOLD_FOR_WEEKLY_REVIEW / DATA_GAP 的 ticker，除非該 ticker 同時有 Daily 本回合 deterministic weekly-approved new BUY order packet。
+  - portfolio_snapshot_existing_buy_open_orders_patch 中每個 ticker 必須能回溯到同一 JSON output 的 actions[] 或 replace_packet；不得只憑 ORDER_STATE_EXPORT 產生 patch row。
+
+patch row schema：
+每個 portfolio_snapshot_existing_buy_open_orders_patch item 必須包含以下欄位，且 row_text 必須完全符合 Portfolio Snapshot existing_buy_open_orders_summary 的欄位順序：
+{
+  "ticker": "...",
+  "side": "BUY",
+  "patch_type": "NEW_BUY_ORDER" 或 "REPLACE_EXISTING_BUY_ORDER",
+  "paste_target_section": "PORTFOLIO_SNAPSHOT.existing_buy_open_orders_summary",
+  "paste_instruction": "...",
+  "header": "TICKER | budget | compiled_open_order_notional(optional) | residual_cash_not_allocated(optional) | template_id | anchor_baseline_last_close | anchor_price_asof | last_refresh_date_et(optional) | highest_live_limit(optional) | lowest_live_limit(optional) | live_step_count(optional) | live_order_steps_summary(optional) | live_order_qtys_summary(optional)",
+  "row_text": "...",
+  "operator_confirmation_required": true,
+  "not_live_broker_truth_until_submitted": true,
+  "source_evidence": "..."
+}
+
+row_text 格式硬規則：
+- row_text 必須是一行純文字，格式如下：
+  TICKER | budget | compiled_open_order_notional | residual_cash_not_allocated | template_id | anchor_baseline_last_close | anchor_price_asof | last_refresh_date_et | highest_live_limit | lowest_live_limit | live_step_count | live_order_steps_summary | live_order_qtys_summary
+
+- 欄位順序必須完全等於：
+  TICKER | budget | compiled_open_order_notional(optional) | residual_cash_not_allocated(optional) | template_id | anchor_baseline_last_close | anchor_price_asof | last_refresh_date_et(optional) | highest_live_limit(optional) | lowest_live_limit(optional) | live_step_count(optional) | live_order_steps_summary(optional) | live_order_qtys_summary(optional)
+
+- 不得省略中間欄位。
+- 即使 last_refresh_date_et 要留空，也必須保留該欄位位置：
+  ... | anchor_price_asof |  | highest_live_limit ...
+- row_text 不得包含 Markdown code fence。
+- row_text 不得包含額外說明文字。
+- 價格與 notional 欄位四捨五入到小數點後 2 位。
+- 若 action=REPLACE，row_text 中的 budget、compiled_open_order_notional、residual_cash_not_allocated、template_id、anchor_baseline_last_close、anchor_price_asof、highest_live_limit、lowest_live_limit、live_step_count、live_order_steps_summary、live_order_qtys_summary 必須與同 ticker replace_packet 的對應欄位一致。
+- 若 row_text 與 replace_packet 對應欄位不一致，該 output 視為 schema / consistency invalid。
+- qty 必須為整數。
+- live_order_steps_summary 與 live_order_qtys_summary 的 step 名稱必須完全一致，且順序必須依 weekly-approved ordered_step_names。
+
+欄位填值規則：
+- ticker：
+  使用 Daily action / replace_packet 的 ticker。
+
+- budget：
+  使用 same remaining budget / weekly-approved reserved open-order budget。
+  REPLACE 時必須等於 replace_packet.remaining_budget_after。
+  不得提高 budget。
+
+- compiled_open_order_notional：
+  使用 replace_packet.compiled_open_order_notional，或 deterministic new buy packet 的 compiled_open_order_notional。
+  必須等於 Σ(step_limit_price_i × step_qty_i)。
+
+- residual_cash_not_allocated：
+  使用 replace_packet.residual_cash_not_allocated，或 deterministic new buy packet 的 residual_cash_not_allocated。
+  必須等於 budget - compiled_open_order_notional。
+
+- template_id：
+  使用 weekly-approved template_id。
+  不得由 Daily 改 role 或改 template。
+
+- anchor_baseline_last_close：
+  若 action=REPLACE，使用 replace_packet.new_anchor_baseline_last_close。
+  若是 weekly-approved new BUY，使用該 order packet 的 anchor_baseline_last_close。
+
+- anchor_price_asof：
+  若 action=REPLACE，使用 replace_packet.new_anchor_price_asof。
+  若是 weekly-approved new BUY，使用該 order packet 的 anchor_price_asof。
+
+- last_refresh_date_et：
+  若 operator 已實際送出 / 重掛該 order，填 execution_date_et 或 operator-provided submitted date。
+  若 Daily 只產生待送單 packet，尚未由 operator 確認送出，允許留空，但 not_live_broker_truth_until_submitted 必須為 true。
+  不得把 intended state 假裝成 live broker truth。
+
+- Daily Execution Check 產生的 portfolio_snapshot_existing_buy_open_orders_patch row 預設是 paste-back candidate，不是 current live state。
+- 除非本回合 INPUTS 明確提供 operator-submitted / broker-confirmed 狀態，Daily 不得將 patch row 描述為已成交、已送出、已 live、或已確認 remaining qty。
+- operator 只有在實際送出 replacement / new BUY orders 並確認 remaining quantities 後，才可把 row_text 貼回下一次 Portfolio Snapshot。
+
+- highest_live_limit：
+  使用新 order ladder 中最高的 limit price。
+
+- lowest_live_limit：
+  使用新 order ladder 中最低的 limit price。
+
+- live_step_count：
+  使用新 order ladder 的 step 數量。
+
+- live_order_steps_summary：
+  依 ordered_step_names 輸出：
+    step@price;step@price
+  例如：
+    starter@671.39;L1@650.94;L2@623.67;L3@593.00;L4@558.92
+
+- live_order_qtys_summary：
+  依 ordered_step_names 輸出：
+    step:qty;step:qty
+  例如：
+    starter:15;L1:11;L2:8;L3:7;L4:5
+
+paste_instruction 規則：
+- 若 patch_type="NEW_BUY_ORDER"：
+  paste_instruction 必須寫：
+    "Append this row to PORTFOLIO_SNAPSHOT.existing_buy_open_orders_summary after the operator submits the order and confirms remaining quantities."
+
+- 若 patch_type="REPLACE_EXISTING_BUY_ORDER"：
+  paste_instruction 必須寫：
+    "Replace the existing same-ticker row in PORTFOLIO_SNAPSHOT.existing_buy_open_orders_summary after the operator submits the replacement order and confirms remaining quantities. Do not keep both old and new rows."
+
+source_evidence 必須說明：
+- 該 row 來自 Daily action=REPLACE 或 weekly-approved new BUY packet。
+- same ticker / same budget / weekly role / thesis / ranking / event binding preserved。
+- row_text 是 Portfolio Snapshot paste-back format。
+- ORDER_STATE_EXPORT 不被當成 live broker truth。
+- 若尚未 operator-confirmed submitted / remaining qty confirmed，必須明確寫該 row 只是 paste-back candidate，不是 live broker truth。
 
 DATA_GAP / HOLD_FOR_WEEKLY_REVIEW:
 - weekly_intent_preserved may be false only for DATA_GAP or HOLD_FOR_WEEKLY_REVIEW.

@@ -1,9 +1,9 @@
-as_of: "2026-05-05"
-run_timestamp_et: "2026-05-05 17:41 ET"
+as_of: "2026-05-12"
+run_timestamp_et: "2026-05-13 01:27 ET"
 benchmark: "QQQ"
 tax_intent: "LTCG_only"
 min_holding_period: ">=12m"
-hard_cap_open_orders_budget: 54552.39
+hard_cap_open_orders_budget: 43663.89
 relative_rotation_enabled: true
 
 relative_rotation_guardrails:
@@ -131,6 +131,8 @@ user_approved_extended_etf_static_list:
   - QUAL
   - CIBR
   - VUG
+  - GRID
+  - BOTZ
 
 
 active_shortlist_size_rule:
@@ -224,6 +226,8 @@ daily_execution_drift_policy:
     VT: "diversified_core_buffer"
     SMH: "sector_alpha_tilt"
     IGV: "sector_alpha_tilt"
+    CIBR: "extended_etf_minority_sleeve"
+
 
   calculations_required:
     anchor_drift_pct: "(daily_last_close - anchor_baseline_last_close) / anchor_baseline_last_close * 100"

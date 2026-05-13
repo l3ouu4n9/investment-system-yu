@@ -8,6 +8,7 @@
     "weekly_sources",
     "actions",
     "blocked_items",
+    "portfolio_snapshot_existing_buy_open_orders_patch",
     "operator_notes"
   ],
   "properties": {
@@ -53,6 +54,72 @@
     "blocked_items": {
       "type": "array",
       "items": {}
+    },
+    "portfolio_snapshot_existing_buy_open_orders_patch": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ticker",
+          "side",
+          "patch_type",
+          "paste_target_section",
+          "paste_instruction",
+          "header",
+          "row_text",
+          "operator_confirmation_required",
+          "not_live_broker_truth_until_submitted",
+          "source_evidence"
+        ],
+        "properties": {
+          "ticker": {
+            "type": "string",
+            "minLength": 1
+          },
+          "side": {
+            "type": "string",
+            "enum": ["BUY"]
+          },
+          "patch_type": {
+            "type": "string",
+            "enum": [
+              "NEW_BUY_ORDER",
+              "REPLACE_EXISTING_BUY_ORDER"
+            ]
+          },
+          "paste_target_section": {
+            "type": "string",
+            "enum": [
+              "PORTFOLIO_SNAPSHOT.existing_buy_open_orders_summary"
+            ]
+          },
+          "paste_instruction": {
+            "type": "string",
+            "minLength": 1
+          },
+          "header": {
+            "type": "string",
+            "const": "TICKER | budget | compiled_open_order_notional(optional) | residual_cash_not_allocated(optional) | template_id | anchor_baseline_last_close | anchor_price_asof | last_refresh_date_et(optional) | highest_live_limit(optional) | lowest_live_limit(optional) | live_step_count(optional) | live_order_steps_summary(optional) | live_order_qtys_summary(optional)"
+          },
+          "row_text": {
+            "type": "string",
+            "minLength": 1
+          },
+          "operator_confirmation_required": {
+            "type": "boolean",
+            "const": true
+          },
+          "not_live_broker_truth_until_submitted": {
+            "type": "boolean",
+            "const": true
+          },
+          "source_evidence": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
     },
     "operator_notes": {
       "type": "array",

@@ -1,7 +1,7 @@
 # Strategy A - Decision Builder
 # ChatGPT-5.5 Thinking
 # derived from Strategy Template - Yu (Dual-Lane Full Version)
-# updated 2026-05-05
+# updated 2026-05-10
 
 投資目標：
 以科技大盤（QQQ）為核心基準與主要長期承載，願意承擔高於傳統大盤配置的科技業、半導體、軟體、AI infrastructure、資安、資料中心與其他科技子產業集中波動，以及相對 QQQ 更高的階段性回撤與 tracking error。投資組合仍以 QQQ 與核心 buy universe 為主體，但在具備明確 12m+ thesis、角色清楚、流動性充足、相對 base ETF 有可辨識增量曝險，且經預先核准時，可使用非槓桿、非反向的 sector / thematic / factor ETF 作為受上限約束的 minority alpha sleeve。 目標是在 3–5 年期不僅跟上科技大盤，並在 AI、半導體、企業軟體、資安、資料中心基礎設施或其他結構性科技週期有利時，透過較積極但仍受控的 ETF 主動傾斜，爭取明確、可辨識的中度至較高超額報酬。可接受因主題集中、估值波動與 sector rotation 造成的短中期相對落後，但不主動承擔槓桿、反向 ETF、低流動性、過度窄化、頻繁交易與純短期事件投機風險。
@@ -72,6 +72,50 @@
 若 last_close 抓不到：
 - 該 ticker 禁止 increase / 新增
 - 只能 keep / reduce / cancel / WATCHLIST_NO_TRADE（T4-F）
+
+2.49) Market-Data Numeric Unit Normalization (NEW, MUST)
+
+- 所有 market data 數值欄位在 TEMPLATE2_OUTPUT 與 DECISION_PACKET 中都必須輸出為 parser-friendly numeric form；不得保留 human-readable shorthand。
+- volume / avg volume / avg_volume_3m / liquidity volume 類欄位必須正規化為完整整數股數，不得輸出 K / M / B / T 後綴字串。
+- 若來源提供縮寫：
+  - "K" = × 1,000
+  - "M" = × 1,000,000
+  - "B" = × 1,000,000,000
+  - "T" = × 1,000,000,000,000
+- 範例：
+  - "4.35M" 必須輸出為 4350000
+  - "44.3M" 必須輸出為 44300000
+  - "2.87M" 必須輸出為 2870000
+  - "950K" 必須輸出為 950000
+- 若來源提供 comma-formatted numeric string，例如 "4,350,000"，必須移除逗號並輸出為 number：4350000。
+- 若來源提供小數縮寫，轉換後必須四捨五入為最接近的整數股數；不得保留小數。
+- TEMPLATE2_OUTPUT.2.2 MARKET_DATA_TABLE 的 avg_volume_3m 欄位必須輸出完整整數，例如 4350000，不得輸出 "4.35M"。
+- DECISION_PACKET.MARKET_DATA_SNAPSHOT.tickers[*].avg_volume_3m 必須輸出 JSON number，例如 4350000，不得輸出 JSON string "4.35M"。
+- 若 volume / avg_volume_3m 無法取得，才可輸出 null；不得用 "NA"、"N/A"、"unknown" 或 shorthand 字串代替。
+- 此正規化只改變數值表示格式，不得改變 liquidity_tier、quadrant、ranking、budget、delta 或任何投資判斷。
+
+2.49A) Missing Numeric Market-Data Null Normalization (NEW, MUST)
+
+- 所有 market data numeric 欄位若無法取得，必須輸出 null，不得輸出 "NA"、"N/A"、"unknown"、空字串、"-" 或任何 human-readable placeholder。
+- 此規則適用於 TEMPLATE2_OUTPUT.2.2 MARKET_DATA_TABLE 與 DECISION_PACKET.MARKET_DATA_SNAPSHOT.tickers[*]。
+- 適用欄位至少包含：
+  - last_close
+  - ma50
+  - ma200
+  - atr20_abs
+  - atr20_pct
+  - avg_volume_3m
+  - week52_low
+  - week52_high
+- 若 last_close 無法取得，仍需遵守既有規則：
+  - 該 ticker 禁止 increase / 新增
+  - 只能 keep / reduce / cancel / WATCHLIST_NO_TRADE
+- 若非 last_close 的 numeric 欄位缺失，例如 MA50 / MA200 / ATR / 52w range / avg_volume_3m，則該欄位輸出 null，並由 data_gap 判定規則決定是否構成 data_gap。
+- 範例：
+  - 不得輸出：VOO | 678.04 | 2026-05-08 | NA | NA | NA | NA | 4350000 | NA | NA | ...
+  - 必須輸出：VOO | 678.04 | 2026-05-08 | null | null | null | null | 4350000 | null | null | ...
+- DECISION_PACKET JSON 中也必須輸出 JSON null，不得輸出字串 "NA"。
+- 此正規化只改變缺值表示格式，不得改變 liquidity_tier、quadrant、ranking、budget、delta 或任何投資判斷。
 
 2.5) Weekend / Holiday Market-Data Canonicalization + Provenance (NEW, MUST)
 - 若 as_of / run_timestamp_et 落在非交易日（含週末 / 美股休市日），MARKET_DATA_SNAPSHOT.market_data_target_close_date_et 必須回退到最近一個已完成的美股正常收盤日；不得寫成週末 / 假日日期。

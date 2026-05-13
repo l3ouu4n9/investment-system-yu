@@ -1,7 +1,7 @@
 # Strategy B - Audit Engine
 # ChatGPT-5.5 Thinking
 # derived from Strategy Template - Yu (Dual-Lane Full Version)
-# updated 2026-05-05
+# updated 2026-05-11
 
 投資目標：
 以科技大盤（QQQ）為核心基準與主要長期承載，願意承擔高於傳統大盤配置的科技業、半導體、軟體、AI infrastructure、資安、資料中心與其他科技子產業集中波動，以及相對 QQQ 更高的階段性回撤與 tracking error。投資組合仍以 QQQ 與核心 buy universe 為主體，但在具備明確 12m+ thesis、角色清楚、流動性充足、相對 base ETF 有可辨識增量曝險，且經預先核准時，可使用非槓桿、非反向的 sector / thematic / factor ETF 作為受上限約束的 minority alpha sleeve。 目標是在 3–5 年期不僅跟上科技大盤，並在 AI、半導體、企業軟體、資安、資料中心基礎設施或其他結構性科技週期有利時，透過較積極但仍受控的 ETF 主動傾斜，爭取明確、可辨識的中度至較高超額報酬。可接受因主題集中、估值波動與 sector rotation 造成的短中期相對落後，但不主動承擔槓桿、反向 ETF、低流動性、過度窄化、頻繁交易與純短期事件投機風險。
@@ -108,6 +108,39 @@
 - Strategy B 不得自行預設 time_in_force。
 - 若 time_in_force != "GTD"，則 expiry_if_gtd 必須明示為 null；若 time_in_force = "GTD"，則 expiry_if_gtd 必須為 upstream 明示日期。
 
+6.1A-0) Buy-Side Role Layer SSOT Copy-Forward Rule（NEW, MUST）
+- role_layer 是 Daily Execution Check / Strategy C 後續流程的 role SSOT。
+- 對於任何 AUDITED_DECISION_PACKET.final_execution_plans 中 compile_ready = true 的 buy-side execution row：
+  - role_layer
+  - role_layer_source
+  必須直接存在於該 execution row；不得只存在於 final_buy_side_delta_table / buy_universe_scorecard / execution_plan_drafts_8_5 / active_shortlist。
+- final_execution_plans[*].role_layer 必須等於同 ticker 在下列 upstream role SSOT 中已 resolved 的 role_layer，依序 deterministic copy-forward：
+  (1) Strategy A / DECISION_PACKET.final_buy_side_delta_table 明示 role_layer
+  (2) Strategy A execution_plan_drafts_8_5 明示 role_layer
+  (3) RESEARCH_JSON.buy_universe_scorecard / Strategy A buy_universe_scorecard 明示 role_layer
+  (4) 若 ticker 來自 user_approved_extended_etf_static_list 且本輪以 extended ETF sleeve 啟用，role_layer 必須 = "extended_etf_minority_sleeve"
+- role_layer_source 必須顯式記錄 copy-forward 來源，例如：
+  - "copied_from_final_buy_side_delta_table"
+  - "copied_from_execution_plan_drafts_8_5"
+  - "copied_from_buy_universe_scorecard"
+  - "resolved_from_user_approved_extended_etf_static_list"
+- 不得用 template_id 反推 role_layer，因為多個 role 可共用同一 template_id，例如 T4-B。
+- 若同 ticker 在 upstream role SSOT 之間出現衝突：
+  - 視為 MUST PASS FAIL
+  - 該 row 不得標記為 compile_ready
+  - order_compiler_ready 必須 = false
+  - compiler_blockers 必須加入 "ROLE_LAYER_SSOT_CONFLICT"
+- 若無法 deterministic 決定 role_layer：
+  - 視為 MUST PASS FAIL
+  - 該 row 不得標記為 compile_ready
+  - order_compiler_ready 必須 = false
+  - compiler_blockers 必須加入 "ROLE_LAYER_SSOT_DATA_GAP"
+  - final_execution_plans 不得輸出該半完成 row；必須 audit fail 或從 final_execution_plans 移除 / 標記 blocked。
+- 若 ticker 來自 user_approved_extended_etf_static_list 且本輪以 extended ETF sleeve 啟用：
+  - role_layer 必須是 "extended_etf_minority_sleeve"
+  - role_layer_source 必須是 "resolved_from_user_approved_extended_etf_static_list" 或 "copied_from_final_buy_side_delta_table"
+  - 不得把 extended ETF 因 template_id = "T4-B" 誤歸類成 diversified_core_buffer 或 sector_alpha_tilt。
+
 6.1A) Execution Policy Resolution Precedence (NEW, MUST)
 - 若 buy-side execution row 缺少 plan_type / time_in_force / expiry_if_gtd，且該 row 可 deterministic 對應到 role_layer：
   - benchmark_carrier_core -> Strategy Settings.buy_order_template_map.benchmark_carrier_core
@@ -163,6 +196,8 @@
   - compiler_blockers 必須加入 "UPSTREAM_DATA_GAP_FROM_STRATEGY_B"
 - Audit 不得因 sell-side compile defaults 可由 Strategy Settings deterministic copy-forward 補齊，就把該問題錯誤歸因為 Strategy C compile failure。  
 
+
+
 【輸入】
 (1) RESEARCH_JSON
 (2) Portfolio Snapshot
@@ -209,6 +244,22 @@ DECISION_PACKET_END
 6.521. max_new_tickers_per_week compliance
 6.53. benchmark carrier / active tilt drift
 6.54. role layering compliance
+6.54A. final_execution_plans role_layer SSOT compliance（NEW, MUST）
+- Audit 必須確認每一筆 AUDITED_DECISION_PACKET.final_execution_plans 中 compile_ready = true 的 buy-side row：
+  - role_layer 非空
+  - role_layer_source 非空
+  - role_layer 是從 upstream role SSOT deterministic copy-forward，不得由 template_id 推斷
+  - role_layer 必須是下列 configured role buckets 之一：
+    - benchmark_carrier_core
+    - diversified_core_buffer
+    - sector_alpha_tilt
+    - extended_etf_minority_sleeve
+- 若 compile_ready = true 的 buy-side row 缺少 role_layer / role_layer_source，或 role_layer 不是 configured role buckets 之一：
+  - 視為 MUST PASS FAIL
+  - 該 row 不得標記為 compile_ready
+  - order_compiler_ready 必須 = false
+  - compiler_blockers 必須加入 "ROLE_LAYER_SSOT_DATA_GAP"
+- 若 role_layer 只能透過 template_id 反推，視為不可 deterministic；不得 PASS。
 6.55. linkage + entry_driver labeling
 6.56. no-trade primary blocker labeling
 6.57. conditional post-event order preference compliance
@@ -286,6 +337,8 @@ DECISION_PACKET_END
 - 對於 AUDITED_DECISION_PACKET.final_execution_plans 中任何 compile_ready = true 的 buy-side execution plan，Audit 必須確認至少具備以下欄位：
   - ticker
   - template_id        # NEW_ORDER 也不得為 null
+  - role_layer
+  - role_layer_source
   - final_action
   - target_open_order_budget
   - existing_open_order_budget
@@ -346,6 +399,8 @@ DECISION_PACKET_END
   - plan_type
   - time_in_force
   - expiry_if_gtd
+  - role_layer
+  - role_layer_source
 - 對於 AUDITED_DECISION_PACKET.final_sell_execution_plans 中任何 compile_ready = true 的 sell-side execution plan，
   除 8.51 已列欄位外，Audit 還必須確認下列欄位已直接存在於該 execution row：
   - event_id_refs
@@ -361,6 +416,7 @@ DECISION_PACKET_END
   - 該 row 不得標記為 compile_ready
   - order_compiler_ready 必須 = false
   - compiler_blockers 必須加入 "UPSTREAM_DATA_GAP_FROM_STRATEGY_B"
+  - 若缺失欄位為 role_layer / role_layer_source，則 compiler_blockers 必須加入 "ROLE_LAYER_SSOT_DATA_GAP"；若缺失原因是 upstream role SSOT 衝突，則 compiler_blockers 必須加入 "ROLE_LAYER_SSOT_CONFLICT"。
 - Audit 不得把 compile-ready row 留成「需要 Strategy C 再補 event refs / 結構主題 / plan_type / TIF / expiry」的半完成 bundle。
 
 8.51A. Intended-Place-Date Normalization for Retained Buy-Side Plans（NEW, MUST）
@@ -505,7 +561,7 @@ DECISION_PACKET_END
     - deferred_action_date_et = null
     - deferred_action = null
     - deferred_reason = null
-  - 若缺少 template_id / ordered_step_names / step_offsets_vs_anchor / step_budget_weights / event refs / plan_type / time_in_force / expiry_if_gtd：
+  - 若缺少 template_id / role_layer / role_layer_source / ordered_step_names / step_offsets_vs_anchor / step_budget_weights / event refs / plan_type / time_in_force / expiry_if_gtd：
     - 該 row 不得 compile_ready
     - order_compiler_ready 必須 = false
     - compiler_blockers 必須加入 "UPSTREAM_DATA_GAP_FROM_STRATEGY_B"
@@ -845,6 +901,8 @@ order_state_export_preview:
 - 欄位映射固定如下：
   - ticker -> ticker
   - template_id -> template_id
+  - role_layer -> role_layer
+  - role_layer_source -> role_layer_source
   - action_draft / order_intent / final_action_candidate -> final_action
   - existing_budget -> existing_open_order_budget
   - proposed_budget -> target_open_order_budget
@@ -871,6 +929,11 @@ order_state_export_preview:
   - time_in_force -> time_in_force
   - expiry_if_gtd -> expiry_if_gtd
   - why -> why
+- 若 Strategy A execution_plan_drafts_8_5 未明示 role_layer / role_layer_source，但同 ticker 可由 final_buy_side_delta_table / buy_universe_scorecard / enabled extended ETF sleeve deterministic copy-forward：
+  - Audit 必須依 6.1A-0 補入 role_layer / role_layer_source
+  - 這屬於 structure-only copy-forward，不得改動 ticker / budget / delta_budget / thesis / ranking / event refs / structural_theme_refs
+- Audit 不得以 template_id 作為 role_layer 的替代欄位；template_id 只代表 order template，不代表 role SSOT。
+
 
 - final_action collapse 固定如下：
   - final_action_candidate = "KEEP_EXISTING" 或 order_intent = "KEEP_EXISTING" -> final_action = "KEEP_EXISTING"
@@ -1136,6 +1199,8 @@ order_state_export_preview:
 - final_execution_plans（REQUIRED；每筆 compile_ready = true 的 row 必須具備下列欄位）
   - ticker
   - template_id
+  - role_layer
+  - role_layer_source
   - final_action
   - target_open_order_budget
   - existing_open_order_budget

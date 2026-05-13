@@ -7,6 +7,7 @@ from textwrap import dedent
 import pytest
 
 from investment_orchestrator.common.io import read_json, write_json, write_text
+from investment_orchestrator.common.schema_validation import ArtifactSchemaError, validate_artifact_schema
 from investment_orchestrator.parsers.extract_daily_execution_check import (
     DailyExecutionCheckExtractionError,
     extract_daily_execution_check,
@@ -17,7 +18,18 @@ from investment_orchestrator.validators.validate_daily_execution_actions import 
     REASON_CODE_VALUES,
     validate_daily_execution_actions,
 )
-from investment_orchestrator.workflow.daily_execution_check import render_daily_execution_check_prompt
+from investment_orchestrator.workflow.daily_execution_check import (
+    build_daily_execution_precomputed_diagnostics,
+    render_daily_execution_check_prompt,
+)
+
+
+PORTFOLIO_SNAPSHOT_BUY_OPEN_ORDERS_PATCH_HEADER = (
+    "TICKER | budget | compiled_open_order_notional(optional) | residual_cash_not_allocated(optional) | "
+    "template_id | anchor_baseline_last_close | anchor_price_asof | last_refresh_date_et(optional) | "
+    "highest_live_limit(optional) | lowest_live_limit(optional) | live_step_count(optional) | "
+    "live_order_steps_summary(optional) | live_order_qtys_summary(optional)"
+)
 
 
 def audited_packet(*, ticker: str = "QQQ") -> dict:
@@ -72,6 +84,7 @@ def valid_action_payload(
             }
         ],
         "blocked_items": [],
+        "portfolio_snapshot_existing_buy_open_orders_patch": [],
         "operator_notes": [],
     }
 
@@ -88,6 +101,30 @@ def valid_replace_packet(*, ticker: str = "QQQ", budget_delta=0) -> dict:
         "replacement_reason": "execution drift only",
         "proposed_anchor_source": "daily_market_data_snapshot.last_close",
         "notes_for_replace_packet_synthesis": "same ticker, same budget, same weekly binding",
+    }
+
+
+def valid_portfolio_snapshot_buy_open_orders_patch_item(
+    *,
+    ticker: str = "QQQ",
+    patch_type: str = "REPLACE_EXISTING_BUY_ORDER",
+) -> dict:
+    return {
+        "ticker": ticker,
+        "side": "BUY",
+        "patch_type": patch_type,
+        "paste_target_section": "PORTFOLIO_SNAPSHOT.existing_buy_open_orders_summary",
+        "paste_instruction": (
+            "Paste this row after the operator submits the order and confirms remaining quantities."
+        ),
+        "header": PORTFOLIO_SNAPSHOT_BUY_OPEN_ORDERS_PATCH_HEADER,
+        "row_text": (
+            f"{ticker} | 30320.92 | 29166.15 | 1154.77 | T4-E | 681.61 | 2026-05-05 |  | "
+            "671.39 | 558.92 | 5 | starter@671.39;L1@650.94 | starter:15;L1:11"
+        ),
+        "operator_confirmation_required": True,
+        "not_live_broker_truth_until_submitted": True,
+        "source_evidence": "Generated from Daily Execution Check action after operator confirmation.",
     }
 
 
@@ -109,6 +146,66 @@ def test_reason_code_schema_and_validator_stay_in_sync() -> None:
 
     assert schema_reason_codes == REASON_CODE_VALUES
     assert mapped_reason_codes == REASON_CODE_VALUES
+
+
+def test_daily_actions_schema_accepts_empty_portfolio_snapshot_patch() -> None:
+    validate_artifact_schema(valid_action_payload(), schema_name="daily_execution_actions.schema.json")
+
+
+@pytest.mark.parametrize("patch_type", ["REPLACE_EXISTING_BUY_ORDER", "NEW_BUY_ORDER"])
+def test_daily_actions_schema_accepts_portfolio_snapshot_patch_item(patch_type: str) -> None:
+    payload = valid_action_payload()
+    payload["portfolio_snapshot_existing_buy_open_orders_patch"] = [
+        valid_portfolio_snapshot_buy_open_orders_patch_item(patch_type=patch_type)
+    ]
+
+    validate_artifact_schema(payload, schema_name="daily_execution_actions.schema.json")
+
+
+def assert_daily_actions_schema_rejects(payload: dict, match: str) -> None:
+    with pytest.raises(ArtifactSchemaError, match=match):
+        validate_artifact_schema(payload, schema_name="daily_execution_actions.schema.json")
+
+
+def test_daily_actions_schema_rejects_missing_portfolio_snapshot_patch() -> None:
+    payload = valid_action_payload()
+    del payload["portfolio_snapshot_existing_buy_open_orders_patch"]
+
+    assert_daily_actions_schema_rejects(payload, "portfolio_snapshot_existing_buy_open_orders_patch")
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value", "expected_match"),
+    [
+        ("side", "SELL", "SELL"),
+        ("patch_type", "MODIFY_BUY_ORDER", "MODIFY_BUY_ORDER"),
+        ("paste_target_section", "PORTFOLIO_SNAPSHOT.other_section", "PORTFOLIO_SNAPSHOT.other_section"),
+        ("header", "TICKER | budget", "TICKER"),
+        ("operator_confirmation_required", False, "True was expected"),
+        ("not_live_broker_truth_until_submitted", False, "True was expected"),
+        ("source_evidence", "", "should be non-empty"),
+    ],
+)
+def test_daily_actions_schema_rejects_invalid_portfolio_snapshot_patch_fields(
+    field_name: str,
+    invalid_value: object,
+    expected_match: str,
+) -> None:
+    payload = valid_action_payload()
+    patch_item = valid_portfolio_snapshot_buy_open_orders_patch_item()
+    patch_item[field_name] = invalid_value
+    payload["portfolio_snapshot_existing_buy_open_orders_patch"] = [patch_item]
+
+    assert_daily_actions_schema_rejects(payload, expected_match)
+
+
+def test_daily_actions_schema_rejects_unexpected_portfolio_snapshot_patch_property() -> None:
+    payload = valid_action_payload()
+    patch_item = valid_portfolio_snapshot_buy_open_orders_patch_item()
+    patch_item["unexpected"] = "nope"
+    payload["portfolio_snapshot_existing_buy_open_orders_patch"] = [patch_item]
+
+    assert_daily_actions_schema_rejects(payload, "Additional properties are not allowed")
 
 
 def write_weekly_sources(tmp_path: Path, *, ticker: str = "QQQ") -> tuple[Path, Path, Path]:
@@ -335,6 +432,56 @@ def test_old_settings_without_near_edge_keeps_feature_disabled() -> None:
     )
 
     assert parsed["actions"][0]["action"] == "KEEP"
+
+
+def test_precomputed_diagnostics_do_not_infer_role_from_ambiguous_template_id() -> None:
+    portfolio_snapshot = dedent(
+        """
+        (2a) existing_buy_open_orders_summary
+        TICKER | budget | compiled_open_order_notional(optional) | residual_cash_not_allocated(optional) | template_id | anchor_baseline_last_close | anchor_price_asof | last_refresh_date_et(optional) | highest_live_limit(optional) | lowest_live_limit(optional) | live_step_count(optional) | live_order_steps_summary(optional) | live_order_qtys_summary(optional)
+        CIBR | 1000 | 900 | 100 | T4-B | 75.32 | 2026-05-08 | 2026-05-11 | 70.80 | 57.24 | 4 | L1@70.80;L2@67.03;L3@62.52;L4@57.24 | L1:8;L2:11;L3:19;L4:24
+        (2b) sell_open_orders
+        """
+    )
+    settings = {
+        "buy_order_template_map": {
+            "diversified_core_buffer": {"template_id": "T4-B"},
+            "extended_etf_minority_sleeve": {"template_id": "T4-B"},
+        },
+        "daily_execution_drift_policy": {
+            "ticker_role_fallback": {},
+            "keep_tolerance": {
+                "anchor_drift_abs_pct_static_cap": {"diversified_core_buffer": 4.5},
+                "anchor_drift_atr_multiple_cap": {"diversified_core_buffer": 2.5},
+                "max_negative_distance_to_highest_live_limit_pct": {"diversified_core_buffer": 6.0},
+            },
+            "near_edge_monitor_band": {
+                "anchor_drift_pct_band": {"diversified_core_buffer": 1.0},
+                "highest_live_limit_distance_pct_band": {"diversified_core_buffer": 1.0},
+            },
+        },
+    }
+
+    diagnostics = build_daily_execution_precomputed_diagnostics(
+        portfolio_snapshot=portfolio_snapshot,
+        daily_market_data_snapshot={
+            "tickers": [
+                {
+                    "ticker": "CIBR",
+                    "last_close": 75.43,
+                    "price_asof": "2026-05-11",
+                    "atr_20_30d_pct": 2.4,
+                }
+            ]
+        },
+        audited_packet=audited_packet(ticker="CIBR"),
+        settings=settings,
+    )
+
+    row = diagnostics["diagnostics"][0]
+    assert row["ticker"] == "CIBR"
+    assert row["role_used"] is None
+    assert "role_used" in row["data_gap_fields"]
 
 
 def test_workflow_render_writes_to_daily_artifacts_not_current(tmp_path: Path) -> None:

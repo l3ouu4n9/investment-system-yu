@@ -304,9 +304,13 @@ def _role_for_ticker(
     template_id = str(row.get("template_id") or "").strip()
     template_map = settings.get("buy_order_template_map")
     if isinstance(template_map, dict) and template_id:
-        for role, config in template_map.items():
-            if isinstance(config, dict) and str(config.get("template_id") or "").strip() == template_id:
-                return str(role)
+        matching_roles = [
+            str(role)
+            for role, config in template_map.items()
+            if isinstance(config, dict) and str(config.get("template_id") or "").strip() == template_id
+        ]
+        if len(matching_roles) == 1:
+            return matching_roles[0]
     return None
 
 
