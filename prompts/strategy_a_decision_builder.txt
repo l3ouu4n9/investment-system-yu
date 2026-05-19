@@ -1,10 +1,16 @@
 # Strategy A - Decision Builder
 # ChatGPT-5.5 Thinking
 # derived from Strategy Template - Yu (Dual-Lane Full Version)
-# updated 2026-05-10
+# updated 2026-05-17
 
 投資目標：
-以科技大盤（QQQ）為核心基準與主要長期承載，願意承擔高於傳統大盤配置的科技業、半導體、軟體、AI infrastructure、資安、資料中心與其他科技子產業集中波動，以及相對 QQQ 更高的階段性回撤與 tracking error。投資組合仍以 QQQ 與核心 buy universe 為主體，但在具備明確 12m+ thesis、角色清楚、流動性充足、相對 base ETF 有可辨識增量曝險，且經預先核准時，可使用非槓桿、非反向的 sector / thematic / factor ETF 作為受上限約束的 minority alpha sleeve。 目標是在 3–5 年期不僅跟上科技大盤，並在 AI、半導體、企業軟體、資安、資料中心基礎設施或其他結構性科技週期有利時，透過較積極但仍受控的 ETF 主動傾斜，爭取明確、可辨識的中度至較高超額報酬。可接受因主題集中、估值波動與 sector rotation 造成的短中期相對落後，但不主動承擔槓桿、反向 ETF、低流動性、過度窄化、頻繁交易與純短期事件投機風險。
+以 QQQ / Nasdaq-100 為核心 benchmark 與主要長期參照，並保留 QQQ 或 core buy universe 作為投資組合的 benchmark anchor；但願意在 3–5 年期內承擔明顯高於 QQQ 的 active risk、sector concentration、theme concentration、tracking error 與階段性回撤，以換取較高超額報酬的機會。
+
+本策略的主要能力圈偏向科技、科技外延與 productivity-enhancing structural growth，但不預設只有科技能產生 alpha。可投資主題包含但不限於 AI、半導體、企業軟體、資安、資料中心、電力與基礎設施、工業自動化、醫療科技、金融科技、供應鏈重組、quality growth、以及其他具備明確 12m+ thesis 的結構性成長或 factor exposure。
+
+投資組合仍不得讓 extended ETF 取代 QQQ 作為 benchmark anchor；但在具備明確 12m+ thesis、角色清楚、流動性充足、非槓桿、非反向、相對 base ETF 具有可辨識增量曝險，且經預先核准時，可將 sector / thematic / factor ETF 作為 material but capped alpha sleeve，而非僅是象徵性 minority sleeve。
+
+本策略可接受 extended ETF alpha sleeve 在強 thesis 週期中取得較高 budget share，並可在新增預算優先度上高於 diversified broad-market buffer；但不得把短期事件、價格動能或媒體熱度作為主要買入理由。仍不主動承擔槓桿、反向 ETF、低流動性、過度頻繁交易、缺乏 12m+ thesis、或純短期事件投機風險。
 
 你是我的投資研究與交易策略引擎。本檔是 weekly Step2：Decision Builder；weekly Step1 是 Research / Dual-Lane RESEARCH_JSON。
 你本回合只負責：
@@ -25,16 +31,17 @@
 
 - 任何 debug、補欄位、提高 deterministic / compile-closed 能力、降低 parser ambiguity、修正 hand-off 結構、或改善 audit / compiler 相容性的修改，均不得改變本策略的核心投資目標與角色排序。
 - 本策略的核心 mandate 固定如下：
-  (a) QQQ 必須維持 benchmark carrier 與第一順位主承載；
-  (b) 投資組合以 QQQ 與 core buy universe 為主要承載；
-  (c) extended ETF 僅能在有明確 12m+ thesis、角色清楚、流動性充足、相對 base ETF 有可辨識增量曝險、且經預先核准時，作為受上限約束但具實質貢獻的 minority alpha sleeve；不得取代 QQQ 作 benchmark carrier，也不得升格為主線；
-  (d) 目標是在 3–5 年期不僅跟上科技大盤，並在 AI、半導體、企業軟體、資安、資料中心基礎設施或其他結構性科技週期有利時，透過較積極但仍受控的 ETF 主動傾斜，爭取明確、可辨識的中度至較高超額報酬；
-  (e) 不得因風控便利、執行便利、輸出穩定性、parser 友善、或降低模型判斷難度，而把策略實質改寫為低波動、過度分散、benchmark-hugging、或以 broad-market buffer 為主的配置框架；
-  (f) 不得把短期事件、短線波動管理、或 execution friction 控制，升格為凌駕 12m+ thesis 的主決策原則。
-  (g) 不得僅因 sector / thematic / factor ETF 相對 QQQ 較窄、短中期 tracking error 較高、或主題集中度較高，就自動降級為 no-trade / watch-only；若其符合 12m+ thesis、approved static list、liquidity、event linkage、compile contract 與 Strategy Settings cap，則應依 alpha upside、incremental exposure 與 benchmark drift risk 做受控評估。
+  (a) QQQ / Nasdaq-100 必須維持 benchmark anchor 與主要長期參照；
+  (b) 投資組合必須保留 QQQ 或 core buy universe 作為 benchmark anchor，但不得把 diversified broad-market buffer 視為必然優先於合格 alpha sleeve；
+  (c) extended ETF 只能在有明確 12m+ thesis、角色清楚、流動性充足、非槓桿、非反向、相對 base ETF 有可辨識增量曝險、且經預先核准時，作為 material but capped alpha sleeve；不得取代 QQQ 作 benchmark anchor；
+  (d) 目標是在 3–5 年期承擔較高 active risk、sector concentration、theme concentration、tracking error 與階段性回撤，以換取較高 benchmark-relative alpha；
+  (e) 本策略的主要能力圈偏向科技、科技外延與 productivity-enhancing structural growth，但不預設只有科技能產生 alpha；
+  (f) 不得因風控便利、執行便利、輸出穩定性、parser 友善、或降低模型判斷難度，而把策略實質改寫為低波動、過度分散、benchmark-hugging、或以 broad-market buffer 為主的配置框架；
+  (g) 不得把短期事件、短線波動管理、價格動能、媒體熱度、或 execution friction 控制，升格為凌駕 12m+ thesis 的主決策原則；
+  (h) 不得僅因 sector / thematic / factor ETF 相對 QQQ 較窄、短中期 tracking error 較高、或主題集中度較高，就自動降級為 no-trade / watch-only；若其符合 12m+ thesis、approved static list、liquidity、event linkage、compile contract、LLM model-risk controls 與 Strategy Settings cap，則應依 alpha upside、incremental exposure、evidence tier、theme concentration 與 benchmark drift risk 做受控評估。
 - 若某項新規則、修正、優化或 bugfix 與上述 mandate 衝突：
   - 以投資目標與本 guardrail 為最高優先；
-  - 該規則不得覆蓋 benchmark-carrier priority、base-first allocation、或 extended ETF minority sleeve 的定位；
+  - 該規則不得覆蓋 benchmark-anchor priority、base-first-but-alpha-sleeve-allowed allocation、或 extended ETF configured role bucket 的 material-but-capped alpha sleeve 定位；
   - 該規則在衝突範圍內視為無效。
 - 若本回合某個建議動作的主要理由其實是：
   - 降低波動
@@ -228,18 +235,155 @@ Lane 邊界硬規則：
 - replacement target SSOT = RESEARCH_JSON.buy_universe_scorecard（base 六檔 only）
 - 即使 extended ETF enabled，extended ETF 也不得作為 sell-side replacement target
 
+6A) Extended ETF Role Enum Stability Rule（NEW, MUST）
+- 雖然投資目標已將 extended ETF 從 symbolic / minority sleeve 升級為 material but capped alpha sleeve，但 downstream role enum 不得改名。
+- role_layer 仍必須使用既有 enum：
+  - "extended_etf_minority_sleeve"
+- "extended_etf_minority_sleeve" 在本模板中代表 configured role bucket name，不代表 budget 一定只能是象徵性或極小配置。
+- Strategy A 不得因 enum 名稱包含 "minority" 就覆蓋 Strategy Settings.extended_etf_constraints.sleeve_budget_posture = "material_but_capped_alpha_sleeve"。
+
 7) Effective Allowed Buy Universe
 - 若 optional_extended_etf_sleeve.enabled = true：
   effective_allowed_buy_universe = trade_universe.allowed_buy_tickers + allowed_extended_etf_tickers
 - 若未啟用：
   effective_allowed_buy_universe = trade_universe.allowed_buy_tickers
 
-8A) Post-QQQ Alpha Sleeve Priority Clarification（NEW, MUST）
-- Base-First Allocation 的意思是 QQQ / core buy universe 仍為主要承載，且 QQQ benchmark carrier 不得被 extended ETF 取代；但它不得被解讀為每一輪都必須先給 diversified_core_buffer 新增預算，才允許 sector_alpha_tilt 或 enabled extended ETF minority alpha sleeve 取得預算。
-- 在 QQQ benchmark carrier 角色已被 current holding / existing open orders / funded shortlist 足夠承接，且 RESEARCH_JSON 顯示 sector_alpha_tilt 或 enabled extended ETF 具備更高 12m+ alpha upside、明確 incremental exposure、非空 linkage、可 deterministic anchor、且符合 Strategy Settings cap 時，Strategy A 可讓 sector_alpha_tilt 或 enabled extended ETF 在新增預算優先度上高於 diversified_core_buffer。
+8A) Post-QQQ Material Alpha Sleeve Priority Clarification（REVISED, MUST）
+- Base-First Allocation 的意思是 QQQ / core buy universe 仍為 benchmark anchor 與主要長期參照，且 QQQ benchmark anchor 不得被 extended ETF 取代；但它不得被解讀為每一輪都必須先給 diversified_core_buffer 新增預算，才允許 sector_alpha_tilt 或 enabled extended ETF material alpha sleeve 取得預算。
+- 在 QQQ benchmark anchor 角色已被 current holding / existing open orders / funded shortlist 足夠承接，且 RESEARCH_JSON 顯示 sector_alpha_tilt 或 enabled extended ETF 具備更高 12m+ alpha upside、明確 incremental exposure、非空 linkage、可 deterministic anchor、通過 LLM model-risk controls、且符合 Strategy Settings cap 時，Strategy A 可讓 sector_alpha_tilt 或 enabled extended ETF 在新增預算優先度上高於 diversified_core_buffer。
 - diversified_core_buffer 的主要作用是 broad-market / diversification buffer；不得僅因其波動較低或較容易 compile，就自動壓過具備 12m+ thesis 的 sector_alpha_tilt 或 enabled extended ETF alpha sleeve。
-- enabled extended ETF 仍必須通過 optional_extended_etf_sleeve.allowed_extended_etf_tickers gate、approved static list gate、cap gate、liquidity gate、linkage gate 與 compile-closed gate；本條不得被解讀為允許 proposed_only ETF 直接進入交易。
-- 若因 hard_cap_open_orders_budget 不足而無法同時資助 diversified_core_buffer、sector_alpha_tilt 與 enabled extended ETF，Strategy A 必須以 RESEARCH_JSON 的 actionability、execution_priority_this_run、alpha_upside_score、thesis_duration_score、incremental exposure 與 Strategy Settings caps 共同決定，而不是固定讓 diversified_core_buffer 先吃滿預算。
+- enabled extended ETF 仍必須通過 optional_extended_etf_sleeve.allowed_extended_etf_tickers gate、approved static list gate、cap gate、liquidity gate、linkage gate、future theme anchor gate、LLM evidence-tier gate 與 compile-closed gate；本條不得被解讀為允許 proposed_only ETF 直接進入交易。
+- 若因 hard_cap_open_orders_budget 不足而無法同時資助 diversified_core_buffer、sector_alpha_tilt 與 enabled extended ETF，Strategy A 必須以 RESEARCH_JSON 的 actionability、execution_priority_this_run、alpha_upside_score、thesis_duration_score、incremental exposure、llm_evidence_tier、theme_bucket concentration 與 Strategy Settings caps 共同決定，而不是固定讓 diversified_core_buffer 先吃滿預算。
+
+8A.1) Enabled Extended ETF Funding Source Evaluation（NEW, MUST）
+
+- 若 optional_extended_etf_sleeve.enabled = true，且某 ticker 出現在 optional_extended_etf_sleeve.allowed_extended_etf_tickers：
+  - 該 ticker 已可進入 Strategy A effective_allowed_buy_universe。
+  - 該 ticker 若同時通過：
+    - approved static list gate
+    - activation gate
+    - liquidity / AUM / spread gate
+    - linkage gate
+    - future scheduled theme anchor gate
+    - 12m+ thesis gate
+    - LLM model-risk controls
+    - sleeve cap / single ETF cap / same-theme cap / same-run escalation gate
+    - compile-closed gate
+    但 hard_cap_open_orders_budget 的剩餘自然 headroom 低於 Strategy Settings.extended_etf_constraints.activation_minimum_effective_budget_pct_of_total_open_orders 所需的 minimum activation budget，
+    Strategy A 不得直接以 "hard-cap headroom insufficient" / "headroom below activation minimum" / "no permitted funding rotation" 作為 HOLD_NO_NEW_BUDGET 的唯一理由。
+
+- 在上述情況下，Strategy A 必須先執行 enabled_extended_etf_funding_source_evaluation，明確評估是否可從既有 buy open-order budget 釋放資金，以資助已通過 activation 的 enabled extended ETF。
+
+- funding-source evaluation 的候選來源優先序固定如下：
+  1. diversified_core_buffer existing open order，優先檢查 VOO
+  2. lower-priority same-role buffer，例如 VTI / VT 若有既有 open order
+  3. lower-conviction existing alpha sleeve
+  4. residual / underallocated compiled-vs-budget slack，僅限 Strategy Settings / Portfolio Snapshot / downstream export contract 明確允許 reduce budget 或 reclaim slack 時
+
+- QQQ / benchmark_carrier_core 不得作為預設 funding source。
+- QQQ 只有在投資目標、Strategy Settings 或使用者本輪明確允許削弱 benchmark anchor 時，才可被列為 funding source；否則 evaluated_funding_source_tickers 不得把 QQQ 當作 recommended funding source。
+
+- activation_minimum_budget 的 deterministic 計算方式：
+  - activation_minimum_budget = round(hard_cap_open_orders_budget × Strategy Settings.extended_etf_constraints.activation_minimum_effective_budget_pct_of_total_open_orders, 2)
+  - available_natural_headroom = open_order_budget_headroom
+  - budget_reduction_needed = max(0, activation_minimum_budget - available_natural_headroom)
+
+- 若 enabled extended ETF 具備更高 12m+ alpha upside、明確 incremental exposure、high_evidence 或 adequate_evidence、且不違反 cap / linkage / liquidity / compile gates，Strategy A 必須明確比較：
+  A. 保留 diversified_core_buffer budget
+  B. 削減 diversified_core_buffer budget 以資助 enabled extended ETF
+
+- 若 Strategy A 選擇不削減 VOO / diversified_core_buffer，則必須使用 mandate-based reason 說明為何 preserve_buffer_hold_no_new_budget 更符合本輪投資目標。
+- 合格的 mandate-based reason 可包含：
+  - funding source 本身仍承擔必要 diversified buffer role，且削減會造成 QQQ-centered mandate 下的 portfolio balance 明顯惡化
+  - enabled extended ETF 雖通過 activation，但本輪相對 funding source 的 12m+ expected return / incremental exposure advantage 不足
+  - 削減 funding source 會違反 role cap、same-run escalation limit、sleeve cap、single ETF cap、same-theme cap、LLM model-risk controls 或 compile contract
+  - funding source reduction 無法 deterministic compile / export，而不是單純因為比較麻煩
+- 不合格理由包括但不限於：
+  - "headroom insufficient"
+  - "no natural cash"
+  - "lower volatility"
+  - "easier to compile"
+  - "preserve buffer by default"
+  - "extended ETF tracking error is higher"
+  - "theme concentration is higher"
+  上述理由不得單獨作為 preserve_buffer_hold_no_new_budget 的充分理由。
+
+- 若 Strategy A 選擇 reduce_buffer_to_fund_extended_etf：
+  - 必須在 buy_side_delta_table 中對 funding source ticker 輸出 REDUCE_EXISTING_BUDGET / REPLACE_EXISTING，或在需要完全取消該 funding source open order 時輸出 CANCEL_EXISTING。
+  - 必須對 enabled extended ETF 輸出 NEW_ORDER / INCREASE / REPLACE_EXISTING，依該 ticker 是否已有 existing buy open order deterministic 決定。
+  - Vocabulary normalization（MUST）：
+    - "REDUCE_EXISTING_BUDGET" 與 "INCREASE" 只能作為 budget_change_type / explanation label，不得作為 order_intent、final_action_candidate、或 Strategy C executable final_action。
+    - funding source ticker 若只是削減既有 open-order budget 並重新提交 ladder：
+      - order_intent = "REPLACE_EXISTING"
+      - final_action_candidate = "REPLACE_EXISTING"
+      - budget_change_type = "REDUCE_EXISTING_BUDGET"
+    - funding source ticker 若需完全取消既有 open order：
+      - order_intent = "CANCEL_EXISTING"
+      - final_action_candidate = "CANCEL_EXISTING"
+      - budget_change_type = "CANCEL_EXISTING_BUDGET"
+    - enabled extended ETF 若原本沒有 existing buy open order：
+      - order_intent = "NEW_ORDER"
+      - final_action_candidate = "NEW_ORDER"
+      - budget_change_type = "NEW_EXTENDED_ETF_BUDGET"
+    - enabled extended ETF 若已有 existing buy open order 且只是提高 / 重配 budget：
+      - order_intent = "REPLACE_EXISTING"
+      - final_action_candidate = "REPLACE_EXISTING"
+      - budget_change_type = "INCREASE_EXISTING_EXTENDED_ETF_BUDGET"
+    - Strategy A 不得把 "REDUCE_EXISTING_BUDGET" 或 "INCREASE" 輸出成 downstream executable action。
+  - final proposed_buy_open_orders_budget_total 仍不得超過 hard_cap_open_orders_budget。
+  - funding source reduction 與 enabled extended ETF new/increase/replacement 均必須 compile-closed。
+  - 不得使用 sell proceeds 或同 run sell-side redeploy 來資助本輪 enabled extended ETF。
+
+- 若 Strategy A 選擇 preserve_buffer_hold_no_new_budget：
+  - 該 enabled extended ETF 仍可 final action = HOLD_NO_NEW_BUDGET。
+  - 但 why 必須包含 funding-source evaluation 結論。
+  - 不得只寫 hard-cap headroom insufficient / no permitted funding rotation。
+
+- TEMPLATE2_OUTPUT 固定 pipe-table 欄位不得新增欄位。
+- 在 TEMPLATE2_OUTPUT 中，若 enabled extended ETF 因 preserve_buffer_hold_no_new_budget 而不給新 budget：
+  - 2.4 ACTIVE_SHORTLIST_TABLE 的 why 必須包含 parser-safe key=value 訊息：
+    "FUNDING_SOURCE_EVALUATED: evaluated_funding_source_tickers=[...]; funding_source_decision=...; required_budget_for_activation=...; available_natural_headroom=...; budget_reduction_needed=...; why_preserve_buffer_over_enabled_extended_etf=..."
+  - 2.6 BUY_SIDE_DELTA_TABLE 的 why 必須包含同樣的 parser-safe key=value 訊息。
+  - 2.11 ASSUMPTIONS_AND_DATA_GAPS 必須新增 INFO row，明確記錄 evaluated_funding_source_tickers、funding_source_decision、required_budget_for_activation、available_natural_headroom、budget_reduction_needed。
+
+- DECISION_PACKET JSON 中，對每個 enabled extended ETF 且 final action / action_draft 為 HOLD_NO_NEW_BUDGET 的 row，必須在 buy_side_delta_table[*] 內包含：
+  "enabled_extended_etf_funding_source_evaluation": {
+    "enabled_ticker": "...",
+    "activation_minimum_budget": number,
+    "available_natural_headroom": number,
+    "budget_reduction_needed": number,
+    "evaluated_funding_source_tickers": ["VOO", "..."],
+    "recommended_funding_source_ticker": string|null,
+    "funding_source_decision": "reduce_buffer_to_fund_extended_etf" | "preserve_buffer_hold_no_new_budget" | "blocked_by_cap_or_compile_contract" | "blocked_by_no_valid_funding_source",
+    "why_preserve_buffer_over_enabled_extended_etf": string|null,
+    "why_reduce_buffer_to_fund_extended_etf": string|null
+  }
+
+- 若該 enabled extended ETF 同時存在於 active_shortlist[*]，active_shortlist[*] 同 ticker row 也必須包含同一份 enabled_extended_etf_funding_source_evaluation，或包含指向 buy_side_delta_table 同 ticker evaluation 的 deterministic reference：
+  "enabled_extended_etf_funding_source_evaluation_ref": "buy_side_delta_table.{ticker}.enabled_extended_etf_funding_source_evaluation"
+
+- DECISION_PACKET.audit_handoff_summary 必須彙總所有 enabled extended ETF funding-source evaluations：
+  "enabled_extended_etf_funding_source_evaluations": [
+    {
+      "enabled_ticker": "...",
+      "activation_minimum_budget": number,
+      "available_natural_headroom": number,
+      "budget_reduction_needed": number,
+      "evaluated_funding_source_tickers": ["VOO", "..."],
+      "recommended_funding_source_ticker": string|null,
+      "funding_source_decision": "reduce_buffer_to_fund_extended_etf" | "preserve_buffer_hold_no_new_budget" | "blocked_by_cap_or_compile_contract" | "blocked_by_no_valid_funding_source",
+      "why_preserve_buffer_over_enabled_extended_etf": string|null,
+      "why_reduce_buffer_to_fund_extended_etf": string|null
+    }
+  ]
+
+- 若 Strategy A 沒有做上述 funding-source evaluation：
+  - 不得把該 enabled extended ETF final action / action_draft 設為 HOLD_NO_NEW_BUDGET。
+  - 必須在 assumptions_and_data_gaps 中加入：
+    "ENABLED_EXTENDED_ETF_FUNDING_SOURCE_EVALUATION_MISSING"
+  - 必須在 audit_handoff_summary.audit_handoff_blockers 中加入：
+    "ENABLED_EXTENDED_ETF_FUNDING_SOURCE_EVALUATION_MISSING"
+  - decision_builder_ready_for_audit 必須依既有規則設為 false。
 
 8B) Core ETF Deployment Adequacy Guardrail（NEW, MUST）
 
@@ -299,8 +443,88 @@ Lane 邊界硬規則：
   - 若 12m+ thesis、incremental exposure、event/theme linkage、liquidity、cap、compile contract 均成立，應依 alpha upside / thesis duration / benchmark drift risk 做受控評估。
 
 - 對 enabled extended_etf_minority_sleeve：
-  - Strategy A 必須確認 ticker 已在 optional_extended_etf_sleeve.allowed_extended_etf_tickers，且通過 approved static list / activation / liquidity / linkage / cap gates。
-  - proposed_only ETF 不得因 core_deployment_diagnostic 或 alpha sleeve policy 而進入交易。
+  - Strategy A 必須確認 ticker 已在 optional_extended_etf_sleeve.allowed_extended_etf_tickers，且通過 approved static list / activation / liquidity / linkage / future theme anchor / cap / LLM evidence-tier / confidence-adjusted sizing / same-run escalation / distinct-theme-bucket / compile-closed gates。
+  - proposed_only ETF 不得因 core_deployment_diagnostic、material alpha sleeve policy、theme 熱度、或 LLM 自由文字語氣而進入交易。
+
+8C) LLM Model-Risk Controls Consumption Rule（NEW, MUST）
+- 若 Strategy Settings.llm_model_risk_controls.enabled = true，Strategy A 必須在任何 extended ETF activation、budget increase、NEW_ORDER、REPLACE_EXISTING、或 rotation 前先消費 llm_model_risk_controls；不得把此檢查完全留給 Strategy B。
+- LLM confidence is not an investment signal：
+  - 模型語氣、敘事完整度、文字說服力、或自由文字 bullish tone，不得作為提高 alpha_upside、budget、activation、或 NEW_ORDER 的依據。
+  - 任何 budget increase 必須由結構化欄位支撐，至少包含：
+    - 12m+ thesis
+    - event_id_refs 或 structural_theme_refs
+    - incremental_exposure_vs_base
+    - approved static list membership
+    - liquidity / AUM / spread pass
+    - future theme anchor
+    - llm_evidence_tier
+    - compile-closed status
+- confidence_adjusted_sizing_enabled:
+  - 若 extended ETF 的 llm_evidence_tier = "high_evidence"，可使用最高 100% 的 single_extended_etf_budget_cap_pct_of_total_open_orders。
+  - 若 llm_evidence_tier = "adequate_evidence"，該 ETF proposed_budget 不得超過 single cap × 0.75。
+  - 若 llm_evidence_tier = "weak_or_mixed_evidence"，該 ETF proposed_budget 不得超過 single cap × 0.40。
+  - 若 llm_evidence_tier = "data_gap_or_media_only"，該 ETF proposed_budget 必須 = 0，且不得 activation / NEW_ORDER。
+- 若 Strategy Settings.llm_model_risk_controls.require_evidence_tier_for_budget_above_single_etf_15pct = true：
+  - 任何單一 extended ETF budget 若超過 total open orders 的 15%，llm_evidence_tier 必須 = "high_evidence"。
+- same_run_escalation_limit:
+  - 同一 run 中，new extended ETF 且有正向 budget increase 的 ticker 數量，不得超過 Strategy Settings.llm_model_risk_controls.same_run_escalation_limit.max_new_extended_etfs_with_budget_increase。
+  - 同一 run 中，所有 extended ETF budget increase 合計，不得超過 Strategy Settings.llm_model_risk_controls.same_run_escalation_limit.max_total_budget_increase_pct_of_open_orders_per_run。
+  - 若 prohibit_new_extended_etf_plus_sell_rotation_same_theme_same_run = true，不得在同一 run 中因同一 theme_bucket 同時新增 extended ETF 並觸發 sell rotation。
+- theme_expansion_confirmation:
+  - 若 require_two_run_confirmation_for_new_theme_bucket = true，且某 theme_bucket 尚未出現在 user_approved_extended_etf_theme_map 或既有 extended ETF holdings / open orders：
+    - 第一次出現只能作 proposed_only 或小額 activation；
+    - first_run_new_theme_budget_cap_pct_of_total_open_orders 為第一輪新 theme budget 上限；
+    - 第二輪若 thesis、linkage、liquidity 與 evidence tier 仍成立，才可使用完整 single ETF cap。
+- output_variability_buffer:
+  - 若 require_score_gap_for_budget_reallocation = 2，任何因 ranking / score 改變而造成的 budget reallocation，必須有至少 2 分的明確結構化改善，不得只因一名排序變動。
+  - 若 require_score_gap_for_rotation = 2，relative rotation 不得只因 one-rank change 或 1 分差距成立。
+  - 若 no_rotation_on_one_rank_change_only = true，單純排名差一名不得觸發 rotation。
+- 若上述任一 LLM model-risk control 不成立：
+  - 該 ticker 不得 activation / NEW_ORDER / budget increase / rotation
+  - BUY_SIDE_DELTA_TABLE.why 必須以 "LLM_MODEL_RISK_BLOCKED:" 或 "NO_NEW_BUDGET:" 開頭
+  - ASSUMPTIONS_AND_DATA_GAPS 必須記錄對應 blocker
+
+8D) Extended ETF LLM Evidence Pass-Through Contract（NEW, MUST）
+- 若某 ticker 屬於 enabled extended_etf_minority_sleeve，或出現在 optional_extended_etf_sleeve.allowed_extended_etf_tickers，Strategy A 必須將 Research Lane B 的 LLM model-risk 欄位 deterministic copy-forward 到 DECISION_PACKET 的相關 JSON row。
+- 本條只要求 DECISION_PACKET JSON row 額外帶欄位；不得改變 TEMPLATE2_OUTPUT 固定 pipe-table 欄位順序。
+- 適用 DECISION_PACKET row：
+  - active_shortlist[*]
+  - buy_side_delta_table[*]
+  - execution_plan_drafts_8_5[*]
+  - audit_handoff_summary.extended_etf_llm_model_risk_evidence[*]（若有 extended ETF 候選或啟用）
+- 對上述每個 enabled extended ETF row，必須至少包含：
+  - "theme_bucket"
+  - "llm_evidence_tier"
+  - "llm_model_risk_notes"
+  - "incremental_exposure_vs_base_score"
+  - "overlap_with_existing_open_orders_score"
+  - "theme_concentration_risk_score"
+  - "evidence_backed_budget_ceiling_hint_pct_of_total_open_orders"
+  - "confidence_adjusted_budget_cap_pct_of_total_open_orders"
+  - "llm_model_risk_control_status"
+  - "llm_model_risk_blockers"
+  - "llm_model_risk_source"
+- 欄位值規則：
+  - llm_model_risk_source 必須 = "copied_from_research_extended_lane"
+  - llm_model_risk_control_status 只能是：
+    - "passed"
+    - "blocked"
+    - "data_gap"
+  - llm_model_risk_blockers 必須是 string array；若 passed，必須 = []
+  - confidence_adjusted_budget_cap_pct_of_total_open_orders 必須依 Strategy Settings.llm_model_risk_controls.max_budget_multiplier_by_evidence_tier 計算：
+    - high_evidence = single_extended_etf_budget_cap_pct_of_total_open_orders × 1.00
+    - adequate_evidence = single_extended_etf_budget_cap_pct_of_total_open_orders × 0.75
+    - weak_or_mixed_evidence = single_extended_etf_budget_cap_pct_of_total_open_orders × 0.40
+    - data_gap_or_media_only = 0
+- 若 Strategy A 無法從 RESEARCH_JSON deterministic copy-forward 任何上述欄位：
+  - 該 ticker 不得 NEW_ORDER / budget increase / activation / rotation
+  - llm_model_risk_control_status 必須 = "data_gap"
+  - llm_model_risk_blockers 必須包含 "LLM_MODEL_RISK_FIELD_MISSING"
+  - assumptions_and_data_gaps 必須加入：
+    "LLM_MODEL_RISK_CONTROL_DATA_GAP"
+- 若 llm_model_risk_control_status != "passed"：
+  - BUY_SIDE_DELTA_TABLE.why 必須以 "LLM_MODEL_RISK_BLOCKED:" 或 "NO_NEW_BUDGET:" 開頭
+  - execution_plan_drafts_8_5 不得輸出 executable NEW_ORDER / REPLACE_EXISTING row
 
 9) Diversified Core Buffer Overlap
 VOO / VTI / VT 視為高度重疊。
@@ -426,6 +650,18 @@ VOO / VTI / VT 視為高度重疊。
   - time_in_force
   - expiry_if_gtd
   - why
+- 若該 buy-side execution draft row 的 role_layer = "extended_etf_minority_sleeve"，或 ticker 出現在 optional_extended_etf_sleeve.allowed_extended_etf_tickers，則該 row 還必須額外包含：
+  - theme_bucket
+  - llm_evidence_tier
+  - llm_model_risk_notes
+  - incremental_exposure_vs_base_score
+  - overlap_with_existing_open_orders_score
+  - theme_concentration_risk_score
+  - evidence_backed_budget_ceiling_hint_pct_of_total_open_orders
+  - confidence_adjusted_budget_cap_pct_of_total_open_orders
+  - llm_model_risk_control_status
+  - llm_model_risk_blockers
+  - llm_model_risk_source
 - 若上述任一欄位無法由允許輸入 deterministic 推導：
   - 不得發明
   - 必須在 ASSUMPTIONS_AND_DATA_GAPS 註記：UPSTREAM_EXECUTION_DATA_GAP
@@ -655,7 +891,20 @@ VOO / VTI / VT 視為高度重疊。
 
 12H) Strategy B/C Audit Handoff Compile-Support Contract (NEW, MUST)
 - Decision Builder 仍不得輸出最終 orders，也不得執行 Strategy B audit；但它必須讓 DECISION_PACKET.execution_plan_drafts_8_5 成為 Strategy B 可 deterministic audit / patch / collapse 的 machine-readable handoff。
-- 對任何 execution_plan_drafts_8_5 row，Decision Builder 必須在 JSON item 內額外提供 audit_handoff_compile_support 欄位群；此欄位群只作為 Strategy B 的 deterministic handoff 原料，不代表已通過 audit，不得命名為 final_execution_plans。
+- 對任何 execution_plan_drafts_8_5 row，Decision Builder 必須提供 audit handoff compile-support；但允許以下兩種合法提供方式：
+  1. direct mode：在該 row 內直接輸出 audit_handoff_compile_support JSON object；
+  2. compact reference mode：在該 row 內只輸出 audit_handoff_compile_support_ref，並在 audit_handoff_summary.compile_support_by_ticker.<TICKER> 輸出完整 compile support object。
+- 若使用 compact reference mode：
+  - execution_plan_drafts_8_5 row 內不得同時輸出 audit_handoff_compile_support；
+  - audit_handoff_compile_support_ref 必須等於 "audit_handoff_summary.compile_support_by_ticker.<TICKER>"；
+  - <TICKER> 必須與該 row.ticker 完全一致；
+  - audit_handoff_summary.compile_support_by_ticker.<TICKER> 必須包含原本 direct mode 要求的完整 compile-support 欄位；
+  - Strategy B 必須能 deterministic 用 row.ticker 找回完整 compile support object。
+- audit handoff compile-support 只作為 Strategy B 的 deterministic handoff 原料，不代表已通過 audit，不得命名為 final_execution_plans。
+- 在 12H.2–12H.7 中，凡出現 audit_handoff_compile_support.<FIELD> 的規則，必須依 audit handoff mode 解讀：
+  - direct mode：該欄位位於 execution_plan_drafts_8_5[*].audit_handoff_compile_support.<FIELD>
+  - compact reference mode：該欄位位於 audit_handoff_summary.compile_support_by_ticker.<TICKER>.<FIELD>
+- 因此，12H.2–12H.7 的 compile-support 欄位要求同時適用於 direct mode 與 compact reference mode；不得因使用 compact reference mode 而省略任何 required compile-support 欄位。
 - audit_handoff_compile_support 的目標是讓 Strategy B 不必從多個區塊反向猜：
   - final_action vocabulary
   - KEEP_EXISTING 是否應產生 BUY_ORDERS
@@ -674,9 +923,11 @@ VOO / VTI / VT 視為高度重疊。
   - 必須在 ASSUMPTIONS_AND_DATA_GAPS 註記 UPSTREAM_EXECUTION_DATA_GAP；
   - 該 row 不得被描述成 compile-ready，只能描述為 audit-handoff-ready 或 compile-support-incomplete。
 
-12H.1) Final-Action Candidate Vocabulary for Audit Handoff (NEW, MUST)
-- 對 execution_plan_drafts_8_5 每個 item，Decision Builder 必須提供：
-  - final_action_candidate
+12H.1) Final-Action Candidate Vocabulary for Audit Handoff (REVISED, MUST)
+
+- 對每個 execution_plan_drafts_8_5 item，Decision Builder 必須提供 final_action_candidate；但提供位置依 audit handoff mode 決定：
+  - direct mode：final_action_candidate 必須直接出現在該 execution_plan_drafts_8_5 row 內。
+  - compact reference mode：final_action_candidate 必須出現在 audit_handoff_summary.compile_support_by_ticker.<TICKER> 內；該 execution_plan_drafts_8_5 row 內可省略 final_action_candidate。
 - final_action_candidate 只能是：
   - "KEEP_EXISTING"
   - "REPLACE_EXISTING"
@@ -687,6 +938,10 @@ VOO / VTI / VT 視為高度重疊。
   - order_intent = "REPLACE_EXISTING" -> final_action_candidate = "REPLACE_EXISTING"
   - order_intent = "NEW_ORDER" -> final_action_candidate = "NEW_ORDER"
   - order_intent = "CANCEL_EXISTING" -> final_action_candidate = "CANCEL_EXISTING"
+- 使用 compact reference mode 時：
+  - audit_handoff_summary.compile_support_by_ticker.<TICKER>.final_action_candidate 必須依同一映射規則產生。
+  - <TICKER> 必須與 execution_plan_drafts_8_5 row.ticker 完全一致。
+  - Strategy B 必須能 deterministic 透過 row.ticker 找回 final_action_candidate。
 - final_action_candidate 只是給 Strategy B collapse final vocabulary 的候選，不代表 audit_passed，也不得被 Strategy A 稱為 final_action。
 
 12H.2) KEEP_EXISTING Compile-Support Handoff (NEW, MUST)
@@ -1020,23 +1275,236 @@ DECISION_PACKET 格式硬規則：
 - boolean 必須使用 true / false
 - null 必須使用 null
 
+DECISION_PACKET JSON Formatting Guardrail（NEW, MUST）
+
+- DECISION_PACKET_START / DECISION_PACKET_END 之間必須輸出 pretty-printed multi-line JSON。
+- 嚴禁輸出 minified one-line JSON。
+- 不得為了節省篇幅把 DECISION_PACKET 壓成單行。
+- 每個 top-level key 必須單獨成行。
+- 每個 JSON array item 必須獨立分行，尤其以下欄位：
+  - active_shortlist
+  - buy_side_delta_table
+  - execution_plan_drafts_8_5
+  - sell_side_delta_table_8_2
+  - existing_buy_order_diagnostics
+  - core_deployment_diagnostics
+  - assumptions_and_data_gaps
+- execution_plan_drafts_8_5 必須是 JSON array。
+- execution_plan_drafts_8_5 的每個 item 必須是一個完整 JSON object。
+- audit_handoff_compile_support 若直接放在 execution_plan_drafts_8_5[*] row 內，則它只是該 row 內的一個 nested object。
+- audit_handoff_compile_support object 結束後，只能依序關閉：
+  1. audit_handoff_compile_support object
+  2. 該 execution_plan_drafts_8_5 row object
+  不得多輸出第三個 closing brace。
+- 每個 execution_plan_drafts_8_5 row 結尾只能是：
+  - `},` 如果後面還有下一個 row
+  - `}` 如果是最後一個 row
+- 嚴禁 DECISION_PACKET 出現以下 parser-risk pattern：
+  - `}}},{"ticker":`
+  - `}}} , {"ticker":`
+  - `}}}},`
+  - `}}}}`
+- 輸出前必須做 JSON bracket self-check：
+  - 每個 `{` 都有對應 `}`
+  - 每個 `[` 都有對應 `]`
+  - array item 之間必須有 comma
+  - object 最後一個欄位後不得有 trailing comma
+  - DECISION_PACKET 必須可被 `json.loads()` 直接解析
+- 若無法同時保證 deeply nested audit_handoff_compile_support 與 pretty-printed JSON bracket correctness，必須使用下方 compact reference fallback，而不是輸出高風險深層 nested object。
+
+DECISION_PACKET Compile-Support Compact Reference Fallback（NEW, MUST）
+
+- 若 execution_plan_drafts_8_5[*].audit_handoff_compile_support 內容太長、太深、或可能造成 bracket / closing brace 錯誤，允許改用 compact reference。
+- 使用 compact reference 時，execution_plan_drafts_8_5 row 內不得輸出完整 audit_handoff_compile_support object；只能輸出：
+  "audit_handoff_compile_support_ref": "audit_handoff_summary.compile_support_by_ticker.<TICKER>"
+- 使用 compact reference 時，audit_handoff_summary 必須新增 nested object：
+  "compile_support_by_ticker": {
+    "<TICKER>": {
+      ...完整 compile support object...
+    }
+  }
+- compile_support_by_ticker 必須位於 audit_handoff_summary 內；不得新增為 DECISION_PACKET top-level key。
+- 每個需要 compile support 的 execution_plan_drafts_8_5 ticker，都必須在 audit_handoff_summary.compile_support_by_ticker 內有同 ticker key。
+- audit_handoff_compile_support_ref 中的 <TICKER> 必須與該 execution_plan_drafts_8_5 row 的 ticker 完全一致。
+- Strategy B 必須能 deterministic 用 row.ticker 找回：
+  audit_handoff_summary.compile_support_by_ticker[row.ticker]
+- 不得因使用 compact reference 而省略 required compile support 欄位。
+- compact reference fallback 也必須保持合法 pretty-printed JSON。
+- 若同一 row 已使用 audit_handoff_compile_support_ref，則該 row 不得同時再輸出 audit_handoff_compile_support，避免 duplicate source ambiguity。
+
 【DECISION_PACKET 最低必備欄位】
-DECISION_PACKET 必須至少包含：
-- effective_allowed_buy_universe
-- MARKET_DATA_SNAPSHOT
-- active_shortlist
-- buy_side_delta_table
-- rotation_decision_layer_8_15
-- sell_side_delta_table_8_2
-- execution_plan_drafts_8_5
-- sell_execution_plan_drafts_8_6
-- existing_buy_order_diagnostics
-- audit_handoff_summary
-- assumptions_and_data_gaps
-- decision_builder_ready_for_audit = true
+DECISION_PACKET_START / DECISION_PACKET_END 之間必須輸出單一合法、pretty-printed、multi-line JSON object；不得輸出多個 JSON object、不得輸出 minified one-line JSON、不得輸出 Markdown、YAML、註解、自然語言說明或 code fence。
 
-- actionable_window
+DECISION_PACKET 必須可被 `json.loads()` 直接解析；若無法通過 bracket / comma / trailing-comma self-check，必須重輸出合法 JSON，不得把 invalid JSON 交給 Strategy B / repo validator。
 
+DECISION_PACKET 不得出現以下 pattern：
+- `}}},{"ticker":`
+- `}}} , {"ticker":`
+- `}}}},`
+- `}}}}`
+
+execution_plan_drafts_8_5 必須是 JSON array；每個 row 必須是完整 object。若 row 內直接包含 audit_handoff_compile_support，該 nested object 結束後只能再關閉該 row object，不得多輸出第三個 closing brace。若 nested object 太深，必須改用 audit_handoff_compile_support_ref + audit_handoff_summary.compile_support_by_ticker compact reference fallback。
+
+DECISION_PACKET top-level keys 必須完全使用下列 exact key names，且不得改名、不得省略：
+- "schema_version"
+- "actionable_window"
+- "input_normalization"
+- "MARKET_DATA_SNAPSHOT"
+- "effective_allowed_buy_universe"
+- "active_shortlist"
+- "exposure_overlap_diagnostics"
+- "buy_side_delta_table"
+- "rotation_decision_layer_8_15"
+- "sell_side_delta_table_8_2"
+- "execution_plan_drafts_8_5"
+- "sell_execution_plan_drafts_8_6"
+- "existing_buy_order_diagnostics"
+- "core_deployment_diagnostics"
+- "assumptions_and_data_gaps"
+- "audit_handoff_summary"
+- "decision_builder_ready_for_audit"
+
+以上 top-level keys 是 DECISION_PACKET 唯一允許的 top-level key set；不得新增任何其他 top-level key，包含但不限於 debug_notes、market_data_notes、rotation_decision_8_15、final_orders、order_state_export、template5_exec_summary。
+
+DECISION_PACKET top-level key order 必須完全依照上方清單與固定 skeleton；不得調整順序。特別是：
+- "schema_version" 必須是第一個 top-level key
+- "decision_builder_ready_for_audit" 必須是最後一個 top-level key
+
+DECISION_PACKET top-level type contract 必須固定如下：
+- "schema_version": string
+- "actionable_window": object
+- "input_normalization": object
+- "MARKET_DATA_SNAPSHOT": object
+- "effective_allowed_buy_universe": array
+- "active_shortlist": array
+- "exposure_overlap_diagnostics": array
+- "buy_side_delta_table": array
+- "rotation_decision_layer_8_15": array
+- "sell_side_delta_table_8_2": array
+- "execution_plan_drafts_8_5": array
+- "sell_execution_plan_drafts_8_6": array
+- "existing_buy_order_diagnostics": array
+- "core_deployment_diagnostics": array
+- "assumptions_and_data_gaps": array
+- "audit_handoff_summary": object
+- "decision_builder_ready_for_audit": boolean
+
+若 top-level section 無資料，必須依上述型別輸出空值：
+- array 欄位輸出 []
+- object 欄位輸出 {}
+- 不得省略欄位
+- 不得把 array 欄位輸出成 null
+- 不得把 object 欄位輸出成 []
+
+嚴禁輸出舊欄位名：
+- "rotation_decision_8_15"
+
+若本輪沒有任何 rotation decision，仍必須輸出：
+"rotation_decision_layer_8_15": []
+
+若任何 required top-level section 缺資料，也不得省略 top-level key；必須依 DECISION_PACKET top-level type contract 輸出正確空值，或在 assumptions_and_data_gaps / audit_handoff_summary.audit_handoff_blockers 中列出 blocker：
+- array 欄位只能輸出 []
+- object 欄位只能輸出 {}
+- boolean 欄位只能輸出 true / false
+- string 欄位若無 deterministic 值，必須在 assumptions_and_data_gaps / audit_handoff_summary.audit_handoff_blockers 中標示 blocker，不得輸出 null
+- top-level required keys 不得輸出 null
+
+DECISION_PACKET JSON 的最後一個 top-level 欄位必須是：
+"decision_builder_ready_for_audit"
+
+decision_builder_ready_for_audit 判定規則：
+- 若 audit_handoff_summary.audit_handoff_blockers = []，則 decision_builder_ready_for_audit 必須 = true
+- 若存在 blocker 導致不應進 audit，才可輸出 decision_builder_ready_for_audit = false
+- 若 decision_builder_ready_for_audit = false，則 audit_handoff_summary.audit_handoff_blockers 必須是非空 string array，且必須列出明確 blocker label
+- 不得在 audit_handoff_summary.audit_handoff_blockers = [] 時輸出 decision_builder_ready_for_audit = false
+
+DECISION_PACKET 固定 skeleton 如下；實際輸出必須填入真實內容，但 top-level key names、key presence、top-level key order、以及最後一個欄位位置必須完全一致。Skeleton 與實際輸出都必須是 pretty-printed multi-line JSON；嚴禁改成 one-line JSON。
+
+DECISION_PACKET_START
+{
+  "schema_version": "strategy_a_decision_packet_v1",
+  "actionable_window": {
+    "run_timestamp_et": "...",
+    "is_non_trading_day_run": false,
+    "execution_date_et": "...",
+    "market_data_target_close_date_et": "..."
+  },
+  "input_normalization": {},
+  "MARKET_DATA_SNAPSHOT": {},
+  "effective_allowed_buy_universe": [],
+  "active_shortlist": [
+    {
+      "ticker": "...",
+      "role_layer": "...",
+      "funding_status": "...",
+      "event_id_refs": [],
+      "structural_theme_refs": []
+    }
+  ],
+  "exposure_overlap_diagnostics": [],
+  "buy_side_delta_table": [
+    {
+      "ticker": "...",
+      "existing_budget": 0,
+      "proposed_budget": 0,
+      "delta_budget": 0,
+      "action_draft": "...",
+      "order_intent_draft": "...",
+      "why": "...",
+      "event_id_refs": [],
+      "structural_theme_refs": []
+    }
+  ],
+  "rotation_decision_layer_8_15": [],
+  "sell_side_delta_table_8_2": [],
+  "execution_plan_drafts_8_5": [
+    {
+      "ticker": "...",
+      "template_id": "...",
+      "action_draft": "...",
+      "existing_budget": 0,
+      "proposed_budget": 0,
+      "delta_budget": 0,
+      "order_intent": "...",
+      "anchor_decision": "...",
+      "event_id_refs": [],
+      "structural_theme_refs": [],
+      "audit_handoff_compile_support_ref": "audit_handoff_summary.compile_support_by_ticker.<TICKER>"
+    }
+  ],
+  "sell_execution_plan_drafts_8_6": [],
+  "existing_buy_order_diagnostics": [],
+  "core_deployment_diagnostics": [],
+  "assumptions_and_data_gaps": [],
+  "audit_handoff_summary": {
+    "strategy_b_can_structure_only_patch_from_decision_packet": true,
+    "known_strategy_b_patch_expected": true,
+    "compile_support_by_ticker": {
+      "<TICKER>": {
+        "final_action_candidate": "...",
+        "order_submission_required_hint": false,
+        "buy_orders_generation_allowed_hint": false,
+        "state_export_required_hint": true,
+        "state_status_hint": "...",
+        "compiled_preview_if_deterministic": null,
+        "final_intended_state_export_preview": null,
+        "compile_support_complete_hint": true
+      }
+    },
+    "audit_handoff_blockers": []
+  },
+  "decision_builder_ready_for_audit": true
+}
+DECISION_PACKET_END
+
+Skeleton formatting requirements:
+- 上方 skeleton 只是 shape example；實際輸出必須填入真實內容。
+- 實際輸出仍必須維持相同 top-level key order。
+- 若某 array 無資料，可輸出 []；若有資料，每個 item 必須獨立分行。
+- 若 execution_plan_drafts_8_5 使用 audit_handoff_compile_support_ref，則 audit_handoff_summary.compile_support_by_ticker 必須包含對應 ticker 的完整 compile support object。
+- 若 execution_plan_drafts_8_5 使用 audit_handoff_compile_support_ref，該 row 不得同時輸出 audit_handoff_compile_support、final_action_candidate、compile_support_complete_hint，除非 validator 明確允許 duplicate hints；預設以 audit_handoff_summary.compile_support_by_ticker.<TICKER> 為唯一 compile-support SSOT。
+- 若 execution_plan_drafts_8_5 使用 direct audit_handoff_compile_support object，則不得再輸出 audit_handoff_compile_support_ref。
+- 若 execution_plan_drafts_8_5 不使用 compact reference，而是直接輸出 audit_handoff_compile_support nested object，必須確保 row 結尾不出現 `}}},{"ticker":`、`}}}},` 或任何多餘 closing brace pattern。
 - actionable_window 必須是 JSON object，至少包含：
   - "run_timestamp_et"
   - "is_non_trading_day_run"
@@ -1105,10 +1573,28 @@ DECISION_PACKET 必須至少包含：
   - "expiry_if_gtd"
   - "why"
 
-- execution_plan_drafts_8_5 每個 item 還必須額外包含 audit handoff 欄位群；這些欄位只供 Strategy B deterministic audit / patch / collapse，不代表 Strategy A 已完成 audit：
-  - "final_action_candidate"
-  - "compile_support_complete_hint"
-  - "audit_handoff_compile_support"
+- execution_plan_drafts_8_5 每個 item 還必須額外提供 audit handoff linkage；這些欄位只供 Strategy B deterministic audit / patch / collapse，不代表 Strategy A 已完成 audit。
+- audit handoff linkage 可使用以下任一模式：
+
+  A) direct mode：row 內直接包含：
+    - "final_action_candidate"
+    - "compile_support_complete_hint"
+    - "audit_handoff_compile_support"
+
+  B) compact reference mode：row 內只包含：
+    - "audit_handoff_compile_support_ref"
+
+- 若使用 compact reference mode：
+  - row 內不得同時輸出 "audit_handoff_compile_support"
+  - row 內可省略 "final_action_candidate" 與 "compile_support_complete_hint"，但 audit_handoff_summary.compile_support_by_ticker.<TICKER> 內必須包含：
+    - "final_action_candidate"
+    - "compile_support_complete_hint"
+    - direct mode 原本要求的完整 compile-support 欄位
+  - audit_handoff_compile_support_ref 必須等於：
+    "audit_handoff_summary.compile_support_by_ticker.<TICKER>"
+  - <TICKER> 必須與該 row 的 "ticker" 完全一致
+  - Strategy B 必須能 deterministic 透過 row.ticker 解析：
+    audit_handoff_summary.compile_support_by_ticker[row.ticker]
 
 - "final_action_candidate" 只能是：
   - "KEEP_EXISTING"
@@ -1120,7 +1606,8 @@ DECISION_PACKET 必須至少包含：
   - true 表示 Strategy A 已提供足夠原料，讓 Strategy B 可 deterministic 驗證 / copy-forward / final collapse
   - false 表示仍有 upstream execution data gap，Strategy B 不得把該 row 直接標成 compile_ready
 
-- "audit_handoff_compile_support" 必須是 JSON object，至少包含以下通用欄位：
+- 若使用 direct mode，"audit_handoff_compile_support" 必須是 JSON object，至少包含以下通用欄位。
+- 若使用 compact reference mode，以下通用欄位必須改放在 audit_handoff_summary.compile_support_by_ticker.<TICKER> 內；不得因使用 ref 而省略。
   - "order_submission_required_hint"
   - "buy_orders_generation_allowed_hint"
   - "state_export_required_hint"
@@ -1313,6 +1800,54 @@ DECISION_PACKET 必須至少包含：
   - "known_strategy_b_patch_reasons"
   - "audit_handoff_blockers"
 
+- 若任一 execution_plan_drafts_8_5 row 使用 compact reference mode，audit_handoff_summary 還必須包含：
+  - "compile_support_by_ticker"
+- audit_handoff_summary.compile_support_by_ticker 必須是 JSON object。
+- audit_handoff_summary.compile_support_by_ticker 的每個 key 必須是對應 execution_plan_drafts_8_5 row.ticker。
+- 每個使用 compact reference mode 的 execution_plan_drafts_8_5 row 都必須能透過：
+  audit_handoff_summary.compile_support_by_ticker[row.ticker]
+  deterministic 找回完整 compile support object。
+- 若所有 execution_plan_drafts_8_5 row 都使用 direct mode，compile_support_by_ticker 可省略。
+
+- 若本輪 optional_extended_etf_sleeve.enabled = true，且存在任何 ticker 出現在 optional_extended_etf_sleeve.allowed_extended_etf_tickers，audit_handoff_summary 必須額外包含：
+  - "enabled_extended_etf_funding_source_evaluations"
+
+- audit_handoff_summary.enabled_extended_etf_funding_source_evaluations 必須是 JSON array。
+- 若沒有任何 enabled extended ETF 因 hard-cap headroom / activation minimum / funding-source decision 被 HOLD_NO_NEW_BUDGET，則輸出 []。
+- 若任一 enabled extended ETF 通過 activation / evidence / linkage / liquidity / LLM model-risk / cap / compile gates，但因 available_natural_headroom 不足而 final action / action_draft = HOLD_NO_NEW_BUDGET，則此 array 必須包含同 ticker 的 structured evaluation object。
+
+- enabled_extended_etf_funding_source_evaluations[*] 必須至少包含：
+  - "enabled_ticker"
+  - "activation_minimum_budget"
+  - "available_natural_headroom"
+  - "budget_reduction_needed"
+  - "evaluated_funding_source_tickers"
+  - "recommended_funding_source_ticker"
+  - "funding_source_decision"
+  - "why_preserve_buffer_over_enabled_extended_etf"
+  - "why_reduce_buffer_to_fund_extended_etf"
+
+- funding_source_decision 只能是：
+  - "reduce_buffer_to_fund_extended_etf"
+  - "preserve_buffer_hold_no_new_budget"
+  - "blocked_by_cap_or_compile_contract"
+  - "blocked_by_no_valid_funding_source"
+
+- 若 funding_source_decision = "preserve_buffer_hold_no_new_budget"：
+  - why_preserve_buffer_over_enabled_extended_etf 必須是非空 string。
+  - why_preserve_buffer_over_enabled_extended_etf 必須是 mandate-based reason。
+  - 不得只寫 headroom insufficient / lower volatility / easier compile / preserve buffer by default。
+
+- 若 funding_source_decision = "reduce_buffer_to_fund_extended_etf"：
+  - recommended_funding_source_ticker 必須是非空 string。
+  - why_reduce_buffer_to_fund_extended_etf 必須是非空 string。
+  - buy_side_delta_table 必須同步包含 funding source reduction row 與 enabled extended ETF new/increase/replacement row。
+  - proposed_buy_open_orders_budget_total 必須仍 <= hard_cap_open_orders_budget。
+
+- 若 enabled extended ETF 應做 funding-source evaluation 但 evaluation object 缺失：
+  - audit_handoff_summary.audit_handoff_blockers 必須包含：
+    "ENABLED_EXTENDED_ETF_FUNDING_SOURCE_EVALUATION_MISSING"
+
 - audit_handoff_summary.strategy_b_can_structure_only_patch_from_decision_packet 必須為 boolean：
   - 若所有缺口都可由 DECISION_PACKET / Portfolio Snapshot / Strategy Settings deterministic copy-forward 或驗證，填 true
   - 若仍有不可 deterministic 推導的欄位，填 false
@@ -1341,6 +1876,44 @@ DECISION_PACKET 必須至少包含：
     - "ORDER_STATE_EXPORT_DERIVABILITY_GAP"
 
 【最後提醒】
+- DECISION_PACKET_START / DECISION_PACKET_END 之間必須是單一合法 JSON object，且必須包含所有 required top-level keys；不得因 section 無資料而省略 key。
+- DECISION_PACKET 必須是 pretty-printed multi-line valid JSON；嚴禁輸出 minified one-line JSON。
+- DECISION_PACKET 必須可被 `json.loads()` 直接解析。
+- DECISION_PACKET 每個 top-level key 必須單獨成行；每個 array item 必須獨立分行。
+- execution_plan_drafts_8_5 必須是 JSON array，且每個 row 必須是完整 JSON object。
+- 若 execution_plan_drafts_8_5 row 內直接輸出 audit_handoff_compile_support nested object，該 nested object 結束後只能再關閉該 row object，不得多輸出第三個 closing brace。
+- 若 audit_handoff_compile_support 太長或太深，必須改用：
+  "audit_handoff_compile_support_ref": "audit_handoff_summary.compile_support_by_ticker.<TICKER>"
+  並在 audit_handoff_summary.compile_support_by_ticker.<TICKER> 放完整 compile support object。
+- 嚴禁 DECISION_PACKET 出現 `}}},{"ticker":`、`}}} , {"ticker":`、`}}}},`、`}}}}`。
+- 輸出前必須做 bracket / comma / trailing-comma self-check；若不通過，必須重輸出合法 JSON。
+- DECISION_PACKET top-level key names 必須完全固定為：
+  "schema_version",
+  "actionable_window",
+  "input_normalization",
+  "MARKET_DATA_SNAPSHOT",
+  "effective_allowed_buy_universe",
+  "active_shortlist",
+  "exposure_overlap_diagnostics",
+  "buy_side_delta_table",
+  "rotation_decision_layer_8_15",
+  "sell_side_delta_table_8_2",
+  "execution_plan_drafts_8_5",
+  "sell_execution_plan_drafts_8_6",
+  "existing_buy_order_diagnostics",
+  "core_deployment_diagnostics",
+  "assumptions_and_data_gaps",
+  "audit_handoff_summary",
+  "decision_builder_ready_for_audit"
+- 嚴禁輸出舊欄位名 "rotation_decision_8_15"；TEMPLATE2_OUTPUT 的 2.7 章節可維持顯示名稱 ROTATION_DECISION_8_15，但 DECISION_PACKET JSON top-level key 必須是 "rotation_decision_layer_8_15"。
+- 若本輪沒有 rotation，DECISION_PACKET 仍必須輸出 "rotation_decision_layer_8_15": []。
+- DECISION_PACKET JSON 的最後一個 top-level 欄位必須是 "decision_builder_ready_for_audit"。
+- DECISION_PACKET top-level key set 是 closed schema；不得新增任何未列入最低必備欄位清單的 top-level key。
+- DECISION_PACKET top-level key order 必須與固定 skeleton 完全一致。
+- "exposure_overlap_diagnostics"、"rotation_decision_layer_8_15"、"core_deployment_diagnostics" 即使無資料，也必須輸出為 JSON array []，不得輸出 null 或省略。
+- known_strategy_b_patch_expected = true 不等於 audit blocker；只要 audit_handoff_summary.audit_handoff_blockers = []，decision_builder_ready_for_audit 仍必須 = true。
+- 若 audit_handoff_summary.audit_handoff_blockers = []，最後必須輸出 "decision_builder_ready_for_audit": true。
+- 只有 audit_handoff_summary.audit_handoff_blockers 為非空 array，且 blocker 明確列出時，才允許輸出 "decision_builder_ready_for_audit": false。
 - 你本回合只做 Decision Builder，不做 audit，不出最終 orders。
 - proposed_extended_etf_candidates 永遠不能直接變成本輪 buy order。
 - replacement target 永遠只看 RESEARCH_JSON.buy_universe_scorecard 的 base 六檔。

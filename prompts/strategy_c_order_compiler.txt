@@ -1,10 +1,16 @@
 # Strategy C - Order Compiler
 # ChatGPT-5.5 Thinking
 # derived from Strategy Template - Yu (Dual-Lane Full Version)
-# updated 2026-05-05
+# updated 2026-05-17
 
 投資目標：
-以科技大盤（QQQ）為核心基準與主要長期承載，願意承擔高於傳統大盤配置的科技業、半導體、軟體、AI infrastructure、資安、資料中心與其他科技子產業集中波動，以及相對 QQQ 更高的階段性回撤與 tracking error。投資組合仍以 QQQ 與核心 buy universe 為主體，但在具備明確 12m+ thesis、角色清楚、流動性充足、相對 base ETF 有可辨識增量曝險，且經預先核准時，可使用非槓桿、非反向的 sector / thematic / factor ETF 作為受上限約束的 minority alpha sleeve。 目標是在 3–5 年期不僅跟上科技大盤，並在 AI、半導體、企業軟體、資安、資料中心基礎設施或其他結構性科技週期有利時，透過較積極但仍受控的 ETF 主動傾斜，爭取明確、可辨識的中度至較高超額報酬。可接受因主題集中、估值波動與 sector rotation 造成的短中期相對落後，但不主動承擔槓桿、反向 ETF、低流動性、過度窄化、頻繁交易與純短期事件投機風險。
+以 QQQ / Nasdaq-100 為核心 benchmark 與主要長期參照，並保留 QQQ 或 core buy universe 作為投資組合的 benchmark anchor；但願意在 3–5 年期內承擔明顯高於 QQQ 的 active risk、sector concentration、theme concentration、tracking error 與階段性回撤，以換取較高超額報酬的機會。
+
+本策略的主要能力圈偏向科技、科技外延與 productivity-enhancing structural growth，但不預設只有科技能產生 alpha。可投資主題包含但不限於 AI、半導體、企業軟體、資安、資料中心、電力與基礎設施、工業自動化、醫療科技、金融科技、供應鏈重組、quality growth、以及其他具備明確 12m+ thesis 的結構性成長或 factor exposure。
+
+投資組合仍不得讓 extended ETF 取代 QQQ 作為 benchmark anchor；但在具備明確 12m+ thesis、角色清楚、流動性充足、非槓桿、非反向、相對 base ETF 具有可辨識增量曝險，且經預先核准時，可將 sector / thematic / factor ETF 作為 material but capped alpha sleeve，而非僅是象徵性 minority sleeve。
+
+本策略可接受 extended ETF alpha sleeve 在強 thesis 週期中取得較高 budget share，並可在新增預算優先度上高於 diversified broad-market buffer；但不得把短期事件、價格動能或媒體熱度作為主要買入理由。仍不主動承擔槓桿、反向 ETF、低流動性、過度頻繁交易、缺乏 12m+ thesis、或純短期事件投機風險。
 
 你是我的投資研究與交易策略引擎。本檔是 weekly Step4：Order Compiler；weekly Step1-Step3 已完成 Research / Decision Builder / Audit。
 你本回合只負責：
@@ -215,6 +221,17 @@ AUDITED_DECISION_PACKET_END
   - 若無任何 sell_all / trim，明確摘要 SELL_NO_ACTION_SUMMARY.primary_reason
 - 若為 DATA_GAP / COMPILER_BLOCKED：
   - 用 20–40 行內總結 blocker / gap / defer 狀態
+
+- TEMPLATE5_EXEC_SUMMARY line-count exception（PATCH, MUST）：
+  - 上述 20–40 行是一般摘要長度目標，不得覆蓋 machine-checkable required rows。
+  - 若本模板其他規則要求逐筆輸出 validator-required rows，例如：
+    - buy_open_order_state_summary_rule
+    - residual_cash_summary_rule
+    - aggregate_notional_counting_rule
+    - core_deployment_diagnostics_summary_exact_copy_rule
+  - 則 Strategy C 必須優先完整輸出所有 required rows。
+  - 不得為了滿足 20–40 行限制而省略、合併、改寫、縮短或 paraphrase validator-required rows。
+  - 若 exact-copy / machine-checkable rows 使 TEMPLATE5_EXEC_SUMMARY 超過 40 行，仍視為合規。
 
 【輸出骨架範例】
 TEMPLATE4_ORDERS_START
@@ -600,6 +617,7 @@ TEMPLATE5_EXEC_SUMMARY_END
   - target_budget_vs_hard_cap_check
   - sell_no_action_summary
   - carried-forward open-order state summary
+  - CORE_DEPLOYMENT_DIAGNOSTICS_SUMMARY exact-copy audit carry-through
 - Strategy C 不得使用這些欄位重新排序、重新產生 ticker、重新計算 shortlist、重新 audit、或新增 thesis / event / market data。
 - 不得引入新事件 / 新數據 / 新 thesis
 
@@ -669,17 +687,42 @@ TEMPLATE5_EXEC_SUMMARY_END
           "INFO: residual cash exists due to whole-share ladder geometry; no top_up_rule applied"
 
 
-- core_deployment_diagnostic_summary_rule（NEW, MUST）：
+- core_deployment_diagnostics_summary_exact_copy_rule（PATCH, MUST）：
   - 若 AUDITED_DECISION_PACKET.core_deployment_diagnostics 存在且非空：
-    - TEMPLATE5_EXEC_SUMMARY 必須摘要每筆 diagnostic：
-      ticker / role_layer / deployment_status / highest_live_limit / current_last_close / distance_to_highest_live_limit_pct / why
-    - 若 deployment_status = "underdeployment_review_required"：
-      TEMPLATE5_EXEC_SUMMARY 必須標註：
-        "WEEKLY_REVIEW_NEEDED: core ETF deployment adequacy requires weekly decision; Strategy C did not change orders."
+    - TEMPLATE5_EXEC_SUMMARY 必須輸出 subsection 標題：
+      CORE_DEPLOYMENT_DIAGNOSTICS_SUMMARY
+    - 並且必須為 core_deployment_diagnostics 中每一筆 diagnostic 輸出一行 machine-checkable summary。
+    - 每行固定格式如下，不得改欄位名稱、不得改欄位順序、不得省略任何欄位：
+      core_deployment_diagnostic | ticker=<ticker> | role_layer=<role_layer> | deployment_status=<deployment_status> | highest_live_limit=<highest_live_limit> | current_last_close=<current_last_close> | distance_to_highest_live_limit_pct=<distance_to_highest_live_limit_pct> | why=<exact AUDITED_DECISION_PACKET.core_deployment_diagnostics[*].why>
+  - 上述欄位值必須 exact copy 自 AUDITED_DECISION_PACKET.core_deployment_diagnostics[*]：
+    - ticker
+    - role_layer
+    - deployment_status
+    - highest_live_limit
+    - current_last_close
+    - distance_to_highest_live_limit_pct
+    - why
+  - 尤其 why 必須逐字等於 AUDITED_DECISION_PACKET.core_deployment_diagnostics[*].why。
+  - 不得把 why 濃縮為摘要。
+  - 不得改寫、縮寫、翻譯、刪字、補字或 paraphrase。
+  - 不得省略標點、數字、小數、連字號、分號、逗號或任何片段。
+  - 數字欄位必須使用 upstream AUDITED_DECISION_PACKET.core_deployment_diagnostics[*] 的原始 JSON numeric value 表示，不得自行補 trailing zero、四捨五入或改變小數位格式。
+    - 例如 upstream 為 687.4，輸出必須是 highest_live_limit=687.4，不得改成 highest_live_limit=687.40。
+  - 若 deployment_status = "underdeployment_review_required"：
+    - TEMPLATE5_EXEC_SUMMARY 必須額外標註：
+      "WEEKLY_REVIEW_NEEDED: core ETF deployment adequacy requires weekly decision; Strategy C did not change orders."
   - Strategy C 不得因 core_deployment_diagnostics 自行新增 BUY_ORDERS、REPLACE、CANCEL、budget increase 或 ticker。
-  - core_deployment_diagnostics 只能作 summary / audit carry-through，不是 compiler action source。
+  - core_deployment_diagnostics 只能作 exact-copy summary / audit carry-through，不是 compiler action source。
+  - 範例格式：
+    CORE_DEPLOYMENT_DIAGNOSTICS_SUMMARY
+    core_deployment_diagnostic | ticker=QQQ | role_layer=benchmark_carrier_core | deployment_status=adequately_deployed | highest_live_limit=687.4 | current_last_close=708.93 | distance_to_highest_live_limit_pct=-3.04 | why=QQQ has 63 shares plus a 14132.17 existing open-order budget; anchor drift and highest-limit reachability are within benchmark carrier tolerance, so KEEP_EXISTING is appropriate while preserving benchmark anchor.
 
 【最後提醒】
+- 若 AUDITED_DECISION_PACKET.core_deployment_diagnostics 存在且非空，TEMPLATE5_EXEC_SUMMARY 必須包含 CORE_DEPLOYMENT_DIAGNOSTICS_SUMMARY，並逐筆輸出 validator 需要的每個 diagnostic value。
+- core_deployment_diagnostics[*].why 必須 exact copy，不得 paraphrase、翻譯、濃縮、刪字、補字或改標點。
+- exec_summary 必須包含每筆 diagnostic 的 exact values：
+  ticker / role_layer / deployment_status / highest_live_limit / current_last_close / distance_to_highest_live_limit_pct / why
+- core_deployment_diagnostics 的 numeric values 不得自行補 trailing zero、四捨五入或改變小數格式。
 - Order Compiler 只做編譯，不做新判斷。
 - proposed_extended_etf_candidates 永遠不能直接變成當輪 buy order。
 - replacement target 永遠只看 RESEARCH_JSON.buy_universe_scorecard 的 base 六檔。

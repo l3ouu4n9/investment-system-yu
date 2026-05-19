@@ -1,15 +1,16 @@
-as_of: "2026-05-12"
-run_timestamp_et: "2026-05-13 01:27 ET"
+as_of: "2026-05-18"
+run_timestamp_et: "2026-05-18 23:00 ET"
 benchmark: "QQQ"
 tax_intent: "LTCG_only"
 min_holding_period: ">=12m"
-hard_cap_open_orders_budget: 43663.89
+hard_cap_open_orders_budget: 37286.35
 relative_rotation_enabled: true
 
 relative_rotation_guardrails:
   require_same_role_for_rotation: true
-  min_score_gap_to_rotate: 1
+  min_score_gap_to_rotate: 2
   do_not_rotate_if_current_holding_still_role_valid: true
+  no_rotation_on_one_rank_change_only: true
 
 relative_rotation_reference_source: "RESEARCH_JSON.buy_universe_scorecard"
 
@@ -134,12 +135,23 @@ user_approved_extended_etf_static_list:
   - GRID
   - BOTZ
 
+user_approved_extended_etf_theme_map:
+  QUAL:
+    theme_bucket: "quality_factor"
+  CIBR:
+    theme_bucket: "cybersecurity"
+  VUG:
+    theme_bucket: "growth_factor"
+  GRID:
+    theme_bucket: "power_grid_infrastructure"
+  BOTZ:
+    theme_bucket: "robotics_automation"
 
 active_shortlist_size_rule:
   benchmark_carrier: 1
   diversified_core_buffer_max: 1
   sector_alpha_tilt_max: 1
-  extended_etf_minority_sleeve_max: 1
+  extended_etf_minority_sleeve_max: 2
 
 etf_layer_execution_policy:
   purpose: "Separate long-term ETF allocation style from weekday open-order maintenance; keep Daily execution-only while making Weekly responsible for ETF layer suitability and underdeployment review."
@@ -193,14 +205,17 @@ etf_layer_execution_policy:
       daily_maintenance_style: "wider execution tolerance; avoid reacting to normal sector volatility"
 
     extended_etf_minority_sleeve:
-      long_term_best_style: "pre-approved minority alpha sleeve only; not a core replacement and not a short-term event trade"
-      new_budget_posture: "only after approved static-list, liquidity, linkage, incremental exposure, event anchor, and cap gates"
+      long_term_best_style: "pre-approved material but capped alpha sleeve; not a QQQ benchmark-anchor replacement and not a short-term event trade"
+      new_budget_posture: "meaningful budget allowed after approved static-list, liquidity, linkage, incremental exposure, future theme anchor, LLM model-risk controls, and cap gates"
       execution_style: "widest_ladder_and_cap_constrained"
       weekly_review_focus:
-        - "incremental exposure versus base ETF"
+        - "incremental exposure versus QQQ / SMH / IGV / base ETFs"
+        - "theme_bucket concentration"
         - "hot-theme risk"
         - "benchmark drift"
         - "single ETF sleeve cap"
+        - "same-run escalation limit"
+        - "LLM evidence tier and narrative-drift risk"
         - "whether the ETF remains non-levered, non-inverse, liquid, and role-clear"
       daily_maintenance_style: "execution-only; no new activation from Daily"
 
@@ -332,15 +347,59 @@ daily_execution_drift_policy:
 
 max_new_tickers_per_week:
   base_universe_new_tickers_per_week: 0
-  extended_etf_sleeve_new_tickers_per_week: 1
+  extended_etf_sleeve_new_tickers_per_week: 2
 
 extended_etf_constraints:
-  sleeve_budget_cap_pct_of_total_open_orders: 0.22
-  single_extended_etf_budget_cap_pct_of_total_open_orders: 0.15
-  sleeve_budget_posture: "meaningful_but_capped_alpha_sleeve"
+  sleeve_budget_cap_pct_of_total_open_orders: 0.35
+  single_extended_etf_budget_cap_pct_of_total_open_orders: 0.20
+  sleeve_budget_posture: "material_but_capped_alpha_sleeve"
   cap_interpretation: "upper_bound_not_target"
   activation_minimum_effective_budget_pct_of_total_open_orders: 0.04
-  activation_priority_note: "If an approved extended ETF passes activation and has stronger 12m+ alpha upside / incremental exposure than diversified_core_buffer, Strategy A may allocate meaningful but capped budget after preserving QQQ benchmark-carrier role; cap headroom alone must not force allocation."
+
+  max_same_theme_extended_etf_count: 1
+  max_same_theme_budget_pct_of_total_open_orders: 0.25
+  require_distinct_theme_buckets_when_multiple_extended_etfs: true
+  require_incremental_exposure_vs_base: true
+  prohibit_price_momentum_as_primary_driver: true
+
+  activation_priority_note: "If an approved extended ETF passes activation and has stronger 12m+ alpha upside / incremental exposure than diversified_core_buffer, Strategy A may allocate meaningful material-but-capped budget after preserving QQQ benchmark-anchor role; cap headroom alone must not force allocation."
+
+llm_model_risk_controls:
+  enabled: true
+  llm_confidence_is_not_signal: true
+  require_structured_evidence_for_budget_increase: true
+  confidence_adjusted_sizing_enabled: true
+
+  max_budget_multiplier_by_evidence_tier:
+    high_evidence: 1.00
+    adequate_evidence: 0.75
+    weak_or_mixed_evidence: 0.40
+    data_gap_or_media_only: 0.00
+
+  require_evidence_tier_for_budget_above_single_etf_15pct: true
+
+  same_run_escalation_limit:
+    max_new_extended_etfs_with_budget_increase: 2
+    max_total_budget_increase_pct_of_open_orders_per_run: 0.12
+    prohibit_new_extended_etf_plus_sell_rotation_same_theme_same_run: true
+
+  theme_expansion_confirmation:
+    require_two_run_confirmation_for_new_theme_bucket: true
+    first_run_new_theme_budget_cap_pct_of_total_open_orders: 0.08
+    second_run_may_use_full_single_etf_cap_if_thesis_persists: true
+
+  output_variability_buffer:
+    require_score_gap_for_budget_reallocation: 2
+    require_score_gap_for_rotation: 2
+    no_rotation_on_one_rank_change_only: true
+    require_same_direction_signal_in_research_and_audit: true
+
+  human_approval_required_for:
+    - increasing_extended_etf_sleeve_cap
+    - increasing_single_extended_etf_cap
+    - adding_new_theme_bucket_to_static_list
+    - changing_benchmark_anchor
+    - allowing_same_theme_multiple_etfs
 
 sell_execution_policy_defaults:
   default_plan_type: "single_limit_sell"

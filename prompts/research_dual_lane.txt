@@ -1,9 +1,16 @@
 # Research Template - Yu (Dual-Lane Version)
 # ChatGPT Deep Research
-# updated 2026-05-05
+# updated 2026-05-17
 
 投資目標：
-以科技大盤（QQQ）為核心基準與主要長期承載，願意承擔高於傳統大盤配置的科技業、半導體、軟體、AI infrastructure、資安、資料中心與其他科技子產業集中波動，以及相對 QQQ 更高的階段性回撤與 tracking error。投資組合仍以 QQQ 與核心 buy universe 為主體，但在具備明確 12m+ thesis、角色清楚、流動性充足、相對 base ETF 有可辨識增量曝險，且經預先核准時，可使用非槓桿、非反向的 sector / thematic / factor ETF 作為受上限約束的 minority alpha sleeve。 目標是在 3–5 年期不僅跟上科技大盤，並在 AI、半導體、企業軟體、資安、資料中心基礎設施或其他結構性科技週期有利時，透過較積極但仍受控的 ETF 主動傾斜，爭取明確、可辨識的中度至較高超額報酬。可接受因主題集中、估值波動與 sector rotation 造成的短中期相對落後，但不主動承擔槓桿、反向 ETF、低流動性、過度窄化、頻繁交易與純短期事件投機風險。
+以 QQQ / Nasdaq-100 為核心 benchmark 與主要長期參照，並保留 QQQ 或 core buy universe 作為投資組合的 benchmark anchor；但願意在 3–5 年期內承擔明顯高於 QQQ 的 active risk、sector concentration、theme concentration、tracking error 與階段性回撤，以換取較高超額報酬的機會。
+
+本策略的主要能力圈偏向科技、科技外延與 productivity-enhancing structural growth，但不預設只有科技能產生 alpha。可投資主題包含但不限於 AI、半導體、企業軟體、資安、資料中心、電力與基礎設施、工業自動化、醫療科技、金融科技、供應鏈重組、quality growth、以及其他具備明確 12m+ thesis 的結構性成長或 factor exposure。
+
+投資組合仍不得讓 extended ETF 取代 QQQ 作為 benchmark anchor；但在具備明確 12m+ thesis、角色清楚、流動性充足、非槓桿、非反向、相對 base ETF 具有可辨識增量曝險，且經預先核准時，可將 sector / thematic / factor ETF 作為 material but capped alpha sleeve，而非僅是象徵性 minority sleeve。
+
+本策略可接受 extended ETF alpha sleeve 在強 thesis 週期中取得較高 budget share，並可在新增預算優先度上高於 diversified broad-market buffer；但不得把短期事件、價格動能或媒體熱度作為主要買入理由。仍不主動承擔槓桿、反向 ETF、低流動性、過度頻繁交易、缺乏 12m+ thesis、或純短期事件投機風險。
+
 
 目標：
 請以「雙 lane」架構完成研究，最後只輸出一份 RESEARCH_JSON：
@@ -15,9 +22,9 @@
 ────────────────────────────────────────
 【總則 / Hard Rules】
 
-- strategy_mandate_template1_dual_lane (NEW, MUST):
+- strategy_mandate_template1_dual_lane (REVISED, MUST):
   - 本模板所有研究排序必須服務以下投資目標：
-    "以科技大盤（QQQ）為核心基準與主要長期承載，願意承擔高於傳統大盤配置的科技業、半導體、軟體、AI infrastructure、資安、資料中心與其他科技子產業集中波動，以及相對 QQQ 更高的階段性回撤與 tracking error。投資組合仍以 QQQ 與核心 buy universe 為主體，但在具備明確 12m+ thesis、角色清楚、流動性充足、相對 base ETF 有可辨識增量曝險，且經預先核准時，可使用非槓桿、非反向的 sector / thematic / factor ETF 作為受上限約束的 minority alpha sleeve。目標是在 3–5 年期不僅跟上科技大盤，並在 AI、半導體、企業軟體、資安、資料中心基礎設施或其他結構性科技週期有利時，透過較積極但仍受控的 ETF 主動傾斜，爭取明確、可辨識的中度至較高超額報酬。可接受因主題集中、估值波動與 sector rotation 造成的短中期相對落後，但不主動承擔槓桿、反向 ETF、低流動性、過度窄化、頻繁交易與純短期事件投機風險。"
+    "以 QQQ / Nasdaq-100 為核心 benchmark 與主要長期參照，並保留 QQQ 或 core buy universe 作為投資組合的 benchmark anchor；但願意在 3–5 年期內承擔明顯高於 QQQ 的 active risk、sector concentration、theme concentration、tracking error 與階段性回撤，以換取較高超額報酬的機會。本策略的主要能力圈偏向科技、科技外延與 productivity-enhancing structural growth，但不預設只有科技能產生 alpha。可投資主題包含但不限於 AI、半導體、企業軟體、資安、資料中心、電力與基礎設施、工業自動化、醫療科技、金融科技、供應鏈重組、quality growth、以及其他具備明確 12m+ thesis 的結構性成長或 factor exposure。投資組合仍不得讓 extended ETF 取代 QQQ 作為 benchmark anchor；但在具備明確 12m+ thesis、角色清楚、流動性充足、非槓桿、非反向、相對 base ETF 具有可辨識增量曝險，且經預先核准時，可將 sector / thematic / factor ETF 作為 material but capped alpha sleeve，而非僅是象徵性 minority sleeve。本策略可接受 extended ETF alpha sleeve 在強 thesis 週期中取得較高 budget share，並可在新增預算優先度上高於 diversified broad-market buffer；但不得把短期事件、價格動能或媒體熱度作為主要買入理由。仍不主動承擔槓桿、反向 ETF、低流動性、過度頻繁交易、缺乏 12m+ thesis、或純短期事件投機風險。"
 
 - output_shape_rule (NEW, MUST):
   - 最終只能輸出一份 RESEARCH_JSON
@@ -433,18 +440,58 @@ anchor_ref_integrity_rule (NEW, MUST):
 只研究「哪些 extended ETF 值得未來被提名、被放進 static list、被做 predecision、被考慮 activation」。
 Lane B 不是本輪交易主線。
 
-Lane B 研究定位（MUST）：
-- extended ETF sleeve 是「受上限約束的非核心長線 alpha sleeve」，不是純防守性 diversifier，也不是象徵性小配置。
-- 不是常態核心配置
-- 不是短期事件交易工具
+Lane B 研究定位（REVISED, MUST）：
+- extended ETF sleeve 是「material but capped alpha sleeve」：
+  - 不是 QQQ benchmark anchor 的替代品
+  - 不是常態核心配置
+  - 不是短期事件交易工具
+  - 不是象徵性小配置；若通過 thesis / liquidity / approved static list / linkage / cap / compile gates，可對本回合 open-order budget 形成實質貢獻
 - 啟用目的包含：
   (1) 補強 base 六檔無法充分表達的長線輔助曝險
   (2) 更精準表達 base 六檔雖有曝險、但表達不夠純或不夠集中的 12m+ 結構性趨勢
-  (3) 在不取代 QQQ / SMH / IGV 的前提下，提名可被未來人工審核的主題型 minority alpha sleeve
-- 熱門主題本身不是排除理由；AI、半導體、資安、資料中心、電力基礎設施、機器人、自動化、雲端與企業 AI 軟體等熱門主題，只要具備 12m+ thesis、角色清楚、流動性足夠、且相對 base 有增量價值，即可進入 proposed_extended_etf_candidates。
-- 但不得僅因 1–8 週熱度、單一事件、價格動能或媒體敘事而提名。
-- 在符合 12m+ thesis、流動性、role clarity、非槓桿、非反向與 approved-static-list gate 的前提下，不得僅因某 ETF 比 base ETF 更窄、tracking error 更高、或主題集中度更高，就自動排除；應依其相對 base 的 incremental exposure、alpha asymmetry、benchmark drift risk 與 sleeve cap 判斷。
+  (3) 在不取代 QQQ / core buy universe 作 benchmark anchor 的前提下，使用經使用者預先核准的 sector / thematic / factor ETF 形成 material but capped alpha sleeve
+- 熱門主題本身不是排除理由；AI、半導體、資安、資料中心、電力基礎設施、機器人、自動化、雲端、企業 AI 軟體、醫療科技、金融科技、供應鏈重組、quality growth 與其他 productivity-enhancing structural growth 主題，只要具備 12m+ thesis、角色清楚、流動性足夠、且相對 base 有增量價值，即可進入 proposed_extended_etf_candidates。
+- 但不得僅因 1–8 週熱度、單一事件、價格動能、媒體敘事或 LLM 自由文字語氣而提名、啟用或提高 budget。
+- 在符合 12m+ thesis、流動性、role clarity、非槓桿、非反向與 approved-static-list gate 的前提下，不得僅因某 ETF 比 base ETF 更窄、tracking error 更高、或主題集中度更高，就自動排除；應依其相對 base 的 incremental exposure、alpha asymmetry、benchmark drift risk、theme concentration 與 Strategy Settings cap 判斷。
 - 不得取代 QQQ 作 benchmark carrier。
+
+
+Lane B LLM model-risk research controls（NEW, MUST）：
+- LLM confidence is not an investment signal.
+  模型語氣、敘事完整度、文字說服力、或自由文字中的 bullish tone，不得作為提高 alpha_upside、budget、activation、或 NEW_ORDER 的依據。
+- proposed_extended_etf_candidates、extended_etf_candidate_universe、extended_etf_predecision_scorecard、extended_etf_scorecard 每檔 ETF 若存在，必須額外輸出：
+  - theme_bucket
+  - llm_evidence_tier
+  - llm_model_risk_notes
+  - incremental_exposure_vs_base_score
+  - overlap_with_existing_open_orders_score
+  - theme_concentration_risk_score
+  - evidence_backed_budget_ceiling_hint_pct_of_total_open_orders
+- theme_bucket 必須是簡短穩定字串，例如：
+  - "cybersecurity"
+  - "power_grid_infrastructure"
+  - "robotics_automation"
+  - "quality_factor"
+  - "growth_factor"
+  - "ai_semiconductor_precision"
+  - "enterprise_ai_software"
+  - "medical_technology"
+  - "fintech"
+  - "supply_chain_reindustrialization"
+  - "other_structural_growth"
+- llm_evidence_tier 只能是：
+  - "high_evidence"
+  - "adequate_evidence"
+  - "weak_or_mixed_evidence"
+  - "data_gap_or_media_only"
+- evidence_backed_budget_ceiling_hint_pct_of_total_open_orders 必須遵守：
+  - high_evidence：可最高接近 Strategy Settings single cap
+  - adequate_evidence：不得超過 single cap 的 75%
+  - weak_or_mixed_evidence：不得超過 single cap 的 40%
+  - data_gap_or_media_only：必須 = 0
+- 若 llm_evidence_tier != "high_evidence"，不得僅因 theme 熱門或 LLM 敘事完整而把該 ETF 排為 top_candidate。
+- 若同一 run 中多檔 extended ETF 被啟用，theme_bucket 必須互異，除非 Strategy Settings 明確允許 same-theme multi-ETF。
+- 若 theme_bucket 與既有 open orders 或 current holdings 高度重疊，必須在 llm_model_risk_notes 明確說明為何仍具備 incremental exposure，而不是只是重複 QQQ / SMH / IGV / existing extended ETF。
 
 Lane B 研究排序優先級（NEW, MUST）：
 (1) 是否補足或更精準表達 base 六檔無法充分表達的 12m+ 結構性趨勢曝險
@@ -509,6 +556,14 @@ Lane B 必須永遠輸出（MUST）：
     - "benchmark_drift_too_high"
     - "no_approved_static_list"
     - "data_gap_no_linkage"
+    - "failed_llm_evidence_tier"
+    - "llm_budget_ceiling_zero"
+    - "missing_theme_bucket"
+    - "theme_bucket_conflict"
+    - "same_theme_cap_breach"
+    - "same_run_escalation_limit_breach"
+    - "price_momentum_primary_driver"
+    - "llm_model_risk_data_gap"
     - null
 
   - downstream_tradeability_status 只能是：
@@ -530,6 +585,11 @@ Lane B 必須永遠輸出（MUST）：
     (9) event_dependency_score <= 3
     (10) preferred_scheduled_theme_event_id != null
     (11) event_id_refs 或 structural_theme_refs 至少一者非空
+    (12) llm_evidence_tier 必須為 "high_evidence" 或 "adequate_evidence"
+    (13) evidence_backed_budget_ceiling_hint_pct_of_total_open_orders 必須 > 0
+    (14) 若 optional_extended_etf_sleeve.enabled = true 且多檔 extended ETF 同時啟用，theme_bucket 必須互異，除非 Strategy Settings 明確允許 same-theme multi-ETF
+    (15) 不得違反 Strategy Settings.extended_etf_constraints.max_same_theme_extended_etf_count / max_same_theme_budget_pct_of_total_open_orders
+    (16) 不得違反 Strategy Settings.llm_model_risk_controls.same_run_escalation_limit
 
   - 若 can_enter_effective_allowed_buy_universe_this_run = false：
     - lane_b_status 不得為 "activated_tradeable"
@@ -641,6 +701,13 @@ proposed_extended_etf_candidates_rule (MUST):
   event_id_refs: []
   structural_theme_refs: []
   preferred_scheduled_theme_event_id (string|null; 若目前沒有可 deterministic 對應的 future scheduled theme event，則必須 = null)
+  theme_bucket
+  llm_evidence_tier
+  llm_model_risk_notes
+  incremental_exposure_vs_base_score
+  overlap_with_existing_open_orders_score
+  theme_concentration_risk_score
+  evidence_backed_budget_ceiling_hint_pct_of_total_open_orders
 
 - incremental_exposure_vs_base 必須說明該 ETF 相對 QQQ / SMH / IGV / VOO / VTI / VT 的增量曝險。
 - why_not_just_buy_base_alternative 必須明確回答：為何不是直接買 QQQ、SMH 或 IGV 就足夠。
@@ -716,6 +783,22 @@ extended_etf_candidate_universe_tradeability_rule (MUST):
   }
 - 若任一條件不足，該 ETF 不得進入 extended_etf_candidate_universe
 
+- extended_etf_candidate_universe 每檔還必須輸出下列 Lane B handoff 欄位：
+  - best_base_alternative
+  - incremental_exposure_vs_base
+  - why_not_just_buy_base_alternative
+  - theme_bucket
+  - llm_evidence_tier
+  - llm_model_risk_notes
+  - incremental_exposure_vs_base_score
+  - overlap_with_existing_open_orders_score
+  - theme_concentration_risk_score
+  - evidence_backed_budget_ceiling_hint_pct_of_total_open_orders
+  - event_id_refs
+  - structural_theme_refs
+  - preferred_scheduled_theme_event_id
+- 若上述任一欄位缺失，該 ETF 不得進入 extended_etf_candidate_universe，只能保留於 approved_static_list_screening_log 或 proposed_extended_etf_candidates。
+
 - extended_candidate_universe_downstream_gate_rule (NEW, MUST):
   - extended_etf_candidate_universe 不是研究 parking lot，而是已通過使用者核准後、可進入本輪正式 predecision / activation 的 downstream-consumable pool。
   - 因此，除既有 tradeability 條件外，每檔還必須同時滿足：
@@ -743,6 +826,8 @@ extended_etf_predecision_scorecard 每檔必填欄位（MUST）：
 - ticker
 - sleeve_role
 - best_base_alternative
+- incremental_exposure_vs_base
+- why_not_just_buy_base_alternative
 - benchmark_alignment_score (1-5, integer)
 - alpha_upside_score (1-5, integer)
 - regime_fit_score (1-5, integer)
@@ -759,13 +844,37 @@ extended_etf_predecision_scorecard 每檔必填欄位（MUST）：
 - event_id_refs: []
 - structural_theme_refs: []
 - preferred_scheduled_theme_event_id (string|null; 若目前沒有可 deterministic 對應的 future scheduled theme event，則必須 = null)
+- theme_bucket
+- llm_evidence_tier
+- llm_model_risk_notes
+- incremental_exposure_vs_base_score
+- overlap_with_existing_open_orders_score
+- theme_concentration_risk_score
+- evidence_backed_budget_ceiling_hint_pct_of_total_open_orders
 
-extended_etf_activation_rule (MUST):
+
+extended_etf_incremental_exposure_text_rule（NEW, MUST）：
+- extended_etf_predecision_scorecard 與 extended_etf_scorecard 每檔必須同時輸出：
+  - incremental_exposure_vs_base
+  - incremental_exposure_vs_base_score
+  - why_not_just_buy_base_alternative
+- incremental_exposure_vs_base 必須用繁體中文明確說明該 ETF 相對 QQQ / SMH / IGV / VOO / VTI / VT 的增量曝險，而不是只輸出分數。
+- why_not_just_buy_base_alternative 必須明確回答：為什麼不是直接買 best_base_alternative 就足夠。
+- incremental_exposure_vs_base_score 只能作為量化輔助，不得取代文字版 incremental_exposure_vs_base。
+- 若 incremental_exposure_vs_base 為空、泛稱、或只重複 theme 名稱，則不得 enabled，activation_blocker 必須 = "failed_relative_base_advantage"。
+
+extended_etf_activation_rule (REVISED, MUST):
 - optional_extended_etf_sleeve.enabled 只有在以下硬門檻全部成立時，才可進入啟用評估：
   (1) thesis_duration_score >= 4
   (2) liquidity_quality_score >= 4
   (3) event_dependency_score <= 3
   (4) 啟用理由不得主要來自單一 45 天事件；必須具備 12m+ thesis linkage
+  (5) llm_evidence_tier 必須為 "high_evidence" 或 "adequate_evidence"
+  (6) evidence_backed_budget_ceiling_hint_pct_of_total_open_orders 必須 > 0
+  (7) 若 llm_evidence_tier = "data_gap_or_media_only"，不得 enabled，不得進入 allowed_extended_etf_tickers
+  (8) 若 llm_evidence_tier = "weak_or_mixed_evidence"，不得 enabled；只能保留為 predecision_only / watch_only，除非 Strategy Settings 明確允許 weak evidence 小額啟用
+  (9) 若多檔 extended ETF 同時啟用，theme_bucket 必須互異，除非 Strategy Settings 明確允許 same-theme multi-ETF
+  (10) 不得違反 Strategy Settings.extended_etf_constraints.same-theme / max-same-theme / distinct-theme / price-momentum hard gates
 - 在通過硬門檻後，尚需滿足下列加分門檻至少 2 項成立，才可 enabled = true：
   (a) expected_return_profile_3_5y >= 4
   (b) alpha_upside_score 相對 best_base_alternative 更優
@@ -774,6 +883,24 @@ extended_etf_activation_rule (MUST):
 - 若未通過：
   enabled = false
   allowed_extended_etf_tickers = []
+
+- enable_hurdle_passed 定義（NEW, MUST）：
+  - extended_etf_predecision_scorecard[*].enable_hurdle_passed 必須代表「ticker-level activation hard gates」已通過，而不是只代表傳統 thesis / liquidity / event_dependency 三項通過。
+  - 因此，若以下任一條件不成立，enable_hurdle_passed 必須 = false：
+    (1) thesis_duration_score >= 4
+    (2) liquidity_quality_score >= 4
+    (3) event_dependency_score <= 3
+    (4) 具備 12m+ thesis linkage
+    (5) llm_evidence_tier ∈ ["high_evidence","adequate_evidence"]
+    (6) evidence_backed_budget_ceiling_hint_pct_of_total_open_orders > 0
+    (7) theme_bucket 非空
+    (8) 不以 price momentum / media narrative / LLM tone 作為 primary driver
+    (9) 不違反 same-theme / distinct-theme / same-run escalation gates
+  - 若 enable_hurdle_passed = false，activation_blocker 必須使用最接近的合法 blocker，不得為 null。
+  - 若傳統 thesis / liquidity gate 通過，但 LLM model-risk gate 未通過：
+    - enable_hurdle_passed 必須 = false
+    - lane_b_status 可為 "predecision_only" 或 "approved_but_excluded"
+    - downstream_tradeability_status 不得為 "tradeable_this_run"
 
 extended_etf_activation_consistency_rule (MUST):
 - 若任一 extended_etf_predecision_scorecard item 的 enable_hurdle_passed = true，
@@ -793,6 +920,8 @@ extended_etf_scorecard_rule (CONDITIONAL, MUST):
   ticker
   sleeve_role
   best_base_alternative
+  incremental_exposure_vs_base
+  why_not_just_buy_base_alternative
   benchmark_alignment_score
   alpha_upside_score
   regime_fit_score
@@ -809,6 +938,13 @@ extended_etf_scorecard_rule (CONDITIONAL, MUST):
   event_id_refs: []
   structural_theme_refs: []
   preferred_scheduled_theme_event_id (string|null; 若目前沒有可 deterministic 對應的 future scheduled theme event，則必須 = null)
+  theme_bucket
+  llm_evidence_tier
+  llm_model_risk_notes
+  incremental_exposure_vs_base_score
+  overlap_with_existing_open_orders_score
+  theme_concentration_risk_score
+  evidence_backed_budget_ceiling_hint_pct_of_total_open_orders
   lane_b_status
   activation_blocker
   can_enter_effective_allowed_buy_universe_this_run
@@ -1141,7 +1277,7 @@ RESEARCH_JSON 必須至少包含以下欄位（可增欄位，但不要少）：
       "event_id_refs": [],
       "structural_theme_refs": [],
       "lane_b_status": "approved_but_excluded|predecision_only|activated_tradeable|existing_holding_monitor_only",
-      "activation_blocker": "missing_future_scheduled_theme_anchor|failed_tradeability|failed_thesis_duration|event_dependency_too_high|failed_relative_base_advantage|benchmark_drift_too_high|no_approved_static_list|data_gap_no_linkage|null",
+      "activation_blocker": "missing_future_scheduled_theme_anchor|failed_tradeability|failed_thesis_duration|event_dependency_too_high|failed_relative_base_advantage|benchmark_drift_too_high|no_approved_static_list|data_gap_no_linkage|failed_llm_evidence_tier|llm_budget_ceiling_zero|missing_theme_bucket|theme_bucket_conflict|same_theme_cap_breach|same_run_escalation_limit_breach|price_momentum_primary_driver|llm_model_risk_data_gap|null",
       "can_enter_effective_allowed_buy_universe_this_run": false,
       "relative_base_advantage_summary": "",
       "downstream_tradeability_status": "tradeable_this_run|screening_only|watch_only|blocked"
@@ -1161,6 +1297,13 @@ RESEARCH_JSON 必須至少包含以下欄位（可增欄位，但不要少）：
       "preferred_scheduled_theme_event_id": null,
       "event_id_refs": [],
       "structural_theme_refs": [],
+      "theme_bucket": "",
+      "llm_evidence_tier": "high_evidence|adequate_evidence|weak_or_mixed_evidence|data_gap_or_media_only",
+      "llm_model_risk_notes": "",
+      "incremental_exposure_vs_base_score": 0,
+      "overlap_with_existing_open_orders_score": 0,
+      "theme_concentration_risk_score": 0,
+      "evidence_backed_budget_ceiling_hint_pct_of_total_open_orders": 0,
       "lane_b_status": "proposed_only",
       "activation_blocker": "no_approved_static_list",
       "can_enter_effective_allowed_buy_universe_this_run": false
@@ -1193,6 +1336,8 @@ RESEARCH_JSON 必須至少包含以下欄位（可增欄位，但不要少）：
       "proposed_extended_candidates_non_tradeable": true,
       "trend_candidate_scan_complete": true,
       "proposed_extended_candidates_have_incremental_base_advantage": true,
+      "extended_llm_model_risk_fields_complete": true,
+      "extended_incremental_exposure_text_complete": true,
       "strategy_a_research_handoff_complete": true,
       "strategy_a_research_handoff_consistent": true,
       "extended_lane_downstream_gate_consistent": true,
@@ -1219,7 +1364,7 @@ RESEARCH_JSON 必須至少包含以下欄位（可增欄位，但不要少）：
     "disable_reason": "",
     "why_not_enabled": "",
     "allowed_extended_etf_tickers": [],
-    "notes": "Extended ETF sleeve 為受上限約束的非核心長線輔助工具；未啟用時，Template2 必須維持在 trade_universe.allowed_buy_tickers 內。"
+    "notes": "Extended ETF sleeve 為經使用者核准、受上限約束的 material but capped alpha sleeve；未啟用時，Strategy A / Template2 必須維持在 trade_universe.allowed_buy_tickers 內。"
   },
   "extended_etf_scorecard": [],
   "top5_next_week": [],
@@ -1380,6 +1525,29 @@ downstream_handoff_validation_rule (NEW, MUST):
     - expected_role_if_approved 必須屬於允許枚舉。
     - 若 best_base_alternative ∈ ["QQQ","SMH","IGV"]，why_not_just_buy_base_alternative 必須明確說明為何 base exposure 不足。
 
+  (27) Lane B LLM model-risk fields 必須完整：
+    - proposed_extended_etf_candidates、extended_etf_candidate_universe、extended_etf_predecision_scorecard、extended_etf_scorecard 若非空，每檔皆必須具備：
+      - theme_bucket
+      - llm_evidence_tier
+      - llm_model_risk_notes
+      - incremental_exposure_vs_base_score
+      - overlap_with_existing_open_orders_score
+      - theme_concentration_risk_score
+      - evidence_backed_budget_ceiling_hint_pct_of_total_open_orders
+    - llm_evidence_tier 必須屬於允許枚舉：
+      - "high_evidence"
+      - "adequate_evidence"
+      - "weak_or_mixed_evidence"
+      - "data_gap_or_media_only"
+
+  (28) extended ETF incremental exposure text 必須完整：
+    - extended_etf_predecision_scorecard、extended_etf_scorecard 若非空，每檔皆必須具備：
+      - incremental_exposure_vs_base
+      - incremental_exposure_vs_base_score
+      - why_not_just_buy_base_alternative
+    - incremental_exposure_vs_base 不得為空、不得只重複 theme 名稱、不得只輸出分數。
+    - why_not_just_buy_base_alternative 不得為空，且必須明確回答為何 best_base_alternative 不足。
+
 - 若上述任一檢查失敗：
   - validation_summary.passed 必須 = false
   - validation_summary.fail_reasons 必須加入對應 label：
@@ -1398,6 +1566,8 @@ downstream_handoff_validation_rule (NEW, MUST):
     - "SELL_SIDE_RESEARCH_BOUNDARY_MISSING_OR_INCONSISTENT"
     - "TREND_CANDIDATE_SCAN_MISSING_OR_INCOMPLETE"
     - "PROPOSED_EXTENDED_CANDIDATE_MISSING_INCREMENTAL_BASE_ADVANTAGE"
+    - "EXTENDED_LLM_MODEL_RISK_FIELDS_INCOMPLETE"
+    - "EXTENDED_INCREMENTAL_EXPOSURE_TEXT_INCOMPLETE"
 validation_summary_checks_extension_rule (NEW, MUST):
 - validation_summary.checks 必須額外包含以下 boolean checks：
   - downstream_actionability_fields_complete
@@ -1409,6 +1579,8 @@ validation_summary_checks_extension_rule (NEW, MUST):
   - proposed_extended_candidates_non_tradeable
   - trend_candidate_scan_complete
   - proposed_extended_candidates_have_incremental_base_advantage
+  - extended_llm_model_risk_fields_complete
+  - extended_incremental_exposure_text_complete
   - strategy_a_research_handoff_complete
   - strategy_a_research_handoff_consistent
   - extended_lane_downstream_gate_consistent
