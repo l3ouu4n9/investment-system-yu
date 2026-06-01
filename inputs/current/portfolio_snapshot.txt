@@ -1,5 +1,5 @@
 【輸入 2｜Portfolio Snapshot（PATCH: base ETF holdings required; extended ETF holdings optional）】
-# updated 2026-05-18
+# updated 2026-05-31
 
 (1) current_holdings_base（REQUIRED；六檔 base ETF 必填）
 格式：TICKER | shares | avg_cost
@@ -151,11 +151,13 @@ TICKER | budget | compiled_open_order_notional(optional) | residual_cash_not_all
   - 若 open_order_state_timing=pre_submission 或 broker_submission_confirmed=false，Daily Execution Check 不得把 replacement 後 intended ladder 視為 live state。
 
 
-QQQ | 14132.17 | 12380.42 | 1751.75 | T4-E | 719.79 | 2026-05-14 |  | 687.40 | 590.23 | 4 | L1@687.40;L2@658.61;L3@626.22;L4@590.23 | L1:7;L2:5;L3:4;L4:3
-VOO | 11156.43 | 11003.71 | 152.72 | T4-B | 674.66 | 2026-05-06 |  | 651.05 | 563.34 | 4 | L1@651.05;L2@624.06;L3@593.70;L4@563.34 | L1:5;L2:5;L3:4;L4:4
-CIBR | 4021.05 | 3931.15 | 89.90 | T4-B | 79.05 | 2026-05-15 | 2026-05-11 | 74.31 | 60.08 | 4 | L1@74.31;L2@70.35;L3@65.61;L4@60.08 | L1:8;L2:11;L3:18;L4:23
-SMH | 5397.57 | 4751.4 | 646.17 | T4-B | 572.46 | 2026-05-13 |  | 543.84 | 440.79 | 3 | L2@515.21;L3@480.87;L4@440.79 | L2:3;L3:3;L4:4
+
+QQQ | 14132.17 | 11910.86 | 2221.31 | T4-E | 730.28 | 2026-05-26 | | 722.98 | 635.34 | 5 | starter@722.98;L1@708.37;L2@686.46;L3@660.90;L4@635.34 | starter:7;L1:4;L2:3;L3:2;L4:1
+SMH | 5397.57 | 4287.22 | 1110.35 | T4-B | 602.14 | 2026-05-26 | | 578.05 | 493.75 | 4 | L1@578.05;L2@550.96;L3@520.85;L4@493.75 | L1:2;L2:2;L3:2;L4:2
+VOO | 11156.43 | 11003.71 | 152.72 | T4-B | 674.66 | 2026-05-06 | | 651.05 | 563.34 | 4 | L1@651.05;L2@624.06;L3@593.70;L4@563.34 | L1:5;L2:5;L3:4;L4:4
+CIBR | 4021.05 | 3842.96 | 178.09 | T4-B | 89.04 | 2026-05-29 | 2026-06-01 | 85.03 | 72.12 | 4 | L1@85.03;L2@81.03;L3@76.13;L4@72.12 | L1:11;L2:12;L3:15;L4:11
 GRID | 1491.45 | 1106.56 | 384.89 | T4-B | 191.78 | 2026-05-15 |  | 180.27 | 145.75 | 4 | L1@180.27;L2@170.68;L3@159.18;L4@145.75 | L1:1;L2:1;L3:2;L4:3
+
 
 (2b) sell_open_orders（optional, lot-aware open sell orders summary）
 

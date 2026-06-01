@@ -92,14 +92,14 @@ def decision_packet(*, diag: dict | None = None) -> dict:
     return payload
 
 
-def audited_packet(*, diag: dict | None = None, final_action: str = "KEEP_EXISTING") -> dict:
+def audited_packet(*, diag: dict | None = None, final_action: str = "KEEP_EXISTING", ticker: str = "QQQ") -> dict:
     payload = {
         "audit_passed": True,
         "order_compiler_ready": True,
         "final_buy_side_delta_table": [],
         "final_sell_side_delta_table": [],
         "final_execution_plans": [
-            {"ticker": "QQQ", "compile_ready": True, "final_action": final_action, "why": "explicit audit keep reason"}
+            {"ticker": ticker, "compile_ready": True, "final_action": final_action, "why": "explicit audit keep reason"}
         ],
         "final_sell_execution_plans": [],
     }
@@ -183,7 +183,7 @@ def test_strategy_c_diagnostics_do_not_generate_buy_orders(tmp_path: Path) -> No
         summary=diagnostic_summary_text(),
     )
 
-    with pytest.raises(ValueError, match="not executable"):
+    with pytest.raises(ValueError, match="not compile-ready buy-side"):
         validate_orders_output(
             template4_orders_path=template4_path,
             order_state_export_path=state_path,
@@ -207,6 +207,47 @@ def test_strategy_c_buy_orders_only_from_executable_final_plans(tmp_path: Path) 
     )
 
     assert "ticker=QQQ" in parsed["template4_orders"]
+
+
+def test_strategy_c_cancel_existing_buy_order_rows_are_valid_buy_side_actions(tmp_path: Path) -> None:
+    template4_path, state_path, summary_path = write_step4_files(
+        tmp_path,
+        orders=(
+            "TEMPLATE4_ORDERS\n"
+            "BUY_ORDERS\n"
+            "ticker=GRID | step_name=L1 | order_intent=CANCEL_EXISTING\n"
+        ),
+        summary=diagnostic_summary_text(),
+    )
+
+    parsed = validate_orders_output(
+        template4_orders_path=template4_path,
+        order_state_export_path=state_path,
+        exec_summary_path=summary_path,
+        audited_decision_packet=audited_packet(diag=diagnostic(), final_action="CANCEL_EXISTING", ticker="GRID"),
+    )
+
+    assert "order_intent=CANCEL_EXISTING" in parsed["template4_orders"]
+
+
+def test_strategy_c_buy_order_row_intent_must_match_final_action(tmp_path: Path) -> None:
+    template4_path, state_path, summary_path = write_step4_files(
+        tmp_path,
+        orders=(
+            "TEMPLATE4_ORDERS\n"
+            "BUY_ORDERS\n"
+            "ticker=GRID | step_name=L1 | order_intent=REPLACE_EXISTING_SUBMIT_LEG\n"
+        ),
+        summary=diagnostic_summary_text(),
+    )
+
+    with pytest.raises(ValueError, match="order_intent values"):
+        validate_orders_output(
+            template4_orders_path=template4_path,
+            order_state_export_path=state_path,
+            exec_summary_path=summary_path,
+            audited_decision_packet=audited_packet(diag=diagnostic(), final_action="CANCEL_EXISTING", ticker="GRID"),
+        )
 
 
 def test_current_strategy_settings_new_policy_surface_and_keep_roles() -> None:

@@ -1,9 +1,9 @@
-as_of: "2026-05-18"
-run_timestamp_et: "2026-05-18 23:00 ET"
+as_of: "2026-05-31"
+run_timestamp_et: "2026-05-31 20:58 ET"
 benchmark: "QQQ"
 tax_intent: "LTCG_only"
 min_holding_period: ">=12m"
-hard_cap_open_orders_budget: 37286.35
+hard_cap_open_orders_budget: 36198.67
 relative_rotation_enabled: true
 
 relative_rotation_guardrails:
@@ -25,17 +25,17 @@ buy_order_template_map:
       - L3
       - L4
     step_offsets_vs_anchor:
-      starter: -0.015
-      L1: -0.045
-      L2: -0.085
-      L3: -0.130
-      L4: -0.180
+      starter: -0.010
+      L1: -0.030
+      L2: -0.060
+      L3: -0.095
+      L4: -0.130
     step_budget_weights:
-      starter: 0.34
-      L1: 0.24
+      starter: 0.40
+      L1: 0.25
       L2: 0.18
-      L3: 0.14
-      L4: 0.10
+      L3: 0.12
+      L4: 0.05
     default_event_window_handling: "place_before_nearest_macro_window"
     default_event_window_anchor_type: "scheduled_macro_event"
     default_intended_place_timing: "execution_date_et"
@@ -52,15 +52,15 @@ buy_order_template_map:
       - L3
       - L4
     step_offsets_vs_anchor:
-      L1: -0.035
-      L2: -0.075
-      L3: -0.120
-      L4: -0.165
+      L1: -0.025
+      L2: -0.055
+      L3: -0.085
+      L4: -0.120
     step_budget_weights:
-      L1: 0.30
-      L2: 0.27
-      L3: 0.23
-      L4: 0.20
+      L1: 0.35
+      L2: 0.30
+      L3: 0.22
+      L4: 0.13
     default_event_window_handling: "place_before_nearest_macro_window"
     default_event_window_anchor_type: "scheduled_macro_event"
     default_intended_place_timing: "execution_date_et"
@@ -77,15 +77,15 @@ buy_order_template_map:
       - L3
       - L4
     step_offsets_vs_anchor:
-      L1: -0.050
-      L2: -0.100
-      L3: -0.160
-      L4: -0.230
+      L1: -0.040
+      L2: -0.085
+      L3: -0.135
+      L4: -0.180
     step_budget_weights:
-      L1: 0.20
-      L2: 0.24
-      L3: 0.27
-      L4: 0.29
+      L1: 0.28
+      L2: 0.27
+      L3: 0.25
+      L4: 0.20
     default_event_window_handling: "place_before_nearest_theme_event"
     default_event_window_anchor_type: "scheduled_theme_event"
     default_intended_place_timing: "execution_date_et"
@@ -102,15 +102,15 @@ buy_order_template_map:
       - L3
       - L4
     step_offsets_vs_anchor:
-      L1: -0.060
-      L2: -0.110
-      L3: -0.170
-      L4: -0.240
+      L1: -0.045
+      L2: -0.090
+      L3: -0.145
+      L4: -0.190
     step_budget_weights:
-      L1: 0.15
-      L2: 0.20
+      L1: 0.25
+      L2: 0.25
       L3: 0.30
-      L4: 0.35
+      L4: 0.20
     default_event_window_handling: "place_before_nearest_theme_event"
     default_event_window_anchor_type: "scheduled_theme_event"
     default_intended_place_timing: "execution_date_et"
@@ -134,6 +134,7 @@ user_approved_extended_etf_static_list:
   - VUG
   - GRID
   - BOTZ
+  - AIQ
 
 user_approved_extended_etf_theme_map:
   QUAL:
@@ -242,6 +243,7 @@ daily_execution_drift_policy:
     SMH: "sector_alpha_tilt"
     IGV: "sector_alpha_tilt"
     CIBR: "extended_etf_minority_sleeve"
+    GRID: "extended_etf_minority_sleeve"
 
 
   calculations_required:

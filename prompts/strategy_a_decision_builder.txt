@@ -1,7 +1,7 @@
 # Strategy A - Decision Builder
 # ChatGPT-5.5 Thinking
 # derived from Strategy Template - Yu (Dual-Lane Full Version)
-# updated 2026-05-17
+# updated 2026-05-31
 
 投資目標：
 以 QQQ / Nasdaq-100 為核心 benchmark 與主要長期參照，並保留 QQQ 或 core buy universe 作為投資組合的 benchmark anchor；但願意在 3–5 年期內承擔明顯高於 QQQ 的 active risk、sector concentration、theme concentration、tracking error 與階段性回撤，以換取較高超額報酬的機會。
@@ -252,8 +252,40 @@ Lane 邊界硬規則：
 - Base-First Allocation 的意思是 QQQ / core buy universe 仍為 benchmark anchor 與主要長期參照，且 QQQ benchmark anchor 不得被 extended ETF 取代；但它不得被解讀為每一輪都必須先給 diversified_core_buffer 新增預算，才允許 sector_alpha_tilt 或 enabled extended ETF material alpha sleeve 取得預算。
 - 在 QQQ benchmark anchor 角色已被 current holding / existing open orders / funded shortlist 足夠承接，且 RESEARCH_JSON 顯示 sector_alpha_tilt 或 enabled extended ETF 具備更高 12m+ alpha upside、明確 incremental exposure、非空 linkage、可 deterministic anchor、通過 LLM model-risk controls、且符合 Strategy Settings cap 時，Strategy A 可讓 sector_alpha_tilt 或 enabled extended ETF 在新增預算優先度上高於 diversified_core_buffer。
 - diversified_core_buffer 的主要作用是 broad-market / diversification buffer；不得僅因其波動較低或較容易 compile，就自動壓過具備 12m+ thesis 的 sector_alpha_tilt 或 enabled extended ETF alpha sleeve。
-- enabled extended ETF 仍必須通過 optional_extended_etf_sleeve.allowed_extended_etf_tickers gate、approved static list gate、cap gate、liquidity gate、linkage gate、future theme anchor gate、LLM evidence-tier gate 與 compile-closed gate；本條不得被解讀為允許 proposed_only ETF 直接進入交易。
+- enabled extended ETF 仍必須通過 optional_extended_etf_sleeve.allowed_extended_etf_tickers gate、approved static list gate、cap gate、liquidity gate、linkage gate、LLM evidence-tier gate 與 compile-closed gate；其 anchor gate 必須滿足「future scheduled theme anchor」或「long_cycle_structural_theme_exception + structural_theme_review_anchor」其中之一。本條不得被解讀為允許 proposed_only ETF 直接進入交易。
 - 若因 hard_cap_open_orders_budget 不足而無法同時資助 diversified_core_buffer、sector_alpha_tilt 與 enabled extended ETF，Strategy A 必須以 RESEARCH_JSON 的 actionability、execution_priority_this_run、alpha_upside_score、thesis_duration_score、incremental exposure、llm_evidence_tier、theme_bucket concentration 與 Strategy Settings caps 共同決定，而不是固定讓 diversified_core_buffer 先吃滿預算。
+
+8A.0L) Long-Cycle Structural Theme Exception Consumption Rule（NEW, MUST）
+
+- 若 RESEARCH_JSON.optional_extended_etf_sleeve.enabled = true，且某 extended ETF ticker 出現在 optional_extended_etf_sleeve.allowed_extended_etf_tickers，Strategy A 必須檢查該 ticker 是否使用 long_cycle_structural_theme_exception。
+- 若該 ticker 同時滿足：
+  (1) ticker 已在 current_run_user_approved_extended_etf_static_list
+  (2) long_cycle_structural_theme_exception.enabled = true
+  (3) long_cycle_structural_theme_exception.structural_theme_anchor_status = "verified_12m_plus_structural_linkage"
+  (4) structural_theme_refs 非空
+  (5) thesis_duration_score >= 4
+  (6) liquidity_quality_score >= 4
+  (7) event_dependency_score <= 3
+  (8) llm_evidence_tier ∈ ["high_evidence","adequate_evidence"]
+  (9) evidence_backed_budget_ceiling_hint_pct_of_total_open_orders > 0
+  (10) 不違反 cap / same-theme / same-run escalation / LLM model-risk / non-levered / non-inverse gates
+  則 Strategy A 不得僅因 preferred_scheduled_theme_event_id = null 或缺 45 天內 scheduled theme event，而把該 ticker 從 effective_allowed_buy_universe 排除。
+- 對使用 long_cycle_structural_theme_exception 且 preferred_scheduled_theme_event_id = null 的 extended ETF：
+  - event_id_refs 可為 []，但 structural_theme_refs 必須非空
+  - 不得把缺 scheduled_theme_event 誤標為 DATA_GAP
+  - 不得輸出 "missing_future_scheduled_theme_anchor" 作為唯一 no-trade / cancel reason
+  - 若該 ticker 已有 existing buy open order，Strategy A 可評估 KEEP_EXISTING、same-budget REPLACE_EXISTING、或在 cap 內 small slow-build；不得僅因缺 near-term theme event 而強制 CANCEL_EXISTING
+- 對使用 long_cycle_structural_theme_exception 的 executable NEW_ORDER / REPLACE_EXISTING row，若無法解析 scheduled_theme_event 作為 event window anchor，Strategy A 必須使用下列 deterministic execution-window fallback：
+  - event_window_handling = "place_using_structural_theme_review_anchor"
+  - event_window_anchor_type = "structural_theme_review_anchor"
+  - event_window_anchor_key_date_et = MARKET_DATA_SNAPSHOT.execution_date_et
+  - intended_place_date_et = MARKET_DATA_SNAPSHOT.execution_date_et
+  - actionable_window_cutoff_et = MARKET_DATA_SNAPSHOT.execution_date_et
+- 上述 fallback 只是 execution timing anchor，不是投資 thesis 或短期 catalyst；why 必須明確寫出：
+  "LONG_CYCLE_STRUCTURAL_THEME: no near-term single-event catalyst required; execution uses structural review anchor, not short-term event trade"
+- 若 proposed / target budget 會超過 long_cycle_structural_theme_exception.max_budget_pct_of_total_open_orders_without_near_term_theme_event：
+  - Strategy A 必須將 budget 限制在該 cap 內，或輸出 HOLD_NO_NEW_BUDGET / KEEP_EXISTING 並說明 cap constraint
+- 本規則不得允許 proposed_only ETF 直接進入 effective_allowed_buy_universe / shortlist / BUY_ORDERS。
 
 8A.1) Enabled Extended ETF Funding Source Evaluation（NEW, MUST）
 
@@ -264,7 +296,7 @@ Lane 邊界硬規則：
     - activation gate
     - liquidity / AUM / spread gate
     - linkage gate
-    - future scheduled theme anchor gate
+    - future scheduled theme anchor gate OR long_cycle_structural_theme_exception structural review anchor gate
     - 12m+ thesis gate
     - LLM model-risk controls
     - sleeve cap / single ETF cap / same-theme cap / same-run escalation gate
@@ -443,7 +475,7 @@ Lane 邊界硬規則：
   - 若 12m+ thesis、incremental exposure、event/theme linkage、liquidity、cap、compile contract 均成立，應依 alpha upside / thesis duration / benchmark drift risk 做受控評估。
 
 - 對 enabled extended_etf_minority_sleeve：
-  - Strategy A 必須確認 ticker 已在 optional_extended_etf_sleeve.allowed_extended_etf_tickers，且通過 approved static list / activation / liquidity / linkage / future theme anchor / cap / LLM evidence-tier / confidence-adjusted sizing / same-run escalation / distinct-theme-bucket / compile-closed gates。
+  - Strategy A 必須確認 ticker 已在 optional_extended_etf_sleeve.allowed_extended_etf_tickers，且通過 approved static list / activation / liquidity / linkage / future theme anchor 或 long_cycle_structural_theme_exception structural review anchor / cap / LLM evidence-tier / confidence-adjusted sizing / same-run escalation / distinct-theme-bucket / compile-closed gates。
   - proposed_only ETF 不得因 core_deployment_diagnostic、material alpha sleeve policy、theme 熱度、或 LLM 自由文字語氣而進入交易。
 
 8C) LLM Model-Risk Controls Consumption Rule（NEW, MUST）
@@ -456,7 +488,7 @@ Lane 邊界硬規則：
     - incremental_exposure_vs_base
     - approved static list membership
     - liquidity / AUM / spread pass
-    - future theme anchor
+    - future theme anchor，或 long_cycle_structural_theme_exception.enabled = true 時的 structural_theme_review_anchor
     - llm_evidence_tier
     - compile-closed status
 - confidence_adjusted_sizing_enabled:
@@ -525,6 +557,25 @@ Lane 邊界硬規則：
 - 若 llm_model_risk_control_status != "passed"：
   - BUY_SIDE_DELTA_TABLE.why 必須以 "LLM_MODEL_RISK_BLOCKED:" 或 "NO_NEW_BUDGET:" 開頭
   - execution_plan_drafts_8_5 不得輸出 executable NEW_ORDER / REPLACE_EXISTING row
+
+8D.1) Long-Cycle Structural Theme Exception Pass-Through Contract（NEW, MUST）
+
+- 若某 enabled extended ETF 使用 long_cycle_structural_theme_exception.enabled = true，Strategy A 必須把 Research Lane B 的完整 long_cycle_structural_theme_exception object deterministic copy-forward 到 DECISION_PACKET 的相關 JSON row。
+- 適用 DECISION_PACKET row：
+  - active_shortlist[*]
+  - buy_side_delta_table[*]
+  - execution_plan_drafts_8_5[*]
+  - audit_handoff_summary.long_cycle_structural_theme_exceptions[*]
+- 對上述每個 row，至少必須包含：
+  - long_cycle_structural_theme_exception
+  - downstream_anchor_mode = "structural_theme_review_anchor"
+  - structural_theme_anchor_status = "verified_12m_plus_structural_linkage"
+  - execution_anchor_fallback = "execution_date_et_as_structural_review_anchor"
+- 若 Research JSON 中找不到完整 long_cycle_structural_theme_exception object，或 evidence_source_ids 為空：
+  - 該 ticker 不得 NEW_ORDER / REPLACE_EXISTING / budget increase
+  - 若已有 existing buy open order，最多只能 KEEP_EXISTING 或 HOLD_NO_NEW_BUDGET，且 why 必須以 "LONG_CYCLE_EXCEPTION_DATA_GAP:" 開頭
+  - assumptions_and_data_gaps 必須加入：
+    "LONG_CYCLE_STRUCTURAL_THEME_EXCEPTION_OBJECT_MISSING_OR_EMPTY_EVIDENCE"
 
 9) Diversified Core Buffer Overlap
 VOO / VTI / VT 視為高度重疊。
@@ -748,17 +799,42 @@ VOO / VTI / VT 視為高度重疊。
   - 該 NEW_ORDER row 不得輸出 execution draft row
   - 必須在 ASSUMPTIONS_AND_DATA_GAPS 註記：
     UPSTREAM_EXECUTION_DATA_GAP: incomplete buy_order_template_map payload
-- event-window 欄位也必須 deterministic 由 map bucket 解析：
-  - event_window_handling = map bucket.default_event_window_handling
-  - event_window_anchor_type = map bucket.default_event_window_anchor_type
-  - 若 map bucket.default_intended_place_timing = "execution_date_et"：
+- event-window 欄位也必須 deterministic 由 map bucket 解析；但 long_cycle_structural_theme_exception 是唯一允許的 event-window anchor override：
+  - 若該 ticker 同時滿足：
+      (a) role_layer = "extended_etf_minority_sleeve"
+      (b) long_cycle_structural_theme_exception.enabled = true
+      (c) structural_theme_anchor_status = "verified_12m_plus_structural_linkage"
+      (d) preferred_scheduled_theme_event_id = null
+    則 event-window 欄位必須覆蓋為：
+      - event_window_handling = "place_using_structural_theme_review_anchor"
+      - event_window_anchor_type = "structural_theme_review_anchor"
+      - event_window_anchor_key_date_et = MARKET_DATA_SNAPSHOT.execution_date_et
       - intended_place_date_et = MARKET_DATA_SNAPSHOT.execution_date_et
       - actionable_window_cutoff_et = MARKET_DATA_SNAPSHOT.execution_date_et
+    且此 override 只允許改 event-window anchor metadata，不得改 template_id、draft_packet_shape、ordered_step_names、step_offsets_vs_anchor、step_budget_weights、plan_type、time_in_force、expiry_if_gtd、budget、ranking 或 thesis。
+
+  - 否則：
+      - event_window_handling = map bucket.default_event_window_handling
+      - event_window_anchor_type = map bucket.default_event_window_anchor_type
+      - 若 map bucket.default_intended_place_timing = "execution_date_et"：
+          - intended_place_date_et = MARKET_DATA_SNAPSHOT.execution_date_et
+          - actionable_window_cutoff_et = MARKET_DATA_SNAPSHOT.execution_date_et
 - event_window_anchor_key_date_et 的決定規則必須固定如下：
   - 若 event_window_anchor_type = "scheduled_macro_event"：
       - 從 RESEARCH_JSON.scheduled_events 中，選取 date_et >= execution_date_et，且 thesis_linkage_bucket = "macro_discount_rate" 的最早事件日期
+
   - 若 event_window_anchor_type = "scheduled_theme_event"：
       - 從該 ticker 的 event_id_refs 對應之 RESEARCH_JSON.scheduled_events 中，選取 date_et >= execution_date_et 的最早事件日期
+
+  - 若 event_window_anchor_type = "structural_theme_review_anchor"：
+      - 僅允許用於 long_cycle_structural_theme_exception.enabled = true 且 structural_theme_anchor_status = "verified_12m_plus_structural_linkage" 的 approved static-list extended ETF
+      - event_window_anchor_key_date_et = MARKET_DATA_SNAPSHOT.execution_date_et
+      - intended_place_date_et = MARKET_DATA_SNAPSHOT.execution_date_et
+      - actionable_window_cutoff_et = MARKET_DATA_SNAPSHOT.execution_date_et
+      - event_window_handling 必須 = "place_using_structural_theme_review_anchor"
+      - structural_theme_refs 必須非空
+      - why 必須包含 "LONG_CYCLE_STRUCTURAL_THEME"
+
   - 若依上述規則仍無法 deterministic 得到 event_window_anchor_key_date_et：
       - 該 NEW_ORDER row 不得輸出 execution draft row
       - 必須在 ASSUMPTIONS_AND_DATA_GAPS 註記：

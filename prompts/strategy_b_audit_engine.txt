@@ -1,7 +1,7 @@
 # Strategy B - Audit Engine
 # ChatGPT-5.5 Thinking
 # derived from Strategy Template - Yu (Dual-Lane Full Version)
-# updated 2026-05-17
+# updated 2026-05-31
 
 投資目標：
 以 QQQ / Nasdaq-100 為核心 benchmark 與主要長期參照，並保留 QQQ 或 core buy universe 作為投資組合的 benchmark anchor；但願意在 3–5 年期內承擔明顯高於 QQQ 的 active risk、sector concentration、theme concentration、tracking error 與階段性回撤，以換取較高超額報酬的機會。
@@ -48,7 +48,7 @@
   - 使用槓桿 / 反向 / 低流動性 / thesis 不足 / 短期事件投機；
   - proposed_only ETF 進入 effective universe / shortlist / BUY_ORDERS；
   - 超出 extended ETF sleeve cap、single ETF cap、same-theme cap、same-run escalation limit；
-  - 缺少 12m+ thesis、linkage、approved static list、future anchor、llm_evidence_tier 或 compile-required 欄位；
+  - 缺少 12m+ thesis、linkage、approved static list、llm_evidence_tier 或 compile-required 欄位；若缺 future anchor，只有在該 ticker 未通過 long_cycle_structural_theme_exception 或未使用 structural_theme_review_anchor 時，才視為必須 FAIL；
   - 因追逐短期價格動能、媒體熱度或 LLM 敘事語氣而新增 ticker 或提高 budget。
 - 若 Audit 以 benchmark drift、active tilt drift、theme concentration 或 model-risk 為理由降級 / FAIL，必須明確指出違反的是哪一個 hard cap、linkage gate、liquidity gate、activation gate、LLM model-risk control 或 compile contract；不得只寫泛稱「風險較高」或「偏離 QQQ」。
 1) Single Source of Truth
@@ -275,7 +275,7 @@ DECISION_PACKET_END
 - Audit 必須確認：
   - QQQ 的 benchmark_carrier_core priority 沒有被 diversified_core_buffer 或 sector_alpha_tilt 覆蓋；
   - diversified_core_buffer 不得僅因低波動或容易 compile 而壓過 QQQ 或合格 alpha sleeve；
-  - sector_alpha_tilt / enabled extended_etf_minority_sleeve 若通過 thesis / linkage / liquidity / future theme anchor / cap / LLM model-risk controls / compile gates，不得僅因波動、主題集中或 tracking error 較高被 FAIL；
+  - sector_alpha_tilt / enabled extended_etf_minority_sleeve 若通過 thesis / linkage / liquidity / future theme anchor 或 long_cycle_structural_theme_exception structural review anchor / cap / LLM model-risk controls / compile gates，不得僅因波動、主題集中或 tracking error 較高被 FAIL；
   - proposed_only ETF 仍不得進入 effective_allowed_buy_universe / shortlist / BUY_ORDERS。
 - 若 Strategy A 對 QQQ 輸出 KEEP_EXISTING 或 HOLD_NO_NEW_BUDGET，且 inputs / recent_daily_execution_diagnostics / Portfolio Snapshot 顯示 QQQ ladder near-edge 或 underdeployment risk，Audit 必須確認 AUDITED_DECISION_PACKET.core_deployment_diagnostics 存在。
 - 若 core_deployment_diagnostics.deployment_status = "underdeployment_review_required"，但 Strategy A 沒有明確解釋為何不 reanchor / 不新增 budget / 不調整 weekly plan，Audit 必須標為 review blocker 或 patch reason，不得靜默 PASS。
@@ -284,7 +284,7 @@ DECISION_PACKET_END
 
 - 若 DECISION_PACKET 中存在 enabled extended ETF，且同時滿足以下條件：
   - ticker 出現在 optional_extended_etf_sleeve.allowed_extended_etf_tickers
-  - 該 ticker 通過 activation / approved static list / evidence / linkage / liquidity / future theme anchor / LLM model-risk / cap / compile gates
+  - 該 ticker 通過 activation / approved static list / evidence / linkage / liquidity / future theme anchor 或 long_cycle_structural_theme_exception structural review anchor / LLM model-risk / cap / compile gates
   - final_buy_side_delta_table 或 buy_side_delta_table 對該 ticker 給出 HOLD_NO_NEW_BUDGET / held_no_new_budget / selected_enabled_no_budget
   - why / reason / budget_source 包含 hard-cap headroom insufficient、headroom below activation minimum、available natural headroom insufficient、或 no permitted funding rotation 類理由
   則 Audit 必須檢查 Strategy A 是否已輸出 enabled_extended_etf_funding_source_evaluation。
@@ -395,6 +395,59 @@ DECISION_PACKET_END
 - 本 audit rule 不允許 proposed_only ETF 進入 effective_allowed_buy_universe / shortlist / BUY_ORDERS。
 - 本 audit rule 不要求 Strategy C 做任何額外判斷；Strategy C 只照 AUDITED_DECISION_PACKET 編譯。
 
+6.58B. Long-Cycle Structural Theme Exception Audit（NEW, MUST）
+
+- 若 AUDITED_DECISION_PACKET / DECISION_PACKET 中某 enabled extended ETF 使用 long_cycle_structural_theme_exception，Audit 必須將其視為 future scheduled theme anchor gate 的 narrow exception，而不是自動 FAIL。
+- 本例外只適用於已通過 optional_extended_etf_sleeve.allowed_extended_etf_tickers gate 的 approved static-list extended ETF；不得套用於 proposed_only ETF。
+- Audit 讀取 long_cycle_structural_theme_exception object 的來源優先序固定如下：
+  (1) DECISION_PACKET.execution_plan_drafts_8_5[*] 同 ticker object
+  (2) DECISION_PACKET.buy_side_delta_table[*] 同 ticker object
+  (3) DECISION_PACKET.active_shortlist[*] 同 ticker object
+  (4) DECISION_PACKET.audit_handoff_summary.long_cycle_structural_theme_exceptions[*] 同 ticker object
+  (5) RESEARCH_JSON.extended_etf_scorecard / extended_etf_predecision_scorecard / extended_etf_candidate_universe / approved_static_list_screening_log 同 ticker object
+- 若前四者缺失，但 RESEARCH_JSON 可 deterministic 找到同 ticker 的完整 object，Audit 可做 structure-only copy-forward；但必須在 patches_applied / audit notes 標明：
+  "LONG_CYCLE_STRUCTURAL_THEME_EXCEPTION_COPIED_FROM_RESEARCH_JSON"
+- 若 RESEARCH_JSON 也缺失，或 evidence_source_ids = []，則不得視為通過 long-cycle exception；Audit 必須把 null preferred_scheduled_theme_event_id 視為未被 narrow exception 覆蓋。
+- Audit 必須驗證 long_cycle_structural_theme_exception 至少包含：
+  - enabled = true
+  - exception_type = "long_cycle_structural_theme_without_near_term_event"
+  - structural_theme_anchor_status = "verified_12m_plus_structural_linkage"
+  - primary_structural_theme_ref 非空
+  - evidence_source_ids 非空
+  - execution_anchor_fallback = "execution_date_et_as_structural_review_anchor"
+  - next_review_trigger 非空
+  - budget_posture = "keep_existing_or_small_slow_build_only"
+  - max_budget_pct_of_total_open_orders_without_near_term_theme_event 為數字且 > 0
+  - why_not_short_term_event_trade 非空
+- Audit 必須驗證該 ticker 同時滿足：
+  - thesis_duration_score >= 4
+  - liquidity_quality_score >= 4
+  - event_dependency_score <= 3
+  - llm_evidence_tier ∈ ["high_evidence","adequate_evidence"]
+  - evidence_backed_budget_ceiling_hint_pct_of_total_open_orders > 0
+  - structural_theme_refs 非空
+  - 不以 price momentum / media narrative / LLM tone 作為 primary driver
+  - 不違反 extended ETF sleeve cap、single ETF cap、same-theme cap、same-run escalation limit、LLM model-risk controls、non-levered / non-inverse gates
+- 若上述條件成立：
+  - preferred_scheduled_theme_event_id = null 不得單獨構成 audit failure
+  - 不得把該 ticker 因 null preferred_scheduled_theme_event_id 單獨標為 "missing_future_scheduled_theme_anchor"
+  - 若 Strategy A 因該 ticker 已有 existing buy open order 而輸出 KEEP_EXISTING / same-budget REPLACE_EXISTING，Audit 不得僅因缺 45 天內 scheduled theme event 而改成 CANCEL_EXISTING
+- 若該 ticker 產生 executable NEW_ORDER / REPLACE_EXISTING row，Audit 必須確認 execution row 已 deterministic 關閉：
+  - event_window_handling = "place_using_structural_theme_review_anchor"
+  - event_window_anchor_type = "structural_theme_review_anchor"
+  - event_window_anchor_key_date_et = actionable_window.execution_date_et 或 MARKET_DATA_SNAPSHOT.execution_date_et
+  - intended_place_date_et 非空
+  - actionable_window_cutoff_et 非空
+  - structural_theme_refs 非空
+  - plan_type / time_in_force / expiry_if_gtd 非空且符合 compile contract
+- 若該 ticker 使用 long_cycle_structural_theme_exception，但 execution row 仍把 event_window_anchor_type 設為 "scheduled_theme_event" 且 preferred_scheduled_theme_event_id = null：
+  - Audit 必須 FAIL
+  - compiler_blockers 必須加入 "LONG_CYCLE_STRUCTURAL_ANCHOR_EXECUTION_METADATA_GAP"
+- 若 proposed / target budget 超過 long_cycle_structural_theme_exception.max_budget_pct_of_total_open_orders_without_near_term_theme_event，且上游未提供明確 override / human approval：
+  - Audit 必須 FAIL 或要求 Strategy A 降低 budget
+  - compiler_blockers 必須加入 "LONG_CYCLE_STRUCTURAL_THEME_BUDGET_CAP_BREACH"
+- 本規則不得降低 Strategy C compile contract；若 execution row 缺少 compile-required 欄位，仍必須依 8.51 / 8.51D FAIL。
+
 6.59. Daily Drift Policy Sanity Audit（NEW, MUST）
 - Audit 必須確認 Strategy Settings.daily_execution_drift_policy.keep_tolerance 完整覆蓋所有 role：
   - benchmark_carrier_core
@@ -422,7 +475,7 @@ DECISION_PACKET_END
     - incremental_exposure_vs_base
     - approved static list membership
     - liquidity / AUM / spread pass
-    - future theme anchor
+    - future theme anchor，或 long_cycle_structural_theme_exception.enabled = true 時的 structural_theme_review_anchor
     - llm_evidence_tier
     - compile-closed status
   - 若單一 extended ETF budget > total open orders 的 15%，llm_evidence_tier 必須 = "high_evidence"。
