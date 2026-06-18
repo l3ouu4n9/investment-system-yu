@@ -1,7 +1,7 @@
 # Strategy A - Decision Builder
 # ChatGPT-5.5 Thinking
 # derived from Strategy Template - Yu (Dual-Lane Full Version)
-# updated 2026-05-31
+# updated 2026-06-07
 
 投資目標：
 以 QQQ / Nasdaq-100 為核心 benchmark 與主要長期參照，並保留 QQQ 或 core buy universe 作為投資組合的 benchmark anchor；但願意在 3–5 年期內承擔明顯高於 QQQ 的 active risk、sector concentration、theme concentration、tracking error 與階段性回撤，以換取較高超額報酬的機會。
@@ -417,6 +417,146 @@ Lane 邊界硬規則：
     "ENABLED_EXTENDED_ETF_FUNDING_SOURCE_EVALUATION_MISSING"
   - decision_builder_ready_for_audit 必須依既有規則設為 false。
 
+8A.1B) Post-Cancel Material Headroom Redeployment Review（NEW, MUST）
+
+- 目的：當本輪因 CANCEL_EXISTING / REDUCE_EXISTING_BUDGET / non-effective universe removal 釋放出 material buy open-order budget headroom 時，Strategy A 必須主動評估是否應將釋放出的預算重新配置到更符合本策略 3–5y benchmark-relative mandate 的既有合格買單或 enabled extended ETF；不得直接把 material headroom preserve，除非有明確 mandate-based reason。
+- 本規則只處理 buy open-order budget headroom，不處理 sell proceeds。
+- 本規則不得違反 no same-run sell redeploy；若 headroom 來自 SELL_ORDERS 或 sell proceeds，仍不得用於本輪 buy budget。
+- 本規則的 trigger：
+  - 先計算：
+    trigger_source_exists =
+      any existing buy open order row has action_draft / final_action_candidate / final_action = "CANCEL_EXISTING"
+      OR any existing buy open order row has proposed_budget < existing_budget
+  - 若 trigger_source_exists = true，且下列任一條件成立：
+    (1) released_buy_open_order_budget >= max(1000.00, round(hard_cap_open_orders_budget * 0.03, 2))
+    (2) post_action_open_order_budget_headroom >= max(1000.00, round(hard_cap_open_orders_budget * 0.03, 2))
+    則必須啟動 post_cancel_material_headroom_redeployment_review。
+  - 若 trigger_source_exists = false，則 post_cancel_material_headroom_redeployment_review.triggered 必須 = false；不得只因自然 headroom 很大而套用 post-cancel review。
+- released_buy_open_order_budget 的 deterministic 計算：
+  - released_buy_open_order_budget = Σ(max(0, existing_budget - proposed_budget)) for buy-side rows with CANCEL_EXISTING / budget reduction
+  - post_action_open_order_budget_headroom = hard_cap_open_orders_budget - proposed_buy_open_orders_budget_total
+- DECISION_PACKET 必須每回合輸出 top-level object；觸發時填入實際 review，未觸發時輸出 triggered=false 與 redeployment_decision="not_triggered"：
+  post_cancel_material_headroom_redeployment_review:
+    triggered: true|false
+    trigger_reason_codes: []
+    released_buy_open_order_budget: number
+    post_action_open_order_budget_headroom: number
+    materiality_threshold: number
+    cancelled_or_reduced_source_tickers: []
+    candidate_redeployment_destinations: []
+    evaluated_destination_tickers: []
+    recommended_destination_tickers: []
+    redeployment_decision: "not_triggered" | "redeploy_to_existing_qualified_orders" | "partial_redeploy_to_existing_qualified_orders" | "preserve_headroom_with_mandate_reason" | "blocked_by_cap_or_compile_contract" | "blocked_by_no_qualified_destination"
+    redeployment_budget_total: number
+    preserved_headroom_after_review: number
+    why_redeploy: string|null
+    why_preserve_headroom: string|null
+    why_each_candidate_rejected: []
+- candidate_redeployment_destinations 至少必須評估：
+  (1) QQQ / benchmark_carrier_core，若 QQQ 仍具 actionability、future macro anchor、非空 linkage，且 core_deployment_diagnostics 不顯示過度部署；
+  (2) 已在 active_shortlist 或 final buy-side delta 中具備 12m+ thesis、非空 linkage、compile-closed 的 sector_alpha_tilt，例如 SMH；
+  (3) optional_extended_etf_sleeve.allowed_extended_etf_tickers 內的 enabled extended ETF，例如 GRID，且必須通過 approved static list / activation / liquidity / cap / LLM model-risk / future theme anchor 或 long_cycle_structural_theme_exception structural review anchor；
+  (4) diversified_core_buffer，例如 VOO，但不得僅因較低波動或容易 compile 而優先於 QQQ / 合格 alpha sleeve；
+  (5) 若 CIBR 或其他 approved static-list ETF 經 Research Template 啟用 long_cycle_structural_theme_exception 且進入 optional_extended_etf_sleeve.allowed_extended_etf_tickers，則必須評估其 KEEP_EXISTING / same-budget REPLACE_EXISTING / small slow-build，而不得僅因缺 near-term scheduled theme event 取消。
+- evaluated_destination_tickers 不得包含：
+  - proposed_only ETF
+  - 不在 effective_allowed_buy_universe 的 ticker
+  - 缺 12m+ thesis linkage 的 ticker
+  - 不能 deterministic compile 的 ticker
+  - QQQ 作為 funding source；QQQ 只能作 redeployment destination，除非使用者明確允許削弱 benchmark anchor
+- 若 Strategy A 決定 redeploy_to_existing_qualified_orders 或 partial_redeploy_to_existing_qualified_orders：
+  - 對已有 existing buy open order 的 destination ticker，executable action 必須收斂為：
+    order_intent = "REPLACE_EXISTING"
+    final_action_candidate = "REPLACE_EXISTING"
+    budget_change_type = "INCREASE_EXISTING_BUY_OPEN_ORDER_BUDGET"
+  - 對沒有 existing buy open order 的 destination ticker，executable action 必須收斂為：
+    order_intent = "NEW_ORDER"
+    final_action_candidate = "NEW_ORDER"
+    budget_change_type = "NEW_BUY_OPEN_ORDER_BUDGET"
+  - 每個 redeployment destination 必須有 compile-closed execution draft，包含 template_id、anchor、step names、step offsets、step_budget_weights 或合法 qty vector、event-window metadata、plan_type、time_in_force、expiry_if_gtd。
+  - final proposed_buy_open_orders_budget_total 仍必須 <= hard_cap_open_orders_budget。
+  - 不得因想用滿 hard cap 而把預算塞給 lower-alpha / lower-linkage / compile-convenient ETF。
+- 若 Strategy A 決定 preserve_headroom_with_mandate_reason：
+  - why_preserve_headroom 必須是非空 mandate-based reason，且明確比較為什麼不把 headroom 補到 QQQ / SMH / GRID / 其他 enabled extended ETF。
+  - 合格 reason 可包含：
+    - 所有可評估 destination 的 compile contract 不完整；
+    - 加 budget 會違反 hard cap、sleeve cap、single ETF cap、same-theme cap、same-run escalation limit 或 LLM model-risk controls；
+    - QQQ / SMH / GRID 等 destination 的 current open-order reachability / role deployment 已足夠，且增加 budget 反而會造成過度集中或偏離本輪 mandate；
+    - Research / Decision Builder 判定本輪 forced deployment expected value 不足，preserve headroom 高於部署到 lower-alpha / lower-linkage ETF。
+  - 不合格 reason 包含但不限於：
+    - "hard cap is upper bound not target"
+    - "no deterministic new-budget target"
+    - "headroom preserved by default"
+    - "lower volatility"
+    - "easier to compile"
+    - "avoid tracking error"
+    - "extended ETF theme concentration is higher"
+  - 上述不合格 reason 不得單獨作為 preserve material headroom 的充分理由。
+- 若 Strategy A 沒有做本 post-cancel material headroom redeployment review：
+  - 不得把 released material headroom 靜默 preserve。
+  - assumptions_and_data_gaps 必須加入：
+    "POST_CANCEL_MATERIAL_HEADROOM_REDEPLOYMENT_REVIEW_MISSING"
+  - audit_handoff_summary.audit_handoff_blockers 必須加入：
+    "POST_CANCEL_MATERIAL_HEADROOM_REDEPLOYMENT_REVIEW_MISSING"
+  - decision_builder_ready_for_audit 必須依既有 blocker 規則設為 false。
+- TEMPLATE2_OUTPUT requirements：
+  - 若本規則 triggered=true，2.11 ASSUMPTIONS_AND_DATA_GAPS 必須新增 INFO 或 BLOCKER row，摘要：
+    "POST_CANCEL_HEADROOM_REDEPLOYMENT_REVIEW: released_buy_open_order_budget=...; post_action_open_order_budget_headroom=...; evaluated_destination_tickers=[...]; redeployment_decision=...; redeployment_budget_total=...; preserved_headroom_after_review=..."
+  - 若任何 buy_side_delta_table row 因本規則增加 / 不增加 budget，why 必須包含 parser-safe key=value：
+    "POST_CANCEL_HEADROOM_REVIEW: released_budget=...; evaluated_destination_tickers=[...]; redeployment_decision=...; why=..."
+- DECISION_PACKET.audit_handoff_summary 必須包含：
+  post_cancel_material_headroom_redeployment_review: {same object or deterministic summary}
+
+8A.2) Cold Regime Benchmark-Relative Deployment Decision Rule（NEW, MUST）
+
+- 目的：當 RESEARCH_JSON 顯示 cold regime / equity risk-reward impaired / cash-T-bill opportunity cost material 時，Strategy A 必須用 QQQ-centered 3–5y benchmark-relative mandate 判斷本輪應部署、reanchor、HOLD_NO_NEW_BUDGET，或 preserve headroom；不得機械式為了用滿 hard_cap_open_orders_budget 而硬買，也不得把本系統改寫為 bond / cash allocation engine。
+
+- Trigger：若 RESEARCH_JSON.cold_regime_benchmark_relative_opportunity_review.triggered = true，或 RESEARCH_JSON.regime_inputs / buy_universe_scorecard / optional_extended_etf_sleeve 顯示下列任一情況，必須啟動 cold_regime_benchmark_relative_deployment_review：
+  (1) base_universe_deployment_posture ∈ {"ranking_hold_watch_only","preserve_headroom_if_no_actionable_anchor"}；
+  (2) cash_tbill_opportunity_cost_material = true；
+  (3) QQQ / core buy universe 的 actionability_status 非 actionable_this_run，且 hard_cap_open_orders_budget 仍有可部署 headroom；
+  (4) sector_alpha_tilt 或 enabled extended ETF 有 12m+ thesis 但因 anchor / linkage / cap / compile gate 暫時不可部署；
+  (5) Strategy A 原本會因 cash drag / hard cap / open-order deployment 壓力而新增或替換較低 expected value 的 ETF。
+
+- 若未觸發，本規則不得改變既有 Post-QQQ Material Alpha Sleeve Priority Clarification、Enabled Extended ETF Funding Source Evaluation、Core ETF Deployment Adequacy Guardrail、active_shortlist_size_rule 或 hard_cap_open_orders_budget 流程。
+
+- 觸發時，DECISION_PACKET 必須輸出 top-level object：
+  cold_regime_benchmark_relative_deployment_review:
+    triggered: true|false
+    research_review_present: true|false
+    trigger_reasons: []
+    qqq_anchor_status: "maintain_anchor|adequately_anchored|underdeployment_review_needed|not_triggered"
+    qualified_actionable_candidates: []
+    blocked_or_watch_only_candidates: []
+    cash_tbill_opportunity_cost_material: true|false
+    preserve_headroom_allowed: true|false
+    conclusion: "deploy_to_qqq_or_core|deploy_to_sector_alpha_tilt|deploy_to_enabled_extended_etf|preserve_headroom|not_triggered"
+    objective_alignment_reason: "{繁體中文一句話}"
+
+- Decision rules：
+  (1) 若 QQQ / benchmark_carrier_core 存在 underdeployment risk、near-edge ladder、或 core_deployment_diagnostics.deployment_status="underdeployment_review_required"，不得用 cold regime 作為不處理 QQQ 的唯一理由。Strategy A 仍必須依 8B 輸出 core_deployment_diagnostics，並明確說明 KEEP_EXISTING / REPLACE_EXISTING / NEW_ORDER / HOLD_NO_NEW_BUDGET 的選擇。
+  (2) 若 QQQ / core universe 仍有合格 12m+ thesis、future macro anchor、非空 linkage、compile-closed execution draft、且 cold market 只是 sentiment_or_drawdown_only，則 cold regime 不得阻止部署；冷市場應視為可能改善 entry compensation。
+  (3) 若 sector_alpha_tilt 或 enabled extended ETF 具備更高 12m+ alpha upside、非空 linkage、liquidity / cap / LLM gates 通過，且 execution / anchor 可 deterministic compile，則不得因 cold regime、波動較高、tracking error 較高、或主題較集中而自動 HOLD_NO_NEW_BUDGET。
+  (4) 若 enabled extended ETF 已通過 activation，但 available_natural_headroom 低於 activation minimum，Strategy A 仍必須先執行 8A.1 enabled_extended_etf_funding_source_evaluation；不得用 cold regime 直接跳過 funding-source evaluation。
+  (5) 若所有可部署 ETF 都缺少 12m+ thesis linkage、future anchor、compile contract，或 Research 指出 equity risk/reward impaired 且本週 forced deployment expected value 不足，Strategy A 可選擇 conclusion="preserve_headroom"。
+  (6) conclusion="preserve_headroom" 時，不得輸出 NEW_ORDER 或 increase budget 給低 alpha、低 linkage、只因較穩 / 較容易 compile / 較接近 benchmark 的 ETF。
+  (7) conclusion="preserve_headroom" 不得被解讀為 chronic cash retention、低波動優先、或放棄 QQQ benchmark anchor；objective_alignment_reason 必須明確說明 preserve headroom 是因本輪 benchmark-relative expected value 不足，而不是因市場冷本身。
+  (8) cash / T-bill / MMF / Treasury / bond ETF 只能作 opportunity-cost context；除非 ticker 已經由 optional_extended_etf_sleeve.allowed_extended_etf_tickers 放行，否則不得進入 effective_allowed_buy_universe / active_shortlist / buy_side_delta_table / execution_plan_drafts_8_5。
+  (9) 若 Treasury / bond ETF 已由使用者 approved static list + optional_extended_etf_sleeve.allowed_extended_etf_tickers 放行，Strategy A 仍必須把它視為 enabled extended ETF，完整通過 activation、12m+ total-return thesis、liquidity、cap、LLM model-risk、linkage / long_cycle exception、compile-closed gates；不得因其低波動或避險屬性自動提高 priority。
+
+- TEMPLATE2_OUTPUT requirements：
+  - 若 cold_regime_benchmark_relative_deployment_review.triggered=true，2.11 ASSUMPTIONS_AND_DATA_GAPS 必須新增 INFO row，摘要：
+    "COLD_REGIME_BENCHMARK_RELATIVE_REVIEW: conclusion=...; preserve_headroom_allowed=...; qqq_anchor_status=...; cash_tbill_opportunity_cost_material=..."
+  - 若任何 active_shortlist 或 buy_side_delta_table row 因本規則 proposed_budget=0 / HOLD_NO_NEW_BUDGET，why 必須以 parser-safe 前綴開頭：
+    "COLD_REGIME_REVIEW: "
+  - 若 conclusion="preserve_headroom"，why 必須包含：
+    "CONSTRAINT_DRIVEN_NOT_OBJECTIVE_SHIFT: benchmark-relative expected value insufficient; preserving headroom is higher EV than forcing lower-alpha deployment"
+
+- Audit handoff requirements：
+  - DECISION_PACKET.audit_handoff_summary 必須包含：
+    cold_regime_benchmark_relative_deployment_review: {same object or deterministic summary}
+  - 若本規則阻止了原本可能產生的 NEW_ORDER / REPLACE_EXISTING / budget increase，audit_handoff_summary.audit_handoff_blockers 不必加入 compiler blocker；但必須在 review object 中說明是 decision-level preserve headroom，而非 compile failure。
+
 8B) Core ETF Deployment Adequacy Guardrail（NEW, MUST）
 
 - Strategy A 必須區分三層：
@@ -477,6 +617,144 @@ Lane 邊界硬規則：
 - 對 enabled extended_etf_minority_sleeve：
   - Strategy A 必須確認 ticker 已在 optional_extended_etf_sleeve.allowed_extended_etf_tickers，且通過 approved static list / activation / liquidity / linkage / future theme anchor 或 long_cycle_structural_theme_exception structural review anchor / cap / LLM evidence-tier / confidence-adjusted sizing / same-run escalation / distinct-theme-bucket / compile-closed gates。
   - proposed_only ETF 不得因 core_deployment_diagnostic、material alpha sleeve policy、theme 熱度、或 LLM 自由文字語氣而進入交易。
+
+8B.1) Existing Buy Open Order Weekly Reachability / Same-Budget Reanchor Gate（NEW, MUST）
+
+- Strategy A 必須對 Portfolio Snapshot.existing_buy_open_orders_summary 中每一筆 existing buy open order 執行 weekly reachability / reanchor 判定；不得只對 QQQ 執行 core_deployment_diagnostics。
+- 本 gate 是 weekly execution-planning gate，不是 Daily 自動交易；它只允許在同 ticker、同 role、同 thesis、同 budget 或 same remaining budget、且 compile-closed 的條件下，把失去可執行性的 live ladder 收斂為 same-budget REPLACE_EXISTING。
+- 對每一筆 existing buy open order，Strategy A 必須使用 MARKET_DATA_SNAPSHOT.current_last_close / price_asof 與 Portfolio Snapshot.existing_buy_open_orders_summary 中的：
+  - anchor_baseline_last_close
+  - anchor_price_asof
+  - highest_live_limit
+  - lowest_live_limit
+  - live_step_count
+  - live_order_steps_summary
+  - live_order_qtys_summary
+  計算並輸出 existing_buy_order_diagnostics。
+- 計算公式固定如下：
+  - baseline_drift_pct = (current_last_close - anchor_baseline_last_close) / anchor_baseline_last_close * 100
+  - distance_to_highest_live_limit_pct = (highest_live_limit - current_last_close) / current_last_close * 100
+  - distance_to_lowest_live_limit_pct = (lowest_live_limit - current_last_close) / current_last_close * 100
+- existing_buy_order_diagnostics 內的 drift 欄位 canonical name 必須使用 baseline_drift_pct；core_deployment_diagnostics 若需要 anchor_drift_pct，可 deterministic copy baseline_drift_pct 為 anchor_drift_pct，但不得兩者數值不一致。
+- Strategy A 必須依 ticker 的 role_layer，讀取 Strategy Settings.daily_execution_drift_policy.keep_tolerance：
+  - anchor_drift_abs_pct_static_cap[role_layer]
+  - max_negative_distance_to_highest_live_limit_pct[role_layer]
+- Strategy Settings.daily_execution_drift_policy.keep_tolerance.max_negative_distance_to_highest_live_limit_pct[role_layer] 是正數 magnitude，代表允許的最大負距離百分比；例如 6.0 代表 floor = -6.0%，不得解讀為 +6.0%。
+- reachability_floor_pct = -abs(max_negative_distance_to_highest_live_limit_pct[role_layer])
+- KEEP_EXISTING 只在下列條件全部成立時才可使用：
+  - required live ladder fields are present and parseable
+  - abs(baseline_drift_pct) <= anchor_drift_abs_pct_static_cap[role_layer]
+  - distance_to_highest_live_limit_pct >= reachability_floor_pct
+  - no override / thesis / role / event blocker requires hold or cancel
+- 若 abs(baseline_drift_pct) 超過 role tolerance，或 distance_to_highest_live_limit_pct < reachability_floor_pct，Strategy A 不得把 why 寫成 "within tolerance" / "reachability remains within tolerance" / "baseline drift and reachability remain within role tolerance"。
+- 若 threshold breached 且以下條件全部成立：
+  - same ticker only
+  - same existing_budget / same remaining budget only
+  - weekly thesis / role / event binding preserved
+  - no ranking change
+  - no budget increase
+  - Portfolio Snapshot current live row is complete and parseable
+  - replacement can be computed deterministically from existing weekly-approved role/template and current same-budget constraints
+  則 Strategy A 應輸出：
+  - BUY_SIDE_DELTA_TABLE.action_draft = "REPLACE_EXISTING"
+  - BUY_SIDE_DELTA_TABLE.order_intent_draft = "REPLACE_EXISTING"
+  - BUY_SIDE_DELTA_TABLE.anchor_decision_draft = "mini_reanchor_candidate" 或 "full_reanchor_candidate"
+  - EXECUTION_PLAN_DRAFTS_8_5.order_intent = "REPLACE_EXISTING"
+  - EXECUTION_PLAN_DRAFTS_8_5.anchor_decision = "mini_reanchor_candidate" 或 "full_reanchor_candidate"
+  - audit_handoff_summary.compile_support_by_ticker.<TICKER>.final_action_candidate = "REPLACE_EXISTING"
+- mini_reanchor_candidate / full_reanchor_candidate 判定：
+  - 若只有 distance_to_highest_live_limit_pct breach，且 abs(baseline_drift_pct) 仍在 role tolerance 內，優先使用 "mini_reanchor_candidate"。
+  - 若 abs(baseline_drift_pct) 也 breach，或 live ladder 整體明顯 stale，使用 "full_reanchor_candidate"。
+8B.1A) Full-Reanchor Complete Template Ladder Rebuild Rule（NEW, MUST）
+
+- 本規則處理 existing buy open order 被判定為 full_reanchor_candidate 時，replacement submit leg 應如何重建 ladder shape。
+- 若 anchor_decision_draft / anchor_decision = "full_reanchor_candidate"：
+  - Strategy A 不得預設 preserve current live partial step shape。
+  - Strategy A 必須優先從 Strategy Settings.buy_order_template_map 對應 role bucket 重建完整 template ladder。
+  - 對 role_layer = "sector_alpha_tilt"，必須使用 buy_order_template_map.sector_alpha_tilt。
+  - rebuilt replacement submit leg 必須使用完整 map bucket：
+    - template_id
+    - draft_packet_shape
+    - ordered_step_names
+    - step_offsets_vs_anchor
+    - step_budget_weights 或本規則允許的 fitted step_budget_weights
+    - default_plan_type
+    - default_time_in_force
+    - default_expiry_if_gtd
+- current live order 若只剩部分 steps，例如只剩 L3 / L4，不得導致 full_reanchor_candidate 的 replacement submit leg 也只剩 L3 / L4。
+- full_reanchor_candidate 的正確語意：
+  - cancel leg：必須逐 step 取消 current live SSOT 中實際存在的 live steps。
+  - submit leg：必須用 current_last_close 作新 anchor，重建完整 template ladder。
+- 因此：
+  - REPLACE_EXISTING cancel leg 可保留 current live partial shape，例如只取消 L3 / L4。
+  - REPLACE_EXISTING submit leg 不得保留 partial live shape；若 template map 有 L1 / L2 / L3 / L4，submit leg 必須輸出 L1 / L2 / L3 / L4。
+- full_reanchor_candidate 預設欄位收斂：
+  - preserve_live_step_shape = false
+  - live_step_count = null
+  - live_step_count_after_submission 不得放在 top-level live_step_count；必須放在 compiled_preview_if_deterministic.live_step_count_after_submission
+  - current live step count 必須只保留在 current_live_step_count / current_live_order_steps_summary / current_live_order_qtys_summary 這類 current-live SSOT 欄位中
+  - ordered_step_names = Strategy Settings.buy_order_template_map.{role_bucket}.ordered_step_names
+  - step_offsets_vs_anchor = Strategy Settings.buy_order_template_map.{role_bucket}.step_offsets_vs_anchor
+  - anchor_baseline_last_close = current_last_close
+  - anchor_price_asof = current_last_close_asof
+  - draft_packet_shape = Strategy Settings.buy_order_template_map.{role_bucket}.draft_packet_shape
+  - plan_type = Strategy Settings.buy_order_template_map.{role_bucket}.default_plan_type
+  - time_in_force = Strategy Settings.buy_order_template_map.{role_bucket}.default_time_in_force
+  - expiry_if_gtd = Strategy Settings.buy_order_template_map.{role_bucket}.default_expiry_if_gtd
+- mini_reanchor_candidate 可保留 current live step shape，前提是:
+  - only reachability breach, not baseline drift breach
+  - current live step shape is complete enough for the intended execution role
+  - compiled_notional <= proposed_budget
+  - why 明確說明只是 mini reanchor, not full rebuild
+- full_reanchor_candidate 只有在 Strategy Settings 明確提供：
+  "allow_full_reanchor_preserve_live_partial_step_shape": true
+  且 why 提供 mandate-based reason 時，才可保留 partial live step shape。
+- 不合格 reason 包含但不限於：
+  - "preserve live shape by default"
+  - "avoid changing order count"
+  - "easier to compile"
+  - "current live orders only have L3/L4"
+  - "no deterministic new-budget target"
+  上述理由不得作為 full_reanchor 保留 partial live ladder 的充分理由。
+
+Full-reanchor whole-share budget-fit rule（NEW, MUST）:
+- Strategy A 在 full_reanchor_candidate 重建完整 template ladder 時，必須避免因單價高、整股 floor、或 partial live ladder carry-forward 而造成 material underdeployment。
+- 若 current live order 是完整 template ladder 的 subset，例如 current live only has L3 / L4 while template map has L1 / L2 / L3 / L4：
+  - Strategy A 應優先嘗試 deterministic fitted ladder sizing：
+    (1) 對 current live 中仍存在且仍屬於 full template 的 deeper steps，保留其 current live shares 作為 target_step_share_vector 的初始值；
+    (2) 對 full template 中缺失的 shallower steps，若 proposed_budget 足以容納每個 missing step 至少 1 share，則補 1 share；
+    (3) 若上述 target_step_share_vector 的 compiled_notional <= proposed_budget，則可使用該 vector 作為 intended full-reanchor submit sizing；
+    (4) 若仍有 residual cash 且不會超過 proposed_budget，可依 deterministic budget-fit 目標增加 shares，使 compiled_notional 最大化但不超過 proposed_budget；tie-breaker 優先選擇較接近原 template risk shape、其次才是更深 rung。
+  - 例：若 current live 是 L3:2 / L4:2，完整 template 是 L1/L2/L3/L4，且 same-budget 可容納，Strategy A 可產生 L1:1 / L2:1 / L3:2 / L4:2，而不是只提交 L3:2 / L4:2。
+- 若使用 target_step_share_vector，Strategy A 必須將其轉換為可由 Strategy C 現有 Budget-fit compile rule deterministic 重現的 step_budget_weights：
+  - step_budget_weights 必須 sum to 1.0（允許 ±0.001）
+  - 對每個 step，必須滿足：
+    floor(proposed_budget × step_budget_weight_i / limit_price_i) = target_step_share_vector_i
+  - 若無法找到合法 step_budget_weights 讓 Strategy C 重現 target_step_share_vector，則不得輸出該 fitted vector；必須改用 default map step_budget_weights 或標記 compile blocker。
+- 若 default map step_budget_weights 會導致 material residual_cash_not_allocated，而 fitted ladder sizing 可在不超過 proposed_budget 的前提下明顯提高 compiled_open_order_notional，Strategy A 應優先使用 fitted ladder sizing。
+- material residual threshold:
+  - residual_cash_not_allocated >= min(lowest_full_template_limit_price, max(500.00, proposed_budget × 0.15))
+- 若 full_reanchor_candidate 無法使用完整 template ladder deterministic compile：
+  - 不得退回 KEEP_EXISTING
+  - 不得退回 partial L3/L4-only submit leg
+  - 必須在 BUY_SIDE_DELTA_TABLE.why 以 "COMPILE_BLOCKED: FULL_REANCHOR_COMPLETE_LADDER_REBUILD_FAILED:" 開頭
+  - 必須在 ASSUMPTIONS_AND_DATA_GAPS 記錄：
+    "FULL_REANCHOR_COMPLETE_LADDER_REBUILD_FAILED"
+  - audit_handoff_summary.audit_handoff_blockers 必須加入：
+    "FULL_REANCHOR_COMPLETE_LADDER_REBUILD_FAILED"
+- 若 threshold breached 但 replacement 無法 deterministic compile，Strategy A 不得靜默 KEEP_EXISTING；必須：
+  - 在 BUY_SIDE_DELTA_TABLE.why 以 "COMPILE_BLOCKED:" 或 "REACHABILITY_BREACH_HOLD_FOR_WEEKLY_REVIEW:" 開頭
+  - 在 ASSUMPTIONS_AND_DATA_GAPS 記錄 "UPSTREAM_EXECUTION_DATA_GAP" 或 "UPSTREAM_OR_PORTFOLIO_LIVE_STATE_GAP"
+  - 在 audit_handoff_summary.audit_handoff_blockers 中加入對應 blocker
+  - decision_builder_ready_for_audit 依既有 blocker 規則判定
+- 若 Strategy A 最終仍選擇 KEEP_EXISTING despite threshold breach，why 必須明確包含：
+  - breached_metric
+  - actual_value
+  - role_threshold
+  - why_not_same_budget_reanchor
+  且 why_not_same_budget_reanchor 必須是 mandate / compile / data-gap reason；不得只是 "weekly does not force reanchor"、"avoid reducing live-state notional"、"keep existing by default"。
+- distance_to_lowest_live_limit_pct 只作 evidence；除非 Strategy Settings 另有 crash-bid stale rule，不得單獨觸發 REPLACE_EXISTING / CANCEL_EXISTING。
+- near_edge_monitor_band 只可產生 operator note；不得在未 threshold breach 時自行觸發 REPLACE_EXISTING。
 
 8C) LLM Model-Risk Controls Consumption Rule（NEW, MUST）
 - 若 Strategy Settings.llm_model_risk_controls.enabled = true，Strategy A 必須在任何 extended ETF activation、budget increase、NEW_ORDER、REPLACE_EXISTING、或 rotation 前先消費 llm_model_risk_controls；不得把此檢查完全留給 Strategy B。
@@ -686,7 +964,7 @@ VOO / VTI / VT 視為高度重疊。
   - current_last_close_asof
   - draft_packet_shape
   - preserve_live_step_shape
-  - live_step_count
+  - live_step_count（若 preserve_live_step_shape = true，必須為 current live SSOT step count；若 anchor_decision = "full_reanchor_candidate" 且 preserve_live_step_shape = false，可為 null，post-submission step count 必須放在 compiled_preview_if_deterministic.live_step_count_after_submission）
   - ordered_step_names
   - step_offsets_vs_anchor
   - step_budget_weights 或 preserve_live_qty_vector
@@ -718,6 +996,31 @@ VOO / VTI / VT 視為高度重疊。
   - 必須在 ASSUMPTIONS_AND_DATA_GAPS 註記：UPSTREAM_EXECUTION_DATA_GAP
   - 該 ticker 不得輸出半完成 execution draft row
 - 若 sell-side execution draft 存在，也比照相同原則；不得輸出缺 lot / anchor / event-window / redeploy binding 的半完成 row。
+
+12A.0) REPLACE_EXISTING Trigger Precedence for Existing Buy Orders（NEW, MUST）
+
+- 在套用 12A Reanchor Notional Feasibility Gate 之前，Strategy A 必須先依 8B.1 判定每一筆 existing buy open order 是否觸發 same-budget REPLACE_EXISTING。
+- 若 8B.1 判定某 existing buy open order 已 breach weekly reachability / drift threshold，且 replacement 可 deterministic compile，則該 ticker 的 execution draft 不得保留為 KEEP_EXISTING。
+- 對此類 row，Strategy A 必須先將 order_intent 收斂為 "REPLACE_EXISTING"，再套用 12A 的 reanchor notional feasibility gate。
+- 若 anchor_decision = "mini_reanchor_candidate"，且 12A 判定 preserve_live_qty_vector reanchor 後 notional 不可行，但 Strategy Settings.buy_order_template_map 對應 role bucket 可 deterministic 提供 step_budget_weights，Strategy A 必須改用 step_budget_weights 作為 replacement submit-leg sizing。
+- 若 anchor_decision = "full_reanchor_candidate"，Strategy A 不得把 preserve_live_qty_vector / preserve_live_step_shape 作為預設 sizing path；必須依 8B.1A 重建完整 template ladder。
+- full_reanchor_candidate 的 replacement submit leg 必須優先使用：
+  (1) Strategy Settings.buy_order_template_map 對應 role bucket 的完整 ordered_step_names / step_offsets_vs_anchor；
+  (2) default step_budget_weights，或 8B.1A 允許且可由 Strategy C 重現的 fitted step_budget_weights；
+  (3) preserve_live_step_shape = false。
+- 若 12A 也無法 deterministic 產生可行 replacement submit leg，Strategy A 才可停止輸出 REPLACE_EXISTING execution draft，並改以 compile blocker / data gap 表達；不得退回無條件 KEEP_EXISTING，也不得退回 partial live ladder submit leg。
+- KEEP_EXISTING 的 precedence 低於 confirmed reachability breach + deterministic same-budget replacement。
+
+12A.05) REPLACE_EXISTING New Anchor Baseline Closure Rule（NEW, MUST）
+
+- 若 buy-side execution draft 的 order_intent = "REPLACE_EXISTING"，且 anchor_decision 屬於 "mini_reanchor_candidate" / "full_reanchor_candidate"，則 replacement submit leg 的新 anchor 必須 deterministic 關閉如下：
+  - anchor_baseline_last_close = current_last_close
+  - anchor_price_asof = current_last_close_asof
+- REPLACE_EXISTING row 不得沿用 current live order 的舊 anchor_baseline_last_close / anchor_price_asof 作為 replacement submit leg 的新 anchor。
+- current live order 的舊 anchor_baseline_last_close / anchor_price_asof 只能保留在 cancel-leg / current_live_* 欄位中，用於 Strategy B / Strategy C 取消既有掛單與 audit trace。
+- replacement submit leg 的 step_offsets_vs_anchor 必須以新的 anchor_baseline_last_close 為基準計算，也就是以 current_last_close 為新 anchor。
+- compiled_preview_if_deterministic、final_intended_state_export_preview、intended_next_ssot_reference 中的 post-replace intended live state，必須使用新 anchor_baseline_last_close / anchor_price_asof。
+- 若 Decision Builder 無法 deterministic 設定新的 anchor_baseline_last_close = current_last_close 或 anchor_price_asof = current_last_close_asof，則不得輸出 REPLACE_EXISTING execution draft；必須改以 UPSTREAM_EXECUTION_DATA_GAP / compile blocker 表達。
 
 12A) Reanchor Notional Feasibility Gate (NEW, MUST)
 - 若 buy-side execution draft 同時滿足以下條件：
@@ -1046,6 +1349,17 @@ VOO / VTI / VT 視為高度重疊。
   - intended_next_ssot_reference 必須指向 current live row carry-forward
   - 不得暗示 Strategy C 應產生新的 BUY_ORDERS rows。
 
+- KEEP_EXISTING compile-support eligibility guard（NEW, MUST）:
+  - 若該 ticker 的 existing_buy_order_diagnostics 顯示：
+    - weekly_drift_breach = true，或
+    - weekly_reachability_breach = true，或
+    - weekly_reanchor_required = true
+    則 Decision Builder 不得直接使用 KEEP_EXISTING compile-support handoff，除非 why 明確提供合格的 why_not_same_budget_reanchor。
+  - weekly_reachability_breach 必須依 existing_buy_order_diagnostics.reachability_floor_pct 判定；不得在 12H.2 重新用 max_negative_distance_to_highest_live_limit_pct 做正負號推導。
+  - 若 breach 已成立且 8B.1 / 12A.0 可 deterministic 產生 same-budget REPLACE_EXISTING，則該 row 必須使用 REPLACE_EXISTING compile-support handoff，而不是 KEEP_EXISTING compile-support handoff。
+  - 對 KEEP_EXISTING row，audit_handoff_compile_support.final_intended_state_export_preview 必須等於 current live SSOT carry-forward；但這只適用於未 breach 或 breach 已被明確 justified hold 的 row。
+  - Decision Builder 不得用 KEEP_EXISTING state carry-forward 規則掩蓋 reachability threshold breach。
+
 - 對 KEEP_EXISTING row，Decision Builder 應額外提供：
   - final_intended_existing_buy_open_orders_summary_row_fixed_candidate
 - 此欄位只作為 Strategy B deterministic audit / serialization 原料，不代表 Strategy A 已輸出 ORDER_STATE_EXPORT，也不得命名為 ORDER_STATE_EXPORT。
@@ -1085,6 +1399,16 @@ VOO / VTI / VT 視為高度重疊。
   - 不得輸出 compiled_preview_if_deterministic
   - 必須在 ASSUMPTIONS_AND_DATA_GAPS 註記 UPSTREAM_OR_PORTFOLIO_LIVE_STATE_GAP
 - Decision Builder 必須預演 replacement submit leg：
+  - 對 REPLACE_EXISTING submit leg，anchor_baseline_last_close 必須已依 12A.05 設為 current_last_close；anchor_price_asof 必須已依 12A.05 設為 current_last_close_asof。下列 raw_limit_price_i 公式中的 anchor_baseline_last_close 指的是 post-reanchor new anchor，不是 current live order 的舊 anchor。
+  - 若 anchor_decision = "full_reanchor_candidate"：
+      - compiled_preview_if_deterministic 必須預演完整 template ladder，不得只預演 current live partial step subset。
+      - ordered_step_names 必須等於 Strategy Settings.buy_order_template_map 對應 role bucket 的完整 ordered_step_names。
+      - step_offsets_vs_anchor 必須等於 Strategy Settings.buy_order_template_map 對應 role bucket 的完整 step_offsets_vs_anchor。
+      - preserve_live_step_shape 必須 = false，除非 Strategy Settings 明確允許 full_reanchor preserve partial live shape 且 why 提供 mandate-based reason。
+      - compiled_step_preview 必須包含完整 template ladder 的每一個 step；若 template 是 L1/L2/L3/L4，compiled_step_preview 不得只包含 L3/L4。
+      - 若使用 8B.1A fitted ladder sizing，compiled_preview_if_deterministic.sizing_source 必須 = "full_reanchor_complete_template_ladder_fitted_step_budget_weights"。
+      - 若使用 default map weights，compiled_preview_if_deterministic.sizing_source 必須 = "full_reanchor_complete_template_ladder_default_step_budget_weights"。
+      - 若 replacement submit leg 無法完整預演，不得聲稱 compile_support_complete_hint = true。
   - 若使用 step_budget_weights：
       - 驗證 Σ(step_budget_weights) = 1.0（允許 ±0.001）
       - 對每個 step：
@@ -1436,6 +1760,8 @@ DECISION_PACKET top-level keys 必須完全使用下列 exact key names，且不
 - "sell_execution_plan_drafts_8_6"
 - "existing_buy_order_diagnostics"
 - "core_deployment_diagnostics"
+- "cold_regime_benchmark_relative_deployment_review"
+- "post_cancel_material_headroom_redeployment_review"
 - "assumptions_and_data_gaps"
 - "audit_handoff_summary"
 - "decision_builder_ready_for_audit"
@@ -1461,6 +1787,8 @@ DECISION_PACKET top-level type contract 必須固定如下：
 - "sell_execution_plan_drafts_8_6": array
 - "existing_buy_order_diagnostics": array
 - "core_deployment_diagnostics": array
+- "cold_regime_benchmark_relative_deployment_review": object
+- "post_cancel_material_headroom_redeployment_review": object
 - "assumptions_and_data_gaps": array
 - "audit_handoff_summary": object
 - "decision_builder_ready_for_audit": boolean
@@ -1551,10 +1879,88 @@ DECISION_PACKET_START
   "sell_execution_plan_drafts_8_6": [],
   "existing_buy_order_diagnostics": [],
   "core_deployment_diagnostics": [],
+  "cold_regime_benchmark_relative_deployment_review": {
+    "triggered": false,
+    "research_review_present": true,
+    "trigger_reasons": [],
+    "qqq_anchor_status": "not_triggered",
+    "qualified_actionable_candidates": [],
+    "blocked_or_watch_only_candidates": [],
+    "cash_tbill_opportunity_cost_material": false,
+    "preserve_headroom_allowed": false,
+    "conclusion": "not_triggered",
+    "objective_alignment_reason": "NOT_TRIGGERED: cold regime benchmark-relative deployment review not required this run"
+  },
+  "post_cancel_material_headroom_redeployment_review": {
+    "triggered": false,
+    "trigger_reason_codes": [],
+    "released_buy_open_order_budget": 0,
+    "post_action_open_order_budget_headroom": 0,
+    "materiality_threshold": 0,
+    "cancelled_or_reduced_source_tickers": [],
+    "candidate_redeployment_destinations": [],
+    "evaluated_destination_tickers": [],
+    "recommended_destination_tickers": [],
+    "redeployment_decision": "not_triggered",
+    "redeployment_budget_total": 0,
+    "preserved_headroom_after_review": 0,
+    "why_redeploy": null,
+    "why_preserve_headroom": "NOT_TRIGGERED: no material post-cancel buy open-order headroom redeployment review required this run",
+    "why_each_candidate_rejected": []
+  },
   "assumptions_and_data_gaps": [],
   "audit_handoff_summary": {
     "strategy_b_can_structure_only_patch_from_decision_packet": true,
+    "all_execution_plan_drafts_have_final_action_candidate": true,
+    "all_keep_existing_rows_have_live_state_carry_forward": true,
+    "all_replace_existing_rows_have_cancel_leg_source": true,
+    "all_replace_existing_rows_have_submit_leg_preview_or_gap": true,
+    "all_new_order_rows_have_submit_leg_preview_or_gap": true,
+    "all_cancel_existing_rows_have_cancel_leg_source_or_gap": true,
+    "all_execution_rows_have_event_refs_and_structural_refs": true,
+    "all_execution_rows_have_plan_type_tif_expiry": true,
+    "all_deferred_state_hints_derivable": true,
     "known_strategy_b_patch_expected": true,
+    "known_strategy_b_patch_reasons": [
+      "FINAL_ACTION_VOCABULARY_COLLAPSE",
+      "KEEP_EXISTING_STATE_CARRY_FORWARD_VALIDATION",
+      "REPLACE_EXISTING_CANCEL_LEG_VALIDATION",
+      "REPLACE_EXISTING_SUBMIT_LEG_COMPILED_PREVIEW_VALIDATION",
+      "NEW_ORDER_SUBMIT_LEG_COMPILED_PREVIEW_VALIDATION",
+      "CANCEL_EXISTING_CANCEL_LEG_VALIDATION",
+      "ORDER_STATE_EXPORT_DERIVABILITY_VALIDATION",
+      "SELL_NO_ACTION_SUMMARY_COLLAPSE"
+    ],
+    "cold_regime_benchmark_relative_deployment_review": {
+      "triggered": false,
+      "research_review_present": true,
+      "trigger_reasons": [],
+      "qqq_anchor_status": "not_triggered",
+      "qualified_actionable_candidates": [],
+      "blocked_or_watch_only_candidates": [],
+      "cash_tbill_opportunity_cost_material": false,
+      "preserve_headroom_allowed": false,
+      "conclusion": "not_triggered",
+      "objective_alignment_reason": "NOT_TRIGGERED: cold regime benchmark-relative deployment review not required this run"
+    },
+    "post_cancel_material_headroom_redeployment_review": {
+      "triggered": false,
+      "trigger_reason_codes": [],
+      "released_buy_open_order_budget": 0,
+      "post_action_open_order_budget_headroom": 0,
+      "materiality_threshold": 0,
+      "cancelled_or_reduced_source_tickers": [],
+      "candidate_redeployment_destinations": [],
+      "evaluated_destination_tickers": [],
+      "recommended_destination_tickers": [],
+      "redeployment_decision": "not_triggered",
+      "redeployment_budget_total": 0,
+      "preserved_headroom_after_review": 0,
+      "why_redeploy": null,
+      "why_preserve_headroom": "NOT_TRIGGERED: no material post-cancel buy open-order headroom redeployment review required this run",
+      "why_each_candidate_rejected": []
+    },
+    "enabled_extended_etf_funding_source_evaluations": [],
     "compile_support_by_ticker": {
       "<TICKER>": {
         "final_action_candidate": "...",
@@ -1854,12 +2260,25 @@ Skeleton formatting requirements:
   - "structure_data_gap_flag"
   - "anchor_review_flag"
   - "suggested_anchor_action"
+  - "role_layer"
+  - "anchor_drift_abs_pct_static_cap"
+  - "max_negative_distance_to_highest_live_limit_pct"
+  - "reachability_floor_pct"
+  - "weekly_reachability_breach"
+  - "weekly_drift_breach"
+  - "weekly_reanchor_required"
 - suggested_anchor_action 只能是：
   - "keep_anchor"
   - "mini_reanchor_candidate"
   - "full_reanchor_candidate"
   - "cancel_only"
   - "data_gap_no_reanchor"
+- 若 weekly_reachability_breach = true 且 weekly_drift_breach = false，suggested_anchor_action 應優先為 "mini_reanchor_candidate"。
+- 若 weekly_drift_breach = true，suggested_anchor_action 應優先為 "full_reanchor_candidate"，除非存在 data gap 或 cancel-only blocker。
+- weekly_reachability_breach = true iff distance_to_highest_live_limit_pct < reachability_floor_pct.
+- weekly_drift_breach = true iff abs(baseline_drift_pct) > anchor_drift_abs_pct_static_cap.
+- weekly_reanchor_required = true iff weekly_reachability_breach = true OR weekly_drift_breach = true.
+- 若 weekly_reanchor_required = true，BUY_SIDE_DELTA_TABLE / DECISION_PACKET.buy_side_delta_table 不得輸出普通 KEEP_EXISTING，除非 why 明確包含 why_not_same_budget_reanchor。
 
 - audit_handoff_summary 必須是 JSON object，不得輸出為 array；至少包含：
   - "strategy_b_can_structure_only_patch_from_decision_packet"
@@ -1978,6 +2397,8 @@ Skeleton formatting requirements:
   "sell_execution_plan_drafts_8_6",
   "existing_buy_order_diagnostics",
   "core_deployment_diagnostics",
+  "cold_regime_benchmark_relative_deployment_review",
+  "post_cancel_material_headroom_redeployment_review",
   "assumptions_and_data_gaps",
   "audit_handoff_summary",
   "decision_builder_ready_for_audit"
@@ -1987,6 +2408,41 @@ Skeleton formatting requirements:
 - DECISION_PACKET top-level key set 是 closed schema；不得新增任何未列入最低必備欄位清單的 top-level key。
 - DECISION_PACKET top-level key order 必須與固定 skeleton 完全一致。
 - "exposure_overlap_diagnostics"、"rotation_decision_layer_8_15"、"core_deployment_diagnostics" 即使無資料，也必須輸出為 JSON array []，不得輸出 null 或省略。
+- "cold_regime_benchmark_relative_deployment_review" 必須每回合永遠輸出，不得省略。
+  - 若未觸發，必須輸出：
+    {
+      "triggered": false,
+      "research_review_present": true|false,
+      "trigger_reasons": [],
+      "qqq_anchor_status": "not_triggered",
+      "qualified_actionable_candidates": [],
+      "blocked_or_watch_only_candidates": [],
+      "cash_tbill_opportunity_cost_material": false,
+      "preserve_headroom_allowed": false,
+      "conclusion": "not_triggered",
+      "objective_alignment_reason": "NOT_TRIGGERED: cold regime benchmark-relative deployment review not required this run"
+    }
+  - 若 RESEARCH_JSON.cold_regime_benchmark_relative_opportunity_review 存在，research_review_present 必須 = true；若不存在，research_review_present 必須 = false 且 assumptions_and_data_gaps 必須記錄 "COLD_REGIME_RESEARCH_REVIEW_OBJECT_MISSING"。
+
+- "post_cancel_material_headroom_redeployment_review" 必須每回合永遠輸出，不得省略。
+  - 若未觸發，必須輸出：
+    {
+      "triggered": false,
+      "trigger_reason_codes": [],
+      "released_buy_open_order_budget": 0,
+      "post_action_open_order_budget_headroom": 0,
+      "materiality_threshold": 0,
+      "cancelled_or_reduced_source_tickers": [],
+      "candidate_redeployment_destinations": [],
+      "evaluated_destination_tickers": [],
+      "recommended_destination_tickers": [],
+      "redeployment_decision": "not_triggered",
+      "redeployment_budget_total": 0,
+      "preserved_headroom_after_review": 0,
+      "why_redeploy": null,
+      "why_preserve_headroom": "NOT_TRIGGERED: no material post-cancel buy open-order headroom redeployment review required this run",
+      "why_each_candidate_rejected": []
+    }
 - known_strategy_b_patch_expected = true 不等於 audit blocker；只要 audit_handoff_summary.audit_handoff_blockers = []，decision_builder_ready_for_audit 仍必須 = true。
 - 若 audit_handoff_summary.audit_handoff_blockers = []，最後必須輸出 "decision_builder_ready_for_audit": true。
 - 只有 audit_handoff_summary.audit_handoff_blockers 為非空 array，且 blocker 明確列出時，才允許輸出 "decision_builder_ready_for_audit": false。

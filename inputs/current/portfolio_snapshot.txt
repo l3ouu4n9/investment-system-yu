@@ -1,5 +1,5 @@
 【輸入 2｜Portfolio Snapshot（PATCH: base ETF holdings required; extended ETF holdings optional）】
-# updated 2026-05-31
+# updated 2026-06-17
 
 (1) current_holdings_base（REQUIRED；六檔 base ETF 必填）
 格式：TICKER | shares | avg_cost
@@ -9,9 +9,9 @@
 - avg_cost 允許為 NA/null
 
 IGV | 5 | 97.05
-QQQ | 63 | 605.05
-SMH | 15 | 326.30
-VOO | 51 | 538.93
+QQQ | 80 | 628.33
+SMH | 20 | 395.39
+VOO | 56 | 551.51
 VT | 3 | 144.49
 VTI | 36 | 290.45
 
@@ -23,11 +23,14 @@ VTI | 36 | 290.45
 - 若提供本區塊，current_holdings_base 的 shares 與 avg_cost 應為各券商明細的聚合結果
 - 模型不得直接以本區塊取代 current_holdings_base 做 base exposure / ranking / rotation 計算
 
-SCH | QQQ | 60 | 604.88
+SCH | QQQ | 77 | 629.11
 FID | QQQ | 3 | 608.4
 
-SCH | SMH | 11 | 246.53
+SCH | SMH | 16 | 357.82
 FID | SMH | 4 | 545.67
+
+SCH | VOO | 51 | 538.93
+FID | VOO | 5 | 679.87
 
 (1b) current_holdings_extended（OPTIONAL；若目前持有任何 extended ETF，無論本回合 optional_extended_etf_sleeve.enabled=true/false 都應提供）
 格式：TICKER | shares | avg_cost
@@ -150,14 +153,9 @@ TICKER | budget | compiled_open_order_notional(optional) | residual_cash_not_all
   - 若未提供上述 metadata，但 existing_buy_open_orders_summary 明確已反映當日 replacement 後 ladder，Daily Execution Check 可將該 row 視為 operator-provided current state。
   - 若 open_order_state_timing=pre_submission 或 broker_submission_confirmed=false，Daily Execution Check 不得把 replacement 後 intended ladder 視為 live state。
 
-
-
-QQQ | 14132.17 | 11910.86 | 2221.31 | T4-E | 730.28 | 2026-05-26 | | 722.98 | 635.34 | 5 | starter@722.98;L1@708.37;L2@686.46;L3@660.90;L4@635.34 | starter:7;L1:4;L2:3;L3:2;L4:1
-SMH | 5397.57 | 4287.22 | 1110.35 | T4-B | 602.14 | 2026-05-26 | | 578.05 | 493.75 | 4 | L1@578.05;L2@550.96;L3@520.85;L4@493.75 | L1:2;L2:2;L3:2;L4:2
-VOO | 11156.43 | 11003.71 | 152.72 | T4-B | 674.66 | 2026-05-06 | | 651.05 | 563.34 | 4 | L1@651.05;L2@624.06;L3@593.70;L4@563.34 | L1:5;L2:5;L3:4;L4:4
-CIBR | 4021.05 | 3842.96 | 178.09 | T4-B | 89.04 | 2026-05-29 | 2026-06-01 | 85.03 | 72.12 | 4 | L1@85.03;L2@81.03;L3@76.13;L4@72.12 | L1:11;L2:12;L3:15;L4:11
-GRID | 1491.45 | 1106.56 | 384.89 | T4-B | 191.78 | 2026-05-15 |  | 180.27 | 145.75 | 4 | L1@180.27;L2@170.68;L3@159.18;L4@145.75 | L1:1;L2:1;L3:2;L4:3
-
+QQQ | 1983.65 | 699.36 | 1284.29 | T4-E | 744.00 | 2026-06-15 |  | 699.36 | 699.36 | 1 | L2@699.36 | L2:1
+VOO | 7757.08 | 6436.08 | 1321.00 | T4-B | 697.30 | 2026-06-10 | | 658.95 | 613.62 | 3 | L2@658.95;L3@638.03;L4@613.62 | L2:5;L3:3;L4:2
+SMH | 2384.23 | 1682.46 | 701.77 | T4-B | 647.10 | 2026-06-15 |  | 592.10 | 530.62 | 3 | L2@592.10;L3@559.74;L4@530.62 | L2:1;L3:1;L4:1
 
 (2b) sell_open_orders（optional, lot-aware open sell orders summary）
 

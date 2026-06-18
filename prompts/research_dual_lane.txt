@@ -1,6 +1,6 @@
 # Research Template - Yu (Dual-Lane Version)
 # ChatGPT Deep Research
-# updated 2026-05-31
+# updated 2026-06-07
 
 投資目標：
 以 QQQ / Nasdaq-100 為核心 benchmark 與主要長期參照，並保留 QQQ 或 core buy universe 作為投資組合的 benchmark anchor；但願意在 3–5 年期內承擔明顯高於 QQQ 的 active risk、sector concentration、theme concentration、tracking error 與階段性回撤，以換取較高超額報酬的機會。
@@ -101,6 +101,45 @@ Lane A 收錄標準（NEW, MUST）：
   "SHORT_TERM_ONLY: not thesis-changing"
 - mapped_to_allowed_buy_universe 與 structural_theme_refs 只能作 traceability / mapping，不得單獨構成收錄理由
 - 不符合 materiality_filter_rule 的低訊號事件不得硬塞入主清單
+
+- cold_regime_benchmark_relative_opportunity_review_rule（NEW, MUST）：
+  - 目的：在股市長期低迷、QQQ / Nasdaq beta risk-reward 明顯惡化、或本週可執行 entry compensation 不足時，讓 Research Template 明確判斷「本輪是否應部署到 base 六檔 / enabled extended ETF，或保留 headroom / cash optionality」，但不得把本系統改寫為 cross-asset allocation 或 bond-first 防禦系統。
+  - 本規則不得改變本策略 mandate：
+    - QQQ / core buy universe 仍是 benchmark anchor 與主要長期參照。
+    - sector_alpha_tilt 與 approved enabled extended ETF 仍可在具備 12m+ thesis、linkage、liquidity、cap、LLM model-risk controls 時，優先於 diversified_core_buffer。
+    - cash / T-bill / MMF carry 只能作 opportunity-cost benchmark，不得自動成為 tradeable ticker。
+    - Treasury / bond ETF 不得因低波動、避險、或 cash yield 高而直接取代 QQQ benchmark anchor。
+  - 觸發條件：若 regime_inputs、policy_items、scheduled_events、unscheduled_risks、structural_themes_6_18m 或 market context 顯示下列任一情況，必須啟動 cold regime review：
+    (1) QQQ / Nasdaq beta 的 3–5y expected return compensation 明顯不足；
+    (2) equity risk premium / upside compensation 明顯不足以補償 drawdown、earnings、duration 或 liquidity risk；
+    (3) cash / T-bill / MMF carry 已成為 material opportunity-cost benchmark；
+    (4) base 六檔或 enabled extended ETF 的 12m+ thesis linkage 不足、primary anchor 不足、或 actionability_status 可能需降級；
+    (5) 多數可交易 ETF 的 valuation / capital cost / liquidity / earnings-cycle / policy risk 使本週 forced deployment 的 expected value 低於 preserve headroom。
+  - 未觸發時：
+    - 不得為形式完整而輸出 defensive cross-asset thesis。
+    - 不得因單純市場波動、情緒冷、短期 price momentum 弱，就降低 QQQ、SMH、IGV 或 approved enabled extended ETF 的長線 ranking。
+  - RESEARCH_JSON 必須每回合永遠輸出 top-level object；不得只在 triggered=true 時輸出。未觸發時也必須輸出 triggered=false 與 not_triggered / false / [] 預設值，以便 Strategy A / Strategy B deterministic consume：
+    cold_regime_benchmark_relative_opportunity_review:
+      triggered: true|false
+      trigger_reasons: []
+      market_cold_type: "sentiment_or_drawdown_only|equity_risk_reward_impaired|mixed|not_triggered"
+      qqq_anchor_status: "maintain_anchor|adequately_anchored|underdeployment_review_needed|not_triggered"
+      cash_tbill_opportunity_cost_material: true|false
+      treasury_bond_etf_trade_candidate_allowed_by_this_research: false
+      base_universe_deployment_posture: "deploy_if_actionable|ranking_hold_watch_only|preserve_headroom_if_no_actionable_anchor|not_triggered"
+      why: "{繁體中文一句話}"
+  - treasury_bond_etf_trade_candidate_allowed_by_this_research 必須固定為 false，除非該 Treasury / bond ETF 已由使用者本回合明確列入 current_run_user_approved_extended_etf_static_list，並且在 Lane B 中通過 approved static list、activation、12m+ total-return thesis、liquidity、cap、LLM model-risk、linkage / long_cycle exception 等所有 gate。
+  - 若只是市場情緒冷、估值回落、或短期 drawdown，但 QQQ / SMH / IGV / approved enabled extended ETF 的 12m+ thesis 未受損，且 entry compensation 因下跌而改善：
+    - base_universe_deployment_posture 應偏向 "deploy_if_actionable"。
+    - 不得因 cold market 而降低 thesis_duration_score、alpha_upside_score、execution_priority_this_run、或 actionability_status。
+  - 若 cold regime 代表 equity risk/reward impaired，且本輪沒有合格 future macro / theme anchor、沒有足夠 12m+ thesis linkage、或 deployment expected value 不足：
+    - base_universe_deployment_posture 可為 "ranking_hold_watch_only" 或 "preserve_headroom_if_no_actionable_anchor"。
+    - buy_universe_scorecard 中對應 ticker 可使用 actionability_status="ranking_hold_watch_only" 或 "compile_blocked"。
+    - why 必須說明這是 QQQ-centered benchmark-relative opportunity-cost 判斷，不是防禦化、低波動優先、或放棄 benchmark anchor。
+  - cold_regime_benchmark_relative_opportunity_review 不得覆蓋 downstream_actionability_status_assignment_rule：
+    - 若 actionability_status="actionable_this_run"，仍必須有 12m+ thesis、足夠 linkage、primary_anchor_event_id、future anchor date 與 compile_blocker_if_any=null。
+    - 若缺少 future macro / theme anchor，仍必須依既有規則降級，不得用 cold regime review 自行放行。
+  - 本規則不得新增 tradeable universe；不得把 cash、T-bill、MMF、Treasury ETF、bond ETF 自動放入 buy_universe_scorecard、effective_allowed_buy_universe、optional_extended_etf_sleeve.allowed_extended_etf_tickers 或任何可交易清單。
 
 Lane A 必須輸出（MUST）：
 - regime_inputs
@@ -421,6 +460,9 @@ long_cycle_structural_theme_exception_rule (NEW, MUST):
       - "industrial_automation"
       - "medical_technology"
       - "fintech_infrastructure"
+      - "cybersecurity"
+      - "cybersecurity_infrastructure"
+      - "identity_zero_trust_infrastructure"
       - "other_structural_growth_long_cycle"
   (9) 不違反 extended ETF sleeve cap、single ETF cap、same-theme cap、same-run escalation limit、LLM model-risk controls、非槓桿 / 非反向 / liquidity gates
 - 若啟用本例外，對應 item 必須輸出：
@@ -452,6 +494,43 @@ long_cycle_structural_theme_exception_rule (NEW, MUST):
 - 若上述條件任一不成立：
   - 不得啟用本例外
   - preferred_scheduled_theme_event_id = null 時仍應依原規則處理為 screening / watch / approved_but_excluded
+
+approved_static_list_structural_theme_requalification_rule (NEW, MUST):
+- 對 current_run_user_approved_extended_etf_static_list 中每個 approved static-list extended ETF，Research Template 必須先做 structural-theme requalification review，再決定是否因缺 preferred_scheduled_theme_event_id 而排除。
+- 本規則特別適用於 cybersecurity、power_grid_infrastructure、industrial_automation、medical_technology、fintech_infrastructure、supply_chain_reindustrialization 等 12m+ structural growth 主題；這些主題不一定有單一 45 天內 scheduled theme event。
+- 若 approved static-list ETF 缺 preferred_scheduled_theme_event_id，Research Template 不得立刻把 activation_blocker 設為 "missing_future_scheduled_theme_anchor"。
+- 必須先檢查該 ETF 是否可啟用 long_cycle_structural_theme_exception：
+  (1) thesis_duration_score >= 4
+  (2) liquidity_quality_score >= 4
+  (3) event_dependency_score <= 3
+  (4) llm_evidence_tier ∈ ["high_evidence","adequate_evidence"]
+  (5) evidence_backed_budget_ceiling_hint_pct_of_total_open_orders > 0
+  (6) structural_theme_refs 非空
+  (7) incremental_exposure_vs_base 與 why_not_just_buy_base_alternative 能明確說明相對 QQQ / SMH / IGV / VOO / VTI / VT 的增量曝險
+  (8) theme_bucket 屬於或可明確映射至 long-cycle buckets，包括但不限於 "cybersecurity" / "cybersecurity_infrastructure" / "identity_zero_trust_infrastructure"
+  (9) 不違反 extended ETF sleeve cap、single ETF cap、same-theme cap、same-run escalation limit、LLM model-risk controls、非槓桿 / 非反向 / liquidity gates
+- 若上述條件成立：
+  - 不得把 preferred_scheduled_theme_event_id = null 單獨作為排除理由。
+  - 不得把 activation_blocker 設為 "missing_future_scheduled_theme_anchor"。
+  - 必須輸出 long_cycle_structural_theme_exception.enabled = true 的完整 object。
+  - lane_b_status 可為 "activated_tradeable"。
+  - downstream_tradeability_status 可為 "tradeable_this_run"。
+  - can_enter_effective_allowed_buy_universe_this_run 可為 true。
+  - why_not_admitted_or_not_top_candidate 必須包含：
+    "long_cycle_structural_theme_exception accepted: 12m+ structural linkage verified; no near-term single-event catalyst required; budget posture constrained to keep_existing_or_small_slow_build_only"
+- 若上述條件不成立：
+  - 可排除該 ETF，但 blocker 必須指出實際失敗條件，例如：
+    "failed_llm_evidence_tier"
+    "llm_budget_ceiling_zero"
+    "failed_relative_base_advantage"
+    "failed_tradeability"
+    "theme_bucket_conflict"
+    "same_theme_cap_breach"
+  - 只有在已完成 structural-theme requalification review 且 long_cycle_structural_theme_exception 不成立後，才可使用 "missing_future_scheduled_theme_anchor" 作為 blocker。
+- 對 cybersecurity 類 ETF，例如 CIBR，Research Template 必須明確區分：
+  - "cybersecurity structural thesis insufficient / evidence weak"；
+  - 與 "cybersecurity thesis valid but no near-term scheduled theme event"。
+  第二種情況不得單獨導致 approved static-list ETF 被排除，除非 long_cycle_structural_theme_exception 條件未通過。
 
 long_cycle_structural_theme_exception_propagation_rule (NEW, MUST):
 - 若任一 approved static-list extended ETF 啟用 long_cycle_structural_theme_exception.enabled = true，則該完整 object 必須直接出現在該 ticker 所在的所有 Lane B downstream-consumable rows：
@@ -1314,6 +1393,16 @@ RESEARCH_JSON 必須至少包含以下欄位（可增欄位，但不要少）：
   "trade_universe": {
     "allowed_buy_tickers": ["VOO","VTI","VT","QQQ","SMH","IGV"],
     "notes": "Template2 buy-side must restrict to allowed_buy_tickers only."
+  },
+  "cold_regime_benchmark_relative_opportunity_review": {
+    "triggered": false,
+    "trigger_reasons": [],
+    "market_cold_type": "not_triggered",
+    "qqq_anchor_status": "not_triggered",
+    "cash_tbill_opportunity_cost_material": false,
+    "treasury_bond_etf_trade_candidate_allowed_by_this_research": false,
+    "base_universe_deployment_posture": "not_triggered",
+    "why": "NOT_TRIGGERED: cold regime benchmark-relative opportunity review not required this run"
   },
   "strategy_a_research_handoff": {
     "handoff_version": "strategy_a_research_handoff_v1",

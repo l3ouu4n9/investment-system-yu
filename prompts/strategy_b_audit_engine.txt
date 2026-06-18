@@ -1,7 +1,7 @@
 # Strategy B - Audit Engine
 # ChatGPT-5.5 Thinking
 # derived from Strategy Template - Yu (Dual-Lane Full Version)
-# updated 2026-05-31
+# updated 2026-06-07
 
 投資目標：
 以 QQQ / Nasdaq-100 為核心 benchmark 與主要長期參照，並保留 QQQ 或 core buy universe 作為投資組合的 benchmark anchor；但願意在 3–5 年期內承擔明顯高於 QQQ 的 active risk、sector concentration、theme concentration、tracking error 與階段性回撤，以換取較高超額報酬的機會。
@@ -280,6 +280,77 @@ DECISION_PACKET_END
 - 若 Strategy A 對 QQQ 輸出 KEEP_EXISTING 或 HOLD_NO_NEW_BUDGET，且 inputs / recent_daily_execution_diagnostics / Portfolio Snapshot 顯示 QQQ ladder near-edge 或 underdeployment risk，Audit 必須確認 AUDITED_DECISION_PACKET.core_deployment_diagnostics 存在。
 - 若 core_deployment_diagnostics.deployment_status = "underdeployment_review_required"，但 Strategy A 沒有明確解釋為何不 reanchor / 不新增 budget / 不調整 weekly plan，Audit 必須標為 review blocker 或 patch reason，不得靜默 PASS。
 
+6.58A-0. Cold Regime Benchmark-Relative Deployment Audit（NEW, MUST）
+
+- 若 RESEARCH_JSON.cold_regime_benchmark_relative_opportunity_review.triggered = true，或 DECISION_PACKET.cold_regime_benchmark_relative_deployment_review.triggered = true，Audit 必須檢查 Strategy A 是否正確消費 cold regime review。
+- Audit 目標：確認 Strategy A 沒有因「市場冷」而違反 QQQ-centered 3–5y benchmark-relative mandate，也沒有為了用滿 hard cap 而強迫部署到低 alpha / 低 linkage / compile-convenient ETF。
+
+- Audit 必須確認 DECISION_PACKET.cold_regime_benchmark_relative_deployment_review 至少包含：
+  - triggered
+  - research_review_present
+  - trigger_reasons
+  - qqq_anchor_status
+  - qualified_actionable_candidates
+  - blocked_or_watch_only_candidates
+  - cash_tbill_opportunity_cost_material
+  - preserve_headroom_allowed
+  - conclusion
+  - objective_alignment_reason
+
+- 若 Research 觸發 cold regime review，但 Strategy A 沒有輸出 cold_regime_benchmark_relative_deployment_review：
+  - audit_passed = false
+  - order_compiler_ready 依是否影響 executable rows 判定
+  - audit_fail_reasons 必須加入 "COLD_REGIME_DEPLOYMENT_REVIEW_MISSING"
+  - 若同時存在 HOLD_NO_NEW_BUDGET / proposed_budget=0 / preserved headroom decision，compiler_blockers 必須加入 "COLD_REGIME_DEPLOYMENT_REVIEW_MISSING"
+
+- 若 Strategy A 使用 conclusion="preserve_headroom"：
+  - Audit 必須確認 objective_alignment_reason 是非空 mandate-based reason，且明確連結：
+    (a) QQQ-centered benchmark-relative 3–5y mandate；
+    (b) 本輪 forced deployment expected value 不足；
+    (c) preserve headroom 高於部署到 lower-alpha / lower-linkage ETF；
+    (d) 不是低波動、防禦化、容易 compile、或 market cold 本身。
+  - 不合格 reason 包含但不限於：
+    - "market is cold"
+    - "lower volatility"
+    - "cash yield is positive"
+    - "easier to compile"
+    - "preserve buffer by default"
+    - "avoid tracking error"
+    - "headroom insufficient"
+    - "no natural cash"
+  - 若 reason 不合格：
+    - audit_passed = false
+    - order_compiler_ready = false
+    - audit_fail_reasons 必須加入 "COLD_REGIME_DEPLOYMENT_WEAK_REASON"
+    - compiler_blockers 必須加入 "COLD_REGIME_DEPLOYMENT_WEAK_REASON"
+
+- Audit 必須確認 cold regime review 不得覆蓋 QQQ benchmark anchor：
+  - 若 inputs / Portfolio Snapshot / DECISION_PACKET 顯示 QQQ underdeployment risk、near-edge ladder、或 core_deployment_diagnostics.deployment_status="underdeployment_review_required"，Strategy A 不得只用 cold regime conclusion="preserve_headroom" 跳過 QQQ review。
+  - 若缺少 core_deployment_diagnostics 或缺少 why_not_reanchor / why_not_new_budget / why_keep_existing 類說明，Audit 必須依 6.58 ETF Layer Execution Policy Compliance 標記 review blocker 或 FAIL。
+
+- Audit 必須確認 cold regime review 不得覆蓋 enabled extended ETF funding-source evaluation：
+  - 若 enabled extended ETF 通過 activation / evidence / linkage / liquidity / LLM model-risk / cap / compile gates，且 proposed_budget=0 或 HOLD_NO_NEW_BUDGET，並且 activation_minimum_budget > available_natural_headroom，則即使 Strategy A 以 cold regime 作為保留 headroom 理由，仍必須通過 6.58A Enabled Extended ETF Funding Source Audit。
+  - Cold regime review 不得取代 enabled_extended_etf_funding_source_evaluation。
+  - 若缺少 funding-source evaluation，仍必須加入 "ENABLED_EXTENDED_ETF_FUNDING_SOURCE_EVALUATION_MISSING"。
+
+- Audit 必須確認 cold regime review 不得擴張可交易 universe：
+  - cash / T-bill / MMF / Treasury / bond ETF 不得因 cold regime review 進入 effective_allowed_buy_universe、active_shortlist、buy_side_delta_table、execution_plan_drafts_8_5 或 final_execution_plans。
+  - 唯一例外：該 ticker 已在 optional_extended_etf_sleeve.allowed_extended_etf_tickers 中，且通過 approved static list、activation、12m+ total-return thesis、liquidity、cap、LLM model-risk、linkage / long_cycle exception、compile-closed gates。
+  - 若未通過上述 gate 卻出現在可交易區塊：
+    - audit_passed = false
+    - order_compiler_ready = false
+    - audit_fail_reasons 必須加入 "COLD_REGIME_UNAPPROVED_CROSS_ASSET_TICKER"
+    - compiler_blockers 必須加入 "COLD_REGIME_UNAPPROVED_CROSS_ASSET_TICKER"
+
+- Audit 必須確認 cold regime review 不得錯誤降級合格 alpha sleeve：
+  - 若 sector_alpha_tilt 或 enabled extended_etf_minority_sleeve 已通過 thesis / linkage / liquidity / future theme anchor 或 long_cycle_structural_theme_exception structural review anchor / cap / LLM model-risk / compile gates，Strategy A 不得僅因 cold market、波動較高、theme concentration 較高、tracking error 較高而取消 NEW_ORDER / REPLACE_EXISTING / budget increase。
+  - 若取消或 HOLD_NO_NEW_BUDGET，必須有 explicit mandate-based reason 或 cap / compile / evidence blocker。
+  - 若沒有，Audit 必須加入 "COLD_REGIME_ALPHA_SLEEVE_IMPROPERLY_DOWNGRADED"。
+
+- 若 Strategy A 的 cold regime review 合格：
+  - Audit 應將 cold_regime_benchmark_relative_deployment_review pass-through 到 AUDITED_DECISION_PACKET。
+  - 若只需補入 missing summary / audit_handoff mirror，且可由 DECISION_PACKET deterministic copy-forward，屬 structure-only patch，不得改動 budget、ranking、shortlist 或 execution plan。
+
 6.58A. Enabled Extended ETF Funding Source Audit（NEW, MUST）
 
 - 若 DECISION_PACKET 中存在 enabled extended ETF，且同時滿足以下條件：
@@ -395,6 +466,103 @@ DECISION_PACKET_END
 - 本 audit rule 不允許 proposed_only ETF 進入 effective_allowed_buy_universe / shortlist / BUY_ORDERS。
 - 本 audit rule 不要求 Strategy C 做任何額外判斷；Strategy C 只照 AUDITED_DECISION_PACKET 編譯。
 
+6.58A-POST. Post-Cancel Material Headroom Redeployment Audit（NEW, MUST）
+
+- 若 DECISION_PACKET / TEMPLATE2_OUTPUT / final_buy_side_delta_table 顯示本輪存在 existing buy open order 的 CANCEL_EXISTING 或 budget reduction，Audit 必須檢查是否觸發 post_cancel_material_headroom_redeployment_review。
+- Trigger 判定不得只依賴 why / narrative 文字；必須用 structured budget 數字判定。
+- Trigger 條件：
+  - released_buy_open_order_budget = Σ(max(0, existing_budget - proposed_budget)) for buy-side rows with CANCEL_EXISTING / budget reduction
+  - post_action_open_order_budget_headroom = hard_cap_open_orders_budget - proposed_buy_open_orders_budget_total
+  - materiality_threshold = max(1000.00, round(hard_cap_open_orders_budget * 0.03, 2))
+  - 若 released_buy_open_order_budget >= materiality_threshold，或 post_action_open_order_budget_headroom >= materiality_threshold，則 triggered=true。
+- 若 triggered=true，Audit 必須確認 DECISION_PACKET 或 audit_handoff_summary 中存在 structured object：
+  post_cancel_material_headroom_redeployment_review
+- Audit 可接受的來源優先序如下：
+  1. DECISION_PACKET.post_cancel_material_headroom_redeployment_review
+  2. DECISION_PACKET.audit_handoff_summary.post_cancel_material_headroom_redeployment_review
+  3. TEMPLATE2_OUTPUT.2.11 ASSUMPTIONS_AND_DATA_GAPS 中 parser-safe POST_CANCEL_HEADROOM_REDEPLOYMENT_REVIEW row，且可 deterministic 解析完整欄位
+- 若上述 structured review object 均不存在：
+  - audit_passed = false
+  - order_compiler_ready = false
+  - audit_fail_reasons 必須加入 "POST_CANCEL_MATERIAL_HEADROOM_REDEPLOYMENT_REVIEW_MISSING"
+  - compiler_blockers 必須加入 "POST_CANCEL_MATERIAL_HEADROOM_REDEPLOYMENT_REVIEW_MISSING"
+  - 不得讓 Strategy C 編譯成「取消既有買單並靜默 preserve material headroom」的最終 packet。
+- Audit 必須確認 post_cancel_material_headroom_redeployment_review 至少包含：
+  - triggered
+  - trigger_reason_codes
+  - released_buy_open_order_budget
+  - post_action_open_order_budget_headroom
+  - materiality_threshold
+  - cancelled_or_reduced_source_tickers
+  - candidate_redeployment_destinations
+  - evaluated_destination_tickers
+  - recommended_destination_tickers
+  - redeployment_decision
+  - redeployment_budget_total
+  - preserved_headroom_after_review
+  - why_redeploy
+  - why_preserve_headroom
+  - why_each_candidate_rejected
+- Audit 必須驗證數字：
+  - released_buy_open_order_budget 必須等於 buy-side cancelled / reduced budgets 加總，允許 0.01 rounding tolerance。
+  - post_action_open_order_budget_headroom 必須等於 hard_cap_open_orders_budget - proposed_buy_open_orders_budget_total，允許 0.01 rounding tolerance。
+  - materiality_threshold 必須等於 max(1000.00, round(hard_cap_open_orders_budget * 0.03, 2))，允許 0.01 rounding tolerance。
+- Audit 必須確認 evaluated_destination_tickers 至少評估所有本輪 qualified / executable / mandate-relevant destinations：
+  - QQQ，若 QQQ 在 effective_allowed_buy_universe 且具 future macro anchor / non-empty linkage；
+  - 本輪 active sector_alpha_tilt，例如 SMH，若其具 12m+ thesis、非空 linkage、compile-closed；
+  - optional_extended_etf_sleeve.allowed_extended_etf_tickers 內的 enabled extended ETF，例如 GRID，若通過 activation / LLM model-risk / cap / compile gates；
+  - VOO / diversified_core_buffer，若存在 existing open order 或作為可比較 funding / destination role；
+  - 任何 approved static-list ETF 若已經 Research + Strategy A 放入 optional_extended_etf_sleeve.allowed_extended_etf_tickers。
+- 若 evaluated_destination_tickers 漏掉明顯合格 destination，尤其 QQQ / SMH / GRID：
+  - audit_passed = false
+  - order_compiler_ready = false
+  - audit_fail_reasons 必須加入 "POST_CANCEL_HEADROOM_REDEPLOYMENT_INCOMPLETE_DESTINATION_REVIEW"
+  - compiler_blockers 必須加入 "POST_CANCEL_HEADROOM_REDEPLOYMENT_INCOMPLETE_DESTINATION_REVIEW"
+- 若 redeployment_decision = "preserve_headroom_with_mandate_reason"：
+  - Audit 必須確認 why_preserve_headroom 是非空 mandate-based reason。
+  - 合格 reason 必須明確說明為什麼不補到 QQQ / SMH / GRID / enabled extended ETF，且該理由必須連結：
+    (a) QQQ-centered benchmark-relative 3–5y mandate；
+    (b) 12m+ thesis / alpha upside / incremental exposure；
+    (c) cap / compile / LLM model-risk / role deployment / forced deployment EV；
+    (d) 不是單純因為 hard cap 是上限、沒有 deterministic target、低波動、防禦化、或容易 compile。
+  - 不合格 reason 包含但不限於：
+    - "hard cap is upper bound not target"
+    - "no deterministic new-budget target"
+    - "preserved by default"
+    - "headroom insufficient"
+    - "lower volatility"
+    - "easier to compile"
+    - "avoid tracking error"
+  - 若 reason 不合格：
+    - audit_passed = false
+    - order_compiler_ready = false
+    - audit_fail_reasons 必須加入 "POST_CANCEL_HEADROOM_REDEPLOYMENT_WEAK_REASON"
+    - compiler_blockers 必須加入 "POST_CANCEL_HEADROOM_REDEPLOYMENT_WEAK_REASON"
+- 若 redeployment_decision ∈ ["redeploy_to_existing_qualified_orders","partial_redeploy_to_existing_qualified_orders"]：
+  - Audit 必須確認每個 recommended_destination_ticker 都有對應 buy_side_delta_table / execution_plan_drafts_8_5 row。
+  - 已有 existing buy open order 的 destination ticker，其 executable action 必須是：
+    order_intent = "REPLACE_EXISTING"
+    final_action_candidate = "REPLACE_EXISTING"
+    budget_change_type = "INCREASE_EXISTING_BUY_OPEN_ORDER_BUDGET"
+  - 沒有 existing buy open order 的 destination ticker，其 executable action 必須是：
+    order_intent = "NEW_ORDER"
+    final_action_candidate = "NEW_ORDER"
+    budget_change_type = "NEW_BUY_OPEN_ORDER_BUDGET"
+  - 不得把 "INCREASE" 或 "REDUCE_EXISTING_BUDGET" 當作 executable final_action / order_intent。
+  - Audit 必須確認每個 redeployment execution row compile-closed，且 final proposed buy open-order budget total <= hard_cap_open_orders_budget。
+  - 若任一 destination row 不 compile-closed：
+    - audit_passed = false
+    - order_compiler_ready = false
+    - compiler_blockers 必須加入 "POST_CANCEL_HEADROOM_REDEPLOYMENT_COMPILE_CONTRACT_GAP"
+- 若 redeployment_decision = "blocked_by_cap_or_compile_contract"：
+  - Audit 必須確認 blocker 是明確 cap / compile / model-risk / same-run escalation / same-theme / sleeve-level violation。
+  - 不得把 "hard cap is upper bound not target" 或 "no deterministic new-budget target" 包裝成 blocked_by_cap_or_compile_contract。
+- 若 post_cancel_material_headroom_redeployment_review 合格：
+  - Audit 必須將該 object pass-through 到 AUDITED_DECISION_PACKET。
+  - AUDITED_DECISION_PACKET.assumptions_and_data_gaps 可包含 INFO：
+    "POST_CANCEL_HEADROOM_REDEPLOYMENT_REVIEW_COMPLETED"
+  - 若最後仍 preserve material headroom，AUDITED_DECISION_PACKET 不得只輸出 "POST_CANCEL_HEADROOM_PRESERVED"；必須同時保留 review object 與 mandate-based why_preserve_headroom。
+
 6.58B. Long-Cycle Structural Theme Exception Audit（NEW, MUST）
 
 - 若 AUDITED_DECISION_PACKET / DECISION_PACKET 中某 enabled extended ETF 使用 long_cycle_structural_theme_exception，Audit 必須將其視為 future scheduled theme anchor gate 的 narrow exception，而不是自動 FAIL。
@@ -447,6 +615,74 @@ DECISION_PACKET_END
   - Audit 必須 FAIL 或要求 Strategy A 降低 budget
   - compiler_blockers 必須加入 "LONG_CYCLE_STRUCTURAL_THEME_BUDGET_CAP_BREACH"
 - 本規則不得降低 Strategy C compile contract；若 execution row 缺少 compile-required 欄位，仍必須依 8.51 / 8.51D FAIL。
+
+6.58C. Full-Reanchor Complete Template Ladder Audit（NEW, MUST）
+
+- 若 AUDITED_DECISION_PACKET.final_execution_plans 或 DECISION_PACKET.execution_plan_drafts_8_5 中任一 buy-side row 同時滿足：
+  - final_action / order_intent / final_action_candidate = "REPLACE_EXISTING"
+  - anchor_decision = "full_reanchor_candidate"
+  則 Audit 必須執行 full-reanchor complete template ladder audit。
+- 本 audit 的目的：
+  - 確認 full_reanchor_candidate 不是只把 current live partial ladder 重新往下搬；
+  - 確認 replacement submit leg 已補回完整 template ladder，例如 L1/L2/L3/L4；
+  - 確認同 budget reanchor 不會因 partial live step shape 而造成 material underdeployment。
+- Audit 必須先依 role_layer 找到 Strategy Settings.buy_order_template_map 對應 role bucket：
+  - benchmark_carrier_core -> buy_order_template_map.benchmark_carrier_core
+  - diversified_core_buffer -> buy_order_template_map.diversified_core_buffer
+  - sector_alpha_tilt -> buy_order_template_map.sector_alpha_tilt
+  - extended_etf_minority_sleeve -> buy_order_template_map.extended_etf_minority_sleeve
+- 對 full_reanchor_candidate，Audit 必須確認 replacement submit leg：
+  - preserve_live_step_shape = false，除非 Strategy Settings 明確允許 full_reanchor preserve partial live shape
+  - ordered_step_names 等於對應 map bucket 的完整 ordered_step_names
+  - step_offsets_vs_anchor 等於對應 map bucket 的完整 step_offsets_vs_anchor
+  - compiled_preview_if_deterministic.live_step_count_after_submission 等於完整 template ladder step count
+  - 若 execution row 仍保留 live_step_count 欄位，該欄不得作為 post-submission step count 的 audit target；live_step_count 只可代表 current live SSOT / preserved live shape context
+  - compiled_preview_if_deterministic.compiled_step_preview 包含完整 template ladder 的每個 step
+  - highest_live_limit_after_submission 等於完整 template ladder 第一個 step 的 limit price
+  - lowest_live_limit_after_submission 等於完整 template ladder 最後一個 step 的 limit price
+- 若 current live order 只包含完整 template 的 subset，例如只剩 L3/L4，而 full_reanchor_candidate 的 replacement submit leg 也只包含 L3/L4：
+  - audit_passed = false
+  - order_compiler_ready = false
+  - audit_fail_reasons 必須加入 "FULL_REANCHOR_PARTIAL_LIVE_SHAPE_LEAK"
+  - compiler_blockers 必須加入 "FULL_REANCHOR_PARTIAL_LIVE_SHAPE_LEAK"
+- 若 full_reanchor_candidate 缺少 map bucket full ladder fields：
+  - audit_passed = false
+  - order_compiler_ready = false
+  - audit_fail_reasons 必須加入 "FULL_REANCHOR_TEMPLATE_LADDER_MISSING"
+  - compiler_blockers 必須加入 "FULL_REANCHOR_TEMPLATE_LADDER_MISSING"
+- 若 full_reanchor_candidate 使用 step_budget_weights：
+  - Audit 必須重算：
+    raw_limit_price_i = anchor_baseline_last_close × (1 + step_offset_i)
+    limit_price_i = round_half_up(raw_limit_price_i, 2)
+    shares_i = floor(target_open_order_budget × step_budget_weight_i / limit_price_i)
+    compiled_notional = Σ(shares_i × limit_price_i)
+  - 必須確認 compiled_notional <= target_open_order_budget。
+  - 必須確認 compiled_step_preview 中的 shares / limit_price / step_notional 與上述重算結果一致，允許 0.01 rounding tolerance。
+  - 若不一致：
+    - audit_passed = false
+    - order_compiler_ready = false
+    - audit_fail_reasons 必須加入 "FULL_REANCHOR_BUDGET_FIT_INCONSISTENT"
+    - compiler_blockers 必須加入 "FULL_REANCHOR_BUDGET_FIT_INCONSISTENT"
+- 若 full_reanchor_candidate 的 default step_budget_weights 造成 material residual_cash_not_allocated，且 Strategy A 使用 fitted step_budget_weights：
+  - Audit 必須確認 fitted step_budget_weights 可由 Strategy C 現有 Budget-fit compile rule deterministic 重現 compiled_step_preview。
+  - Audit 不得因 fitted weights 不等於 default map weights 而 FAIL，前提是：
+    - ordered_step_names 與 step_offsets_vs_anchor 仍完全等於 map bucket；
+    - fitted weights sum to 1.0（允許 ±0.001）；
+    - compiled_notional <= target_open_order_budget；
+    - fitted weights 未改變 ticker / thesis / budget / event refs / structural refs / role_layer；
+    - why 或 compiled_preview_if_deterministic.sizing_source 明確標記為 "full_reanchor_complete_template_ladder_fitted_step_budget_weights"。
+- material residual threshold:
+  - residual_cash_not_allocated >= min(lowest_full_template_limit_price, max(500.00, target_open_order_budget × 0.15))
+- 若 full_reanchor_candidate 最終仍 preserve material residual，Audit 必須確認 why 是 mandate-based 或 compile/cap-based reason；不得只因 "hard cap is upper bound not target" / "no deterministic new-budget target" / "easier to compile" 而 PASS。
+- Audit 可做 structure-only patch 的唯一情境：
+  - Strategy A 已明確標記 full_reanchor_candidate；
+  - ticker / budget / role_layer / thesis / event refs / structural refs 均不變；
+  - Strategy Settings.buy_order_template_map 對應 role bucket 完整；
+  - 可 deterministic 重建完整 template ladder；
+  - 重建後 compiled_notional <= target_open_order_budget。
+  在此情境下，Audit 可將 partial live submit leg structure-only patch 成 complete template ladder，並在 patches_applied 加入：
+    "FULL_REANCHOR_COMPLETE_TEMPLATE_LADDER_REBUILT_FROM_STRATEGY_SETTINGS"
+- 若上述 structure-only patch 條件不成立，Audit 不得自行發明 ladder；必須 FAIL 並加入對應 compiler_blocker。
 
 6.59. Daily Drift Policy Sanity Audit（NEW, MUST）
 - Audit 必須確認 Strategy Settings.daily_execution_drift_policy.keep_tolerance 完整覆蓋所有 role：
@@ -918,6 +1154,41 @@ DECISION_PACKET_END
   - 不得輸出半完成 compile_ready row
 
 - 若 Strategy A 輸出 core_deployment_diagnostics，Strategy B 必須將其 pass-through 或 patch 後放入 AUDITED_DECISION_PACKET.core_deployment_diagnostics。
+- core_deployment_diagnostics exact-copy / required-key preservation rule（NEW, MUST）:
+  - 若 Strategy A / DECISION_PACKET 輸出 core_deployment_diagnostics，Strategy B 必須將每筆 diagnostic exact-copy 到 AUDITED_DECISION_PACKET.core_deployment_diagnostics，除非有明確 structure-only patch reason。
+  - Strategy B 不得刪除、濃縮、改名或省略任何 upstream diagnostic required key。
+  - 若有 patch，只能 deterministic 新增或修正欄位，不得移除 Strategy A 已存在欄位。
+  - 每筆 AUDITED_DECISION_PACKET.core_deployment_diagnostics[*] 至少必須包含下列 required keys：
+    - ticker
+    - role_layer
+    - current_holding_shares
+    - existing_open_order_budget
+    - compiled_open_order_notional
+    - residual_cash_not_allocated
+    - highest_live_limit
+    - current_last_close
+    - distance_to_highest_live_limit_pct
+    - anchor_drift_pct
+    - near_edge_flags
+    - deployment_status
+    - weekly_allowed_responses
+    - why
+  - weekly_allowed_responses 必須是 array，且每個值只能是下列 allowlist 之一：
+    - keep_existing
+    - same_budget_reanchor
+    - new_budget_if_hard_cap_and_strategy_allow
+    - hold_no_new_budget_with_explicit_reason
+  - 若 Strategy A 已提供 weekly_allowed_responses，Strategy B 必須原樣保留其 array order 與 values，不得濃縮成文字、改名、改成 null、或省略。
+  - 若 Strategy A 輸出 core_deployment_diagnostics，但其中任一 diagnostic row 缺少上述 required key，且 Strategy B 無法僅依允許輸入 deterministic 補齊：
+    - audit_passed = false 或 order_compiler_ready = false
+    - compiler_blockers 必須加入 "UPSTREAM_DATA_GAP_FROM_STRATEGY_B"
+    - audit_fail_reasons 必須加入 "CORE_DEPLOYMENT_DIAGNOSTICS_REQUIRED_KEY_MISSING"
+    - 不得靜默 PASS。
+  - 若 weekly_allowed_responses 存在但不是 array，或包含 allowlist 以外的值：
+    - audit_passed = false 或 order_compiler_ready = false
+    - compiler_blockers 必須加入 "UPSTREAM_DATA_GAP_FROM_STRATEGY_B"
+    - audit_fail_reasons 必須加入 "CORE_DEPLOYMENT_DIAGNOSTICS_WEEKLY_ALLOWED_RESPONSES_INVALID"
+    - 不得靜默 PASS。
 - core_deployment_diagnostics 只作 weekly review / audit evidence，不得直接要求 Strategy C 產生 BUY_ORDERS。
 - 若 core_deployment_diagnostics 影響最終 action，該影響必須已經反映在 final_buy_side_delta_table / final_execution_plans；Strategy C 不得自行解讀 diagnostic 來改 action。
 
@@ -1374,6 +1645,10 @@ order_state_export_preview:
 【AUDITED_DECISION_PACKET 最低必備欄位】
 - audit_passed = true / false
 - order_compiler_ready = true / false
+- post_cancel_material_headroom_redeployment_review（REQUIRED IF TRIGGERED）
+  - 若本輪有 buy-side CANCEL_EXISTING / budget reduction，且 released_buy_open_order_budget 或 post_action_open_order_budget_headroom 達 materiality threshold，則 AUDITED_DECISION_PACKET 必須保留 post_cancel_material_headroom_redeployment_review。
+  - 若未觸發，可省略或輸出 triggered=false。
+  - 若 triggered=true 但 object 缺失，audit_passed 必須 = false，order_compiler_ready 必須 = false。
 - final_buy_side_delta_table
 - final_sell_side_delta_table
 - final_execution_plans
@@ -1382,6 +1657,11 @@ order_state_export_preview:
 - audit_fail_reasons
 - patches_applied
 - compiler_blockers
+
+- core_deployment_diagnostics（REQUIRED IF PROVIDED BY STRATEGY A）
+  - 若 DECISION_PACKET.core_deployment_diagnostics 存在且非空，AUDITED_DECISION_PACKET.core_deployment_diagnostics 必須存在且 row count 必須相同，除非 TEMPLATE2_PATCH 明確記錄 deterministic structure-only patch reason。
+  - AUDITED_DECISION_PACKET.core_deployment_diagnostics[*] 必須保留 upstream required keys，尤其 weekly_allowed_responses。
+  - 不得因 core_deployment_diagnostics 只屬 weekly review / audit evidence，就省略或縮寫其 required keys。
 
 - compile_support_summary（REQUIRED）
   - all_compile_ready_rows_self_contained: true / false
