@@ -221,11 +221,26 @@ existing compile-ready / diagnostics checks are unchanged; still fail-closed in 
 - **Total open-order-state reconciliation:** implemented in **G3** (see the budget-semantics /
   G3 reconciliation bullets above) — totals are recomputed from `final_execution_plans` and
   reconciled against the hard cap, including KEEP_EXISTING existing notional.
-- **Still deferred:** portfolio-snapshot-independent verification of KEEP_EXISTING existing notional
-  (**G4**); per-bucket `max_new_tickers_per_week` (base vs extended); semantic conflicting-action
-  detection beyond exact duplicates; hardening the standalone `extract_orders_and_summary.main()`
-  context coverage (it shares the validate-before-write ordering but is still not supplied
-  settings/budgets/universe — weaker by design).
+- **Per-bucket `max_new_tickers_per_week` (implemented):** `validate_orders_output` enforces the
+  base and extended new-ticker ceilings **separately**, not only the aggregate sum, via
+  `_validate_per_bucket_new_tickers(buy_order_rows, strategy_settings)` (runs whenever strategy
+  settings are supplied). Limits come from
+  `max_new_tickers_per_week.base_universe_new_tickers_per_week` /
+  `.extended_etf_sleeve_new_tickers_per_week`. **Classification source = the operator
+  strategy-settings universe lists** (base = `core_universe ∪ satellite_universe`; extended =
+  `user_approved_extended_etf_static_list`) — chosen over `final_execution_plans.role_layer` (which
+  can be null) and over `effective_allowed_buy_universe` (a flat membership list that does not label
+  base vs extended). Only distinct net-new tickers count (NEW_ORDER side; ladder rows count once;
+  REPLACE/CANCEL/KEEP excluded). **In-both:** a ticker in both lists is conservatively counted as
+  **base** (documented as a settings inconsistency). **In-neither:** a net-new ticker absent from
+  both lists **fails closed**. Malformed/missing `max_new_tickers_per_week` sub-keys (when settings
+  are present) **fail closed**; an absent `max_new_tickers_per_week` skips only the per-bucket check.
+  The aggregate `_validate_max_new_tickers` (int param) is **retained unchanged** for
+  backward-compatible legacy/standalone callers.
+- **Still deferred:** semantic conflicting-action detection beyond exact duplicates; hardening the
+  standalone `extract_orders_and_summary.main()` context coverage (it shares the validate-before-write
+  ordering but is still not supplied settings/budgets/universe — weaker by design); atomic publish /
+  `os.replace` (G2.2).
 
 ## 7. Non-goals
 

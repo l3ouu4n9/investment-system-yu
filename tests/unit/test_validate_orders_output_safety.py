@@ -455,3 +455,130 @@ def test_keep_existing_parse_blocked_snapshot_row_fails_closed(tmp_path: Path) -
     pkt = audited([keep_plan("QQQ", budget=1983.65, compiled=699.36)])
     with pytest.raises(ValueError, match="parse-blocked / data-gapped"):
         run(tmp_path, "NONE\n", audited_decision_packet=pkt, existing_buy_open_orders=snapshot_2a(bad_row))
+
+
+# --- per-bucket max_new_tickers_per_week (base vs extended) -------------------
+
+
+def bucket_settings(
+    *,
+    base_limit: int = 0,
+    extended_limit: int = 2,
+    core: list[str] | None = None,
+    satellite: list[str] | None = None,
+    approved: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "core_universe": core if core is not None else ["QQQ", "VOO", "VTI", "VT"],
+        "satellite_universe": satellite if satellite is not None else ["SMH", "IGV"],
+        "user_approved_extended_etf_static_list": approved
+        if approved is not None
+        else ["GRID", "CIBR", "BOTZ"],
+        "max_new_tickers_per_week": {
+            "base_universe_new_tickers_per_week": base_limit,
+            "extended_etf_sleeve_new_tickers_per_week": extended_limit,
+        },
+    }
+
+
+def new_order_row(ticker: str, step: str = "L1") -> str:
+    return f"ticker={ticker} | step_name={step} | shares=1 | limit_price=10.00 | order_intent=NEW_ORDER\n"
+
+
+def test_per_bucket_new_base_ticker_fails_when_base_limit_zero_even_if_aggregate_passes(
+    tmp_path: Path,
+) -> None:
+    # base=0, extended=2 -> aggregate sum 2 would pass for 1 new ticker, but the
+    # per-bucket base ceiling (0) is violated.
+    with pytest.raises(ValueError, match="base_universe_new_tickers_per_week=0"):
+        run(
+            tmp_path,
+            new_order_row("QQQ"),
+            strategy_settings=bucket_settings(base_limit=0, extended_limit=2),
+            max_new_tickers_per_week=2,  # aggregate would pass (1 <= 2)
+        )
+
+
+def test_per_bucket_new_extended_within_limit_passes(tmp_path: Path) -> None:
+    run(tmp_path, new_order_row("GRID"), strategy_settings=bucket_settings(base_limit=0, extended_limit=2))
+
+
+def test_per_bucket_extended_over_limit_fails(tmp_path: Path) -> None:
+    body = new_order_row("GRID") + new_order_row("CIBR") + new_order_row("BOTZ")
+    with pytest.raises(ValueError, match="extended_etf_sleeve_new_tickers_per_week=2"):
+        run(tmp_path, body, strategy_settings=bucket_settings(base_limit=0, extended_limit=2))
+
+
+def test_per_bucket_base_within_nonzero_limit_passes(tmp_path: Path) -> None:
+    run(tmp_path, new_order_row("QQQ"), strategy_settings=bucket_settings(base_limit=1, extended_limit=0))
+
+
+def test_per_bucket_ticker_in_neither_list_fails_closed(tmp_path: Path) -> None:
+    # ZZZZ passes the G1 universe allowlist via an explicit effective universe,
+    # but is in neither base nor extended settings list -> per-bucket fails closed.
+    with pytest.raises(ValueError, match="not classifiable as base or extended"):
+        run(
+            tmp_path,
+            new_order_row("ZZZZ"),
+            strategy_settings=bucket_settings(base_limit=5, extended_limit=5),
+            effective_allowed_buy_universe=["ZZZZ"],
+        )
+
+
+def test_per_bucket_ticker_in_both_lists_classified_as_base(tmp_path: Path) -> None:
+    # GRID in both core and approved; base=0 -> counted as base -> fails on base.
+    with pytest.raises(ValueError, match="new base ticker"):
+        run(
+            tmp_path,
+            new_order_row("GRID"),
+            strategy_settings=bucket_settings(
+                base_limit=0,
+                extended_limit=5,
+                core=["GRID", "QQQ"],
+                approved=["GRID"],
+            ),
+        )
+
+
+def test_per_bucket_ladder_rows_same_ticker_count_once(tmp_path: Path) -> None:
+    body = new_order_row("GRID", "L1") + new_order_row("GRID", "L2")
+    run(tmp_path, body, strategy_settings=bucket_settings(base_limit=0, extended_limit=1))
+
+
+def test_per_bucket_replace_cancel_keep_do_not_count(tmp_path: Path) -> None:
+    body = (
+        "ticker=GRID | step_name=L1 | shares=1 | limit_price=10.00 | order_intent=REPLACE_EXISTING_SUBMIT_LEG\n"
+        "ticker=CIBR | step_name=L1 | shares=1 | limit_price=10.00 | order_intent=CANCEL_EXISTING\n"
+    )
+    run(tmp_path, body, strategy_settings=bucket_settings(base_limit=0, extended_limit=0))
+
+
+def test_per_bucket_no_trade_passes(tmp_path: Path) -> None:
+    run(tmp_path, "NONE\n", strategy_settings=bucket_settings(base_limit=0, extended_limit=0))
+
+
+def test_per_bucket_skipped_when_strategy_settings_none(tmp_path: Path) -> None:
+    # No strategy_settings -> per-bucket skipped (and G1 universe also skipped),
+    # so a would-be base violation passes (backward compatible).
+    run(tmp_path, new_order_row("QQQ"))
+
+
+def test_per_bucket_malformed_settings_fail_closed(tmp_path: Path) -> None:
+    bad = bucket_settings(base_limit=0, extended_limit=2)
+    bad["max_new_tickers_per_week"] = "oops"
+    with pytest.raises(ValueError, match="max_new_tickers_per_week must be a mapping"):
+        run(tmp_path, new_order_row("GRID"), strategy_settings=bad)
+
+
+def test_per_bucket_missing_subkey_fails_closed(tmp_path: Path) -> None:
+    bad = bucket_settings(base_limit=0, extended_limit=2)
+    bad["max_new_tickers_per_week"] = {"base_universe_new_tickers_per_week": 0}  # extended missing
+    with pytest.raises(ValueError, match="extended_etf_sleeve_new_tickers_per_week must be an integer"):
+        run(tmp_path, new_order_row("GRID"), strategy_settings=bad)
+
+
+def test_aggregate_check_still_works_for_legacy_int_only_callers(tmp_path: Path) -> None:
+    # No strategy_settings -> per-bucket skipped; legacy aggregate int still enforced.
+    body = new_order_row("QQQ") + new_order_row("SMH")
+    with pytest.raises(ValueError, match="exceeding max_new_tickers_per_week=1"):
+        run(tmp_path, body, max_new_tickers_per_week=1)

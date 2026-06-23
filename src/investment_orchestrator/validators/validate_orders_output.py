@@ -402,6 +402,91 @@ def _validate_max_new_tickers(
     )
 
 
+def _new_buy_tickers(buy_order_rows: list[dict[str, str]]) -> set[str]:
+    """Distinct net-new buy tickers (ladder rows for a ticker count once)."""
+    return {
+        _normalize_ticker(row.get("ticker"))
+        for row in buy_order_rows
+        if _normalize_action(row.get("order_intent")) in _NET_NEW_BUY_INTENTS
+        and _normalize_ticker(row.get("ticker"))
+    }
+
+
+def _require_int_subkey(container: Mapping[str, Any], key: str) -> int:
+    value = container.get(key)
+    _require(
+        isinstance(value, int) and not isinstance(value, bool),
+        f"max_new_tickers_per_week.{key} must be an integer; got {value!r}.",
+    )
+    return value
+
+
+def _validate_per_bucket_new_tickers(
+    buy_order_rows: list[dict[str, str]],
+    strategy_settings: Mapping[str, Any],
+) -> None:
+    """Enforce base vs extended new-ticker ceilings separately (not just the sum).
+
+    Classification source is the operator-maintained strategy settings universe
+    lists (the authoritative SSOT): base = core_universe ∪ satellite_universe,
+    extended = user_approved_extended_etf_static_list. A net-new ticker present
+    in both lists is conservatively counted as base (a settings inconsistency); a
+    net-new ticker in neither list fails closed. Fails closed when the
+    max_new_tickers_per_week settings are malformed.
+    """
+    limits = strategy_settings.get("max_new_tickers_per_week")
+    if not isinstance(limits, Mapping):
+        _require(
+            limits is None,
+            f"max_new_tickers_per_week must be a mapping of base/extended limits; got {limits!r}.",
+        )
+        return  # absent -> per-bucket not applicable (aggregate check still runs)
+
+    base_limit = _require_int_subkey(limits, "base_universe_new_tickers_per_week")
+    extended_limit = _require_int_subkey(limits, "extended_etf_sleeve_new_tickers_per_week")
+
+    base_universe = _string_list_set(strategy_settings.get("core_universe")) | _string_list_set(
+        strategy_settings.get("satellite_universe")
+    )
+    extended_universe = _string_list_set(
+        strategy_settings.get("user_approved_extended_etf_static_list")
+    )
+
+    new_base: set[str] = set()
+    new_extended: set[str] = set()
+    unclassifiable: set[str] = set()
+    for ticker in _new_buy_tickers(buy_order_rows):
+        if ticker in base_universe:  # in-both -> base (conservative)
+            new_base.add(ticker)
+        elif ticker in extended_universe:
+            new_extended.add(ticker)
+        else:
+            unclassifiable.add(ticker)
+
+    _require(
+        not unclassifiable,
+        "BUY_ORDERS opens net-new tickers not classifiable as base or extended "
+        f"(absent from both strategy_settings universe lists): {', '.join(sorted(unclassifiable))}.",
+    )
+    _require(
+        len(new_base) <= base_limit,
+        f"BUY_ORDERS opens {len(new_base)} new base ticker(s) ({', '.join(sorted(new_base))}), "
+        f"exceeding base_universe_new_tickers_per_week={base_limit}.",
+    )
+    _require(
+        len(new_extended) <= extended_limit,
+        f"BUY_ORDERS opens {len(new_extended)} new extended ETF ticker(s) "
+        f"({', '.join(sorted(new_extended))}), "
+        f"exceeding extended_etf_sleeve_new_tickers_per_week={extended_limit}.",
+    )
+
+
+def _string_list_set(value: Any) -> set[str]:
+    if not isinstance(value, list):
+        return set()
+    return {_normalize_ticker(item) for item in value if isinstance(item, str) and item.strip()}
+
+
 def _compile_ready_plans(audited_decision_packet: Any) -> list[Mapping[str, Any]]:
     if not isinstance(audited_decision_packet, Mapping):
         return []
@@ -604,8 +689,10 @@ def validate_orders_output(
 
     * numeric validity (malformed / negative / zero-on-submit) and exact-duplicate
       row rejection always run;
-    * universe allowlist, submit-side budget floor, and max-new-ticker checks run
-      when the corresponding context (settings / universe / budget) is supplied;
+    * universe allowlist, submit-side budget floor, and aggregate max-new-ticker
+      checks run when the corresponding context (settings / universe / budget) is
+      supplied; a per-bucket new-ticker check (base vs extended, PR per-bucket)
+      additionally runs whenever strategy settings are supplied;
     * total open-order exposure reconciliation (PR G3) runs when both an audited
       decision packet and a hard cap are supplied: totals are recomputed from
       ``audited_decision_packet.final_execution_plans`` (not the exec_summary
@@ -654,6 +741,9 @@ def validate_orders_output(
 
     if max_new_tickers_per_week is not None:
         _validate_max_new_tickers(buy_order_rows, max_new_tickers_per_week)
+
+    if strategy_settings is not None:
+        _validate_per_bucket_new_tickers(buy_order_rows, strategy_settings)
 
     if audited_decision_packet is not None:
         _require_buy_order_rows_match_final_plans(
