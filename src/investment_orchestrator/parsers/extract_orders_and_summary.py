@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -51,8 +52,18 @@ def extract_orders_and_summary(
     order_state_export_path: str | Path,
     exec_summary_path: str | Path,
     audited_decision_packet: Any | None = None,
+    strategy_settings: Mapping[str, Any] | None = None,
+    effective_allowed_buy_universe: Collection[str] | None = None,
+    hard_cap_open_orders_budget: Any | None = None,
+    target_new_buy_budget_this_run: Any | None = None,
+    max_new_tickers_per_week: int | None = None,
 ) -> tuple[str, str, str]:
-    """Read, parse, validate, and write Step 4 text artifacts."""
+    """Read, parse, validate, and write Step 4 text artifacts.
+
+    Deterministic post-order safety context (settings / universe / budgets) is
+    forwarded to ``validate_orders_output``; omitting it preserves the prior
+    (narrower) validation behavior for standalone callers.
+    """
     template4_orders_text, order_state_export_text, exec_summary_text = parse_step4_output_text(
         read_text(raw_output_path)
     )
@@ -66,6 +77,11 @@ def extract_orders_and_summary(
         order_state_export_path=order_state_export_path,
         exec_summary_path=exec_summary_path,
         audited_decision_packet=audited_decision_packet,
+        strategy_settings=strategy_settings,
+        effective_allowed_buy_universe=effective_allowed_buy_universe,
+        hard_cap_open_orders_budget=hard_cap_open_orders_budget,
+        target_new_buy_budget_this_run=target_new_buy_budget_this_run,
+        max_new_tickers_per_week=max_new_tickers_per_week,
     )
     return template4_orders_text, order_state_export_text, exec_summary_text
 

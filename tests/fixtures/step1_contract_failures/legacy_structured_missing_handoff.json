@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0",
+  "as_of": "2026-05-10",
+  "executive_summary": "Minimal legacy structured fixture: has a structured trade_universe and a legacy strategy_a_handoff container, but lacks the strict strategy_a_research_handoff_v1 contract and complete buy_universe_scorecard actionability fields.",
+  "trade_universe": {
+    "allowed_buy_tickers": ["VOO", "VTI", "VT", "QQQ", "SMH", "IGV"],
+    "notes": "Legacy structured trade universe."
+  },
+  "scheduled_events": [],
+  "structural_themes_6_18m": [
+    {"id": "theme_ai_infrastructure_12m", "theme": "AI infrastructure", "horizon": "12m_plus"}
+  ],
+  "buy_universe_scorecard": [
+    {"ticker": "QQQ", "role_layer": "benchmark_carrier_core"},
+    {"ticker": "VOO", "role_layer": "diversified_core_buffer"}
+  ],
+  "strategy_a_handoff": {
+    "base_lane_objective": "Legacy prose handoff container without strict v1 fields.",
+    "handoff_recommendation": {
+      "us_core_preferred": "VTI",
+      "growth_tilt": "QQQ"
+    }
+  },
+  "validation_summary": {
+    "passed": true,
+    "fail_reasons": [],
+    "auto_fixes_applied": []
+  }
+}

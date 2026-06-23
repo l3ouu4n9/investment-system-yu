@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 from investment_orchestrator.common.io import read_json, read_text, write_json, write_text
+from investment_orchestrator.parsers import _json_text
 from investment_orchestrator.validators.validate_daily_execution_actions import (
     validate_daily_execution_actions,
 )
@@ -19,25 +19,13 @@ class DailyExecutionCheckExtractionError(ValueError):
 
 def extract_required_block(text: str, start_marker: str, end_marker: str) -> str:
     """Return the text between two required markers."""
-    start = text.find(start_marker)
-    if start == -1:
+    try:
+        block = _json_text.extract_marked_block(text, start_marker, end_marker)
+    except _json_text.JsonTextParseError as exc:
+        raise DailyExecutionCheckExtractionError(str(exc)) from exc
+    if block is None:
         raise DailyExecutionCheckExtractionError(f"Missing required marker {start_marker!r}.")
-    end = text.rfind(end_marker)
-    if end == -1 or end <= start:
-        raise DailyExecutionCheckExtractionError(f"Missing or malformed closing marker {end_marker!r}.")
-    return text[start + len(start_marker) : end].strip()
-
-
-def strip_code_fence(text: str) -> str:
-    """Remove one surrounding Markdown fence when present."""
-    stripped = text.strip()
-    if not stripped.startswith("```"):
-        return stripped
-
-    lines = stripped.splitlines()
-    if len(lines) < 3 or not lines[-1].strip().startswith("```"):
-        return stripped
-    return "\n".join(lines[1:-1]).strip()
+    return block
 
 
 def parse_daily_execution_actions_text(raw_text: str) -> dict[str, Any]:
@@ -47,15 +35,14 @@ def parse_daily_execution_actions_text(raw_text: str) -> dict[str, Any]:
         "DAILY_EXECUTION_ACTIONS_START",
         "DAILY_EXECUTION_ACTIONS_END",
     )
-    cleaned = strip_code_fence(block)
     try:
-        payload = json.loads(cleaned)
-    except json.JSONDecodeError as exc:
-        raise DailyExecutionCheckExtractionError(f"DAILY_EXECUTION_ACTIONS block is not valid JSON: {exc}") from exc
-
-    if not isinstance(payload, dict):
-        raise DailyExecutionCheckExtractionError("DAILY_EXECUTION_ACTIONS block must be a single JSON object.")
-    return payload
+        return _json_text.parse_json_like_mapping(
+            block,
+            allow_yaml=False,
+            context="DAILY_EXECUTION_ACTIONS block",
+        )
+    except _json_text.JsonTextParseError as exc:
+        raise DailyExecutionCheckExtractionError(str(exc)) from exc
 
 
 def extract_daily_execution_check(

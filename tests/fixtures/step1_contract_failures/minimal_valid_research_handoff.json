@@ -1,0 +1,195 @@
+{
+  "schema_version": "1.0",
+  "as_of": "2026-06-21",
+  "trade_universe": {
+    "allowed_buy_tickers": ["VOO", "VTI", "VT", "QQQ", "SMH", "IGV"],
+    "notes": "Template2 buy-side must restrict to allowed_buy_tickers only."
+  },
+  "regime_inputs": {},
+  "policy_items": [],
+  "scheduled_events": [],
+  "unscheduled_risks": [],
+  "structural_themes_6_18m": [
+    {
+      "id": "theme_ai_infrastructure_12m",
+      "theme": "AI infrastructure",
+      "horizon": "12m_plus"
+    }
+  ],
+  "top5_next_week": [],
+  "buy_universe_scorecard": [
+    {
+      "ticker": "QQQ",
+      "role_layer": "benchmark_carrier_core",
+      "execution_priority_this_run": 1,
+      "actionability_status": "ranking_hold_watch_only",
+      "entry_driver": "benchmark_anchor",
+      "primary_anchor_type": "structural_theme",
+      "primary_anchor_event_id": null,
+      "primary_anchor_date_et": null,
+      "preferred_scheduled_theme_event_id": null,
+      "thesis_12m_plus_supported": true,
+      "thesis_12m_plus_summary": "Benchmark growth exposure remains useful as a long-term reference.",
+      "thesis_linkage_quality": "adequate",
+      "compile_blocker_if_any": null,
+      "event_id_refs": [],
+      "structural_theme_refs": ["theme_ai_infrastructure_12m"]
+    },
+    {
+      "ticker": "VOO",
+      "role_layer": "diversified_core_buffer",
+      "execution_priority_this_run": 2,
+      "actionability_status": "ranking_hold_watch_only",
+      "entry_driver": "broad_market_buffer",
+      "primary_anchor_type": "structural_theme",
+      "primary_anchor_event_id": null,
+      "primary_anchor_date_et": null,
+      "preferred_scheduled_theme_event_id": null,
+      "thesis_12m_plus_supported": true,
+      "thesis_12m_plus_summary": "Broad US equity buffer remains useful for diversification.",
+      "thesis_linkage_quality": "adequate",
+      "compile_blocker_if_any": null,
+      "event_id_refs": [],
+      "structural_theme_refs": ["theme_ai_infrastructure_12m"]
+    },
+    {
+      "ticker": "VTI",
+      "role_layer": "diversified_core_buffer",
+      "execution_priority_this_run": 3,
+      "actionability_status": "ranking_hold_watch_only",
+      "entry_driver": "broad_market_buffer",
+      "primary_anchor_type": "structural_theme",
+      "primary_anchor_event_id": null,
+      "primary_anchor_date_et": null,
+      "preferred_scheduled_theme_event_id": null,
+      "thesis_12m_plus_supported": true,
+      "thesis_12m_plus_summary": "Total US equity exposure remains useful for core diversification.",
+      "thesis_linkage_quality": "adequate",
+      "compile_blocker_if_any": null,
+      "event_id_refs": [],
+      "structural_theme_refs": ["theme_ai_infrastructure_12m"]
+    },
+    {
+      "ticker": "VT",
+      "role_layer": "diversified_core_buffer",
+      "execution_priority_this_run": 4,
+      "actionability_status": "ranking_hold_watch_only",
+      "entry_driver": "global_market_buffer",
+      "primary_anchor_type": "structural_theme",
+      "primary_anchor_event_id": null,
+      "primary_anchor_date_et": null,
+      "preferred_scheduled_theme_event_id": null,
+      "thesis_12m_plus_supported": true,
+      "thesis_12m_plus_summary": "Global equity exposure remains useful for diversification.",
+      "thesis_linkage_quality": "adequate",
+      "compile_blocker_if_any": null,
+      "event_id_refs": [],
+      "structural_theme_refs": ["theme_ai_infrastructure_12m"]
+    },
+    {
+      "ticker": "SMH",
+      "role_layer": "sector_alpha_tilt",
+      "execution_priority_this_run": 5,
+      "actionability_status": "ranking_hold_watch_only",
+      "entry_driver": "semiconductor_structural_growth",
+      "primary_anchor_type": "structural_theme",
+      "primary_anchor_event_id": null,
+      "primary_anchor_date_et": null,
+      "preferred_scheduled_theme_event_id": null,
+      "thesis_12m_plus_supported": true,
+      "thesis_12m_plus_summary": "Semiconductor infrastructure has a long-cycle growth thesis.",
+      "thesis_linkage_quality": "adequate",
+      "compile_blocker_if_any": null,
+      "event_id_refs": [],
+      "structural_theme_refs": ["theme_ai_infrastructure_12m"]
+    },
+    {
+      "ticker": "IGV",
+      "role_layer": "sector_alpha_tilt",
+      "execution_priority_this_run": 6,
+      "actionability_status": "ranking_hold_watch_only",
+      "entry_driver": "software_structural_growth",
+      "primary_anchor_type": "structural_theme",
+      "primary_anchor_event_id": null,
+      "primary_anchor_date_et": null,
+      "preferred_scheduled_theme_event_id": null,
+      "thesis_12m_plus_supported": true,
+      "thesis_12m_plus_summary": "Software productivity exposure remains a long-cycle watch candidate.",
+      "thesis_linkage_quality": "adequate",
+      "compile_blocker_if_any": null,
+      "event_id_refs": [],
+      "structural_theme_refs": ["theme_ai_infrastructure_12m"]
+    }
+  ],
+  "user_approved_extended_etf_static_list": [],
+  "trend_candidate_scan": [],
+  "approved_static_list_screening_log": [],
+  "proposed_extended_etf_candidates": [],
+  "extended_etf_candidate_universe": [],
+  "extended_etf_predecision_scorecard": [],
+  "optional_extended_etf_sleeve": {
+    "enabled": false,
+    "top_candidate": null,
+    "disable_reason": "no approved candidates passed activation",
+    "why_not_enabled": "extended ETF sleeve remains disabled because no approved candidate passed activation",
+    "allowed_extended_etf_tickers": [],
+    "notes": "Disabled state is explicit; Strategy A must stay within trade_universe.allowed_buy_tickers."
+  },
+  "extended_etf_scorecard": [],
+  "strategy_a_research_handoff": {
+    "handoff_version": "strategy_a_research_handoff_v1",
+    "handoff_scope": "research_to_decision_builder_only",
+    "not_order_instruction": true,
+    "strategy_a_must_still_apply": [
+      "Portfolio Snapshot",
+      "Strategy Settings",
+      "market data",
+      "role caps",
+      "existing open orders",
+      "hard cap",
+      "template map",
+      "compile contract"
+    ],
+    "base_shortlist_eligible_by_role": {
+      "benchmark_carrier_core": [],
+      "diversified_core_buffer": [],
+      "sector_alpha_tilt": []
+    },
+    "base_watch_only_by_role": {
+      "benchmark_carrier_core": ["QQQ"],
+      "diversified_core_buffer": ["VOO", "VTI", "VT"],
+      "sector_alpha_tilt": ["SMH", "IGV"]
+    },
+    "positive_delta_research_supported": [],
+    "positive_delta_not_implied_for": ["VOO", "VTI", "VT", "QQQ", "SMH", "IGV"],
+    "replacement_ranking_by_role": {
+      "benchmark_carrier_core": ["QQQ"],
+      "diversified_core_buffer": ["VOO", "VTI", "VT"],
+      "sector_alpha_tilt": ["SMH", "IGV"]
+    },
+    "rotation_handoff": [],
+    "buy_side_no_action_hints": [],
+    "extended_lane_downstream_gate": {
+      "effective_allowed_extended_etf_tickers_this_run": [],
+      "predecision_only_tickers": [],
+      "proposed_only_tickers": [],
+      "approved_but_excluded_tickers": [],
+      "must_not_enter_strategy_a_effective_universe": [],
+      "disable_reason": "no approved candidates passed activation",
+      "why_not_enabled": "extended ETF sleeve remains disabled because no approved candidate passed activation"
+    },
+    "sell_side_research_boundary": {
+      "research_template_sell_decision_scope": "base_etf_research_only_unless_current_portfolio_sell_diagnostics_provided",
+      "sell_side_full_diagnostic_inputs_present": false,
+      "portfolio_snapshot_ltcg_lots_are_eligibility_not_sell_thesis": true,
+      "sell_side_positive_action_supported_tickers": [],
+      "sell_side_watch_only_tickers": [],
+      "sell_side_data_gap_note": ""
+    }
+  },
+  "validation_summary": {
+    "passed": true,
+    "fail_reasons": [],
+    "auto_fixes_applied": []
+  }
+}

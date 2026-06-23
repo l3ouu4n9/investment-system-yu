@@ -1,0 +1,44 @@
+RESEARCH_JSON_START
+{
+  "schema_version": "1.0",
+  "executive_summary": {
+    "headline": "Minimal fixture derived from artifacts/archive/20260607_194129/step1_research/research_output.json: a RESEARCH_JSON envelope wraps the actual research body.",
+    "language": "zh-TW"
+  },
+  "RESEARCH_JSON": {
+    "as_of": "2026-06-07",
+    "language": "zh-TW",
+    "assumptions": [
+      "Missing data is labeled unspecified."
+    ],
+    "strategy_a_handoff": {
+      "base_lane_objective": "Use low-cost core ETFs as the chassis; add QQQ/SMH/IGV for growth tilt.",
+      "handoff_recommendation": {
+        "us_core_preferred": "VTI",
+        "growth_tilt": "QQQ"
+      },
+      "practical_handoff_notes": [
+        "Prose recommendation, not a structured strategy_a_research_handoff_v1 object."
+      ]
+    },
+    "lane_a": {
+      "VOO": {"latest_price": "688.11", "ranking_score": 55}
+    },
+    "lane_b": {
+      "approved": [{"ticker": "QUAL", "theme_fit": "quality factor"}]
+    },
+    "limitations": [
+      "Wrapper output lacks strict trade_universe / buy_universe_scorecard structures."
+    ]
+  },
+  "STRATEGY_SETTINGS_YAML": {
+    "core_universe": ["VOO", "VTI", "VT", "QQQ"],
+    "satellite_universe": ["SMH", "IGV"]
+  },
+  "validation_summary": {
+    "passed": true,
+    "fail_reasons": [],
+    "auto_fixes_applied": []
+  }
+}
+RESEARCH_JSON_END

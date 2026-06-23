@@ -1,0 +1,40 @@
+{
+  "schema_version": "1.0",
+  "as_of": "2026-06-21",
+  "executive_summary": "Minimal fixture derived from artifacts/current/step1_research/research_output.json: validates against the current permissive schema while missing strict downstream handoff fields.",
+  "lane_a": {
+    "VOO": {
+      "latest_price": "688.11",
+      "ranking_score": 55,
+      "timing_view": "buy"
+    },
+    "QQQ": {
+      "latest_price": "740.62",
+      "ranking_score": 90,
+      "timing_view": "buy"
+    }
+  },
+  "lane_b": {
+    "approved": [
+      {
+        "ticker": "QUAL",
+        "theme_fit": "quality factor"
+      }
+    ],
+    "candidates": [
+      {
+        "ticker": "SOXX",
+        "theme": "semiconductors"
+      }
+    ]
+  },
+  "ranking_methodology": "Scores combine return, volatility, and theme fit.",
+  "assumptions": [
+    "Missing data is labeled unspecified."
+  ],
+  "validation_summary": {
+    "passed": true,
+    "fail_reasons": [],
+    "auto_fixes_applied": []
+  }
+}

@@ -15,9 +15,16 @@ from investment_orchestrator.llm.manual_output import (
 from investment_orchestrator.parsers.extract_audit_and_audited_packet import (
     extract_audit_and_audited_packet,
 )
-from investment_orchestrator.workflow.step1_research import step1_research_output_path
+from investment_orchestrator.state.upstream_artifact_guard import enforce_upstream_artifact_guard
+from investment_orchestrator.workflow.step1_research import (
+    step1_research_degraded_mode_decision_path,
+    step1_research_output_path,
+)
 from investment_orchestrator.workflow.step2_decision_builder import (
+    step2_blocked_by_research_gate_path,
     step2_decision_packet_path,
+    step2_prompt_path,
+    step2_raw_output_path,
     step2_template2_output_path,
 )
 
@@ -28,6 +35,7 @@ RAW_OUTPUT_FILENAME = "raw_output.txt"
 TEMPLATE3_AUDIT_FILENAME = "template3_audit.txt"
 TEMPLATE2_PATCH_FILENAME = "template2_patch.txt"
 AUDITED_DECISION_PACKET_FILENAME = "audited_decision_packet.json"
+STEP3_BLOCKED_BY_UPSTREAM_GATE_FILENAME = "step3_blocked_by_upstream_gate.json"
 
 STRATEGY_SETTINGS_BLOCK_RE = re.compile(
     r"STRATEGY_SETTINGS_START\s*\n.*?\nSTRATEGY_SETTINGS_END",
@@ -68,6 +76,27 @@ def step3_template2_patch_path() -> Path:
 def step3_audited_decision_packet_path() -> Path:
     """Return the extracted audited decision packet path."""
     return step3_artifact_dir() / AUDITED_DECISION_PACKET_FILENAME
+
+
+def step3_blocked_by_upstream_gate_path() -> Path:
+    """Return the deterministic Step 3 upstream-gate block artifact path."""
+    return step3_artifact_dir() / STEP3_BLOCKED_BY_UPSTREAM_GATE_FILENAME
+
+
+def enforce_step3_upstream_guard() -> None:
+    """Fail closed before Step 3 consumes blocked or missing Step 2 artifacts."""
+    enforce_upstream_artifact_guard(
+        blocked_artifact_path=step3_blocked_by_upstream_gate_path(),
+        upstream_blocked_artifacts=[step2_blocked_by_research_gate_path()],
+        required_artifacts=[
+            step2_prompt_path(),
+            step2_raw_output_path(),
+            step2_template2_output_path(),
+            step2_decision_packet_path(),
+        ],
+        repo_root_path=repo_root(),
+        permission_fallback_artifacts=[step1_research_degraded_mode_decision_path()],
+    )
 
 
 def _require_non_empty_text(path: Path, *, label: str) -> str:
@@ -149,6 +178,8 @@ def build_step3_prompt_text() -> str:
 
 def render_step3_prompt() -> dict[str, str]:
     """Write the rendered Step 3 prompt and prepare the manual output artifact."""
+    enforce_step3_upstream_guard()
+
     artifact_dir = step3_artifact_dir()
     prompt_output_path = step3_prompt_path()
     raw_output_path = step3_raw_output_path()
@@ -171,6 +202,8 @@ def render_step3_prompt() -> dict[str, str]:
 
 def parse_step3_output() -> dict[str, str]:
     """Parse and validate the manual Step 3 output artifacts."""
+    enforce_step3_upstream_guard()
+
     template3_audit_text, template2_patch_text, audited_packet = extract_audit_and_audited_packet(
         raw_output_path=step3_raw_output_path(),
         template3_audit_path=step3_template3_audit_path(),

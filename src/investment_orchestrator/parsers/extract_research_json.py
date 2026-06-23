@@ -2,43 +2,16 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from investment_orchestrator.common.io import read_text, write_json
+from investment_orchestrator.parsers import _json_text
 from investment_orchestrator.validators.validate_research_output import validate_research_output
 
 
 class ResearchExtractionError(ValueError):
     """Raised when a Step 1 raw output cannot be parsed into RESEARCH_JSON."""
-
-
-def strip_code_fence(text: str) -> str:
-    """Remove a surrounding Markdown code fence when present."""
-    stripped = text.strip()
-    if not stripped.startswith("```"):
-        return stripped
-
-    lines = stripped.splitlines()
-    if len(lines) < 3 or not lines[-1].strip().startswith("```"):
-        return stripped
-    return "\n".join(lines[1:-1]).strip()
-
-
-def extract_marked_block(text: str, start_marker: str, end_marker: str) -> str | None:
-    """Return the trimmed text between two markers when both exist."""
-    start = text.find(start_marker)
-    if start == -1:
-        return None
-    end = text.rfind(end_marker)
-    if end == -1 or end <= start:
-        raise ResearchExtractionError(
-            f"Missing or malformed closing marker {end_marker!r} for {start_marker!r}."
-        )
-    return text[start + len(start_marker) : end].strip()
 
 
 def extract_first_balanced_json(text: str) -> str | None:
@@ -73,25 +46,26 @@ def extract_first_balanced_json(text: str) -> str | None:
 
 def parse_json_like_mapping(text: str) -> dict[str, Any]:
     """Parse JSON first, then YAML as a fallback, and require a mapping root."""
-    cleaned = strip_code_fence(text)
-    payload: Any
-
     try:
-        payload = json.loads(cleaned)
-    except json.JSONDecodeError:
-        try:
-            payload = yaml.safe_load(cleaned)
-        except yaml.YAMLError as exc:
-            raise ResearchExtractionError(f"RESEARCH_JSON is not valid JSON/YAML: {exc}") from exc
-
-    if not isinstance(payload, dict):
-        raise ResearchExtractionError("RESEARCH_JSON must parse to a JSON object.")
-    return payload
+        return _json_text.parse_json_like_mapping(
+            text,
+            allow_yaml=True,
+            context="RESEARCH_JSON",
+        )
+    except _json_text.JsonTextParseError as exc:
+        raise ResearchExtractionError(str(exc)) from exc
 
 
 def parse_research_output_text(raw_text: str) -> dict[str, Any]:
     """Parse a raw Step 1 output string into a validated RESEARCH_JSON payload."""
-    candidate = extract_marked_block(raw_text, "RESEARCH_JSON_START", "RESEARCH_JSON_END")
+    try:
+        candidate = _json_text.extract_marked_block(
+            raw_text,
+            "RESEARCH_JSON_START",
+            "RESEARCH_JSON_END",
+        )
+    except _json_text.JsonTextParseError as exc:
+        raise ResearchExtractionError(str(exc)) from exc
     if candidate is None:
         candidate = extract_first_balanced_json(raw_text)
     if candidate is None:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 import re
 from typing import Any
@@ -11,6 +10,7 @@ import yaml
 
 from investment_orchestrator.common.io import read_text, write_json, write_text
 from investment_orchestrator.common.paths import repo_root
+from investment_orchestrator.parsers import _json_text
 from investment_orchestrator.validators.validate_decision_packet import validate_decision_packet
 
 
@@ -23,27 +23,15 @@ CITATION_TAIL_RE = re.compile(r"\s*\(\[[^\]]+\]\[\d+\]\)\.?\s*$")
 KV_SEGMENT_RE = re.compile(r"(?P<key>[A-Za-z0-9_]+)=(?P<value>.*)")
 
 
-def strip_code_fence(text: str) -> str:
-    """Remove one surrounding Markdown fence when present."""
-    stripped = text.strip()
-    if not stripped.startswith("```"):
-        return stripped
-
-    lines = stripped.splitlines()
-    if len(lines) < 3 or not lines[-1].strip().startswith("```"):
-        return stripped
-    return "\n".join(lines[1:-1]).strip()
-
-
 def extract_required_block(text: str, start_marker: str, end_marker: str) -> str:
     """Return the text between two required markers."""
-    start = text.find(start_marker)
-    if start == -1:
+    try:
+        block = _json_text.extract_marked_block(text, start_marker, end_marker)
+    except _json_text.JsonTextParseError as exc:
+        raise Step2ExtractionError(str(exc)) from exc
+    if block is None:
         raise Step2ExtractionError(f"Missing required marker {start_marker!r}.")
-    end = text.rfind(end_marker)
-    if end == -1 or end <= start:
-        raise Step2ExtractionError(f"Missing or malformed closing marker {end_marker!r}.")
-    return text[start + len(start_marker) : end].strip()
+    return block
 
 
 def _clean_value_text(value: str) -> str:
@@ -420,7 +408,7 @@ def _parse_structured_list(lines: list[str]) -> list[Any]:
 
 def parse_outline_decision_packet(text: str, *, context_text: str) -> dict[str, Any]:
     """Parse the outline-style DECISION_PACKET emitted by the current Step 2 prompt."""
-    sections = _packet_lines_to_sections(strip_code_fence(text))
+    sections = _packet_lines_to_sections(_json_text.strip_code_fence(text))
     if not sections:
         raise Step2ExtractionError("DECISION_PACKET is not valid JSON/YAML or supported outline text.")
 
@@ -470,19 +458,19 @@ def parse_outline_decision_packet(text: str, *, context_text: str) -> dict[str, 
 
 def parse_json_like_mapping(text: str, *, context_text: str = "") -> dict[str, Any]:
     """Parse JSON first, then YAML as a fallback, and require an object root."""
-    cleaned = strip_code_fence(text)
-    payload: Any
-
+    cleaned = _json_text.strip_code_fence(text)
     try:
-        payload = json.loads(cleaned)
-    except json.JSONDecodeError:
+        payload = _json_text.robust_json_parse(
+            cleaned,
+            allow_yaml=True,
+            context="DECISION_PACKET",
+            strip_fence=False,
+        )
+    except _json_text.JsonTextParseError as exc:
         try:
-            payload = yaml.safe_load(cleaned)
-        except yaml.YAMLError as exc:
-            try:
-                return parse_outline_decision_packet(cleaned, context_text=context_text)
-            except Step2ExtractionError:
-                raise Step2ExtractionError(f"DECISION_PACKET is not valid JSON/YAML: {exc}") from exc
+            return parse_outline_decision_packet(cleaned, context_text=context_text)
+        except Step2ExtractionError:
+            raise Step2ExtractionError(str(exc)) from exc
 
     if not isinstance(payload, dict):
         return parse_outline_decision_packet(cleaned, context_text=context_text)

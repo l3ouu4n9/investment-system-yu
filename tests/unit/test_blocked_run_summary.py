@@ -1,0 +1,465 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+from investment_orchestrator.state.blocked_run_summary import (
+    BlockedRunSummaryResult,
+    blocked_run_summary_result_to_dict,
+    build_blocked_run_summary,
+    summarize_current_run,
+)
+
+
+STEP1_DECISION_DISPLAY = "artifacts/current/step1_research/research_degraded_mode_decision.json"
+
+
+def step1_decision(
+    *,
+    state: str = "NO_OUTPUT",
+    manual_review_required: bool = False,
+    allowed_actions: list[str] | None = None,
+    blocked_actions: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "state": state,
+        "research_availability": state.lower(),
+        "allowed_actions": allowed_actions or ["HOLD", "NO_TRADE"],
+        "blocked_actions": blocked_actions
+        if blocked_actions is not None
+        else ["SELL", "NEW_BUY", "ROTATION", "REBALANCE", "EXTENDED_ETF_ADMISSION", "ORDER_COMPILATION"],
+        "manual_review_required": manual_review_required,
+        "blocker_reasons": ["no research output and no last-known-good available."],
+        "non_blocker_reasons": [],
+        "report_only": True,
+    }
+
+
+def step2_block(*, state: str = "NO_OUTPUT", manual_review_required: bool = False) -> dict[str, Any]:
+    return {
+        "blocked": True,
+        "reason": "research_degraded_mode_gate",
+        "state": state,
+        "allowed_actions": ["HOLD", "NO_TRADE"],
+        "blocked_actions": ["NEW_BUY", "ORDER_COMPILATION"],
+        "manual_review_required": manual_review_required,
+        "blocker_reasons": [f"research state {state} is not STRICT_FRESH."],
+        "source_artifact": STEP1_DECISION_DISPLAY,
+        "recommended_result": "NO_TRADE",
+        "report_only": False,
+    }
+
+
+def upstream_block(
+    *,
+    reason: str = "upstream_research_gate_blocked",
+    state: str = "NO_OUTPUT",
+    manual_review_required: bool = False,
+    with_permission: bool = True,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "blocked": True,
+        "reason": reason,
+        "blocked_by_artifact": "artifacts/current/step2_decision_builder/step2_blocked_by_research_gate.json",
+        "missing_required_artifacts": [],
+        "stale_or_inconsistent_artifacts": ["upstream_gate_already_blocked:..."],
+        "recommended_result": "NO_TRADE",
+        "manual_review_required": manual_review_required,
+        "report_only": False,
+        "upstream_permission_read_errors": [],
+    }
+    payload["upstream_permission"] = (
+        {
+            "state": state,
+            "research_availability": state.lower(),
+            "allowed_actions": ["HOLD", "NO_TRADE"],
+            "blocked_actions": ["NEW_BUY", "ORDER_COMPILATION"],
+            "manual_review_required": manual_review_required,
+            "blocker_reasons": [f"research state {state} is not STRICT_FRESH."],
+            "non_blocker_reasons": [],
+            "recommended_result": "NO_TRADE",
+            "source_artifact": STEP1_DECISION_DISPLAY,
+        }
+        if with_permission
+        else None
+    )
+    return payload
+
+
+def final_safety_block(
+    *,
+    manual_review_required: bool = False,
+    fail_reasons: list[str] | None = None,
+) -> dict[str, Any]:
+    reasons = fail_reasons or ["step3_audited_packet.blocker_reasons is non-empty."]
+    return {
+        "blocked": True,
+        "reason": "final_execution_safety_gate",
+        "ready_for_order_compilation": False,
+        "recommended_result": "NO_TRADE",
+        "manual_review_required": manual_review_required,
+        "fail_reasons": list(reasons),
+        "blocker_reasons": list(reasons),
+        "non_blocker_reasons": [],
+        "checked_conditions": {"no_explicit_blockers": False},
+        "is_deterministic": True,
+        "report_only": False,
+    }
+
+
+# --- build_blocked_run_summary ----------------------------------------------
+
+
+def test_no_output_chain_summarizes_to_no_trade() -> None:
+    result = build_blocked_run_summary(
+        step1_decision=step1_decision(state="NO_OUTPUT"),
+        step2_block=step2_block(state="NO_OUTPUT"),
+        step3_block=upstream_block(state="NO_OUTPUT"),
+        step4_block=upstream_block(state="NO_OUTPUT"),
+    )
+
+    assert result.run_blocked is True
+    assert result.recommended_result == "NO_TRADE"
+    assert result.research_state == "NO_OUTPUT"
+    assert result.highest_severity_state == "NO_OUTPUT"
+    assert result.research_availability == "no_output"
+    assert result.allowed_actions == ["HOLD", "NO_TRADE"]
+    assert "NEW_BUY" in result.blocked_actions
+    assert "ORDER_COMPILATION" in result.blocked_actions
+    assert result.blocked_stages == ["step2", "step3", "step4"]
+    assert result.manual_review_required is False
+
+
+def test_step1_manual_review_propagates_to_summary() -> None:
+    result = build_blocked_run_summary(
+        step1_decision=step1_decision(state="MANUAL_REVIEW_REQUIRED", manual_review_required=True),
+        step2_block=None,
+        step3_block=None,
+        step4_block=None,
+    )
+
+    assert result.run_blocked is True  # step1 degraded
+    assert result.manual_review_required is True
+    assert result.research_state == "MANUAL_REVIEW_REQUIRED"
+    assert result.highest_severity_state == "MANUAL_REVIEW_REQUIRED"
+
+
+def test_upstream_block_manual_review_propagates_to_summary() -> None:
+    result = build_blocked_run_summary(
+        step1_decision=None,
+        step2_block=None,
+        step3_block=upstream_block(state="MANUAL_REVIEW_REQUIRED", manual_review_required=True),
+        step4_block=None,
+    )
+
+    assert result.manual_review_required is True
+    assert result.blocked_stages == ["step3"]
+
+
+def test_step2_blocked_only_lists_step2_stage() -> None:
+    result = build_blocked_run_summary(
+        step1_decision=step1_decision(state="NO_OUTPUT"),
+        step2_block=step2_block(state="NO_OUTPUT"),
+        step3_block=None,
+        step4_block=None,
+    )
+
+    assert result.blocked_stages == ["step2"]
+    assert result.run_blocked is True
+
+
+def test_step3_4_blocks_with_upstream_permission_expose_state_and_actions() -> None:
+    result = build_blocked_run_summary(
+        step1_decision=None,
+        step2_block=None,
+        step3_block=upstream_block(state="DEGRADED_NO_RESEARCH"),
+        step4_block=upstream_block(state="DEGRADED_NO_RESEARCH"),
+    )
+
+    assert result.research_state == "DEGRADED_NO_RESEARCH"
+    assert result.allowed_actions == ["HOLD", "NO_TRADE"]
+    assert "NEW_BUY" in result.blocked_actions
+    assert result.blocked_stages == ["step3", "step4"]
+
+
+def test_strict_fresh_with_no_blocks_is_not_blocked() -> None:
+    result = build_blocked_run_summary(
+        step1_decision=step1_decision(
+            state="STRICT_FRESH",
+            allowed_actions=[
+                "HOLD",
+                "NO_TRADE",
+                "SELL",
+                "NEW_BUY",
+                "ROTATION",
+                "REBALANCE",
+                "EXTENDED_ETF_ADMISSION",
+                "ORDER_COMPILATION",
+            ],
+            blocked_actions=[],
+        ),
+        step2_block=None,
+        step3_block=None,
+        step4_block=None,
+    )
+
+    assert result.run_blocked is False
+    assert result.recommended_result is None  # do not fabricate NO_TRADE
+    assert result.research_state == "STRICT_FRESH"
+    assert result.blocked_stages == []
+    assert result.blocked_actions == []
+    assert "NEW_BUY" in result.allowed_actions
+
+
+def test_no_artifacts_at_all_is_not_blocked() -> None:
+    result = build_blocked_run_summary(
+        step1_decision=None, step2_block=None, step3_block=None, step4_block=None
+    )
+
+    assert result.run_blocked is False
+    assert result.recommended_result is None
+    assert result.research_state is None
+    assert result.highest_severity_state is None
+    assert result.blocked_stages == []
+
+
+def test_summary_is_deterministic_and_not_llm_generated() -> None:
+    inputs = dict(
+        step1_decision=step1_decision(),
+        step2_block=step2_block(),
+        step3_block=upstream_block(),
+        step4_block=upstream_block(),
+    )
+    first = blocked_run_summary_result_to_dict(build_blocked_run_summary(**inputs))
+    second = blocked_run_summary_result_to_dict(build_blocked_run_summary(**inputs))
+
+    assert first == second
+    assert first["is_llm_generated"] is False
+    assert first["report_only"] is False
+    json.dumps(first, ensure_ascii=False)
+
+
+def test_summary_does_not_fabricate_decision_or_order_outputs() -> None:
+    payload = blocked_run_summary_result_to_dict(
+        build_blocked_run_summary(
+            step1_decision=step1_decision(),
+            step2_block=step2_block(),
+            step3_block=upstream_block(),
+            step4_block=upstream_block(),
+        )
+    )
+
+    for forbidden in (
+        "decision_packet",
+        "audited_decision_packet",
+        "orders",
+        "final_buy_side_delta_table",
+        "final_execution_plans",
+        "template4_orders",
+    ):
+        assert forbidden not in payload
+
+
+def test_primary_blocker_reasons_deduped_in_order() -> None:
+    result = build_blocked_run_summary(
+        step1_decision=step1_decision(state="NO_OUTPUT"),
+        step2_block=step2_block(state="NO_OUTPUT"),
+        step3_block=None,
+        step4_block=None,
+    )
+
+    assert result.primary_blocker_reasons[0] == "no research output and no last-known-good available."
+    assert len(result.primary_blocker_reasons) == len(set(result.primary_blocker_reasons))
+
+
+# --- UX3: final execution safety gate as a blocked source --------------------
+
+
+def test_final_gate_only_block_is_run_blocked_no_trade_step4() -> None:
+    # Upstream all green (STRICT_FRESH, no upstream blocks), but the final
+    # execution safety gate blocked Step 4.
+    result = build_blocked_run_summary(
+        step1_decision=step1_decision(
+            state="STRICT_FRESH",
+            allowed_actions=["HOLD", "NO_TRADE", "NEW_BUY", "ORDER_COMPILATION"],
+            blocked_actions=[],
+        ),
+        step2_block=None,
+        step3_block=None,
+        step4_block=None,
+        step4_final_safety_block=final_safety_block(),
+    )
+
+    assert result.run_blocked is True
+    assert result.recommended_result == "NO_TRADE"
+    assert result.blocked_stages == ["step4"]
+
+
+def test_final_gate_fail_reasons_appear_in_primary_blocker_reasons() -> None:
+    result = build_blocked_run_summary(
+        step1_decision=step1_decision(state="STRICT_FRESH", blocked_actions=[]),
+        step2_block=None,
+        step3_block=None,
+        step4_block=None,
+        step4_final_safety_block=final_safety_block(
+            fail_reasons=["Step 3 final_execution_plans must be a list."]
+        ),
+    )
+
+    assert "Step 3 final_execution_plans must be a list." in result.primary_blocker_reasons
+
+
+def test_final_gate_manual_review_propagates_to_summary() -> None:
+    result = build_blocked_run_summary(
+        step1_decision=step1_decision(state="STRICT_FRESH", blocked_actions=[]),
+        step2_block=None,
+        step3_block=None,
+        step4_block=None,
+        step4_final_safety_block=final_safety_block(manual_review_required=True),
+    )
+
+    assert result.manual_review_required is True
+
+
+def test_step4_upstream_and_final_gate_blocks_do_not_duplicate_step4() -> None:
+    result = build_blocked_run_summary(
+        step1_decision=step1_decision(state="NO_OUTPUT"),
+        step2_block=None,
+        step3_block=None,
+        step4_block=upstream_block(),
+        step4_final_safety_block=final_safety_block(),
+    )
+
+    assert result.blocked_stages.count("step4") == 1
+
+
+def test_no_final_gate_block_preserves_existing_behavior() -> None:
+    # Backward-compatible: omitting step4_final_safety_block matches prior result.
+    result = build_blocked_run_summary(
+        step1_decision=step1_decision(state="NO_OUTPUT"),
+        step2_block=step2_block(state="NO_OUTPUT"),
+        step3_block=upstream_block(),
+        step4_block=upstream_block(),
+    )
+
+    assert result.run_blocked is True
+    assert result.blocked_stages == ["step2", "step3", "step4"]
+
+
+# --- summarize_current_run (filesystem, no monkeypatch needed) ---------------
+
+
+def write_json_file(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def summary_paths(tmp_path: Path) -> dict[str, Path]:
+    base = tmp_path / "artifacts" / "current"
+    return {
+        "step1_decision_path": base / "step1_research" / "research_degraded_mode_decision.json",
+        "step2_block_path": base / "step2_decision_builder" / "step2_blocked_by_research_gate.json",
+        "step3_block_path": base / "step3_audit_engine" / "step3_blocked_by_upstream_gate.json",
+        "step4_block_path": base / "step4_order_compiler" / "step4_blocked_by_upstream_gate.json",
+        "step4_final_safety_block_path": base
+        / "step4_order_compiler"
+        / "step4_blocked_by_final_execution_safety_gate.json",
+        "output_path": base / "run_summary.json",
+    }
+
+
+def test_summarize_current_run_writes_run_summary(tmp_path: Path) -> None:
+    paths = summary_paths(tmp_path)
+    write_json_file(paths["step1_decision_path"], step1_decision(state="NO_OUTPUT"))
+    write_json_file(paths["step2_block_path"], step2_block(state="NO_OUTPUT"))
+    write_json_file(paths["step3_block_path"], upstream_block(state="NO_OUTPUT"))
+    write_json_file(paths["step4_block_path"], upstream_block(state="NO_OUTPUT"))
+
+    result = summarize_current_run(repo_root_path=tmp_path, **paths)
+
+    assert result.run_blocked is True
+    assert paths["output_path"].is_file()
+    written = json.loads(paths["output_path"].read_text(encoding="utf-8"))
+    assert written["recommended_result"] == "NO_TRADE"
+    assert written["research_state"] == "NO_OUTPUT"
+    assert written["read_errors"] == []
+    assert set(written["source_artifacts"]) == {
+        "step1_degraded_decision",
+        "step2_blocked_by_research_gate",
+        "step3_blocked_by_upstream_gate",
+        "step4_blocked_by_upstream_gate",
+    }
+
+
+def test_summarize_current_run_records_malformed_without_fabricating(tmp_path: Path) -> None:
+    paths = summary_paths(tmp_path)
+    # Malformed Step 1 decision; only a Step 2 block is valid.
+    paths["step1_decision_path"].parent.mkdir(parents=True, exist_ok=True)
+    paths["step1_decision_path"].write_text("{not json", encoding="utf-8")
+    write_json_file(paths["step2_block_path"], step2_block(state="NO_OUTPUT"))
+
+    result = summarize_current_run(repo_root_path=tmp_path, **paths)
+
+    assert result.read_errors  # malformed file recorded
+    assert any("research_degraded_mode_decision.json" in err for err in result.read_errors)
+    # Permission falls back to the valid Step 2 block; nothing fabricated.
+    assert result.run_blocked is True
+    assert result.research_state == "NO_OUTPUT"
+    assert result.blocked_stages == ["step2"]
+
+
+def test_summarize_current_run_no_artifacts_is_not_blocked(tmp_path: Path) -> None:
+    paths = summary_paths(tmp_path)
+
+    result = summarize_current_run(repo_root_path=tmp_path, **paths)
+
+    assert result.run_blocked is False
+    assert result.read_errors == []  # absent files are not errors
+    assert paths["output_path"].is_file()
+
+
+def test_summarize_current_run_includes_final_gate_only_block(tmp_path: Path) -> None:
+    paths = summary_paths(tmp_path)
+    # Upstream all green (STRICT_FRESH permission, no upstream blocks), only the
+    # final execution safety gate blocked Step 4.
+    write_json_file(
+        paths["step1_decision_path"],
+        step1_decision(
+            state="STRICT_FRESH",
+            allowed_actions=["HOLD", "NO_TRADE", "NEW_BUY", "ORDER_COMPILATION"],
+            blocked_actions=[],
+        ),
+    )
+    write_json_file(paths["step4_final_safety_block_path"], final_safety_block())
+
+    result = summarize_current_run(repo_root_path=tmp_path, **paths)
+
+    written = json.loads(paths["output_path"].read_text(encoding="utf-8"))
+    assert written["run_blocked"] is True
+    assert written["recommended_result"] == "NO_TRADE"
+    assert "step4" in written["blocked_stages"]
+    assert written["is_llm_generated"] is False
+    assert "step4_final_execution_safety_gate" in written["source_artifacts"]
+    assert (
+        written["source_artifacts"]["step4_final_execution_safety_gate"]
+        == "artifacts/current/step4_order_compiler/step4_blocked_by_final_execution_safety_gate.json"
+    )
+    assert "step3_audited_packet.blocker_reasons is non-empty." in written["primary_blocker_reasons"]
+
+
+def test_summarize_current_run_malformed_final_gate_records_read_error(tmp_path: Path) -> None:
+    paths = summary_paths(tmp_path)
+    write_json_file(
+        paths["step1_decision_path"],
+        step1_decision(state="STRICT_FRESH", blocked_actions=[]),
+    )
+    paths["step4_final_safety_block_path"].parent.mkdir(parents=True, exist_ok=True)
+    paths["step4_final_safety_block_path"].write_text("{not json", encoding="utf-8")
+
+    result = summarize_current_run(repo_root_path=tmp_path, **paths)
+
+    assert result.read_errors
+    assert any(
+        "step4_blocked_by_final_execution_safety_gate.json" in err for err in result.read_errors
+    )

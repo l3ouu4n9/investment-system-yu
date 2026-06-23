@@ -1,0 +1,10 @@
+2.1 INPUT_NORMALIZATION
+normalized_trade_universe_source | RESEARCH_JSON.base_universe_fallback_due_missing_trade_universe_allowed_buy_tickers
+optional_extended_etf_sleeve_enabled | false
+2.3 EFFECTIVE_ALLOWED_BUY_UNIVERSE
+["VOO","VTI","VT","QQQ","SMH","IGV"]
+2.6 BUY_SIDE_DELTA_TABLE
+GRID | 1491.45 | 0.0 | -1491.45 | CANCEL_EXISTING | CANCEL_EXISTING | cancel_non_effective_universe_existing_buy_order | released_buy_open_order_budget | CANCEL_EXISTING: GRID is not in effective_allowed_buy_universe because RESEARCH_JSON.optional_extended_etf_sleeve.enabled/allowed_extended_etf_tickers is missing; POST_CANCEL_HEADROOM_REVIEW: released_budget=1491.45; evaluated_destination_tickers=[QQQ,SMH,VOO,VTI,VT,IGV]; redeployment_decision=preserve_headroom_with_mandate_reason; why=structured actionability/linkage fields are insufficient for same-run redeployment | [] | ["lane_B_GRID_smart_grid_infrastructure"]
+2.11 ASSUMPTIONS_AND_DATA_GAPS
+INFO | RESEARCH_JSON lacks trade_universe.allowed_buy_tickers; normalized effective base universe from RESEARCH_JSON.base_universe | ["VOO","VTI","VT","QQQ","SMH","IGV"]
+INFO | RESEARCH_JSON lacks optional_extended_etf_sleeve.enabled and allowed_extended_etf_tickers; extended ETF activation treated as disabled for effective_allowed_buy_universe | ["GRID","QUAL","CIBR","VUG","BOTZ","AIQ"]

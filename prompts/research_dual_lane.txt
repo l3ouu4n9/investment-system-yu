@@ -1864,6 +1864,78 @@ final_output_contract_rule (MUST, NON-NEGOTIABLE):
 - 不得因 token 壓力、篇幅、省略、摘要化、或部分輸出，而刪除 schema_version 或 validation_summary。
 - 若輸出缺少 schema_version 或 validation_summary，該輸出視為 INVALID，不得提交。
 
+strict_machine_readable_handoff_contract_rule (NEW, MUST, NON-NEGOTIABLE):
+- RESEARCH_JSON_START / RESEARCH_JSON_END 之間必須是「單一 top-level JSON object」。
+- 該 top-level object 必須「直接」包含下列 strict execution handoff 欄位，不得少、不得改放進任何外層 wrapper：
+  - schema_version
+  - validation_summary
+  - trade_universe（必須含 trade_universe.allowed_buy_tickers）
+  - buy_universe_scorecard
+  - scheduled_events
+  - structural_themes_6_18m
+  - regime_inputs
+  - policy_items
+  - top5_next_week
+  - user_approved_extended_etf_static_list
+  - proposed_extended_etf_candidates
+  - extended_etf_candidate_universe
+  - extended_etf_predecision_scorecard
+  - approved_static_list_screening_log
+  - optional_extended_etf_sleeve
+  - extended_etf_scorecard
+  - strategy_a_research_handoff
+- 上列欄位的完整定義、子欄位與列舉值，一律以上方各 MUST 規則與【共同輸出欄位 / Shared RESEARCH_JSON】為準；本規則只是把「最終 top-level 形狀」再次釘死，不取代、也不放寬上述定義，也不刪除任何既有 research 要求（macro / regime / policy / scheduled event / ETF universe scorecard / Lane B gating / DATA_GAP / non-order boundary 仍全部保留）。
+- compact canonical top-level 形狀（僅示意結構與欄位，完整內容見上方 Shared RESEARCH_JSON）：
+  {
+    "schema_version": "1.0",
+    "as_of": "YYYY-MM-DD",
+    "trade_universe": { "allowed_buy_tickers": ["VOO","VTI","VT","QQQ","SMH","IGV"] },
+    "regime_inputs": { },
+    "policy_items": [ ],
+    "scheduled_events": [ ],
+    "structural_themes_6_18m": [ ],
+    "top5_next_week": [ ],
+    "buy_universe_scorecard": [ ],
+    "user_approved_extended_etf_static_list": [ ],
+    "proposed_extended_etf_candidates": [ ],
+    "extended_etf_candidate_universe": [ ],
+    "extended_etf_predecision_scorecard": [ ],
+    "approved_static_list_screening_log": [ ],
+    "optional_extended_etf_sleeve": { "enabled": false, "allowed_extended_etf_tickers": [], "disable_reason": "", "why_not_enabled": "" },
+    "extended_etf_scorecard": [ ],
+    "strategy_a_research_handoff": { "handoff_version": "strategy_a_research_handoff_v1", "...": "見上方 Shared RESEARCH_JSON 完整定義" },
+    "validation_summary": { "passed": false, "fail_reasons": [], "auto_fixes_applied": [] }
+  }
+- canonical skeleton 形狀規則：
+  - buy_universe_scorecard 必須是「6 個 structured object」，每個 object 具備上方規定的所有 scorecard 欄位；不得用 prose 段落、markdown 表格或 per-ticker 自由文字取代。
+  - scorecard rows 必須是 structured objects，不是 prose paragraphs。
+  - 上述 [] / { } 只是欄位示意；empty array 只有在「該回合確實沒有對應項目且有明確意義」時才可使用，不得用空陣列或省略欄位隱藏缺漏（見 data_gap_must_be_explicit_rule）。
+  - disabled gate 必須附明確 reason（見下方 forbidden_output_shapes_rule 與 data_gap_must_be_explicit_rule）。
+
+forbidden_output_shapes_rule (NEW, MUST):
+- 以下 output 形狀一律禁止，即使被 RESEARCH_JSON_START / RESEARCH_JSON_END 包住也算 INVALID：
+  - 禁止 envelope 包裝：top-level { "RESEARCH_JSON": { ... }, "STRATEGY_SETTINGS_YAML": "..." }。strict 欄位必須在 top-level，不可巢狀在 RESEARCH_JSON / STRATEGY_SETTINGS_YAML 或任何 wrapper key 底下。
+  - 禁止 narrative lanes 作 top-level payload：top-level { "lane_a": "...markdown...", "lane_b": "...markdown..." } 或 { "lane_A": "...", "lane_B": "..." }。
+  - 禁止用 lane_a / lane_b / lane_A / lane_B 的 prose 或表格取代 machine-readable 欄位（trade_universe / buy_universe_scorecard / scheduled_events / strategy_a_research_handoff 等）；research narrative 只能放進結構化欄位內的 why / summary / notes，不可取代結構化欄位本身。
+  - 禁止用 base_universe + 一段 markdown 報告，取代 trade_universe.allowed_buy_tickers + buy_universe_scorecard。
+  - 禁止把 markdown prose / narrative report 作為 markers 內唯一有用內容，或放在 markers 外。
+  - 禁止 validation_summary.passed=true 卻省略 trade_universe 或 buy_universe_scorecard 等 required handoff 欄位；passed=true 不代表可以少輸出欄位。
+
+data_gap_must_be_explicit_rule (NEW, MUST):
+- 資料缺失或不確定時，必須在 strict 欄位「內」以明確、可分類方式表達，不得用省略欄位或改寫 narrative 來規避：
+  - scorecard / handoff 自由文字以 "DATA_GAP:" 或 "SHORT_TERM_ONLY:" 開頭。
+  - blocker 用既有 actionability_status / compile_blocker_if_any / activation_blocker 表達；blocker vs non-blocker 由既有規則判定。
+  - disabled gate（如 optional_extended_etf_sleeve.enabled=false）必須附明確 disable_reason 與 why_not_enabled，不可留空。
+  - empty array 只有在明確且有意義時才可使用；不得用空陣列、null 或省略欄位隱藏缺漏。
+- 不得用省略欄位、刪減 handoff 欄位、或改輸出 narrative，來規避 DATA_GAP 標記。
+
+cannot_complete_strict_handoff_fallback_rule (NEW, MUST):
+- 若本回合無法完成 strict handoff，仍必須輸出 strict JSON（含上述全部 top-level 欄位），並以 explicit failure / DATA_GAP 表達失敗：
+  - validation_summary.passed = false，且 validation_summary.fail_reasons 列出實際失敗原因。
+  - 對應 scorecard / handoff 欄位用 DATA_GAP / compile_blocker / blocker 標記。
+- 嚴禁因「無法完成 strict handoff」就改輸出 narrative research report 或 markdown lanes。無法完成的正確表達是 strict JSON + explicit failure，不是退回散文。
+- 上述 strict machine-readable handoff 僅供下游 Strategy Template / decision builder 使用，仍是 research handoff（handoff_scope = research_to_decision_builder_only），不是 order instruction（not_order_instruction = true）；本模板不得在此輸出任何 order、order sizing、或 compile-ready 下單指令。
+
 ────────────────────────────────────────
 【最後輸出格式】
 
@@ -1892,6 +1964,12 @@ final_output_self_check_rule (MUST):
   (15) output is wrapped by RESEARCH_JSON_START and RESEARCH_JSON_END
   (16) RESEARCH_JSON_START 之前沒有任何文字
   (17) RESEARCH_JSON_END 之後沒有任何文字
+  (18) top-level 是單一 JSON object，且直接包含 strict handoff 欄位（trade_universe / buy_universe_scorecard / scheduled_events / structural_themes_6_18m / regime_inputs / policy_items / top5_next_week / optional_extended_etf_sleeve / strategy_a_research_handoff 等），未被包進任何 wrapper
+  (19) 沒有用 RESEARCH_JSON / STRATEGY_SETTINGS_YAML 或任何 envelope 包裝 strict 欄位
+  (20) 沒有用 lane_a / lane_b / lane_A / lane_B 或 markdown prose 作 top-level payload，或取代 machine-readable 欄位
+  (21) validation_summary.passed=true 時，所有 required handoff 欄位皆完整存在，未被省略
+  (22) 所有資料缺失皆以 strict 欄位內的 DATA_GAP / blocker / disable_reason 明確表達，未以省略欄位或 narrative 規避
+  (23) 若無法完成 strict handoff，輸出的是 strict JSON + explicit failure，而非 narrative report
 - 如果任一項不成立，必須先修正 JSON，不得輸出。
 - 不得用 summary、narrative report、markdown、code fence、partial JSON、或無 marker JSON 取代最終輸出。
 - 不得用 reason / partial_or_missing_items / completed_hard_requirements 等輔助欄位取代 validation_summary.passed / validation_summary.fail_reasons / validation_summary.auto_fixes_applied。

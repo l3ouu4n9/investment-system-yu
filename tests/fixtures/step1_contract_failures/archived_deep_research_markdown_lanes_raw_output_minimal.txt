@@ -1,0 +1,30 @@
+RESEARCH_JSON_START
+{
+  "schema_version": "1.0",
+  "as_of": "2026-06-11",
+  "base_universe": [
+    "VOO",
+    "VTI",
+    "VT",
+    "QQQ",
+    "SMH",
+    "IGV"
+  ],
+  "approved_extended_etf": [
+    "QUAL",
+    "CIBR",
+    "VUG",
+    "GRID",
+    "BOTZ",
+    "AIQ"
+  ],
+  "executive_summary": "Minimal fixture derived from artifacts/archive/20260621_221010/step1_research/raw_output.txt: deep research appears in markdown lanes, not strict handoff structures.",
+  "lane_A": "## Lane A: Core ETF performance and technical analysis\n\n| ETF | AUM | Fee | 1M return |\n| --- | --- | --- | --- |\n| VOO | ~9807B | 0.03% | +0.02% |\n| QQQ | 4774B | 0.18% | +1.60% |",
+  "lane_B": "## Lane B: Extended ETF candidate analysis\n\nQUAL has quality-factor exposure. CIBR has cybersecurity exposure. These notes are prose, not optional_extended_etf_sleeve.allowed_extended_etf_tickers.",
+  "validation_summary": {
+    "passed": true,
+    "fail_reasons": [],
+    "auto_fixes_applied": []
+  }
+}
+RESEARCH_JSON_END

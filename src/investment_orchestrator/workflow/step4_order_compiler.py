@@ -2,24 +2,45 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 from pathlib import Path
 from typing import Any
 
 from investment_orchestrator.common.io import ensure_dir, file_exists, read_json, read_text, write_text
 from investment_orchestrator.common.paths import repo_root, require_prompt_path
+from investment_orchestrator.validators.strategy_settings import parse_strategy_settings_text
 from investment_orchestrator.llm.manual_output import (
     ensure_manual_output_metadata_template,
     render_prompt,
     write_rendered_prompt,
 )
 from investment_orchestrator.parsers.extract_orders_and_summary import extract_orders_and_summary
+from investment_orchestrator.state.final_execution_safety_gate import (
+    enforce_final_execution_safety_gate,
+)
+from investment_orchestrator.state.upstream_artifact_guard import enforce_upstream_artifact_guard
 from investment_orchestrator.validators.validate_audited_decision_packet import (
     validate_audited_decision_packet,
 )
-from investment_orchestrator.workflow.step1_research import step1_research_output_path
-from investment_orchestrator.workflow.step2_decision_builder import step2_decision_packet_path
-from investment_orchestrator.workflow.step3_audit_engine import step3_audited_decision_packet_path
+from investment_orchestrator.workflow.step1_research import (
+    step1_research_degraded_mode_decision_path,
+    step1_research_output_path,
+)
+from investment_orchestrator.workflow.step2_decision_builder import (
+    step2_blocked_by_research_gate_path,
+    step2_decision_packet_path,
+    step2_prompt_path,
+    step2_raw_output_path,
+    step2_template2_output_path,
+)
+from investment_orchestrator.workflow.step3_audit_engine import (
+    step3_audited_decision_packet_path,
+    step3_blocked_by_upstream_gate_path,
+    step3_prompt_path,
+    step3_raw_output_path,
+    step3_template3_audit_path,
+)
 
 
 STEP4_DIRNAME = "step4_order_compiler"
@@ -28,6 +49,10 @@ RAW_OUTPUT_FILENAME = "raw_output.txt"
 TEMPLATE4_ORDERS_FILENAME = "template4_orders.txt"
 ORDER_STATE_EXPORT_FILENAME = "order_state_export.txt"
 EXEC_SUMMARY_FILENAME = "exec_summary.txt"
+STEP4_BLOCKED_BY_UPSTREAM_GATE_FILENAME = "step4_blocked_by_upstream_gate.json"
+STEP4_BLOCKED_BY_FINAL_EXECUTION_SAFETY_GATE_FILENAME = (
+    "step4_blocked_by_final_execution_safety_gate.json"
+)
 
 
 def current_inputs_dir() -> Path:
@@ -65,6 +90,58 @@ def step4_exec_summary_path() -> Path:
     return step4_artifact_dir() / EXEC_SUMMARY_FILENAME
 
 
+def step4_blocked_by_upstream_gate_path() -> Path:
+    """Return the deterministic Step 4 upstream-gate block artifact path."""
+    return step4_artifact_dir() / STEP4_BLOCKED_BY_UPSTREAM_GATE_FILENAME
+
+
+def step4_blocked_by_final_execution_safety_gate_path() -> Path:
+    """Return the deterministic Step 4 final-execution-safety-gate block artifact path."""
+    return step4_artifact_dir() / STEP4_BLOCKED_BY_FINAL_EXECUTION_SAFETY_GATE_FILENAME
+
+
+def enforce_step4_upstream_guard() -> None:
+    """Fail closed before Step 4 consumes blocked or missing upstream artifacts."""
+    enforce_upstream_artifact_guard(
+        blocked_artifact_path=step4_blocked_by_upstream_gate_path(),
+        upstream_blocked_artifacts=[
+            step2_blocked_by_research_gate_path(),
+            step3_blocked_by_upstream_gate_path(),
+        ],
+        required_artifacts=[
+            step2_prompt_path(),
+            step2_raw_output_path(),
+            step2_template2_output_path(),
+            step2_decision_packet_path(),
+            step3_prompt_path(),
+            step3_raw_output_path(),
+            step3_template3_audit_path(),
+            step3_audited_decision_packet_path(),
+        ],
+        repo_root_path=repo_root(),
+        permission_fallback_artifacts=[step1_research_degraded_mode_decision_path()],
+    )
+
+
+def enforce_step4_final_execution_safety_gate() -> None:
+    """Fail closed before order compilation unless deterministic checks all pass.
+
+    This runs after the upstream guard and before any prompt render / order
+    compiler readiness check, so Step 3's LLM self-reported audit_passed /
+    order_compiler_ready can no longer be the sole release condition.
+    """
+    enforce_final_execution_safety_gate(
+        blocked_artifact_path=step4_blocked_by_final_execution_safety_gate_path(),
+        step1_permission_path=step1_research_degraded_mode_decision_path(),
+        step2_decision_packet_path=step2_decision_packet_path(),
+        step3_audited_packet_path=step3_audited_decision_packet_path(),
+        step2_block_path=step2_blocked_by_research_gate_path(),
+        step3_block_path=step3_blocked_by_upstream_gate_path(),
+        step4_block_path=step4_blocked_by_upstream_gate_path(),
+        repo_root_path=repo_root(),
+    )
+
+
 def _require_non_empty_text(path: Path, *, label: str) -> str:
     """Read a required text input and fail clearly when it is missing or empty."""
     try:
@@ -99,6 +176,24 @@ def load_strategy_settings_text() -> str:
     )
 
 
+def load_strategy_settings() -> dict[str, Any]:
+    """Parse the operator-maintained strategy settings YAML for deterministic checks."""
+    return parse_strategy_settings_text(load_strategy_settings_text())
+
+
+def _max_new_tickers_per_week_total(strategy_settings: Mapping[str, Any]) -> int | None:
+    """Derive an integer weekly new-ticker ceiling from settings (sum of sub-buckets)."""
+    value = strategy_settings.get("max_new_tickers_per_week")
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, Mapping):
+        leaves = [v for v in value.values() if isinstance(v, int) and not isinstance(v, bool)]
+        return sum(leaves) if leaves else None
+    return None
+
+
 def load_portfolio_snapshot_text() -> str:
     """Read the operator-maintained portfolio snapshot exactly as stored on disk."""
     return _require_non_empty_text(
@@ -121,6 +216,28 @@ def load_decision_packet() -> dict[str, Any]:
         step2_decision_packet_path(),
         label="Step 2 decision_packet.json artifact",
     )
+
+
+def load_effective_allowed_buy_universe() -> list[str] | None:
+    """Read the Step 2 decision packet's per-run effective allowed buy universe.
+
+    This is the run-specific (typically stricter) buy universe. It is read
+    defensively: if the decision packet is missing / malformed / lacks a
+    non-empty string list, this returns None so the validator falls back to the
+    static strategy-settings universe floor (never weaker than settings).
+    """
+    try:
+        payload = read_json(step2_decision_packet_path())
+    except (FileNotFoundError, json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    universe = payload.get("effective_allowed_buy_universe")
+    if isinstance(universe, list):
+        tickers = [item for item in universe if isinstance(item, str) and item.strip()]
+        if tickers:
+            return tickers
+    return None
 
 
 def load_audited_decision_packet() -> dict[str, Any]:
@@ -176,6 +293,9 @@ def build_step4_prompt_text() -> str:
 
 def render_step4_prompt() -> dict[str, str]:
     """Write the rendered Step 4 prompt and prepare the manual output artifact."""
+    enforce_step4_upstream_guard()
+    enforce_step4_final_execution_safety_gate()
+
     artifact_dir = step4_artifact_dir()
     prompt_output_path = step4_prompt_path()
     raw_output_path = step4_raw_output_path()
@@ -198,13 +318,21 @@ def render_step4_prompt() -> dict[str, str]:
 
 def parse_step4_output() -> dict[str, str]:
     """Parse and validate the manual Step 4 output artifacts."""
+    enforce_step4_upstream_guard()
+    enforce_step4_final_execution_safety_gate()
+
     audited_packet = ensure_order_compiler_ready(load_audited_decision_packet())
+    strategy_settings = load_strategy_settings()
     template4_orders_text, order_state_export_text, exec_summary_text = extract_orders_and_summary(
         raw_output_path=step4_raw_output_path(),
         template4_orders_path=step4_template4_orders_path(),
         order_state_export_path=step4_order_state_export_path(),
         exec_summary_path=step4_exec_summary_path(),
         audited_decision_packet=audited_packet,
+        strategy_settings=strategy_settings,
+        effective_allowed_buy_universe=load_effective_allowed_buy_universe(),
+        hard_cap_open_orders_budget=strategy_settings.get("hard_cap_open_orders_budget"),
+        max_new_tickers_per_week=_max_new_tickers_per_week_total(strategy_settings),
     )
     return {
         "template4_orders_path": str(step4_template4_orders_path()),

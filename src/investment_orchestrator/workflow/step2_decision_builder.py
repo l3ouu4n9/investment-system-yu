@@ -16,8 +16,12 @@ from investment_orchestrator.llm.manual_output import (
 from investment_orchestrator.parsers.extract_template2_and_decision_packet import (
     extract_template2_and_decision_packet,
 )
+from investment_orchestrator.state.research_degraded_mode_gate import enforce_step2_research_gate
 from investment_orchestrator.validators.strategy_settings import parse_strategy_settings_text
-from investment_orchestrator.workflow.step1_research import step1_research_output_path
+from investment_orchestrator.workflow.step1_research import (
+    step1_research_degraded_mode_decision_path,
+    step1_research_output_path,
+)
 
 
 STEP2_DIRNAME = "step2_decision_builder"
@@ -25,6 +29,7 @@ PROMPT_FILENAME = "prompt.txt"
 RAW_OUTPUT_FILENAME = "raw_output.txt"
 TEMPLATE2_OUTPUT_FILENAME = "template2_output.txt"
 DECISION_PACKET_FILENAME = "decision_packet.json"
+STEP2_BLOCKED_BY_RESEARCH_GATE_FILENAME = "step2_blocked_by_research_gate.json"
 
 
 def current_inputs_dir() -> Path:
@@ -55,6 +60,11 @@ def step2_template2_output_path() -> Path:
 def step2_decision_packet_path() -> Path:
     """Return the parsed decision packet path."""
     return step2_artifact_dir() / DECISION_PACKET_FILENAME
+
+
+def step2_blocked_by_research_gate_path() -> Path:
+    """Return the deterministic Step 2 research-gate block artifact path."""
+    return step2_artifact_dir() / STEP2_BLOCKED_BY_RESEARCH_GATE_FILENAME
 
 
 def _require_non_empty_text(path: Path, *, label: str) -> str:
@@ -124,6 +134,12 @@ def build_step2_prompt_text() -> str:
 
 def render_step2_prompt() -> dict[str, str]:
     """Write the rendered Step 2 prompt and prepare the manual output artifact."""
+    enforce_step2_research_gate(
+        source_artifact_path=step1_research_degraded_mode_decision_path(),
+        blocked_artifact_path=step2_blocked_by_research_gate_path(),
+        repo_root_path=repo_root(),
+    )
+
     artifact_dir = step2_artifact_dir()
     prompt_output_path = step2_prompt_path()
     raw_output_path = step2_raw_output_path()

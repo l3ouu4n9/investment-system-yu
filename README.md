@@ -38,6 +38,26 @@ PYTHONPATH=src uv run python -m investment_orchestrator.cli.run_step1 render
 PYTHONPATH=src uv run python -m investment_orchestrator.cli.run_step1 parse
 ```
 
+## Run Status / Blocked-Run Summary
+
+When Step 1 / Deep Research produces no output, invalid research, or a
+degraded-mode gate blocks the pipeline (Step 2/3/4 fail closed), run:
+
+```bash
+PYTHONPATH=src uv run python -m investment_orchestrator.cli.run_status
+```
+
+This reads the existing per-step artifacts and writes a deterministic
+operational summary to `artifacts/current/run_summary.json`. It is **not** an
+LLM decision packet, audit packet, or order output (`is_llm_generated` is always
+`false`). Key fields: `run_blocked`, `recommended_result`, `research_state`,
+`manual_review_required`, `blocked_stages`, `allowed_actions`, `blocked_actions`,
+and `source_artifacts` (which trace back to the Step 1 degraded decision and the
+Step 2/3/4 blocked artifacts). A `recommended_result` of `NO_TRADE` is a
+deterministic safety outcome, not a silent failure. See
+[Deep Research degraded-mode design](docs/deep_research_degraded_mode_design.md)
+for the operating procedure.
+
 ## Daily Execution Check
 
 Weekday execution maintenance is a separate manual workflow. It reads the latest
