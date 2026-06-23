@@ -6,6 +6,9 @@ from typing import Any
 import pytest
 
 from investment_orchestrator.common.io import write_text
+from investment_orchestrator.parsers.portfolio_snapshot_existing_orders import (
+    parse_existing_buy_open_orders_summary,
+)
 from investment_orchestrator.validators.validate_orders_output import validate_orders_output
 
 
@@ -334,3 +337,121 @@ def test_g3_skipped_without_hard_cap(tmp_path: Path) -> None:
     # (over-target plan would otherwise fail); G1 checks still run.
     pkt = audited([plan("QQQ", "KEEP_EXISTING", 9999.0, 1.0)])
     run(tmp_path, "NONE\n", audited_decision_packet=pkt)
+
+
+# --- G4: KEEP_EXISTING independent verification vs portfolio snapshot (2a) ----
+
+_SNAPSHOT_HEADER = (
+    "TICKER | budget | compiled_open_order_notional | residual | template_id | "
+    "anchor | asof | refresh | hi | lo | steps | live_order_steps_summary | live_order_qtys_summary"
+)
+
+
+def snapshot_2a(rows: str) -> Any:
+    text = (
+        "(2a) existing_buy_open_orders_summary\n"
+        + _SNAPSHOT_HEADER
+        + "\n"
+        + rows
+        + "\n(2b) sell_open_orders\nNONE\n"
+    )
+    return parse_existing_buy_open_orders_summary(text)
+
+
+def keep_plan(ticker: str, *, budget: Any, compiled: Any) -> dict[str, Any]:
+    return {
+        "ticker": ticker,
+        "final_action": "KEEP_EXISTING",
+        "compile_ready": True,
+        "existing_open_order_budget": budget,
+        "compiled_open_order_notional": compiled,
+        "target_open_order_budget": budget,
+    }
+
+
+# A snapshot row: QQQ budget 1983.65, stated 699.36, reconstructed L2@699.36 x1 = 699.36.
+QQQ_ROW = "QQQ | 1983.65 | 699.36 | 1284.29 | T4-E | 744.00 | 2026-06-15 |  | 699.36 | 699.36 | 1 | L2@699.36 | L2:1"
+
+
+def test_keep_existing_matching_snapshot_passes(tmp_path: Path) -> None:
+    pkt = audited([keep_plan("QQQ", budget=1983.65, compiled=699.36)])
+    run(
+        tmp_path,
+        "NONE\n",
+        audited_decision_packet=pkt,
+        existing_buy_open_orders=snapshot_2a(QQQ_ROW),
+    )
+
+
+def test_keep_existing_missing_from_snapshot_fails_closed(tmp_path: Path) -> None:
+    pkt = audited([keep_plan("SMH", budget=100.0, compiled=100.0)])
+    with pytest.raises(ValueError, match="not present in portfolio snapshot"):
+        run(tmp_path, "NONE\n", audited_decision_packet=pkt, existing_buy_open_orders=snapshot_2a(QQQ_ROW))
+
+
+def test_keep_existing_section_absent_with_keep_plans_fails_closed(tmp_path: Path) -> None:
+    pkt = audited([keep_plan("QQQ", budget=1983.65, compiled=699.36)])
+    no_section = parse_existing_buy_open_orders_summary("no (2a) section present\n")
+    with pytest.raises(ValueError, match="section \\(2a\\) .* is missing or empty"):
+        run(tmp_path, "NONE\n", audited_decision_packet=pkt, existing_buy_open_orders=no_section)
+
+
+def test_keep_existing_compiled_notional_mismatch_fails(tmp_path: Path) -> None:
+    pkt = audited([keep_plan("QQQ", budget=1983.65, compiled=500.00)])
+    with pytest.raises(ValueError, match="compiled_open_order_notional .* does not match"):
+        run(tmp_path, "NONE\n", audited_decision_packet=pkt, existing_buy_open_orders=snapshot_2a(QQQ_ROW))
+
+
+def test_keep_existing_budget_mismatch_fails(tmp_path: Path) -> None:
+    pkt = audited([keep_plan("QQQ", budget=9999.00, compiled=699.36)])
+    with pytest.raises(ValueError, match="existing_open_order_budget .* does not match"):
+        run(tmp_path, "NONE\n", audited_decision_packet=pkt, existing_buy_open_orders=snapshot_2a(QQQ_ROW))
+
+
+def test_snapshot_stated_vs_reconstructed_mismatch_fails(tmp_path: Path) -> None:
+    # stated col3 = 800.00 but reconstructed L2@699.36 x1 = 699.36 -> snapshot internal mismatch.
+    bad_row = "QQQ | 1983.65 | 800.00 | 1284.29 | T4-E | 744.00 | 2026-06-15 |  | 699.36 | 699.36 | 1 | L2@699.36 | L2:1"
+    pkt = audited([keep_plan("QQQ", budget=1983.65, compiled=800.00)])
+    with pytest.raises(ValueError, match="stated compiled notional .* does not match reconstructed"):
+        run(tmp_path, "NONE\n", audited_decision_packet=pkt, existing_buy_open_orders=snapshot_2a(bad_row))
+
+
+def test_non_keep_actions_not_forced_through_snapshot_check(tmp_path: Path) -> None:
+    # NEW_ORDER + CANCEL plans must not require a (2a) snapshot row.
+    pkt = audited(
+        [
+            plan("CIBR", "CANCEL_EXISTING", 0.0, 0.0),
+            {
+                "ticker": "QQQ",
+                "final_action": "NEW_ORDER",
+                "compile_ready": True,
+                "compiled_open_order_notional": 20.00,
+                "target_open_order_budget": 25.00,
+            },
+        ]
+    )
+    body = "ticker=QQQ | step_name=L1 | shares=2 | limit_price=10.00 | order_intent=NEW_ORDER\n"
+    # Snapshot has no QQQ/CIBR existing rows; G4 must not fire for NEW/CANCEL.
+    run(
+        tmp_path,
+        body,
+        strategy_settings=settings(),
+        audited_decision_packet=pkt,
+        hard_cap_open_orders_budget="1000",
+        existing_buy_open_orders=snapshot_2a("SMH | 100 | 50 | 50 | T | 1 | 2026-01-01 |  | 1 | 1 | 1 | L1@50.00 | L1:1"),
+    )
+
+
+def test_g4_skipped_when_existing_orders_context_none(tmp_path: Path) -> None:
+    # Backward-compat: no existing_buy_open_orders context -> G4 skipped even with
+    # a KEEP plan that has no snapshot to verify against.
+    pkt = audited([keep_plan("QQQ", budget=1983.65, compiled=699.36)])
+    run(tmp_path, "NONE\n", audited_decision_packet=pkt, hard_cap_open_orders_budget="5000")
+
+
+def test_keep_existing_parse_blocked_snapshot_row_fails_closed(tmp_path: Path) -> None:
+    # Wrong column count for QQQ -> data_gap -> KEEP verification fails closed.
+    bad_row = "QQQ | 1983.65 | 699.36 | T4-E | L2@699.36 | L2:1"
+    pkt = audited([keep_plan("QQQ", budget=1983.65, compiled=699.36)])
+    with pytest.raises(ValueError, match="parse-blocked / data-gapped"):
+        run(tmp_path, "NONE\n", audited_decision_packet=pkt, existing_buy_open_orders=snapshot_2a(bad_row))

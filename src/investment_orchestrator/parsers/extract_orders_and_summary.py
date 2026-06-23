@@ -7,6 +7,9 @@ from pathlib import Path
 from typing import Any
 
 from investment_orchestrator.common.io import read_text, write_text
+from investment_orchestrator.parsers.portfolio_snapshot_existing_orders import (
+    ExistingBuyOpenOrdersParseResult,
+)
 from investment_orchestrator.validators.validate_orders_output import validate_orders_output
 
 
@@ -88,6 +91,7 @@ def extract_orders_and_summary(
     hard_cap_open_orders_budget: Any | None = None,
     target_new_buy_budget_this_run: Any | None = None,
     max_new_tickers_per_week: int | None = None,
+    existing_buy_open_orders: ExistingBuyOpenOrdersParseResult | None = None,
 ) -> tuple[str, str, str]:
     """Read, parse, validate, and write Step 4 text artifacts.
 
@@ -126,6 +130,7 @@ def extract_orders_and_summary(
         hard_cap_open_orders_budget=hard_cap_open_orders_budget,
         target_new_buy_budget_this_run=target_new_buy_budget_this_run,
         max_new_tickers_per_week=max_new_tickers_per_week,
+        existing_buy_open_orders=existing_buy_open_orders,
     )
 
     # Validation passed: publish canonical artifacts, then clean quarantine.

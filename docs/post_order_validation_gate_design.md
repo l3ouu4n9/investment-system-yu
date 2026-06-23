@@ -178,11 +178,24 @@ existing compile-ready / diagnostics checks are unchanged; still fail-closed in 
   against the plan's `compiled_open_order_notional` within a cents tolerance; KEEP_EXISTING and
   CANCEL_EXISTING are not cross-checked. The G1 submit-side floor is retained as an additional
   independent check.
-  - **Residual limitation (deferred to G4):** KEEP_EXISTING existing notional is trusted from the
-    structured audited packet (sourced upstream from the portfolio snapshot). Independent
-    verification of that existing notional against the operator portfolio snapshot would require a
-    portfolio-snapshot parser and is deferred to G4. (G3's cross-check independently verifies
-    NEW_ORDER / REPLACE_EXISTING submit notional against the actual order rows.)
+  - **KEEP_EXISTING independent verification (G4 implemented):** KEEP_EXISTING existing notional is
+    no longer trusted from the audited packet alone. A pure parser
+    (`parsers/portfolio_snapshot_existing_orders.py`) extracts section **(2a)
+    existing_buy_open_orders_summary** of `inputs/current/portfolio_snapshot.txt` — the
+    operator-maintained **SSOT for buy-side existing open orders** — and `validate_orders_output`
+    cross-checks, for each compile-ready `KEEP_EXISTING` plan: audited `existing_open_order_budget`
+    vs snapshot `budget`; audited `compiled_open_order_notional` vs the snapshot's stated /
+    reconstructed `Σ(step_qty × step_limit_price)` notional; and the snapshot's own stated vs
+    reconstructed notional — all within a cents tolerance. It **fails closed** when (2a) is missing
+    while KEEP plans exist, a KEEP ticker is absent from (2a), the (2a) row is parse-blocked, or any
+    value disagrees. The primary `parse_step4_output` path always parses (2a) and passes it;
+    non-primary/standalone callers that omit the context skip only G4 (backward compatible).
+    `order_state_export.txt` is **not** used as an independent source — it is Step 4 *output*
+    (downstream of the same LLM), usable only as a restated cross-check.
+  - **Residual limitations:** G4 verifies KEEP existing notional only for tickers present in (2a)
+    against the operator-provided values (it does not re-derive holdings from broker truth);
+    NEW_ORDER / REPLACE_EXISTING are covered by the G3 submit-side cross-check, and CANCEL_EXISTING
+    contributes zero. Broader portfolio accounting beyond buy-side (2a) is out of scope.
 - **Scoping (safety):** universe / budget / new-ticker checks apply only to submit/new legs — never
   to cancel legs — because cancelling an out-of-universe ticker (e.g. GRID/CIBR removal) is valid,
   and the same ticker legitimately spans many ladder rows.

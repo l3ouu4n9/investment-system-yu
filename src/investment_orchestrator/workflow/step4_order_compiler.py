@@ -16,6 +16,9 @@ from investment_orchestrator.llm.manual_output import (
     write_rendered_prompt,
 )
 from investment_orchestrator.parsers.extract_orders_and_summary import extract_orders_and_summary
+from investment_orchestrator.parsers.portfolio_snapshot_existing_orders import (
+    parse_existing_buy_open_orders_summary,
+)
 from investment_orchestrator.state.final_execution_safety_gate import (
     enforce_final_execution_safety_gate,
 )
@@ -323,6 +326,7 @@ def parse_step4_output() -> dict[str, str]:
 
     audited_packet = ensure_order_compiler_ready(load_audited_decision_packet())
     strategy_settings = load_strategy_settings()
+    existing_buy_open_orders = parse_existing_buy_open_orders_summary(load_portfolio_snapshot_text())
     template4_orders_text, order_state_export_text, exec_summary_text = extract_orders_and_summary(
         raw_output_path=step4_raw_output_path(),
         template4_orders_path=step4_template4_orders_path(),
@@ -333,6 +337,7 @@ def parse_step4_output() -> dict[str, str]:
         effective_allowed_buy_universe=load_effective_allowed_buy_universe(),
         hard_cap_open_orders_budget=strategy_settings.get("hard_cap_open_orders_budget"),
         max_new_tickers_per_week=_max_new_tickers_per_week_total(strategy_settings),
+        existing_buy_open_orders=existing_buy_open_orders,
     )
     return {
         "template4_orders_path": str(step4_template4_orders_path()),

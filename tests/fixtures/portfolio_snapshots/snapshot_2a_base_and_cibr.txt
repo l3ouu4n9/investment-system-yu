@@ -1,0 +1,107 @@
+(2a) existing_buy_open_orders_summary（optional, ticker-level summary; buy-side existing open orders SSOT）
+
+- 若此區塊缺失，或此區塊存在但無任何資料列：視為沒有既有 buy open orders；模型不得假設市場上已有買單
+- parsing_rule: "Portfolio Snapshot 的 budget 若含逗號（如 2,500 / 8,000），計算前必須先移除逗號再做加總/占比。"
+
+- open_orders_anchor_state_rule (NEW, MUST):
+  - 為了讓 keep/reduce 時能決定是否 reanchor / mini-reanchor，你必須為每個 ticker 提供「上次下單時使用的錨定基準」：
+    anchor_baseline_last_close 與 anchor_price_asof
+  - anchor_baseline_last_close 定義：
+    上一次你生成/重掛該 ticker 買單時所採用的 baseline last_close
+  - anchor_price_asof 定義：
+    該 baseline 的收盤日（YYYY-MM-DD, ET）
+  - last_refresh_date_et（optional）：
+    你上次實際取消/重掛該 ticker 買單的日期（ET）；若缺則視為未知，不用年齡觸發，只用漂移觸發
+  - 若 anchor_baseline_last_close 或 anchor_price_asof 缺失：
+    視為 DATA_GAP；本回合該 ticker 允許 keep / reduce / cancel，但不得觸發 mini-reanchor / reanchor
+
+格式（UPDATED）：
+
+TICKER | budget | compiled_open_order_notional(optional) | residual_cash_not_allocated(optional) | template_id | anchor_baseline_last_close | anchor_price_asof | last_refresh_date_et(optional) | highest_live_limit(optional) | lowest_live_limit(optional) | live_step_count(optional) | live_order_steps_summary(optional) | live_order_qtys_summary(optional)
+
+- column_position_preservation_rule (NEW, MUST):
+  - existing_buy_open_orders_summary 的每一資料列都必須嚴格維持欄位順序
+  - 即使 compiled_open_order_notional / residual_cash_not_allocated / last_refresh_date_et 等 optional 欄位缺值，也必須保留空欄位置，不得省略分隔欄位
+  - 不得因 optional middle fields 缺值而讓 template_id、anchor_baseline_last_close 或後續欄位左移
+  - 若資料列欄位數與格式定義不一致，Strategy C 必須視為 DATA_GAP / PARSE_BLOCKED
+
+- budget_vs_live_notional_rule (NEW, MUST):
+  - budget = 該 ticker 的 target / reserved open-order budget bucket
+  - compiled_open_order_notional = 目前 live buy orders 的實際名目金額總和
+  - residual_cash_not_allocated = budget - compiled_open_order_notional
+  - Strategy C 不得把 budget 與 compiled_open_order_notional 視為必然相等
+  - 若存在整股限制、weighted ladder、preserve_live_qty_vector 或 top_up_rule 缺失，compiled_open_order_notional 可以明顯低於 budget；此差額必須保留，不得默默吞掉
+
+- compiled_open_order_notional_reconstruction_rule (NEW, MUST):
+  - 若 live_order_steps_summary 與 live_order_qtys_summary 可 deterministic 解析：
+    compiled_open_order_notional = Σ(step_shares_i × step_limit_price_i)
+  - residual_cash_not_allocated = budget - compiled_open_order_notional
+  - Strategy C 與後續 Portfolio Snapshot / ORDER_STATE_EXPORT 應優先保留這兩個欄位，而不是只保留 budget
+
+- new_order_state_export_rule (NEW, MUST):
+  - 對於本回合由 Strategy C 新生成、且要寫入 ORDER_STATE_EXPORT 的 buy open orders：
+    - 必須輸出 compiled_open_order_notional
+    - 必須輸出 residual_cash_not_allocated
+  - 不得只輸出 budget 而省略實際已編譯出的 live notional
+  - 若因資料格式限制暫時無法輸出，必須在 TEMPLATE5_EXEC_SUMMARY 明確列為 DATA_GAP / EXPORT_GAP
+
+- keep_existing_state_carry_forward_rule (NEW, MUST):
+  - 若某 ticker 在 current live SSOT 已存在，且本回合 final_action = "KEEP_EXISTING"：
+    - compiled_open_order_notional
+    - residual_cash_not_allocated
+    - highest_live_limit
+    - lowest_live_limit
+    - live_step_count
+    - live_order_steps_summary
+    - live_order_qtys_summary
+    應優先沿用 current live SSOT 的既有值
+  - 不得因為輸出 post-submission intended SSOT，就省略、重算或改寫上述欄位
+  - 除非 AUDITED_DECISION_PACKET 已明示 replace / reanchor / cancel，否則 KEEP_EXISTING 不得改變上述 live-state 欄位
+
+- live_buy_order_structure_rule (NEW, MUST):
+  - existing_buy_open_orders_summary 除了 baseline 外，還必須盡量保留目前 live 買單價格結構摘要：
+    - highest_live_limit = 目前尚未成交的最高買入限價
+    - lowest_live_limit = 目前尚未成交的最低買入限價
+    - live_step_count = 目前 live、未成交的 BUY step 數量
+    - live_order_steps_summary = 目前 live buy order 的 step 與價格摘要
+    - live_order_qtys_summary = 目前 live buy order 各 step 的剩餘股數摘要
+  - live_order_steps_summary 與 live_order_qtys_summary 的 step 名稱必須一致
+
+- data_gap_behavior_for_live_structure (NEW, MUST):
+  - 若 highest_live_limit / lowest_live_limit / live_step_count / live_order_steps_summary / live_order_qtys_summary 全部缺失：
+    - 不得僅靠 baseline 推定原掛單成交機率仍合理
+    - 允許 keep / cancel / baseline-based mini_reanchor / baseline-based reanchor
+    - 但 reason 必須明確寫：
+      "DATA_GAP: live order price structure missing; fill probability inferred from baseline only"
+
+- live_step_count_definition_rule (NEW, MUST):
+  - live_step_count = 目前市場上仍有效的未成交 BUY steps 數量
+  - 若 live_step_count 缺失，且 live_order_steps_summary 也無法可靠解析：
+    - 不得憑空假設 step 數量
+    - 不得輸出 preserve_existing_step_shape / preserve_existing_live_qty 類型的 replace-style packet
+
+- summary_ssot_rule_for_buy_open_orders (NEW, MUST):
+  - existing_buy_open_orders_summary 是 buy-side existing open orders 的唯一 SSOT
+  - A = Σ(existing_buy_open_orders_summary budgets)
+  - 若其中 ticker 不在 effective_allowed_buy_universe：
+      action 必須 = cancel
+      new_budget 必須 = 0
+      且不得輸出該 ticker 的 Execution Plan / BUY_ORDERS
+
+- post_submission_state_metadata_rule（OPTIONAL BUT RECOMMENDED）：
+  - 若 Portfolio Snapshot 是在當日 weekly-approved orders 實際下單 / cancel-replace / 重掛之後更新，建議在 snapshot header 或 operator notes 中標示：
+      open_order_state_asof_et: YYYY-MM-DD HH:MM ET
+      open_order_state_timing: post_submission / post_close / pre_submission
+      broker_submission_confirmed: true/false/unknown
+      fills_asof_et: YYYY-MM-DD HH:MM ET 或 unknown
+      remaining_qty_confirmed: true/false/unknown
+  - 若未提供上述 metadata，但 existing_buy_open_orders_summary 明確已反映當日 replacement 後 ladder，Daily Execution Check 可將該 row 視為 operator-provided current state。
+  - 若 open_order_state_timing=pre_submission 或 broker_submission_confirmed=false，Daily Execution Check 不得把 replacement 後 intended ladder 視為 live state。
+
+QQQ | 20513.08 | 18627.11 | 1885.97 | T4-E | 711.23 | 2026-05-08 | 2026-05-11 | 679.22 | 583.21 | 4 | L1@679.22;L2@650.78;L3@618.77;L4@583.21 | L1:10;L2:8;L3:6;L4:5
+VOO | 12633.71 | 11003.71 | 1630.00 | T4-B | 674.66 | 2026-05-06 |  | 651.05 | 563.34 | 4 | L1@651.05;L2@624.06;L3@593.70;L4@563.34 | L1:5;L2:5;L3:4;L4:4
+SMH | 6485.25 | 5267.48 | 1217.77 | T4-B | 576.31 | 2026-05-11 |  | 518.68 | 443.76 | 3 | L2@518.68;L3@484.10;L4@443.76 | L2:3;L3:4;L4:4
+CIBR | 4021.05 | 3865.37 | 155.68 | T4-B | 75.32 | 2026-05-08 | 2026-05-11 | 70.80 | 57.24 | 4 | L1@70.80;L2@67.03;L3@62.52;L4@57.24 | L1:8;L2:11;L3:19;L4:24
+
+
+(2b) sell_open_orders（optional, lot-aware open sell orders summary）

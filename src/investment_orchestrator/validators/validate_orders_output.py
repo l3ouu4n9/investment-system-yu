@@ -9,6 +9,9 @@ import re
 from typing import Any
 
 from investment_orchestrator.common.io import read_text
+from investment_orchestrator.parsers.portfolio_snapshot_existing_orders import (
+    ExistingBuyOpenOrdersParseResult,
+)
 
 
 # Strategy settings keys that, together, define the approved buy universe floor.
@@ -500,6 +503,87 @@ def _validate_total_open_order_exposure(
     )
 
 
+def _validate_keep_existing_against_snapshot(
+    *,
+    audited_decision_packet: Any,
+    existing_buy_open_orders: ExistingBuyOpenOrdersParseResult,
+) -> None:
+    """Independently verify KEEP_EXISTING open-order notional vs portfolio snapshot (PR G4).
+
+    KEEP_EXISTING existing notional is otherwise trusted from the audited packet.
+    This cross-checks it against section (2a) of the operator-maintained portfolio
+    snapshot (the SSOT for buy-side existing open orders). Fails closed when a KEEP
+    ticker is missing from (2a), (2a) is absent while KEEP plans exist, the (2a)
+    row is parse-blocked, or any value disagrees beyond cents tolerance. Only
+    KEEP_EXISTING is checked here (NEW_ORDER / REPLACE_EXISTING / CANCEL_EXISTING
+    are handled by the G3 submit-side reconciliation).
+    """
+    keep_plans = [
+        plan
+        for plan in _compile_ready_plans(audited_decision_packet)
+        if _normalize_action(plan.get("final_action") or plan.get("action") or plan.get("order_intent"))
+        == "KEEP_EXISTING"
+    ]
+    if not keep_plans:
+        return
+
+    _require(
+        existing_buy_open_orders.section_present,
+        "audited packet has KEEP_EXISTING plans but portfolio snapshot section (2a) "
+        "existing_buy_open_orders_summary is missing or empty.",
+    )
+
+    for plan in keep_plans:
+        ticker = _normalize_ticker(plan.get("ticker")) or "<missing>"
+        order = existing_buy_open_orders.orders.get(ticker)
+        _require(
+            order is not None,
+            f"KEEP_EXISTING ticker {ticker} is not present in portfolio snapshot (2a).",
+        )
+        _require(
+            not order.data_gap,
+            f"portfolio snapshot (2a) row for {ticker} is parse-blocked / data-gapped.",
+        )
+
+        audited_budget = _require_non_negative_decimal_field(plan, "existing_open_order_budget", ticker)
+        audited_compiled = _require_non_negative_decimal_field(plan, "compiled_open_order_notional", ticker)
+
+        _require(
+            order.budget is not None,
+            f"portfolio snapshot (2a) row for {ticker} has no parseable budget.",
+        )
+        _require(
+            abs(audited_budget - order.budget) <= _BUDGET_TOLERANCE,
+            f"KEEP_EXISTING {ticker}: audited existing_open_order_budget ({audited_budget}) "
+            f"does not match portfolio snapshot (2a) budget ({order.budget}).",
+        )
+
+        # Snapshot internal consistency: stated vs reconstructed must agree when both exist.
+        if order.stated_compiled_notional is not None and order.reconstructed_notional is not None:
+            _require(
+                abs(order.stated_compiled_notional - order.reconstructed_notional) <= _BUDGET_TOLERANCE,
+                f"portfolio snapshot (2a) {ticker}: stated compiled notional "
+                f"({order.stated_compiled_notional}) does not match reconstructed "
+                f"Σ(qty×limit_price) ({order.reconstructed_notional}).",
+            )
+
+        snapshot_notional = (
+            order.stated_compiled_notional
+            if order.stated_compiled_notional is not None
+            else order.reconstructed_notional
+        )
+        _require(
+            snapshot_notional is not None,
+            f"portfolio snapshot (2a) row for {ticker} has no verifiable compiled notional "
+            "(neither stated nor reconstructable).",
+        )
+        _require(
+            abs(audited_compiled - snapshot_notional) <= _BUDGET_TOLERANCE,
+            f"KEEP_EXISTING {ticker}: audited compiled_open_order_notional ({audited_compiled}) "
+            f"does not match portfolio snapshot (2a) notional ({snapshot_notional}).",
+        )
+
+
 def validate_orders_output(
     *,
     template4_orders_path: str | Path,
@@ -511,6 +595,7 @@ def validate_orders_output(
     hard_cap_open_orders_budget: Any | None = None,
     target_new_buy_budget_this_run: Any | None = None,
     max_new_tickers_per_week: int | None = None,
+    existing_buy_open_orders: ExistingBuyOpenOrdersParseResult | None = None,
 ) -> dict[str, str]:
     """Validate the required Step 4 output text artifacts.
 
@@ -525,7 +610,12 @@ def validate_orders_output(
       decision packet and a hard cap are supplied: totals are recomputed from
       ``audited_decision_packet.final_execution_plans`` (not the exec_summary
       aggregate PASS flags) and reconciled against the hard cap, capturing
-      KEEP_EXISTING existing notional the submit-side floor omits.
+      KEEP_EXISTING existing notional the submit-side floor omits;
+    * KEEP_EXISTING independent verification (PR G4) runs when both an audited
+      decision packet and parsed ``existing_buy_open_orders`` (portfolio snapshot
+      section (2a), the buy-side SSOT) are supplied: each KEEP plan's existing
+      budget / compiled notional is cross-checked against the operator snapshot
+      rather than trusted from the audited packet alone.
 
     All checks are deterministic and fail closed (raise ``ValueError``). The
     universe/budget/new-ticker checks apply only to submit/new buy legs, never to
@@ -577,6 +667,12 @@ def validate_orders_output(
             buy_order_rows=buy_order_rows,
             audited_decision_packet=audited_decision_packet,
             hard_cap_open_orders_budget=hard_cap_open_orders_budget,
+        )
+
+    if audited_decision_packet is not None and existing_buy_open_orders is not None:
+        _validate_keep_existing_against_snapshot(
+            audited_decision_packet=audited_decision_packet,
+            existing_buy_open_orders=existing_buy_open_orders,
         )
 
     return {

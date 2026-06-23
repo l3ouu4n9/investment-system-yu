@@ -1,0 +1,52 @@
+(2a) existing_buy_open_orders_summary（optional, ticker-level summary; buy-side existing open orders SSOT）
+
+- 若此區塊缺失，或此區塊存在但無任何資料列：視為沒有既有 buy open orders；模型不得假設市場上已有買單
+- parsing_rule: "Portfolio Snapshot 的 budget 若含逗號（如 2,500 / 8,000），計算前必須先移除逗號再做加總/占比。"
+
+- open_orders_anchor_state_rule (NEW, MUST):
+  - 為了讓 keep/reduce 時能決定是否 reanchor / mini-reanchor，你必須為每個 ticker 提供「上次下單時使用的錨定基準」：
+    anchor_baseline_last_close 與 anchor_price_asof
+  - anchor_baseline_last_close 定義：
+    上一次你生成/重掛該 ticker 買單時所採用的 baseline last_close
+  - anchor_price_asof 定義：
+    該 baseline 的收盤日（YYYY-MM-DD, ET）
+  - last_refresh_date_et（optional）：
+    你上次實際取消/重掛該 ticker 買單的日期（ET）；若缺則視為未知，不用年齡觸發，只用漂移觸發
+  - 若 anchor_baseline_last_close 或 anchor_price_asof 缺失：
+    視為 DATA_GAP；本回合該 ticker 允許 keep / reduce / cancel，但不得觸發 mini-reanchor / reanchor
+
+格式（UPDATED）：
+TICKER | budget | template_id | anchor_baseline_last_close | anchor_price_asof | last_refresh_date_et(optional) | highest_live_limit(optional) | lowest_live_limit(optional) | live_step_count(optional) | live_order_steps_summary(optional) | live_order_qtys_summary(optional)
+
+- live_buy_order_structure_rule (NEW, MUST):
+  - existing_buy_open_orders_summary 除了 baseline 外，還必須盡量保留目前 live 買單價格結構摘要：
+    - highest_live_limit = 目前尚未成交的最高買入限價
+    - lowest_live_limit = 目前尚未成交的最低買入限價
+    - live_step_count = 目前 live、未成交的 BUY step 數量
+    - live_order_steps_summary = 目前 live buy order 的 step 與價格摘要
+    - live_order_qtys_summary = 目前 live buy order 各 step 的剩餘股數摘要
+  - live_order_steps_summary 與 live_order_qtys_summary 的 step 名稱必須一致
+
+- data_gap_behavior_for_live_structure (NEW, MUST):
+  - 若 highest_live_limit / lowest_live_limit / live_step_count / live_order_steps_summary / live_order_qtys_summary 全部缺失：
+    - 不得僅靠 baseline 推定原掛單成交機率仍合理
+    - 允許 keep / cancel / baseline-based mini_reanchor / baseline-based reanchor
+    - 但 reason 必須明確寫：
+      "DATA_GAP: live order price structure missing; fill probability inferred from baseline only"
+
+- live_step_count_definition_rule (NEW, MUST):
+  - live_step_count = 目前市場上仍有效的未成交 BUY steps 數量
+  - 若 live_step_count 缺失，且 live_order_steps_summary 也無法可靠解析：
+    - 不得憑空假設 step 數量
+    - 不得輸出 preserve_existing_step_shape / preserve_existing_live_qty 類型的 replace-style packet
+
+- summary_ssot_rule_for_buy_open_orders (NEW, MUST):
+  - existing_buy_open_orders_summary 是 buy-side existing open orders 的唯一 SSOT
+  - A = Σ(existing_buy_open_orders_summary budgets)
+  - 若其中 ticker 不在 effective_allowed_buy_universe：
+      action 必須 = cancel
+      new_budget 必須 = 0
+      且不得輸出該 ticker 的 Execution Plan / BUY_ORDERS
+
+
+(2b) sell_open_orders（optional, lot-aware open sell orders summary）
