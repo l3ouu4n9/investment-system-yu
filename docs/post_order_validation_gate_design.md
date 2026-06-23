@@ -171,10 +171,19 @@ existing compile-ready / diagnostics checks are unchanged; still fail-closed in 
 - **Scoping (safety):** universe / budget / new-ticker checks apply only to submit/new legs — never
   to cancel legs — because cancelling an out-of-universe ticker (e.g. GRID/CIBR removal) is valid,
   and the same ticker legitimately spans many ladder rows.
-- **Deferred to G2:** full open-order-state budget reconciliation (adding existing kept notional to
-  the submit-side total); per-bucket `max_new_tickers_per_week` (base vs extended); semantic
-  conflicting-action detection beyond exact duplicates; validate-before-write ordering; hardening
-  the standalone `extract_orders_and_summary.main()` path (still weaker by design).
+- **Implemented in G2 (validate-before-write / quarantine):** `extract_orders_and_summary` now
+  writes candidate artifacts to a `quarantine/` subdirectory, validates the quarantine paths with
+  the same G1 context (validator API unchanged), and publishes the canonical
+  `template4_orders.txt` / `order_state_export.txt` / `exec_summary.txt` **only after validation
+  passes**. On validation failure the exception propagates, canonical artifacts are never written
+  or overwritten (a prior-good set is preserved byte-for-byte), and the rejected candidates remain
+  under `quarantine/` as diagnostics. On success the three quarantine files are removed and the
+  `quarantine/` directory is removed if empty.
+- **Still deferred to G2+ / G3:** full open-order-state budget reconciliation (adding existing kept
+  notional to the submit-side total); per-bucket `max_new_tickers_per_week` (base vs extended);
+  semantic conflicting-action detection beyond exact duplicates; hardening the standalone
+  `extract_orders_and_summary.main()` context coverage (it shares the validate-before-write
+  ordering but is still not supplied settings/budgets/universe — weaker by design).
 
 ## 7. Non-goals
 

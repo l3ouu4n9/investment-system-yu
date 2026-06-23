@@ -25,6 +25,37 @@ def extract_required_block(text: str, start_marker: str, end_marker: str) -> str
     return text[start + len(start_marker) : end].strip()
 
 
+QUARANTINE_DIRNAME = "quarantine"
+
+
+def _normalize_artifact_text(text: str) -> str:
+    """Canonical Step 4 artifact normalization (must match canonical writes)."""
+    return text.rstrip() + "\n"
+
+
+def _quarantine_path(path: str | Path) -> Path:
+    """Return the quarantine candidate path for a canonical artifact path."""
+    canonical = Path(path)
+    return canonical.parent / QUARANTINE_DIRNAME / canonical.name
+
+
+def _cleanup_quarantine(paths: list[Path]) -> None:
+    """Remove this run's quarantine files, then the dir only if it is empty."""
+    parents: set[Path] = set()
+    for path in paths:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        parents.add(path.parent)
+    for parent in parents:
+        try:
+            parent.rmdir()
+        except OSError:
+            # Directory not empty or already gone; leave it.
+            pass
+
+
 def parse_step4_output_text(raw_text: str) -> tuple[str, str, str]:
     """Parse a raw Step 4 response into the three required text blocks."""
     template4_orders_text = extract_required_block(
@@ -60,6 +91,13 @@ def extract_orders_and_summary(
 ) -> tuple[str, str, str]:
     """Read, parse, validate, and write Step 4 text artifacts.
 
+    Validate-before-write (PR G2): candidate artifacts are written to a
+    ``quarantine/`` subdirectory and validated there; canonical artifacts are
+    published only after deterministic validation passes. On validation failure
+    the exception propagates and the canonical artifacts are never written or
+    overwritten (a prior-good set is preserved); the rejected candidates remain
+    under ``quarantine/`` as diagnostics.
+
     Deterministic post-order safety context (settings / universe / budgets) is
     forwarded to ``validate_orders_output``; omitting it preserves the prior
     (narrower) validation behavior for standalone callers.
@@ -68,14 +106,20 @@ def extract_orders_and_summary(
         read_text(raw_output_path)
     )
 
-    write_text(template4_orders_path, template4_orders_text.rstrip() + "\n")
-    write_text(order_state_export_path, order_state_export_text.rstrip() + "\n")
-    write_text(exec_summary_path, exec_summary_text.rstrip() + "\n")
+    quarantine_template4 = _quarantine_path(template4_orders_path)
+    quarantine_state = _quarantine_path(order_state_export_path)
+    quarantine_summary = _quarantine_path(exec_summary_path)
+
+    # Write candidates to quarantine using the exact canonical normalization,
+    # then validate the quarantine paths (validator API unchanged / G1 semantics).
+    write_text(quarantine_template4, _normalize_artifact_text(template4_orders_text))
+    write_text(quarantine_state, _normalize_artifact_text(order_state_export_text))
+    write_text(quarantine_summary, _normalize_artifact_text(exec_summary_text))
 
     validate_orders_output(
-        template4_orders_path=template4_orders_path,
-        order_state_export_path=order_state_export_path,
-        exec_summary_path=exec_summary_path,
+        template4_orders_path=quarantine_template4,
+        order_state_export_path=quarantine_state,
+        exec_summary_path=quarantine_summary,
         audited_decision_packet=audited_decision_packet,
         strategy_settings=strategy_settings,
         effective_allowed_buy_universe=effective_allowed_buy_universe,
@@ -83,6 +127,13 @@ def extract_orders_and_summary(
         target_new_buy_budget_this_run=target_new_buy_budget_this_run,
         max_new_tickers_per_week=max_new_tickers_per_week,
     )
+
+    # Validation passed: publish canonical artifacts, then clean quarantine.
+    write_text(template4_orders_path, _normalize_artifact_text(template4_orders_text))
+    write_text(order_state_export_path, _normalize_artifact_text(order_state_export_text))
+    write_text(exec_summary_path, _normalize_artifact_text(exec_summary_text))
+    _cleanup_quarantine([quarantine_template4, quarantine_state, quarantine_summary])
+
     return template4_orders_text, order_state_export_text, exec_summary_text
 
 
