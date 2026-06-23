@@ -162,12 +162,27 @@ existing compile-ready / diagnostics checks are unchanged; still fail-closed in 
 - **Budget semantics (important):** `hard_cap_open_orders_budget` in `strategy_settings.yaml` is a
   ceiling on **total intended open-order exposure** — per the order-compiler prompt's
   `aggregate_notional_counting_rule`, it is compared against `total_target_open_order_budget` /
-  `total_compiled_open_order_notional`, which include KEEP_EXISTING existing notional. The G1 check
-  is therefore **submit-side new-order notional validation only**: it recomputes
-  `Σ(shares × limit_price)` over submit/new legs (cancel legs excluded) and fails if that alone
-  exceeds the cap. This is a sound one-directional safety check (new submits alone over the total
-  cap ⇒ definite violation) but is **partial**; full open-order-state reconciliation (adding
-  existing kept notional) is deferred to G2.
+  `total_compiled_open_order_notional`, which include KEEP_EXISTING existing notional. The **G1**
+  check is a **submit-side new-order notional floor**: it recomputes `Σ(shares × limit_price)` over
+  submit/new legs (cancel legs excluded) and fails if that alone exceeds the cap — a sound
+  one-directional check but partial.
+- **Total open-order exposure reconciliation (G3 implemented):** `validate_orders_output` now, when
+  both an audited decision packet and a hard cap are supplied, **recomputes totals from
+  `audited_decision_packet.final_execution_plans`** (the structured, authoritative source) — not
+  from the exec_summary `aggregate_summary` PASS flags, which are LLM/compiler-restated diagnostics
+  and are **not** trusted as validator evidence. Over `compile_ready` plans it parses
+  `compiled_open_order_notional` and `target_open_order_budget` fail-closed (non-negative Decimals),
+  then requires `Σ target ≤ hard_cap` and `Σ compiled ≤ Σ target`. This captures the KEEP_EXISTING
+  existing notional the submit-side floor omits. For NEW_ORDER / REPLACE_EXISTING plans it
+  cross-checks the actual BUY submit rows (`Σ shares × limit_price`, ladder rows summed per ticker)
+  against the plan's `compiled_open_order_notional` within a cents tolerance; KEEP_EXISTING and
+  CANCEL_EXISTING are not cross-checked. The G1 submit-side floor is retained as an additional
+  independent check.
+  - **Residual limitation (deferred to G4):** KEEP_EXISTING existing notional is trusted from the
+    structured audited packet (sourced upstream from the portfolio snapshot). Independent
+    verification of that existing notional against the operator portfolio snapshot would require a
+    portfolio-snapshot parser and is deferred to G4. (G3's cross-check independently verifies
+    NEW_ORDER / REPLACE_EXISTING submit notional against the actual order rows.)
 - **Scoping (safety):** universe / budget / new-ticker checks apply only to submit/new legs — never
   to cancel legs — because cancelling an out-of-universe ticker (e.g. GRID/CIBR removal) is valid,
   and the same ticker legitimately spans many ladder rows.
@@ -190,11 +205,14 @@ existing compile-ready / diagnostics checks are unchanged; still fail-closed in 
   This is recoverability, not all-or-nothing canonical atomicity. Per-file `os.replace` publishing
   or a manifest-based atomic publish is deferred as optional **G2.2** hardening (independent of
   budget reconciliation).
-- **Still deferred to G2+ / G3:** full open-order-state budget reconciliation (adding existing kept
-  notional to the submit-side total); per-bucket `max_new_tickers_per_week` (base vs extended);
-  semantic conflicting-action detection beyond exact duplicates; hardening the standalone
-  `extract_orders_and_summary.main()` context coverage (it shares the validate-before-write
-  ordering but is still not supplied settings/budgets/universe — weaker by design).
+- **Total open-order-state reconciliation:** implemented in **G3** (see the budget-semantics /
+  G3 reconciliation bullets above) — totals are recomputed from `final_execution_plans` and
+  reconciled against the hard cap, including KEEP_EXISTING existing notional.
+- **Still deferred:** portfolio-snapshot-independent verification of KEEP_EXISTING existing notional
+  (**G4**); per-bucket `max_new_tickers_per_week` (base vs extended); semantic conflicting-action
+  detection beyond exact duplicates; hardening the standalone `extract_orders_and_summary.main()`
+  context coverage (it shares the validate-before-write ordering but is still not supplied
+  settings/budgets/universe — weaker by design).
 
 ## 7. Non-goals
 

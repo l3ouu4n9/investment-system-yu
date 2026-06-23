@@ -34,6 +34,22 @@ _NET_NEW_BUY_INTENTS = {"NEW_ORDER", "BUY", "SUBMIT_BUY", "EXECUTE_BUY"}
 # Cancel legs: never universe/budget/new-ticker checked (e.g. removing GRID/CIBR).
 _CANCEL_INTENTS = {"CANCEL_EXISTING", "REPLACE_EXISTING_CANCEL_LEG"}
 
+# final_execution_plans.final_action values whose compiled notional must match the
+# actual BUY submit rows (i.e. the plan submits new orders). KEEP_EXISTING and
+# CANCEL_EXISTING are excluded (no new submit rows to cross-check).
+_SUBMIT_CROSS_CHECK_ACTIONS = {
+    "NEW_ORDER",
+    "REPLACE_EXISTING",
+    "BUY",
+    "REPLACE",
+    "SUBMIT_BUY",
+    "EXECUTE_BUY",
+    "SUBMIT",
+}
+# Cents-level tolerance for the per-ticker submit cross-check (whole-share ladders
+# at 2dp limit prices reconcile exactly; this absorbs float repr only).
+_BUDGET_TOLERANCE = Decimal("0.01")
+
 
 REQUIRED_OUTPUT_LABELS = (
     ("template4_orders.txt", "template4_orders"),
@@ -210,8 +226,14 @@ def _require_diagnostic_summary(exec_summary: str, audited_decision_packet: Any)
 
 
 def _parse_decimal(value: Any) -> Decimal | None:
-    """Parse a numeric field to Decimal; return None when malformed/missing."""
-    text = str(value or "").strip()
+    """Parse a numeric field to Decimal; return None when malformed/missing.
+
+    Note: a numeric/string zero must parse to Decimal(0) (not None) so a
+    legitimate 0.0 notional (e.g. a CANCEL plan) is not treated as missing.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
     if text == "":
         return None
     try:
@@ -377,6 +399,107 @@ def _validate_max_new_tickers(
     )
 
 
+def _compile_ready_plans(audited_decision_packet: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(audited_decision_packet, Mapping):
+        return []
+    rows = audited_decision_packet.get("final_execution_plans")
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, Mapping) and row.get("compile_ready") is True]
+
+
+def _require_non_negative_decimal_field(
+    plan: Mapping[str, Any],
+    key: str,
+    ticker: str,
+) -> Decimal:
+    raw = plan.get(key)
+    value = _parse_decimal(raw)
+    _require(
+        value is not None,
+        f"final_execution_plans[{ticker}].{key} is missing or non-numeric: {raw!r}.",
+    )
+    _require(value >= 0, f"final_execution_plans[{ticker}].{key} must be non-negative: {value}.")
+    return value
+
+
+def _submit_notional_by_ticker(buy_order_rows: list[dict[str, str]]) -> dict[str, Decimal]:
+    """Sum shares*limit_price over submit/new legs, grouped by ticker (cancel legs excluded)."""
+    totals: dict[str, Decimal] = {}
+    for row in buy_order_rows:
+        intent = _normalize_action(row.get("order_intent"))
+        if intent not in _SUBMIT_BUY_INTENTS and intent != "":
+            continue
+        ticker = _normalize_ticker(row.get("ticker"))
+        if not ticker:
+            continue
+        shares = _parse_decimal(row.get("shares"))
+        price = _parse_decimal(row.get("limit_price"))
+        if shares is not None and price is not None:
+            totals[ticker] = totals.get(ticker, Decimal("0")) + shares * price
+    return totals
+
+
+def _validate_total_open_order_exposure(
+    *,
+    buy_order_rows: list[dict[str, str]],
+    audited_decision_packet: Any,
+    hard_cap_open_orders_budget: Any,
+) -> None:
+    """Reconcile TOTAL intended open-order exposure against the hard cap (PR G3).
+
+    Totals are recomputed from ``audited_decision_packet.final_execution_plans``
+    (the structured, authoritative source) — never from the exec_summary
+    aggregate PASS flags, which are LLM/compiler-restated diagnostics. This
+    captures KEEP_EXISTING existing notional that the submit-side G1 floor omits.
+    For NEW_ORDER / REPLACE_EXISTING plans, the actual BUY submit rows are
+    cross-checked against the plan's compiled notional. Fails closed.
+    """
+    plans = _compile_ready_plans(audited_decision_packet)
+    if not plans:
+        # NO_TRADE / no compile-ready plans -> nothing to reconcile (totals 0).
+        return
+
+    cap = _parse_decimal(hard_cap_open_orders_budget)
+    _require(
+        cap is not None,
+        f"hard_cap_open_orders_budget is not a valid number: {hard_cap_open_orders_budget!r}.",
+    )
+
+    submit_by_ticker = _submit_notional_by_ticker(buy_order_rows)
+    total_compiled = Decimal("0")
+    total_target = Decimal("0")
+
+    for plan in plans:
+        ticker = _normalize_ticker(plan.get("ticker")) or "<missing>"
+        compiled = _require_non_negative_decimal_field(plan, "compiled_open_order_notional", ticker)
+        target = _require_non_negative_decimal_field(plan, "target_open_order_budget", ticker)
+        total_compiled += compiled
+        total_target += target
+
+        action = _normalize_action(
+            plan.get("final_action") or plan.get("action") or plan.get("order_intent")
+        )
+        if action in _SUBMIT_CROSS_CHECK_ACTIONS:
+            submit_sum = submit_by_ticker.get(ticker, Decimal("0"))
+            _require(
+                abs(submit_sum - compiled) <= _BUDGET_TOLERANCE,
+                f"BUY_ORDERS submit notional for {ticker} ({submit_sum}) does not match "
+                f"final_execution_plans compiled_open_order_notional ({compiled}).",
+            )
+
+    _require(
+        total_target <= cap,
+        f"total target open-order budget {total_target} exceeds "
+        f"hard_cap_open_orders_budget {cap}.",
+    )
+    _require(
+        total_compiled <= total_target,
+        f"total compiled open-order notional {total_compiled} exceeds "
+        f"total target open-order budget {total_target}.",
+    )
+
+
 def validate_orders_output(
     *,
     template4_orders_path: str | Path,
@@ -396,8 +519,13 @@ def validate_orders_output(
 
     * numeric validity (malformed / negative / zero-on-submit) and exact-duplicate
       row rejection always run;
-    * universe allowlist, budget ceiling, and max-new-ticker checks run when the
-      corresponding context (settings / universe / budget) is supplied.
+    * universe allowlist, submit-side budget floor, and max-new-ticker checks run
+      when the corresponding context (settings / universe / budget) is supplied;
+    * total open-order exposure reconciliation (PR G3) runs when both an audited
+      decision packet and a hard cap are supplied: totals are recomputed from
+      ``audited_decision_packet.final_execution_plans`` (not the exec_summary
+      aggregate PASS flags) and reconciled against the hard cap, capturing
+      KEEP_EXISTING existing notional the submit-side floor omits.
 
     All checks are deterministic and fail closed (raise ``ValueError``). The
     universe/budget/new-ticker checks apply only to submit/new buy legs, never to
@@ -443,6 +571,13 @@ def validate_orders_output(
             audited_decision_packet=audited_decision_packet,
         )
         _require_diagnostic_summary(exec_summary, audited_decision_packet)
+
+    if audited_decision_packet is not None and hard_cap_open_orders_budget is not None:
+        _validate_total_open_order_exposure(
+            buy_order_rows=buy_order_rows,
+            audited_decision_packet=audited_decision_packet,
+            hard_cap_open_orders_budget=hard_cap_open_orders_budget,
+        )
 
     return {
         "template4_orders": template4_orders,

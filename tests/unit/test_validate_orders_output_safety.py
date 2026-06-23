@@ -204,3 +204,133 @@ def test_replace_cancel_and_submit_legs_same_ticker_pass(tmp_path: Path) -> None
 
 def test_no_trade_none_body_passes(tmp_path: Path) -> None:
     run(tmp_path, "NONE\n", strategy_settings=settings(), hard_cap_open_orders_budget="38911.29", max_new_tickers_per_week=2)
+
+
+# --- G3: total open-order exposure reconciliation ----------------------------
+
+
+def plan(
+    ticker: str,
+    final_action: str,
+    compiled: Any,
+    target: Any,
+    *,
+    compile_ready: bool = True,
+) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "ticker": ticker,
+        "final_action": final_action,
+        "compile_ready": compile_ready,
+        "compiled_open_order_notional": compiled,
+        "target_open_order_budget": target,
+    }
+    return row
+
+
+def audited(plans: list[dict[str, Any]]) -> dict[str, Any]:
+    # Only fields validate_orders_output consumes; no core_deployment_diagnostics
+    # so the exec_summary diagnostic cross-check is skipped.
+    return {"final_execution_plans": plans}
+
+
+def test_total_exposure_within_cap_passes(tmp_path: Path) -> None:
+    pkt = audited([plan("QQQ", "KEEP_EXISTING", 1000.0, 1200.0), plan("VOO", "KEEP_EXISTING", 2000.0, 2200.0)])
+    run(tmp_path, "NONE\n", audited_decision_packet=pkt, hard_cap_open_orders_budget="5000")
+
+
+def test_total_target_over_hard_cap_fails(tmp_path: Path) -> None:
+    pkt = audited([plan("QQQ", "KEEP_EXISTING", 1000.0, 3000.0), plan("VOO", "KEEP_EXISTING", 1000.0, 3000.0)])
+    with pytest.raises(ValueError, match="exceeds hard_cap_open_orders_budget"):
+        run(tmp_path, "NONE\n", audited_decision_packet=pkt, hard_cap_open_orders_budget="5000")
+
+
+def test_total_compiled_over_total_target_fails(tmp_path: Path) -> None:
+    pkt = audited([plan("QQQ", "KEEP_EXISTING", 3500.0, 3000.0)])
+    with pytest.raises(ValueError, match="exceeds .*total target open-order budget"):
+        run(tmp_path, "NONE\n", audited_decision_packet=pkt, hard_cap_open_orders_budget="5000")
+
+
+def test_keep_existing_notional_counted_pushes_over_cap_with_zero_buy_rows(tmp_path: Path) -> None:
+    # The headline G1 gap: no BUY rows at all, but KEEP_EXISTING existing
+    # notional alone exceeds the cap -> must fail (submit-side floor would pass).
+    pkt = audited([plan("QQQ", "KEEP_EXISTING", 4000.0, 4000.0), plan("VOO", "KEEP_EXISTING", 4000.0, 4000.0)])
+    with pytest.raises(ValueError, match="exceeds hard_cap_open_orders_budget"):
+        run(tmp_path, "NONE\n", audited_decision_packet=pkt, hard_cap_open_orders_budget="5000")
+
+
+def test_cancel_contributes_zero(tmp_path: Path) -> None:
+    pkt = audited([plan("QQQ", "KEEP_EXISTING", 1000.0, 1000.0), plan("CIBR", "CANCEL_EXISTING", 0.0, 0.0)])
+    run(tmp_path, "NONE\n", audited_decision_packet=pkt, hard_cap_open_orders_budget="1000")
+
+
+def test_new_order_submit_rows_cross_check_passes(tmp_path: Path) -> None:
+    body = "ticker=QQQ | step_name=L1 | shares=2 | limit_price=10.00 | order_intent=NEW_ORDER\n"
+    pkt = audited([plan("QQQ", "NEW_ORDER", 20.00, 25.00)])
+    run(tmp_path, body, strategy_settings=settings(), audited_decision_packet=pkt, hard_cap_open_orders_budget="1000")
+
+
+def test_replace_existing_submit_rows_cross_check_passes(tmp_path: Path) -> None:
+    body = "ticker=SMH | step_name=L1 | shares=2 | limit_price=9.98 | order_intent=REPLACE_EXISTING_SUBMIT_LEG\n"
+    pkt = audited([plan("SMH", "REPLACE_EXISTING", 19.96, 25.00)])
+    run(tmp_path, body, strategy_settings=settings(), audited_decision_packet=pkt, hard_cap_open_orders_budget="1000")
+
+
+def test_ladder_submit_rows_summed_before_cross_check(tmp_path: Path) -> None:
+    body = (
+        "ticker=QQQ | step_name=L1 | shares=2 | limit_price=10.00 | order_intent=NEW_ORDER\n"
+        "ticker=QQQ | step_name=L2 | shares=1 | limit_price=10.00 | order_intent=NEW_ORDER\n"
+    )
+    pkt = audited([plan("QQQ", "NEW_ORDER", 30.00, 35.00)])
+    run(tmp_path, body, strategy_settings=settings(), audited_decision_packet=pkt, hard_cap_open_orders_budget="1000")
+
+
+def test_submit_row_mismatch_fails(tmp_path: Path) -> None:
+    body = "ticker=QQQ | step_name=L1 | shares=2 | limit_price=10.00 | order_intent=NEW_ORDER\n"
+    # Plan claims 50.00 compiled but the submit rows total only 20.00.
+    pkt = audited([plan("QQQ", "NEW_ORDER", 50.00, 60.00)])
+    with pytest.raises(ValueError, match="does not match .*compiled_open_order_notional"):
+        run(tmp_path, body, strategy_settings=settings(), audited_decision_packet=pkt, hard_cap_open_orders_budget="1000")
+
+
+def test_malformed_compiled_notional_fails_closed(tmp_path: Path) -> None:
+    pkt = audited([plan("QQQ", "KEEP_EXISTING", "abc", 1000.0)])
+    with pytest.raises(ValueError, match="compiled_open_order_notional is missing or non-numeric"):
+        run(tmp_path, "NONE\n", audited_decision_packet=pkt, hard_cap_open_orders_budget="5000")
+
+
+def test_missing_target_budget_fails_closed(tmp_path: Path) -> None:
+    pkt = audited([{"ticker": "QQQ", "final_action": "KEEP_EXISTING", "compile_ready": True, "compiled_open_order_notional": 1000.0}])
+    with pytest.raises(ValueError, match="target_open_order_budget is missing or non-numeric"):
+        run(tmp_path, "NONE\n", audited_decision_packet=pkt, hard_cap_open_orders_budget="5000")
+
+
+def test_negative_compiled_notional_fails_closed(tmp_path: Path) -> None:
+    pkt = audited([plan("QQQ", "KEEP_EXISTING", -5.0, 1000.0)])
+    with pytest.raises(ValueError, match="compiled_open_order_notional must be non-negative"):
+        run(tmp_path, "NONE\n", audited_decision_packet=pkt, hard_cap_open_orders_budget="5000")
+
+
+def test_no_trade_empty_final_execution_plans_passes(tmp_path: Path) -> None:
+    run(tmp_path, "NONE\n", audited_decision_packet=audited([]), hard_cap_open_orders_budget="1000")
+
+
+def test_cross_check_within_cent_tolerance_passes(tmp_path: Path) -> None:
+    # compiled 20.01 vs submit 20.00 -> diff 0.01 == tolerance -> passes.
+    body = "ticker=QQQ | step_name=L1 | shares=2 | limit_price=10.00 | order_intent=NEW_ORDER\n"
+    pkt = audited([plan("QQQ", "NEW_ORDER", 20.01, 25.00)])
+    run(tmp_path, body, strategy_settings=settings(), audited_decision_packet=pkt, hard_cap_open_orders_budget="1000")
+
+
+def test_cross_check_beyond_cent_tolerance_fails(tmp_path: Path) -> None:
+    # compiled 20.02 vs submit 20.00 -> diff 0.02 > tolerance -> fails.
+    body = "ticker=QQQ | step_name=L1 | shares=2 | limit_price=10.00 | order_intent=NEW_ORDER\n"
+    pkt = audited([plan("QQQ", "NEW_ORDER", 20.02, 25.00)])
+    with pytest.raises(ValueError, match="does not match"):
+        run(tmp_path, body, strategy_settings=settings(), audited_decision_packet=pkt, hard_cap_open_orders_budget="1000")
+
+
+def test_g3_skipped_without_hard_cap(tmp_path: Path) -> None:
+    # Audited packet present but no hard cap -> G3 reconciliation is skipped
+    # (over-target plan would otherwise fail); G1 checks still run.
+    pkt = audited([plan("QQQ", "KEEP_EXISTING", 9999.0, 1.0)])
+    run(tmp_path, "NONE\n", audited_decision_packet=pkt)
