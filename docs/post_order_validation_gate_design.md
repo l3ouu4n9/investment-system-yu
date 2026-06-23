@@ -179,6 +179,17 @@ existing compile-ready / diagnostics checks are unchanged; still fail-closed in 
   or overwritten (a prior-good set is preserved byte-for-byte), and the rejected candidates remain
   under `quarantine/` as diagnostics. On success the three quarantine files are removed and the
   `quarantine/` directory is removed if empty.
+- **Canonical publish atomicity (G2.1 note):** G2 prevents validation-failed artifacts from
+  overwriting the canonical Step 4 artifacts. However, once validation passes, the three canonical
+  writes (`template4_orders.txt`, `order_state_export.txt`, `exec_summary.txt`) are still
+  **sequential and not cross-file atomic**. A rare mid-publish write/process failure (e.g. disk
+  full, permission error, or process kill between writes) could therefore leave a **partial
+  canonical set** (one file updated, the others stale or missing). In that case the exception
+  propagates so the CLI exits non-zero, and — because quarantine cleanup runs only after all three
+  canonical writes succeed — the **full validated set remains under `quarantine/` for recovery**.
+  This is recoverability, not all-or-nothing canonical atomicity. Per-file `os.replace` publishing
+  or a manifest-based atomic publish is deferred as optional **G2.2** hardening (independent of
+  budget reconciliation).
 - **Still deferred to G2+ / G3:** full open-order-state budget reconciliation (adding existing kept
   notional to the submit-side total); per-bucket `max_new_tickers_per_week` (base vs extended);
   semantic conflicting-action detection beyond exact duplicates; hardening the standalone

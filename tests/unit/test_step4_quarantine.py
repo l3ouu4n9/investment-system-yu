@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from investment_orchestrator.common.io import read_text, write_text
+from investment_orchestrator.parsers import extract_orders_and_summary as extract_mod
 from investment_orchestrator.parsers.extract_orders_and_summary import (
     QUARANTINE_DIRNAME,
     extract_orders_and_summary,
@@ -126,3 +127,55 @@ def test_validation_failure_preserves_pre_existing_canonical_byte_for_byte(tmp_p
     assert read_text(paths["template4_orders_path"]) == prior_template4
     assert read_text(paths["order_state_export_path"]) == prior_state
     assert read_text(paths["exec_summary_path"]) == prior_summary
+
+
+def test_mid_publish_canonical_write_failure_is_recoverable_via_quarantine(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """G2.1: canonical publish is sequential and NOT cross-file atomic.
+
+    If the second canonical write fails mid-publish, this documents that the
+    exception propagates and the full validated set survives in quarantine for
+    recovery -- it does NOT claim all-or-nothing canonical atomicity.
+    """
+    paths = step4_paths(tmp_path)
+    write_text(paths["raw_output_path"], raw_output(VALID_BUY))
+
+    real_write_text = extract_mod.write_text
+    canonical_writes: list[Path] = []
+
+    def flaky_write_text(path: Any, text: str) -> Path:
+        target = Path(path)
+        # Quarantine writes (and validation reads) proceed normally.
+        if QUARANTINE_DIRNAME in target.parts:
+            return real_write_text(target, text)
+        # Canonical publish: first write succeeds, second raises.
+        canonical_writes.append(target)
+        if len(canonical_writes) == 1:
+            return real_write_text(target, text)
+        raise OSError("simulated mid-publish write failure")
+
+    monkeypatch.setattr(extract_mod, "write_text", flaky_write_text)
+
+    with pytest.raises(OSError, match="simulated mid-publish write failure"):
+        extract_orders_and_summary(
+            raw_output_path=paths["raw_output_path"],
+            template4_orders_path=paths["template4_orders_path"],
+            order_state_export_path=paths["order_state_export_path"],
+            exec_summary_path=paths["exec_summary_path"],
+            strategy_settings=settings(),
+        )
+
+    # Partial canonical set: the first canonical write may have landed, the
+    # second did not -> NOT all-or-nothing.
+    assert paths["template4_orders_path"].is_file()  # first canonical write succeeded
+    assert not paths["order_state_export_path"].exists()  # second canonical write failed
+    assert not paths["exec_summary_path"].exists()
+
+    # Recoverability: the full validated set still remains in quarantine
+    # (cleanup runs only after all three canonical writes succeed).
+    assert quarantine_of(paths["template4_orders_path"]).is_file()
+    assert quarantine_of(paths["order_state_export_path"]).is_file()
+    assert quarantine_of(paths["exec_summary_path"]).is_file()
+    assert "ticker=QQQ" in read_text(quarantine_of(paths["template4_orders_path"]))
