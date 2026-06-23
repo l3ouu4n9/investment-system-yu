@@ -257,3 +257,58 @@ existing compile-ready / diagnostics checks are unchanged; still fail-closed in 
 - For the future G1: the new checks are additive validation; rollback by reverting the validator
   changes and tests. Because validation already runs in the enforced path, reverting G1 returns to
   today's (narrower) checks without structural change.
+
+---
+
+## 9. Sell-side validation (deferred, non-blocking hardening — NOT a v1 blocker)
+
+Manual-order Step 4 safety v1 is **buy-side**. Sell-side deterministic validation is intentionally
+deferred; this section records the current state, risks, smallest future design, and an explicit
+implementation trigger so readiness is preserved without speculative code.
+
+### 9.1 Current state
+
+- `validate_orders_output` validates **`BUY_ORDERS` only**. `SELL_ORDERS` appears solely as a
+  section boundary in the buy-section regex and is otherwise unparsed/unchecked.
+- `SELL_ORDERS` has been **dormant in all observed runs** (every archived `template4_orders.txt`
+  emits `SELL_ORDERS = NONE` / `[]`).
+- `audited_decision_packet.final_sell_execution_plans` has been **empty in all observed audited
+  packets** (`sell_no_action_summary` indicates no sell action).
+
+### 9.2 Why this is acceptable for v1
+
+- The current strategy is **long-biased / accumulation-oriented** with LTCG-only sells.
+- **No sell orders have been generated** in any observed run (the sell path has never fired), so
+  there is no current safety gap.
+- **Buy-side order-output safety v1 is complete** (numeric, duplicate, universe, submit-side and
+  total-exposure budget, per-bucket new tickers, KEEP_EXISTING verification, validate-before-write).
+
+### 9.3 Sell-side risks if/when `SELL_ORDERS` becomes non-empty
+
+- **Oversell** relative to sellable quantity (`shares_to_sell` exceeds the lot's `lt_shares_sellable`).
+- **Ineligible lot:** selling a `lot_id` not present in portfolio snapshot section
+  `(3) LTCG_ELIGIBLE_SELLABLE` (the only allowed sell source), or selling when `(3)` is empty.
+- **Duplicate / double-allocated** sell rows draining the same lot beyond its sellable quantity.
+- **Conflicts with existing sell open orders** from section `(2b) sell_open_orders`.
+- **Buy and sell the same ticker in one run** (wash-sale / contradiction risk).
+- **Tax-lot mismatch:** `acquired_before_date` / `lot_selection_mode` inconsistent with the `(3)` lot.
+
+These are tax- and position-correctness risks; they are quantity/lot-based (sell `limit_price` may
+be null, so sell notional is not always computable).
+
+### 9.4 Smallest future design
+
+- Parse portfolio snapshot section `(3) LTCG_ELIGIBLE_SELLABLE` as the **sellable-lot SSOT**
+  (mirroring the G4 `(2a)` parser); optionally parse `(2b) sell_open_orders` for existing live sells.
+- Validate each `SELL_ORDERS` row by `lot_id`, `ticker`, `shares_to_sell`, `lot_selection_mode`, and
+  `acquired_before_date` against the `(3)` lot.
+- Enforce `Σ shares_to_sell` per `lot_id` ≤ `lt_shares_sellable`.
+- **Fail closed** when `SELL_ORDERS` is non-empty but section `(3)` is missing / malformed.
+- Gate the check to run only when `SELL_ORDERS` has rows, so the dormant `NONE` path is unaffected.
+
+### 9.5 Explicit trigger
+
+- **Implement sell-side validation before accepting any run with a non-empty `SELL_ORDERS` or a
+  non-empty `final_sell_execution_plans`.**
+- Until that validator exists, **any non-empty sell output must be treated as manual-review /
+  not v1-safe.**
