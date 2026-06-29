@@ -129,36 +129,35 @@ def test_validation_failure_preserves_pre_existing_canonical_byte_for_byte(tmp_p
     assert read_text(paths["exec_summary_path"]) == prior_summary
 
 
-def test_mid_publish_canonical_write_failure_is_recoverable_via_quarantine(
+def test_mid_publish_canonical_replace_failure_is_recoverable_via_quarantine(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """G2.1: canonical publish is sequential and NOT cross-file atomic.
+    """G2.2: canonical publish is per-file atomic, NOT group-atomic.
 
-    If the second canonical write fails mid-publish, this documents that the
-    exception propagates and the full validated set survives in quarantine for
-    recovery -- it does NOT claim all-or-nothing canonical atomicity.
+    Each canonical artifact is published via an atomic temp + ``os.replace``, so a
+    canonical file is never left with partial content. The three replaces are
+    independent, so a mid-publish failure can still leave a *mixed* set (the first
+    file published, the rest stale/absent) -- but each published file is whole, and
+    the full validated set survives under ``quarantine/`` for recovery (cleanup runs
+    only after all three atomic publishes succeed).
     """
     paths = step4_paths(tmp_path)
     write_text(paths["raw_output_path"], raw_output(VALID_BUY))
 
-    real_write_text = extract_mod.write_text
-    canonical_writes: list[Path] = []
+    real_atomic = extract_mod.atomic_write_text
+    canonical_publishes: list[Path] = []
 
-    def flaky_write_text(path: Any, text: str) -> Path:
-        target = Path(path)
-        # Quarantine writes (and validation reads) proceed normally.
-        if QUARANTINE_DIRNAME in target.parts:
-            return real_write_text(target, text)
-        # Canonical publish: first write succeeds, second raises.
-        canonical_writes.append(target)
-        if len(canonical_writes) == 1:
-            return real_write_text(target, text)
-        raise OSError("simulated mid-publish write failure")
+    def flaky_atomic(path: Any, text: str) -> Path:
+        canonical_publishes.append(Path(path))
+        # First canonical publish lands atomically; the second fails mid-publish.
+        if len(canonical_publishes) == 1:
+            return real_atomic(path, text)
+        raise OSError("simulated mid-publish replace failure")
 
-    monkeypatch.setattr(extract_mod, "write_text", flaky_write_text)
+    monkeypatch.setattr(extract_mod, "atomic_write_text", flaky_atomic)
 
-    with pytest.raises(OSError, match="simulated mid-publish write failure"):
+    with pytest.raises(OSError, match="simulated mid-publish replace failure"):
         extract_orders_and_summary(
             raw_output_path=paths["raw_output_path"],
             template4_orders_path=paths["template4_orders_path"],
@@ -167,14 +166,19 @@ def test_mid_publish_canonical_write_failure_is_recoverable_via_quarantine(
             strategy_settings=settings(),
         )
 
-    # Partial canonical set: the first canonical write may have landed, the
-    # second did not -> NOT all-or-nothing.
-    assert paths["template4_orders_path"].is_file()  # first canonical write succeeded
-    assert not paths["order_state_export_path"].exists()  # second canonical write failed
+    # First canonical file landed and is COMPLETE (atomic, never partial); the
+    # second/third did not -> mixed set (per-file atomic, NOT group-atomic).
+    assert paths["template4_orders_path"].is_file()
+    published = read_text(paths["template4_orders_path"])
+    assert "ticker=QQQ" in published and published.endswith("\n")
+    assert not paths["order_state_export_path"].exists()
     assert not paths["exec_summary_path"].exists()
 
-    # Recoverability: the full validated set still remains in quarantine
-    # (cleanup runs only after all three canonical writes succeed).
+    # No stray atomic temp files were left behind in the canonical directory.
+    canonical_dir = paths["template4_orders_path"].parent
+    assert [p.name for p in canonical_dir.iterdir() if ".tmp." in p.name] == []
+
+    # Recoverability: the full validated set still remains in quarantine.
     assert quarantine_of(paths["template4_orders_path"]).is_file()
     assert quarantine_of(paths["order_state_export_path"]).is_file()
     assert quarantine_of(paths["exec_summary_path"]).is_file()

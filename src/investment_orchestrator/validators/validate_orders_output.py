@@ -298,6 +298,131 @@ def _validate_no_duplicate_buy_rows(buy_order_rows: list[dict[str, str]]) -> Non
     )
 
 
+def _validate_no_conflicting_buy_actions(buy_order_rows: list[dict[str, str]]) -> None:
+    """Reject contradictory buy-side rows for the same ticker / ladder slot.
+
+    Two narrow, format-safe conflict classes are flagged (additive to the
+    exact-duplicate check, which catches identical rows):
+
+    * **Action conflict:** the same ticker carries both a net-new buy leg
+      (``NEW_ORDER`` / ``BUY`` / ``SUBMIT_BUY`` / ``EXECUTE_BUY``) and a
+      *standalone* ``CANCEL_EXISTING`` leg. A coordinated replace uses the
+      ``REPLACE_EXISTING_*_LEG`` intents (not plain ``CANCEL_EXISTING``) and is
+      intentionally exempt.
+    * **Slot intent conflict:** the same ``(ticker, plan_type, step_name)``
+      ladder slot appears with two or more distinct non-empty ``order_intent``
+      values. Multi-step ladders (distinct ``step_name``) and replace
+      cancel/submit legs (distinct ``plan_type``) occupy different slots and are
+      not affected.
+    """
+    net_new_by_ticker: dict[str, bool] = {}
+    plain_cancel_by_ticker: dict[str, bool] = {}
+    slot_intents: dict[tuple[str, str, str], set[str]] = {}
+
+    for row in buy_order_rows:
+        ticker = _normalize_ticker(row.get("ticker"))
+        if not ticker:
+            continue
+        intent = _normalize_action(row.get("order_intent"))
+        if intent in _NET_NEW_BUY_INTENTS:
+            net_new_by_ticker[ticker] = True
+        if intent == "CANCEL_EXISTING":
+            plain_cancel_by_ticker[ticker] = True
+
+        slot = (
+            ticker,
+            str(row.get("plan_type", "")).strip().lower(),
+            str(row.get("step_name", "")).strip().lower(),
+        )
+        if intent:
+            slot_intents.setdefault(slot, set()).add(intent)
+
+    action_conflicts = sorted(
+        ticker
+        for ticker in net_new_by_ticker
+        if plain_cancel_by_ticker.get(ticker)
+    )
+    _require(
+        not action_conflicts,
+        "BUY_ORDERS contains conflicting actions for the same ticker "
+        "(net-new buy and standalone cancel): " + ", ".join(action_conflicts),
+    )
+
+    slot_conflicts = sorted(
+        f"{slot[0]} plan_type={slot[1] or '<none>'} step={slot[2] or '<none>'} "
+        f"intents={','.join(sorted(intents))}"
+        for slot, intents in slot_intents.items()
+        if len(intents) > 1
+    )
+    _require(
+        not slot_conflicts,
+        "BUY_ORDERS has conflicting order_intent values for the same ladder slot: "
+        + "; ".join(slot_conflicts),
+    )
+
+
+def _enforce_safety_context_present(
+    buy_order_rows: list[dict[str, str]],
+    *,
+    allowed_universe: set[str] | None,
+    hard_cap_open_orders_budget: Any | None,
+    target_new_buy_budget_this_run: Any | None,
+    max_new_tickers_per_week: int | None,
+    strategy_settings: Mapping[str, Any] | None,
+) -> None:
+    """Fail closed when BUY submit rows are present but safety context is missing.
+
+    Opt-in (``require_safety_context``). Standalone callers that do not opt in
+    keep the prior lenient behavior (checks skipped when their context is
+    absent); the primary ``run_step4 parse`` path opts in so that a settings file
+    missing a budget / universe / new-ticker ceiling fails closed rather than
+    silently skipping the corresponding check while real BUY rows exist. Pure
+    cancel-only output (no submit/new legs) requires no budget/universe context.
+
+    Net-new BUY rows (``_NET_NEW_BUY_INTENTS``) additionally require both a
+    ``max_new_tickers_per_week`` ceiling and a per-run ``target_new_buy_budget_this_run``
+    (G5). Replacement-/cancel-/keep-only runs have no net-new rows, so neither is
+    required of them — they remain governed by ``hard_cap_open_orders_budget``.
+    """
+    submit_rows = [
+        row
+        for row in buy_order_rows
+        if _normalize_action(row.get("order_intent")) in _SUBMIT_BUY_INTENTS
+        or _normalize_action(row.get("order_intent")) == ""
+    ]
+    if submit_rows:
+        _require(
+            allowed_universe is not None,
+            "BUY_ORDERS has submit rows but the allowed buy universe could not be "
+            "resolved (require_safety_context): supply effective_allowed_buy_universe "
+            "or strategy_settings universe lists.",
+        )
+        _require(
+            hard_cap_open_orders_budget is not None,
+            "BUY_ORDERS has submit rows but hard_cap_open_orders_budget was not "
+            "supplied (require_safety_context).",
+        )
+
+    net_new_rows = any(
+        _normalize_action(row.get("order_intent")) in _NET_NEW_BUY_INTENTS
+        for row in buy_order_rows
+    )
+    if net_new_rows:
+        has_per_bucket = isinstance(strategy_settings, Mapping) and isinstance(
+            strategy_settings.get("max_new_tickers_per_week"), Mapping
+        )
+        _require(
+            max_new_tickers_per_week is not None or has_per_bucket,
+            "BUY_ORDERS opens net-new tickers but no max_new_tickers_per_week ceiling "
+            "was supplied (require_safety_context).",
+        )
+        _require(
+            target_new_buy_budget_this_run is not None,
+            "BUY_ORDERS opens net-new buy rows but target_new_buy_budget_this_run was "
+            "not supplied (require_safety_context).",
+        )
+
+
 def _resolve_allowed_universe(
     effective_allowed_buy_universe: Collection[str] | None,
     strategy_settings: Mapping[str, Any] | None,
@@ -358,29 +483,64 @@ def _submit_buy_notional(buy_order_rows: list[dict[str, str]]) -> Decimal:
     return total
 
 
+def _net_new_buy_notional(buy_order_rows: list[dict[str, str]]) -> Decimal:
+    """Sum shares*limit_price over net-new buy legs only (``_NET_NEW_BUY_INTENTS``).
+
+    Net-new legs are ``NEW_ORDER`` / ``BUY`` / ``SUBMIT_BUY`` / ``EXECUTE_BUY``.
+    ``REPLACE_EXISTING_*`` (budget-neutral reanchors of already-budgeted exposure),
+    ``CANCEL_EXISTING``, KEEP rows, and blank-intent rows are excluded. This is the
+    notional measured against ``target_new_buy_budget_this_run``: a replacement
+    recycles existing open-order budget at a new anchor and must not consume the
+    per-run new-buy budget — it stays bound by ``hard_cap_open_orders_budget``.
+    """
+    total = Decimal("0")
+    for row in buy_order_rows:
+        if _normalize_action(row.get("order_intent")) not in _NET_NEW_BUY_INTENTS:
+            continue
+        shares = _parse_decimal(row.get("shares"))
+        price = _parse_decimal(row.get("limit_price"))
+        if shares is not None and price is not None:
+            total += shares * price
+    return total
+
+
 def _validate_buy_budget(
     buy_order_rows: list[dict[str, str]],
     hard_cap_open_orders_budget: Any | None,
     target_new_buy_budget_this_run: Any | None,
 ) -> None:
-    """Fail if the recomputed new-submit notional exceeds a provided budget ceiling.
+    """Fail if a recomputed buy notional exceeds its provided budget ceiling.
 
-    Conservative: only new/replace-submit legs contribute (cancel legs excluded);
-    existing kept notional is not added here, so this is an upper-bound submit-side
-    ceiling check, not a full open-order-state reconciliation (deferred to G2).
+    Two distinct notionals are measured against two distinct ceilings:
+
+    * ``hard_cap_open_orders_budget`` is checked against the broader **submit-side**
+      notional (new + replace-submit legs; cancel legs excluded). This upper-bound
+      submit-side floor is **unchanged** and is **not weakened** by G5 — the full
+      total-exposure reconciliation (incl. KEEP existing notional) is the separate
+      G3 check.
+    * ``target_new_buy_budget_this_run`` is checked against the **net-new-only**
+      notional (``_NET_NEW_BUY_INTENTS``; replace / cancel / keep / blank excluded),
+      so replacements and cancels never consume the per-run new-buy budget while
+      remaining subject to the hard cap.
     """
     submit_notional = _submit_buy_notional(buy_order_rows)
-    for label, budget in (
-        ("hard_cap_open_orders_budget", hard_cap_open_orders_budget),
-        ("target_new_buy_budget_this_run", target_new_buy_budget_this_run),
+    net_new_notional = _net_new_buy_notional(buy_order_rows)
+    for label, budget, notional, descriptor in (
+        ("hard_cap_open_orders_budget", hard_cap_open_orders_budget, submit_notional, "new-submit"),
+        (
+            "target_new_buy_budget_this_run",
+            target_new_buy_budget_this_run,
+            net_new_notional,
+            "net-new",
+        ),
     ):
         if budget is None:
             continue
         ceiling = _parse_decimal(budget)
         _require(ceiling is not None, f"{label} is not a valid number: {budget!r}.")
         _require(
-            submit_notional <= ceiling,
-            f"BUY_ORDERS new-submit notional {submit_notional} exceeds {label} {ceiling}.",
+            notional <= ceiling,
+            f"BUY_ORDERS {descriptor} notional {notional} exceeds {label} {ceiling}.",
         )
 
 
@@ -681,6 +841,7 @@ def validate_orders_output(
     target_new_buy_budget_this_run: Any | None = None,
     max_new_tickers_per_week: int | None = None,
     existing_buy_open_orders: ExistingBuyOpenOrdersParseResult | None = None,
+    require_safety_context: bool = False,
 ) -> dict[str, str]:
     """Validate the required Step 4 output text artifacts.
 
@@ -693,6 +854,9 @@ def validate_orders_output(
       checks run when the corresponding context (settings / universe / budget) is
       supplied; a per-bucket new-ticker check (base vs extended, PR per-bucket)
       additionally runs whenever strategy settings are supplied;
+    * ``hard_cap_open_orders_budget`` bounds the broader submit-side notional while
+      ``target_new_buy_budget_this_run`` (G5) bounds the **net-new-only** notional
+      (replacement / cancel / keep legs excluded); each runs when supplied;
     * total open-order exposure reconciliation (PR G3) runs when both an audited
       decision packet and a hard cap are supplied: totals are recomputed from
       ``audited_decision_packet.final_execution_plans`` (not the exec_summary
@@ -703,6 +867,19 @@ def validate_orders_output(
       section (2a), the buy-side SSOT) are supplied: each KEEP plan's existing
       budget / compiled notional is cross-checked against the operator snapshot
       rather than trusted from the audited packet alone.
+
+    Conflicting-action detection (same ticker net-new + standalone cancel, or a
+    ladder slot carrying inconsistent ``order_intent`` values) always runs.
+
+    When ``require_safety_context`` is set, the validator fails closed if BUY
+    submit rows are present but the universe / hard-cap budget context is missing,
+    or if net-new BUY rows are present but the new-ticker ceiling or
+    ``target_new_buy_budget_this_run`` is missing (the primary ``run_step4 parse``
+    path opts in).
+    With ``require_safety_context`` left ``False`` (the default for standalone
+    callers), those checks remain *skipped* when their context is absent — so a
+    standalone call without an audited packet / settings / budgets is **not** a
+    complete safety validator and must not be treated as one.
 
     All checks are deterministic and fail closed (raise ``ValueError``). The
     universe/budget/new-ticker checks apply only to submit/new buy legs, never to
@@ -724,11 +901,23 @@ def validate_orders_output(
     buy_order_rows = _buy_order_rows(template4_orders)
     _validate_buy_row_numerics(buy_order_rows)
     _validate_no_duplicate_buy_rows(buy_order_rows)
+    _validate_no_conflicting_buy_actions(buy_order_rows)
 
     allowed_universe = _resolve_allowed_universe(
         effective_allowed_buy_universe,
         strategy_settings,
     )
+
+    if require_safety_context:
+        _enforce_safety_context_present(
+            buy_order_rows,
+            allowed_universe=allowed_universe,
+            hard_cap_open_orders_budget=hard_cap_open_orders_budget,
+            target_new_buy_budget_this_run=target_new_buy_budget_this_run,
+            max_new_tickers_per_week=max_new_tickers_per_week,
+            strategy_settings=strategy_settings,
+        )
+
     if allowed_universe is not None:
         _validate_buy_universe_allowlist(buy_order_rows, allowed_universe)
 

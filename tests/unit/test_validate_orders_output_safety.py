@@ -582,3 +582,245 @@ def test_aggregate_check_still_works_for_legacy_int_only_callers(tmp_path: Path)
     body = new_order_row("QQQ") + new_order_row("SMH")
     with pytest.raises(ValueError, match="exceeding max_new_tickers_per_week=1"):
         run(tmp_path, body, max_new_tickers_per_week=1)
+
+
+# --- conflicting-action detection (always-on, additive to exact-duplicate) ----
+
+
+def test_net_new_and_standalone_cancel_same_ticker_fails(tmp_path: Path) -> None:
+    body = (
+        "ticker=QQQ | plan_type=new_limit_ladder | step_name=L1 | shares=1 | limit_price=10.00 | order_intent=NEW_ORDER\n"
+        "ticker=QQQ | plan_type=cancel_existing_ladder | step_name=L1 | shares=1 | limit_price=10.00 | order_intent=CANCEL_EXISTING\n"
+    )
+    with pytest.raises(ValueError, match="conflicting actions for the same ticker"):
+        run(tmp_path, body, strategy_settings=settings())
+
+
+def test_same_slot_inconsistent_intent_fails(tmp_path: Path) -> None:
+    # Same (ticker, plan_type, step) slot with two distinct intents -> conflict.
+    body = (
+        "ticker=QQQ | plan_type=new_limit_ladder | step_name=L1 | shares=1 | limit_price=10.00 | order_intent=NEW_ORDER\n"
+        "ticker=QQQ | plan_type=new_limit_ladder | step_name=L1 | shares=1 | limit_price=10.00 | order_intent=SUBMIT_BUY\n"
+    )
+    with pytest.raises(ValueError, match="conflicting order_intent values for the same ladder slot"):
+        run(tmp_path, body, strategy_settings=settings())
+
+
+def test_replace_cancel_and_submit_legs_not_flagged_as_action_conflict(tmp_path: Path) -> None:
+    # REPLACE_* legs are a coordinated pair (not a plain CANCEL_EXISTING) -> allowed.
+    body = (
+        "ticker=SMH | plan_type=cancel_existing_ladder_for_replace | step_name=L1 | shares=2 | limit_price=550.00 | order_intent=REPLACE_EXISTING_CANCEL_LEG\n"
+        "ticker=SMH | plan_type=new_limit_ladder | step_name=L1 | shares=2 | limit_price=490.00 | order_intent=REPLACE_EXISTING_SUBMIT_LEG\n"
+    )
+    run(tmp_path, body, strategy_settings=settings())
+
+
+def test_cancel_and_new_for_different_tickers_pass(tmp_path: Path) -> None:
+    body = (
+        "ticker=QQQ | step_name=L1 | shares=1 | limit_price=10.00 | order_intent=NEW_ORDER\n"
+        "ticker=CIBR | step_name=L1 | shares=1 | limit_price=10.00 | order_intent=CANCEL_EXISTING\n"
+    )
+    run(tmp_path, body, strategy_settings=settings())
+
+
+def test_standalone_cancel_only_is_not_action_conflict(tmp_path: Path) -> None:
+    body = "ticker=GRID | step_name=L1 | shares=2 | limit_price=10.00 | order_intent=CANCEL_EXISTING\n"
+    run(tmp_path, body, strategy_settings=settings())
+
+
+# --- require_safety_context (opt-in fail-closed when context missing) ---------
+
+
+def test_require_safety_context_missing_hard_cap_with_buy_rows_fails(tmp_path: Path) -> None:
+    body = new_order_row("QQQ")
+    # Universe resolves (QQQ in settings) but no hard cap supplied -> fail closed.
+    with pytest.raises(ValueError, match="hard_cap_open_orders_budget was not supplied"):
+        run(tmp_path, body, strategy_settings=settings(), require_safety_context=True)
+
+
+def test_require_safety_context_missing_universe_with_buy_rows_fails(tmp_path: Path) -> None:
+    body = new_order_row("QQQ")
+    # No settings / explicit universe -> allowed universe unresolvable -> fail closed.
+    with pytest.raises(ValueError, match="allowed buy universe could not be resolved"):
+        run(tmp_path, body, hard_cap_open_orders_budget="5000", require_safety_context=True)
+
+
+def test_require_safety_context_missing_max_tickers_with_net_new_fails(tmp_path: Path) -> None:
+    body = new_order_row("QQQ")
+    # Universe + hard cap present, but no aggregate int and no per-bucket mapping.
+    with pytest.raises(ValueError, match="no max_new_tickers_per_week ceiling was supplied"):
+        run(
+            tmp_path,
+            body,
+            strategy_settings=settings(),
+            hard_cap_open_orders_budget="5000",
+            require_safety_context=True,
+        )
+
+
+def test_require_safety_context_full_context_passes(tmp_path: Path) -> None:
+    body = "ticker=QQQ | step_name=L1 | shares=2 | limit_price=10.00 | order_intent=NEW_ORDER\n"
+    run(
+        tmp_path,
+        body,
+        strategy_settings=settings(),
+        hard_cap_open_orders_budget="5000",
+        target_new_buy_budget_this_run="5000",
+        max_new_tickers_per_week=2,
+        require_safety_context=True,
+    )
+
+
+def test_require_safety_context_no_buy_rows_passes_without_budget(tmp_path: Path) -> None:
+    # No submit rows at all -> no budget / universe / max-ticker context required.
+    run(tmp_path, "NONE\n", require_safety_context=True)
+
+
+def test_require_safety_context_cancel_only_passes_without_budget(tmp_path: Path) -> None:
+    # Cancel-only output has no submit/new legs -> no budget/universe required.
+    body = "ticker=GRID | step_name=L1 | shares=2 | limit_price=10.00 | order_intent=CANCEL_EXISTING\n"
+    run(tmp_path, body, strategy_settings=settings(), require_safety_context=True)
+
+
+def test_without_require_safety_context_missing_budget_still_skips(tmp_path: Path) -> None:
+    # Backward-compat: default (require_safety_context=False) keeps the lenient
+    # skip-when-context-missing behavior for standalone callers.
+    body = new_order_row("QQQ")
+    run(tmp_path, body, strategy_settings=settings())
+
+
+# --- G5: target_new_buy_budget_this_run = net-new-only ceiling ----------------
+
+
+def replace_submit_row(ticker: str, shares: int, price: str, step: str = "L1") -> str:
+    return (
+        f"ticker={ticker} | step_name={step} | shares={shares} | limit_price={price} "
+        "| order_intent=REPLACE_EXISTING_SUBMIT_LEG\n"
+    )
+
+
+def net_new_row(ticker: str, shares: int, price: str, step: str = "L1") -> str:
+    return (
+        f"ticker={ticker} | step_name={step} | shares={shares} | limit_price={price} "
+        "| order_intent=NEW_ORDER\n"
+    )
+
+
+def test_net_new_notional_over_target_budget_fails(tmp_path: Path) -> None:
+    # Net-new notional 10*500 = 5000 > target 1000 -> fail (net-new ceiling).
+    body = net_new_row("QQQ", 10, "500.00")
+    with pytest.raises(ValueError, match="net-new notional .* exceeds target_new_buy_budget_this_run"):
+        run(tmp_path, body, strategy_settings=settings(), target_new_buy_budget_this_run="1000")
+
+
+def test_net_new_notional_within_target_budget_passes(tmp_path: Path) -> None:
+    # Net-new notional 2*500 = 1000 <= target 1000 -> pass.
+    body = net_new_row("QQQ", 2, "500.00")
+    run(tmp_path, body, strategy_settings=settings(), target_new_buy_budget_this_run="1000")
+
+
+def test_replacement_only_notional_over_target_budget_passes(tmp_path: Path) -> None:
+    # Large replacement notional (50*500 = 25000) but target budget tiny (100):
+    # replacements are budget-neutral reanchors -> not counted toward target -> pass.
+    body = replace_submit_row("SMH", 50, "500.00")
+    run(tmp_path, body, strategy_settings=settings(), target_new_buy_budget_this_run="100")
+
+
+def test_replacement_only_notional_still_subject_to_hard_cap(tmp_path: Path) -> None:
+    # The SAME large replacement notional IS bounded by the hard cap (submit-side).
+    body = replace_submit_row("SMH", 50, "500.00")
+    with pytest.raises(ValueError, match="exceeds hard_cap_open_orders_budget"):
+        run(tmp_path, body, strategy_settings=settings(), hard_cap_open_orders_budget="1000")
+
+
+def test_mixed_replacement_and_net_new_counts_only_net_new_toward_target(tmp_path: Path) -> None:
+    # Net-new QQQ 1*100 = 100; replacement SMH 100*100 = 10000.
+    # Target 500: net-new (100) <= 500 passes; if replacement counted, 10100 > 500
+    # would have failed. Hard cap set high so it does not bind here.
+    body = net_new_row("QQQ", 1, "100.00") + replace_submit_row("SMH", 100, "100.00")
+    run(
+        tmp_path,
+        body,
+        strategy_settings=settings(),
+        target_new_buy_budget_this_run="500",
+        hard_cap_open_orders_budget="50000",
+    )
+
+
+def test_hard_cap_still_applies_independently_of_target(tmp_path: Path) -> None:
+    # Net-new 100*500 = 50000: under target (60000) but over hard cap (1000).
+    # Hard cap must still fire (checked against submit-side notional).
+    body = net_new_row("QQQ", 100, "500.00")
+    with pytest.raises(ValueError, match="exceeds hard_cap_open_orders_budget"):
+        run(
+            tmp_path,
+            body,
+            strategy_settings=settings(),
+            target_new_buy_budget_this_run="60000",
+            hard_cap_open_orders_budget="1000",
+        )
+
+
+def test_cancel_only_does_not_count_toward_target_budget(tmp_path: Path) -> None:
+    body = "ticker=GRID | step_name=L1 | shares=1000 | limit_price=500.00 | order_intent=CANCEL_EXISTING\n"
+    run(tmp_path, body, strategy_settings=settings(), target_new_buy_budget_this_run="1")
+
+
+# --- G5: require_safety_context fail-closed on missing target budget ----------
+
+
+def test_require_safety_context_missing_target_budget_with_net_new_fails(tmp_path: Path) -> None:
+    # Universe + hard cap + max-tickers present, but no target budget and net-new rows.
+    body = new_order_row("QQQ")
+    with pytest.raises(ValueError, match="target_new_buy_budget_this_run was not supplied"):
+        run(
+            tmp_path,
+            body,
+            strategy_settings=settings(),
+            hard_cap_open_orders_budget="5000",
+            max_new_tickers_per_week=2,
+            require_safety_context=True,
+        )
+
+
+def test_require_safety_context_no_buy_rows_passes_without_target_budget(tmp_path: Path) -> None:
+    run(
+        tmp_path,
+        "NONE\n",
+        strategy_settings=settings(),
+        hard_cap_open_orders_budget="5000",
+        require_safety_context=True,
+    )
+
+
+def test_require_safety_context_cancel_only_passes_without_target_budget(tmp_path: Path) -> None:
+    body = "ticker=GRID | step_name=L1 | shares=2 | limit_price=10.00 | order_intent=CANCEL_EXISTING\n"
+    run(
+        tmp_path,
+        body,
+        strategy_settings=settings(),
+        hard_cap_open_orders_budget="5000",
+        require_safety_context=True,
+    )
+
+
+def test_require_safety_context_replacement_only_passes_without_target_or_max_tickers(
+    tmp_path: Path,
+) -> None:
+    # Replacement-only: submit rows present (needs universe + hard cap), but no
+    # net-new rows -> neither max_new_tickers_per_week nor target budget required.
+    body = replace_submit_row("SMH", 1, "10.00")
+    run(
+        tmp_path,
+        body,
+        strategy_settings=settings(),
+        hard_cap_open_orders_budget="5000",
+        require_safety_context=True,
+    )
+
+
+def test_without_require_safety_context_missing_target_budget_still_skips(tmp_path: Path) -> None:
+    # Backward-compat: default lenient mode does not require target budget even with
+    # net-new rows (the budget check is simply skipped when no budget is supplied).
+    body = new_order_row("QQQ")
+    run(tmp_path, body, strategy_settings=settings())

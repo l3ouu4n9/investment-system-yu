@@ -6,7 +6,7 @@ from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import Any
 
-from investment_orchestrator.common.io import read_text, write_text
+from investment_orchestrator.common.io import atomic_write_text, read_text, write_text
 from investment_orchestrator.parsers.portfolio_snapshot_existing_orders import (
     ExistingBuyOpenOrdersParseResult,
 )
@@ -92,6 +92,7 @@ def extract_orders_and_summary(
     target_new_buy_budget_this_run: Any | None = None,
     max_new_tickers_per_week: int | None = None,
     existing_buy_open_orders: ExistingBuyOpenOrdersParseResult | None = None,
+    require_safety_context: bool = False,
 ) -> tuple[str, str, str]:
     """Read, parse, validate, and write Step 4 text artifacts.
 
@@ -102,9 +103,17 @@ def extract_orders_and_summary(
     overwritten (a prior-good set is preserved); the rejected candidates remain
     under ``quarantine/`` as diagnostics.
 
+    Atomic publish (PR G2.2): each canonical artifact is published via
+    ``atomic_write_text`` (temp-in-dir + ``os.replace``), so a canonical file is
+    never left with partial content even on a mid-publish crash. The replace is
+    per-file, not group-atomic across the three files; see the publish-site
+    comment for the group-level limitation and recovery semantics.
+
     Deterministic post-order safety context (settings / universe / budgets) is
     forwarded to ``validate_orders_output``; omitting it preserves the prior
-    (narrower) validation behavior for standalone callers.
+    (narrower) validation behavior for standalone callers. ``require_safety_context``
+    (set by the primary ``run_step4 parse`` path) makes the validator fail closed
+    when BUY submit rows are present but that context is missing.
     """
     template4_orders_text, order_state_export_text, exec_summary_text = parse_step4_output_text(
         read_text(raw_output_path)
@@ -131,12 +140,24 @@ def extract_orders_and_summary(
         target_new_buy_budget_this_run=target_new_buy_budget_this_run,
         max_new_tickers_per_week=max_new_tickers_per_week,
         existing_buy_open_orders=existing_buy_open_orders,
+        require_safety_context=require_safety_context,
     )
 
-    # Validation passed: publish canonical artifacts, then clean quarantine.
-    write_text(template4_orders_path, _normalize_artifact_text(template4_orders_text))
-    write_text(order_state_export_path, _normalize_artifact_text(order_state_export_text))
-    write_text(exec_summary_path, _normalize_artifact_text(exec_summary_text))
+    # Validation passed: publish canonical artifacts atomically (G2.2), then clean
+    # quarantine. Each canonical file is written via atomic_write_text (temp-in-dir +
+    # os.replace), so no canonical file is ever left with partial content — a reader
+    # sees either the complete prior file or the complete new one.
+    #
+    # Per-file atomic, NOT group-atomic: the three replaces are independent, so a
+    # crash between them can still leave a *mixed* set (some files updated, others
+    # stale/absent) — but never a partially written file. The validate-before-publish
+    # ordering still guarantees only validated content is ever published, and because
+    # quarantine cleanup runs only after all three replaces succeed, the full validated
+    # set survives under quarantine/ for recovery on a mid-publish failure. A
+    # manifest/versioned-directory publish for true group atomicity is a future option.
+    atomic_write_text(template4_orders_path, _normalize_artifact_text(template4_orders_text))
+    atomic_write_text(order_state_export_path, _normalize_artifact_text(order_state_export_text))
+    atomic_write_text(exec_summary_path, _normalize_artifact_text(exec_summary_text))
     _cleanup_quarantine([quarantine_template4, quarantine_state, quarantine_summary])
 
     return template4_orders_text, order_state_export_text, exec_summary_text

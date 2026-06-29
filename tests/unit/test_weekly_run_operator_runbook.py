@@ -44,6 +44,17 @@ def test_runbook_states_llm_booleans_not_sufficient(doc_text: str) -> None:
     assert "necessary but not sufficient" in doc_text
 
 
+def test_runbook_documents_weekly_level_controlled_no_trade(doc_text: str) -> None:
+    for phrase in (
+        "run_weekly",
+        "weekly_outcome.json",
+        "terminal_result",
+        "exits `0`",
+        "not LLM generated",
+    ):
+        assert phrase in doc_text, f"runbook missing weekly-command phrase: {phrase!r}"
+
+
 def test_runbook_lists_canonical_step4_files_and_block_artifacts(doc_text: str) -> None:
     for artifact in (
         "template4_orders.txt",

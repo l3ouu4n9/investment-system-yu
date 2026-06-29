@@ -41,6 +41,56 @@ PYTHONPATH=src uv run python -m investment_orchestrator.cli.run_status
 A `render`/`parse` that **exits non-zero** means a deterministic gate blocked the step — do not work
 around it. See §4/§5.
 
+### 2.1 Weekly-level command (controlled routing)
+
+There is a top-level weekly command that routes the run deterministically from the Step 1
+degraded-mode decision (it reuses the existing gates; it does not relax them):
+
+```bash
+PYTHONPATH=src uv run python -m investment_orchestrator.cli.run_weekly
+# writes artifacts/current/weekly_outcome.json (and run_summary.json on the NO_TRADE path)
+```
+
+- **`STRICT_FRESH` + actionable permission** → proceeds to the existing Step 2 render path. Continue
+  the manual `run_step2 parse` → `run_step3` → `run_step4` flow. The weekly run is **not** complete
+  here.
+- **Degraded / blocked / missing / malformed research** (Step 1 state not `STRICT_FRESH`, e.g.
+  `DEGRADED_WITH_LAST_GOOD`, `STRICT_STALE`, `DEGRADED_NO_RESEARCH`, `INVALID_CONTRACT`, `NO_OUTPUT`,
+  `MANUAL_REVIEW_REQUIRED`) → a **deterministic controlled `NO_TRADE` terminal outcome**. The command
+  does **not** enter the Step 2 LLM path and does **not** touch Step 3/4; it writes `run_summary.json`
+  and `weekly_outcome.json` and finishes as a *safe completion*.
+
+**Step-level vs weekly-level exit codes.** Step-level commands (e.g. `run_step2 render`) deliberately
+**fail closed and exit non-zero** when a gate blocks them — that behavior is unchanged and is correct.
+The weekly-level command interprets that same fail-closed gate as a legitimate **no-trade terminal
+outcome and exits `0`**. Automation must read `weekly_outcome.json` (`terminal_result` /
+`weekly_completed`), **not** the exit code, to decide whether the run is tradeable. A non-zero exit
+from `run_weekly` means a genuine operational error, never a controlled `NO_TRADE`.
+
+`weekly_outcome.json` is a **deterministic operational artifact** — it is **not** LLM generated
+(`is_llm_generated` is always `false`) and **not** an order output. It never fabricates a Step 2
+decision packet, Step 3 audit packet, or Step 4 order output.
+
+### 2.2 Strategy-settings budgets to review before each run
+
+Two operator-controlled budget keys in `inputs/current/strategy_settings.yaml` must be reviewed
+**before** each weekly run / Step 4. They are **deterministic operator input, not LLM-generated**, and
+must **not** be inferred from the Step 2 / Step 3 LLM proposed budget — set them explicitly each run:
+
+- [ ] Review `hard_cap_open_orders_budget`
+- [ ] Review `target_new_buy_budget_this_run`
+
+- `hard_cap_open_orders_budget` = ceiling on **total open-order exposure** (all open buy orders,
+  including kept / replaced existing orders).
+- `target_new_buy_budget_this_run` = **USD** ceiling on **this run's net-new buy-side deployment
+  only**. It applies **only to net-new buy orders**; replacement, cancel-only, and no-buy runs do
+  **not** consume it.
+- Both are enforced deterministically during **Step 4 post-order validation**.
+- If `target_new_buy_budget_this_run` is **missing and net-new BUY orders exist** in the primary
+  Step 4 parse path, validation **fails closed** (no orders published).
+- If **stale**, `target_new_buy_budget_this_run` may **over-allow or over-block** new deployment —
+  review it every run even when `hard_cap_open_orders_budget` is unchanged.
+
 ## 3. Deterministic gates (where the run can fail closed)
 
 | Stage | Gate | Effect |
@@ -86,6 +136,8 @@ NO_TRADE is a valid, safe outcome. Missing one trade is preferable to trading on
 ## 6. What to inspect
 
 - `artifacts/current/run_summary.json`
+- `artifacts/current/weekly_outcome.json` — weekly-level terminal outcome (`terminal_result`,
+  `weekly_completed`, `research_state`); deterministic, not LLM generated, not an order output
 - `artifacts/current/step1_research/research_degraded_mode_decision.json`
 - `artifacts/current/step2_decision_builder/step2_blocked_by_research_gate.json`
 - `artifacts/current/step3_audit_engine/step3_blocked_by_upstream_gate.json`

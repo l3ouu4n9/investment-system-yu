@@ -336,8 +336,10 @@ def parse_step4_output() -> dict[str, str]:
         strategy_settings=strategy_settings,
         effective_allowed_buy_universe=load_effective_allowed_buy_universe(),
         hard_cap_open_orders_budget=strategy_settings.get("hard_cap_open_orders_budget"),
+        target_new_buy_budget_this_run=strategy_settings.get("target_new_buy_budget_this_run"),
         max_new_tickers_per_week=_max_new_tickers_per_week_total(strategy_settings),
         existing_buy_open_orders=existing_buy_open_orders,
+        require_safety_context=True,
     )
     return {
         "template4_orders_path": str(step4_template4_orders_path()),

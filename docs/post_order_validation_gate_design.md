@@ -207,17 +207,20 @@ existing compile-ready / diagnostics checks are unchanged; still fail-closed in 
   or overwritten (a prior-good set is preserved byte-for-byte), and the rejected candidates remain
   under `quarantine/` as diagnostics. On success the three quarantine files are removed and the
   `quarantine/` directory is removed if empty.
-- **Canonical publish atomicity (G2.1 note):** G2 prevents validation-failed artifacts from
-  overwriting the canonical Step 4 artifacts. However, once validation passes, the three canonical
-  writes (`template4_orders.txt`, `order_state_export.txt`, `exec_summary.txt`) are still
-  **sequential and not cross-file atomic**. A rare mid-publish write/process failure (e.g. disk
-  full, permission error, or process kill between writes) could therefore leave a **partial
-  canonical set** (one file updated, the others stale or missing). In that case the exception
-  propagates so the CLI exits non-zero, and — because quarantine cleanup runs only after all three
-  canonical writes succeed — the **full validated set remains under `quarantine/` for recovery**.
-  This is recoverability, not all-or-nothing canonical atomicity. Per-file `os.replace` publishing
-  or a manifest-based atomic publish is deferred as optional **G2.2** hardening (independent of
-  budget reconciliation).
+- **Canonical publish atomicity (G2.2 — implemented):** once validation passes, each canonical Step 4
+  artifact (`template4_orders.txt`, `order_state_export.txt`, `exec_summary.txt`) is published via
+  `atomic_write_text` (`common/io.py`): the bytes are written to a temp file **in the same directory**,
+  flushed and `fsync`-ed, then `os.replace`-d onto the target. Because the rename is same-filesystem and
+  atomic, a reader sees either the complete prior file or the complete new file — **never partially
+  written content**, even on a mid-publish crash. On any write/replace failure the temp is removed
+  best-effort and the target is left untouched (absent or its prior content). **Per-file atomic, not
+  group-atomic:** the three replaces are still independent, so a crash *between* them can leave a *mixed*
+  set (one file updated, the others stale/absent) — but no individual file is ever partial. The
+  validate-before-publish ordering still guarantees only validated content is published, and because
+  quarantine cleanup runs only after all three replaces succeed, the **full validated set remains under
+  `quarantine/` for recovery** on a mid-publish failure. True group-level (all-or-nothing) publish via a
+  manifest / versioned-directory swap remains a possible **future** improvement; it is not implemented
+  and is intentionally not over-engineered here.
 - **Total open-order-state reconciliation:** implemented in **G3** (see the budget-semantics /
   G3 reconciliation bullets above) — totals are recomputed from `final_execution_plans` and
   reconciled against the hard cap, including KEEP_EXISTING existing notional.
@@ -237,10 +240,37 @@ existing compile-ready / diagnostics checks are unchanged; still fail-closed in 
   are present) **fail closed**; an absent `max_new_tickers_per_week` skips only the per-bucket check.
   The aggregate `_validate_max_new_tickers` (int param) is **retained unchanged** for
   backward-compatible legacy/standalone callers.
-- **Still deferred:** semantic conflicting-action detection beyond exact duplicates; hardening the
-  standalone `extract_orders_and_summary.main()` context coverage (it shares the validate-before-write
-  ordering but is still not supplied settings/budgets/universe — weaker by design); atomic publish /
-  `os.replace` (G2.2).
+- **Conflicting-action detection (G1.1 implemented):** `_validate_no_conflicting_buy_actions`
+  runs **always** (pure, no external context), additive to the exact-duplicate check. It fails
+  closed on two narrow, format-safe conflict classes: (a) **action conflict** — the same ticker
+  carries both a net-new buy leg (`NEW_ORDER` / `BUY` / `SUBMIT_BUY` / `EXECUTE_BUY`) and a
+  *standalone* `CANCEL_EXISTING` leg (coordinated `REPLACE_EXISTING_*_LEG` pairs are intentionally
+  exempt); and (b) **slot intent conflict** — the same `(ticker, plan_type, step_name)` ladder slot
+  appears with two or more distinct non-empty `order_intent` values. Multi-step ladders (distinct
+  `step_name`) and replace cancel/submit legs (distinct `plan_type`) occupy different slots and pass.
+- **Fail-closed on missing safety context (G1.1 implemented):** an opt-in
+  `require_safety_context` flag makes `validate_orders_output` fail closed when BUY **submit** rows
+  are present but the allowed universe / `hard_cap_open_orders_budget` is missing, or when net-new
+  rows are present but no `max_new_tickers_per_week` ceiling (aggregate int or per-bucket mapping) is
+  supplied. The primary `parse_step4_output` path opts in (via `extract_orders_and_summary`), so a
+  settings file missing a budget / universe / new-ticker ceiling now fails closed rather than
+  silently skipping the corresponding check while real BUY rows exist. Cancel-only output (no
+  submit/new legs) requires no budget/universe context. The flag defaults `False`, so standalone
+  callers keep the prior lenient skip-when-context-missing behavior — and are therefore **not** a
+  complete safety validator (documented in the function docstring and covered by a regression test).
+- **`target_new_buy_budget_this_run` (source defined in §10; wired in G5 — implemented):**
+  `validate_orders_output` accepts and enforces this ceiling; the deterministic operator source is the
+  `target_new_buy_budget_this_run` top-level key in `inputs/current/strategy_settings.yaml` (USD,
+  non-negative), and the primary `parse_step4_output` path now wires it
+  (`strategy_settings.get("target_new_buy_budget_this_run")`). It bounds **net-new** buy notional only
+  (replacement / cancel / keep legs excluded); the hard cap still bounds broader exposure. Under
+  `require_safety_context` it fails closed when net-new BUY rows exist but the key is missing. See §10
+  for the source design and §10.8 for the implementation summary.
+- **Still deferred:** hardening the standalone `extract_orders_and_summary.main()` context coverage
+  (it shares the validate-before-write ordering but is still not supplied settings/budgets/universe —
+  weaker by design, and `require_safety_context` defaults off there); true group-level (all-or-nothing)
+  multi-file publish (per-file atomic publish is implemented in **G2.2** — see above; wiring
+  `target_new_buy_budget_this_run` is implemented in **G5** — see §10).
 
 ## 7. Non-goals
 
@@ -312,3 +342,212 @@ be null, so sell notional is not always computable).
   non-empty `final_sell_execution_plans`.**
 - Until that validator exists, **any non-empty sell output must be treated as manual-review /
   not v1-safe.**
+
+---
+
+## 10. `target_new_buy_budget_this_run` source design (source design — **IMPLEMENTED in G5**)
+
+**Status: source design recorded here; IMPLEMENTED in G5 (see §10.8).** This section records *where*
+the validator's `target_new_buy_budget_this_run` ceiling comes from, how it is represented, when it
+applies, and how the validator consumes it. The **design** itself changed no prompt, no Step 1/2/3/4
+investment semantics, no order compiler, and no broker/live path, and added no separate gate; the
+**G5** implementation (§10.8) wires the operator value into the *existing* post-order validator only —
+it does not change order generation, sizing, or any LLM decision. (The operator runbook called this
+work item "G2 budget source"; because the doc's `G2` label is already used for validate-before-write /
+quarantine, the implementation PR is labelled **G5** to keep the PR sequence unambiguous.)
+
+### 10.1 Current state (inspected)
+
+- `validate_orders_output(..., target_new_buy_budget_this_run=None)` **already accepts and enforces**
+  this ceiling (`_validate_buy_budget`): it recomputes `Σ(shares × limit_price)` over buy-side
+  submit legs and fails closed if that exceeds the supplied number. `extract_orders_and_summary`
+  also already threads the parameter through. **It is never supplied a value** — the primary
+  `parse_step4_output` path passes `hard_cap_open_orders_budget` (from `strategy_settings.yaml`) and
+  `max_new_tickers_per_week`, but **not** `target_new_buy_budget_this_run`, so the check is inert.
+- **There is no operator-controlled, deterministic source for it.** `strategy_settings.yaml` has no
+  such key (only `hard_cap_open_orders_budget: <number>`), and the strategy-settings validator is
+  **permissive** — it ignores unknown top-level keys — so adding the key needs **no schema change**.
+- **Budget data that already flows (all LLM-computed, not operator-controlled):** the Step 2
+  `decision_packet.json` `input_normalization` block carries `hard_cap_open_orders_budget` (echoed
+  from settings), `existing_buy_open_orders_budget_total`, `proposed_buy_open_orders_budget_total`,
+  and `open_order_budget_headroom_after_actions`; Step 3's audited packet carries the same plus
+  `proposed_buy_open_orders_budget_total_after_audit` / `open_order_budget_headroom_after_audit`, and
+  per-plan `target_open_order_budget` / `existing_open_order_budget` / `delta_budget`. These are
+  **totals / per-ticker targets** (≈ the G3 `total_target_open_order_budget` quantity), not a clean
+  "net-new deployment this run" flow, and they are **produced by the Step 2/3 LLM**.
+- **No cash / account-balance input exists** anywhere (the portfolio snapshot tracks holdings,
+  existing open orders, and sellable lots only). A cash-based deterministic derivation is therefore
+  not possible today without a new input.
+
+### 10.2 Candidate sources compared
+
+| Opt | Source | Deterministic? | Pros | Cons |
+|---|---|---|---|---|
+| **A** | New operator key in `strategy_settings.yaml` | Yes | Sits beside `hard_cap_open_orders_budget` (same owner/units/loader); already-loaded in Step 4; permissive schema ⇒ no schema change; one-line wiring; git-auditable | Operator must update it per run (same staleness risk `hard_cap_open_orders_budget` already has) |
+| **B** | New per-run input file `inputs/current/weekly_budget.yaml` | Yes | Explicit per-run artifact; isolates "policy" from "per-run input" | New file + loader + parser + new missing-file failure mode; the "don't make settings weekly-mutable" rationale is **weak** because `strategy_settings.yaml` already carries `as_of` / `run_timestamp_et` and a per-run `hard_cap_open_orders_budget` (it *is* already a per-run operator file) |
+| **C** | Deterministic derivation (e.g. `hard_cap − existing_buy_open_orders_budget_total`) | Partly | No new input | Equals full hard-cap headroom ⇒ never binds tighter than the G3 total-exposure check, so it is **not a meaningful independent throttle**; the headroom figure is itself derived from LLM `proposed_*` totals; needs more design and a cash input to be a real "deployable" number |
+| **D** | Explicit operator per-run override (a flag/field the operator sets each run) | Yes | Safest, fully operator-controlled | Equivalent to A or B depending on where it lives; on its own adds plumbing without deciding the home |
+| **E** | Hybrid clamp: validator enforces `min(operator_target, hard_cap headroom)` and treats the Step 2/3 `proposed_*` as a *proposal* to cross-check, never the authority | Yes (authority) | Matches the stated preference: LLM may propose, deterministic operator value binds; uses artifacts that already exist | More moving parts; best delivered *after* A establishes the authoritative operator value |
+
+### 10.3 Recommended source — **Option A**, governed by the **Option E** philosophy
+
+Add an **operator-controlled key to `strategy_settings.yaml`** as the single authoritative,
+deterministic source, and have the validator enforce it. The Step 2/3 LLM `proposed_*` totals are
+treated as a *proposal* only — the deterministic operator value clamps/rejects, never the reverse.
+
+Rationale:
+
+1. `strategy_settings.yaml` is **already a per-run operator file** (`as_of`, `run_timestamp_et`, and a
+   per-run `hard_cap_open_orders_budget`), so a per-run budget belongs there — Option B's "avoid
+   weekly-mutable settings" benefit does not really apply.
+2. The sibling concept `hard_cap_open_orders_budget` already lives there with the **same units, owner,
+   and update cadence**, and Step 4 already loads settings and passes the hard cap to the validator —
+   so wiring is **one line** (`strategy_settings.get("target_new_buy_budget_this_run")`).
+3. The settings validator is **permissive**, so **no schema change** is required.
+4. It satisfies the explicit preference: **the LLM is not the sole authority** — the operator value is
+   deterministic and authoritative; Step 2 may *propose* (`proposed_buy_open_orders_budget_total_after_audit`)
+   but the validator clamps/rejects against the operator value.
+
+### 10.4 Field specification
+
+- **Exact field name:** `target_new_buy_budget_this_run` (matches the existing validator parameter, so
+  wiring is a direct pass-through).
+- **Location / artifact:** top-level key in `inputs/current/strategy_settings.yaml`, adjacent to
+  `hard_cap_open_orders_budget`.
+- **Type / units:** a single non-negative number (int or float; `Decimal`-parseable), **US dollars** of
+  **net-new** buy-side open-order *notional* intended this run. Example: `target_new_buy_budget_this_run: 5000.00`.
+- **Required vs optional:** an *optional* key in the file, but **conditionally required at validation
+  time**: when the run emits net-new BUY submit rows and `require_safety_context=True` (the primary
+  `parse_step4_output` path), a missing value must **fail closed** — mirroring how the hard cap /
+  universe are already required when submit rows exist, and how `max_new_tickers_per_week` is required
+  when net-new rows exist. Standalone callers (`require_safety_context=False`) keep the lenient
+  skip-when-missing behavior.
+- **Default behavior when missing:** no implicit default and **no derivation** — absence with net-new
+  rows under `require_safety_context` is a fail-closed error (operator must set it); absence with no
+  net-new rows is a no-op (the check is vacuous).
+
+### 10.5 Semantics and interactions
+
+- **Net-new vs replacement (decision):** `target_new_buy_budget_this_run` should bound **net-new legs
+  only** (`NEW_ORDER` / `BUY` / `SUBMIT_BUY` / `EXECUTE_BUY`), **excluding** `REPLACE_EXISTING_*` and
+  `CANCEL_EXISTING`. A replacement re-submits an already-budgeted existing order at a new anchor (the
+  drift policy mandates "same remaining budget only … no budget increase"), so it is **not** new
+  capital and is governed by the *hard cap* (total stock), not by the new-buy *flow*. **Implementation
+  note:** the current `_validate_buy_budget` measures the broader **submit-side** notional (which
+  includes `REPLACE_EXISTING_*` legs). The G5 PR must therefore either (a, recommended) add a
+  net-new-only notional helper and apply the target ceiling to that, or (b) keep the broader
+  submit-side notional and document the ceiling as the conservative "net-new + replace-submit" total.
+  Option (a) is the clean semantic and a small, contained change.
+- **Interaction with `hard_cap_open_orders_budget`:** **independent and additive — both must hold.**
+  The hard cap bounds *total* intended open-order exposure (stock, incl. KEEP_EXISTING; enforced by
+  the G3 reconciliation from `final_execution_plans`). `target_new_buy_budget_this_run` bounds *net-new
+  deployment this run* (flow). The operator should set it ≤ available headroom
+  (`hard_cap − existing kept notional`); if it is set larger than the hard cap, the hard cap simply
+  binds first (harmless misconfiguration). The validator enforces the two ceilings separately.
+- **Interaction with `max_new_tickers_per_week`:** complementary, different dimensions — the budget is
+  a **dollar** ceiling on net-new deployment; `max_new_tickers_per_week` is a **count** ceiling on
+  distinct net-new tickers (per-bucket base/extended). A run can be limited by either.
+- **No-buy / no-order runs (NO_TRADE, cancel-only, KEEP-only):** **do not require it.** With zero
+  net-new submit rows the recomputed net-new notional is `0`, so the check is vacuous and the field is
+  not required even under `require_safety_context`.
+- **Extended ETF sleeve:** `target_new_buy_budget_this_run` is a **single aggregate** dollar ceiling on
+  *all* net-new deployment (base + extended combined). The extended sleeve's own limits
+  (`sleeve_budget_cap_pct_of_total_open_orders`, `single_extended_etf_budget_cap_pct_of_total_open_orders`,
+  `activation_minimum_effective_budget_pct_of_total_open_orders`) are expressed as **percentages of
+  total open orders** and remain **prompt-enforced upstream (Step 2/3)** — the G5 PR does **not** fold
+  them into the validator. The aggregate budget sits orthogonally above the per-sleeve pct caps.
+- **LLM proposal cross-check (optional, Option E):** the G5 PR *may* additionally fail closed when the
+  audited packet's `proposed_buy_open_orders_budget_total_after_audit` exceeds
+  `target_new_buy_budget_this_run` (the LLM proposed more new deployment than the operator authorized).
+  This is belt-and-suspenders on top of the recomputed-rows check and can be split into its own PR; the
+  authoritative check remains the **deterministic recomputation of net-new submit notional vs the
+  operator value** (never trusting an LLM-restated total).
+
+### 10.6 Implementation PR — **G5 (Option A — implemented; see §10.8)**
+
+Minimal, additive, deterministic — no prompt / compiler / investment-semantics change:
+
+1. Add `target_new_buy_budget_this_run: <number>` to `inputs/current/strategy_settings.yaml`
+   (operator-maintained; permissive schema ⇒ no settings-validator change required, though an optional
+   non-negative-number check could be added).
+2. In `parse_step4_output`, pass `target_new_buy_budget_this_run=strategy_settings.get("target_new_buy_budget_this_run")`
+   into `extract_orders_and_summary` (one line; the parameter is already threaded to the validator).
+3. Extend `_enforce_safety_context_present` so that, under `require_safety_context`, **net-new** BUY
+   submit rows require a `target_new_buy_budget_this_run` (fail closed when missing) — gated exactly
+   like `max_new_tickers_per_week` is today.
+4. (Recommended, per §10.5) apply the target ceiling to a **net-new-only** notional rather than the
+   broader submit-side notional.
+5. Unit tests: net-new notional over/under the operator budget; replacement-only and cancel-only runs
+   not gated by it; NO_TRADE not gated; `require_safety_context` fail-closed when net-new rows exist
+   but the key is missing; backward-compat skip for standalone callers.
+
+**Why not B / C:**
+
+- **B (new `weekly_budget.yaml`):** its main rationale (keep `strategy_settings.yaml` non-weekly-mutable)
+  does not hold — settings is already per-run — so it adds a file, loader, parser, and a missing-file
+  failure mode for no real isolation benefit. Reconsider only if the operator inputs are later split into
+  a dedicated per-run bundle.
+- **C (deterministic derivation):** equals full hard-cap headroom, so it never binds tighter than the
+  existing G3 total-exposure check (not an independent throttle), and the headroom it would derive from
+  is itself an LLM-computed total. A genuine cash-based "deployable" derivation needs a cash input that
+  does not exist today; defer.
+
+### 10.7 Non-goals & rollback (this design)
+
+- **Non-goals:** no change to the order-compiler output/format, prompts, Step 1/2/3/4 decision or
+  sizing semantics, or the broker/live path; no new gate enabled by this section; the validator
+  parameter and its `_validate_buy_budget` behavior are unchanged by this doc.
+- **Rollback:** the source design above is docs-only. The G5 implementation (§10.8) is additive
+  validation + one settings key + one wiring line; rollback by reverting those and removing the key.
+
+### 10.8 G5 implementation status (implemented)
+
+G5 wired the deterministic operator-provided per-run new-buy budget into the existing post-order
+validator. **No prompt, Step 1/2/3 LLM decision semantics, order-compiler generation logic,
+investment sizing, or broker/live path was changed; no new gate was added** — G5 only feeds an
+operator value into `validate_orders_output` and widens what the already-enforced checkpoint verifies.
+
+- **Source / location:** `target_new_buy_budget_this_run` is a top-level key in
+  `inputs/current/strategy_settings.yaml`, adjacent to `hard_cap_open_orders_budget`. The
+  strategy-settings validator is permissive, so **no schema change** was required. The committed value
+  is a conservative operator placeholder (≈ half of current open-order headroom, well under the hard
+  cap) and is meant to be reviewed each run; it is **not** derived from any LLM output.
+- **Type / units:** non-negative USD number (parsed as `Decimal`).
+- **Wiring (primary path):** `parse_step4_output` passes
+  `target_new_buy_budget_this_run=strategy_settings.get("target_new_buy_budget_this_run")` into
+  `extract_orders_and_summary` → `validate_orders_output`, with `require_safety_context=True`.
+- **Net-new-only semantics:** the validator measures the ceiling against a **net-new-only** notional
+  (`_net_new_buy_notional`, over `NEW_ORDER` / `BUY` / `SUBMIT_BUY` / `EXECUTE_BUY`). `REPLACE_EXISTING_*`,
+  `CANCEL_EXISTING`, KEEP, and blank-intent legs are **excluded** — replacements recycle already-budgeted
+  exposure and must not consume the per-run new-buy budget.
+- **Hard cap unchanged:** `hard_cap_open_orders_budget` continues to bound the broader submit-side
+  notional (and the G3 total-exposure reconciliation is unchanged). Replacement/cancel notional remains
+  subject to the hard cap; G5 does **not** weaken it.
+- **Missing-field fail-closed:** under `require_safety_context` (the primary path), net-new BUY rows
+  with a missing `target_new_buy_budget_this_run` **fail closed**. No-buy (`NONE`), cancel-only, and
+  replacement-only runs have no net-new rows and therefore do **not** require it. Standalone callers
+  (`require_safety_context=False`) keep the lenient skip-when-missing behavior (unchanged).
+- **Tests:** `tests/unit/test_validate_orders_output_safety.py` (net-new over/under budget;
+  replacement-only over budget passes but still hard-capped; mixed replacement+net-new counts only
+  net-new; hard cap independent; cancel-only excluded; `require_safety_context` fail-closed on missing
+  target with net-new rows; no-buy / cancel-only / replacement-only not required; standalone skip) and
+  `tests/unit/test_step4_target_budget_wiring.py` (primary path forwards the settings value with
+  `require_safety_context=True`; the real settings file carries a non-negative value).
+
+### 10.9 Operational note — per-run operator review (G5.1 / UX4, docs-only)
+
+`target_new_buy_budget_this_run` is a **deterministic operator input that must be reviewed every
+weekly run**; unlike a stale `hard_cap_open_orders_budget` (still backstopped by the G3 total-exposure
+reconciliation), a stale/forgotten target budget silently **over-allows or over-blocks** net-new
+deployment. To mitigate this operational (not code) risk, the operator-facing docs now include
+explicit review guidance:
+
+- The **weekly run operator runbook** (`weekly_run_operator_runbook.md` §2.2) and the **README**
+  ("Budgets to review before each weekly run") list both budget keys as a pre-run review step and
+  explain hard-cap-vs-target-budget, the net-new-only semantics, and the missing-field fail-closed
+  behavior.
+- **Do not treat the Step 2 / Step 3 LLM `proposed_*` budget as the authority** — automation must not
+  infer `target_new_buy_budget_this_run` from it; the operator sets it explicitly each run. (The
+  optional deterministic Step-2-proposal *cross-check* in §10.5 remains deferred.)
+- This G5.1 / UX4 change is **docs-only**: no production code, prompt, workflow, investment logic,
+  order-compiler, or order-generation behavior changed.

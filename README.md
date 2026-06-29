@@ -38,6 +38,64 @@ PYTHONPATH=src uv run python -m investment_orchestrator.cli.run_step1 render
 PYTHONPATH=src uv run python -m investment_orchestrator.cli.run_step1 parse
 ```
 
+## Weekly Orchestration
+
+The weekly run is a manual Step 1→4 paste flow, but there is a top-level
+weekly command that routes the run deterministically from the Step 1
+degraded-mode decision:
+
+```bash
+PYTHONPATH=src uv run python -m investment_orchestrator.cli.run_weekly
+```
+
+- **`STRICT_FRESH` + actionable permission** → proceeds to the existing Step 2
+  render path (which re-enforces the same fail-closed gate). The weekly run is
+  not complete here; continue with the manual `run_step2 parse` → `run_step3`
+  → `run_step4` flow.
+- **Degraded / blocked / missing / malformed research** (e.g.
+  `DEGRADED_WITH_LAST_GOOD`, `STRICT_STALE`, `DEGRADED_NO_RESEARCH`,
+  `INVALID_CONTRACT`, `NO_OUTPUT`, `MANUAL_REVIEW_REQUIRED`) → a **deterministic
+  controlled `NO_TRADE` terminal outcome**. It does **not** enter the Step 2 LLM
+  path and does **not** touch Step 3/4. It writes `artifacts/current/run_summary.json`
+  and `artifacts/current/weekly_outcome.json`, then finishes as a *safe completion*.
+
+**Exit behavior** is deliberate: the weekly-level command exits `0` for a
+controlled `NO_TRADE` terminal outcome — at the weekly level a fail-closed
+degraded-research gate is a legitimate no-trade terminal result, not a broken
+run. Automation must read `weekly_outcome.json` (`terminal_result` /
+`weekly_completed`) rather than inferring "tradeable" from the exit code. The
+step-level commands (e.g. `run_step2 render`) deliberately keep exiting non-zero
+when a gate blocks them — that fail-closed behavior is unchanged. A non-zero
+exit from `run_weekly` means a genuine operational error, never a controlled
+`NO_TRADE`.
+
+`weekly_outcome.json` is a **deterministic operational artifact**, not an LLM
+output (`is_llm_generated` is always `false`) and not an order output. Key
+fields: `weekly_completed`, `terminal_result`, `reason`, `research_state`,
+`allowed_actions`, `blocked_actions`, `manual_review_required`, and
+`source_artifacts` (tracing back to the Step 1 degraded decision and
+`run_summary.json`). Use `--no-render-step2` to skip the Step 2 prompt render on
+the actionable path. See the
+[Weekly Run Operator Runbook](docs/weekly_run_operator_runbook.md).
+
+### Budgets to review before each weekly run
+
+Before each weekly run (`run_weekly` / Step 4), review the two operator-controlled
+budget keys in `inputs/current/strategy_settings.yaml`:
+
+- `hard_cap_open_orders_budget` — ceiling on **total** open-order exposure (all
+  open buy orders, including kept / replaced existing orders).
+- `target_new_buy_budget_this_run` — USD ceiling on **this run's net-new**
+  buy-side deployment only. Replacement, cancel-only, and no-buy runs do **not**
+  consume it.
+
+Both are **deterministic operator input, not LLM-generated**, and are enforced by
+the Step 4 post-order validator. Automation must **not** infer
+`target_new_buy_budget_this_run` from the Step 2 / Step 3 LLM proposed budget —
+set it explicitly each run. A stale value can over-allow or over-block deployment;
+if it is missing while net-new BUY orders exist, primary-path Step 4 validation
+**fails closed**.
+
 ## Run Status / Blocked-Run Summary
 
 When Step 1 / Deep Research produces no output, invalid research, or a
