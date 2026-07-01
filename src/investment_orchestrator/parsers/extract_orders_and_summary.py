@@ -163,11 +163,50 @@ def extract_orders_and_summary(
     return template4_orders_text, order_state_export_text, exec_summary_text
 
 
-def main() -> int:
+# --- standalone CLI safety messaging (G6) ------------------------------------
+
+PRIMARY_PATH_HINT = (
+    "PYTHONPATH=src uv run python -m investment_orchestrator.cli.run_step4 parse"
+)
+_REFUSAL_MESSAGE = (
+    "refusing to run: this standalone extractor is NOT the primary Step 4 safety "
+    "path and does not supply strategy settings / budgets / universe / audited "
+    "packet (require_safety_context=False), so its substantive order-safety checks "
+    "are skipped.\n"
+    f"Use the safe primary path instead:\n    {PRIMARY_PATH_HINT}\n"
+    "If you only need parser-development / debugging output (NOT validated orders), "
+    "re-run with --unsafe-parse-only."
+)
+_UNSAFE_WARNING = (
+    "WARNING: --unsafe-parse-only is a parser-development / debugging mode. It does "
+    "NOT perform complete Step 4 order-safety validation (no strategy settings / "
+    "budgets / universe / audited packet; require_safety_context=False). Its output "
+    "MUST NOT be treated as validated order output or used to approve trades. "
+    f"Use the primary path to approve orders: {PRIMARY_PATH_HINT}"
+)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Standalone extractor CLI (parser-development / debugging only).
+
+    This is **not** the primary Step 4 safety path. By default it now **refuses**
+    to run and directs the operator to ``run_step4 parse`` (which supplies the
+    audited packet / strategy settings / budgets / universe and opts in to
+    ``require_safety_context=True``). The legacy weaker parse-only behavior is
+    available **only** behind the explicit ``--unsafe-parse-only`` flag, which
+    prints a clear non-safety warning. The internal ``extract_orders_and_summary``
+    function API is unchanged; only the CLI gate is added.
+    """
     import argparse
+    import sys
 
     parser = argparse.ArgumentParser(
-        description="Extract TEMPLATE4_ORDERS, ORDER_STATE_EXPORT, and TEMPLATE5_EXEC_SUMMARY from Step 4 output."
+        description=(
+            "Standalone extractor for TEMPLATE4_ORDERS / ORDER_STATE_EXPORT / "
+            "TEMPLATE5_EXEC_SUMMARY. NOT the primary Step 4 safety path: use "
+            f"`{PRIMARY_PATH_HINT}` to produce validated order output. This command "
+            "runs only in explicit --unsafe-parse-only (parser-development) mode."
+        )
     )
     parser.add_argument("--raw-output", required=True, help="Path to step4 raw_output.txt")
     parser.add_argument("--template4-orders", required=True, help="Path to write template4_orders.txt")
@@ -181,8 +220,23 @@ def main() -> int:
         required=True,
         help="Path to write exec_summary.txt",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--unsafe-parse-only",
+        action="store_true",
+        help=(
+            "Run the legacy weaker parse-only extraction (require_safety_context=False; "
+            "no settings/budgets/universe/audited packet). Output is NOT validated "
+            "order output and must not be used to approve trades."
+        ),
+    )
+    args = parser.parse_args(argv)
 
+    if not args.unsafe_parse_only:
+        # Fail closed: do not silently run weaker validation or write artifacts.
+        print(f"{parser.prog}: {_REFUSAL_MESSAGE}", file=sys.stderr)
+        return 2
+
+    print(_UNSAFE_WARNING, file=sys.stderr)
     extract_orders_and_summary(
         raw_output_path=Path(args.raw_output),
         template4_orders_path=Path(args.template4_orders),

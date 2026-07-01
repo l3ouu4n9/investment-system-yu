@@ -131,3 +131,67 @@ def test_prompt_self_check_covers_strict_shape_and_drift(prompt_text: str) -> No
     # The pre-output self-check enumerates the anti-drift items.
     assert "未被包進任何 wrapper" in prompt_text
     assert "作 top-level payload，或取代 machine-readable 欄位" in prompt_text
+
+
+# --- R1C: compact top-of-prompt required-output contract reinforcement -------
+
+
+def _top_contract_section(prompt_text: str) -> str:
+    """Return the compact REQUIRED OUTPUT CONTRACT block inserted near the top."""
+    start = prompt_text.index("REQUIRED OUTPUT CONTRACT")
+    # The block ends where the original objective section begins.
+    end = prompt_text.index("投資目標：", start)
+    return prompt_text[start:end]
+
+
+def test_prompt_has_top_required_output_contract_heading(prompt_text: str) -> None:
+    assert "REQUIRED OUTPUT CONTRACT" in prompt_text
+    assert "MACHINE-READABLE EXECUTION HANDOFF" in prompt_text
+
+
+def test_top_contract_appears_before_long_research_instructions(prompt_text: str) -> None:
+    # Prominence: the compact contract is near the top, before the long Hard
+    # Rules block and before the deep (line ~1800+) strict-handoff contract rule.
+    contract_idx = prompt_text.index("REQUIRED OUTPUT CONTRACT")
+    assert contract_idx < prompt_text.index("【總則 / Hard Rules】")
+    assert contract_idx < prompt_text.index("strict_machine_readable_handoff_contract_rule")
+    # And it precedes the first lane definition the model otherwise anchors on.
+    assert contract_idx < prompt_text.index("Lane A = Base Decision Lane")
+
+
+def test_top_contract_lists_every_validator_required_top_level_key(prompt_text: str) -> None:
+    section = _top_contract_section(prompt_text)
+    for field_name in REQUIRED_TOP_LEVEL_FIELDS:
+        assert field_name in section, f"top contract skeleton missing required key: {field_name}"
+
+
+def test_top_contract_prominently_names_core_handoff_keys(prompt_text: str) -> None:
+    section = _top_contract_section(prompt_text)
+    for key in ("strategy_a_research_handoff", "trade_universe", "buy_universe_scorecard"):
+        assert key in section
+
+
+def test_top_contract_rejects_research_report_only_json(prompt_text: str) -> None:
+    section = _top_contract_section(prompt_text)
+    assert "research-report-only JSON 一律 REJECTED" in section
+    # Names the exact drift keys observed in the failing run.
+    for report_key in ("executive_summary", "methodology", "lane_a", "lane_b", "funds", "charts", "sources", "validation_summary"):
+        assert report_key in section
+
+
+def test_top_contract_states_passed_true_does_not_substitute(prompt_text: str) -> None:
+    section = _top_contract_section(prompt_text)
+    assert "validation_summary.passed=true 不能取代缺漏的 required 欄位" in section
+
+
+def test_top_contract_forbids_envelope_and_markdown_wrappers(prompt_text: str) -> None:
+    section = _top_contract_section(prompt_text)
+    assert "不可把結果巢狀（wrap）在 RESEARCH_JSON" in section
+    assert "markdown" in section
+
+
+def test_top_contract_requires_strict_schema_on_data_gap(prompt_text: str) -> None:
+    section = _top_contract_section(prompt_text)
+    # Missing info must still emit the strict schema + mark DATA_GAP, not switch shape.
+    assert "仍必須輸出此 strict schema" in section
+    assert "DATA_GAP" in section

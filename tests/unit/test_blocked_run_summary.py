@@ -131,6 +131,26 @@ def test_no_output_chain_summarizes_to_no_trade() -> None:
     assert result.manual_review_required is False
 
 
+def test_strict_fresh_evidence_only_summarizes_to_no_trade() -> None:
+    # R2E.1: the non-actionable compiled evidence-first state is a controlled
+    # NO_TRADE run (HOLD/NO_TRADE only); the summary must reflect that.
+    result = build_blocked_run_summary(
+        step1_decision=step1_decision(state="STRICT_FRESH_EVIDENCE_ONLY"),
+        step2_block=step2_block(state="STRICT_FRESH_EVIDENCE_ONLY"),
+        step3_block=None,
+        step4_block=None,
+    )
+
+    assert result.run_blocked is True  # not STRICT_FRESH -> degraded/blocked
+    assert result.recommended_result == "NO_TRADE"
+    assert result.research_state == "STRICT_FRESH_EVIDENCE_ONLY"
+    assert result.highest_severity_state == "STRICT_FRESH_EVIDENCE_ONLY"
+    assert result.allowed_actions == ["HOLD", "NO_TRADE"]
+    assert "NEW_BUY" in result.blocked_actions
+    assert "ORDER_COMPILATION" in result.blocked_actions
+    assert result.manual_review_required is False
+
+
 def test_step1_manual_review_propagates_to_summary() -> None:
     result = build_blocked_run_summary(
         step1_decision=step1_decision(state="MANUAL_REVIEW_REQUIRED", manual_review_required=True),

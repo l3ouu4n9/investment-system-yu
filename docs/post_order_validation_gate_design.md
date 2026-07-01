@@ -266,11 +266,18 @@ existing compile-ready / diagnostics checks are unchanged; still fail-closed in 
   (replacement / cancel / keep legs excluded); the hard cap still bounds broader exposure. Under
   `require_safety_context` it fails closed when net-new BUY rows exist but the key is missing. See §10
   for the source design and §10.8 for the implementation summary.
-- **Still deferred:** hardening the standalone `extract_orders_and_summary.main()` context coverage
-  (it shares the validate-before-write ordering but is still not supplied settings/budgets/universe —
-  weaker by design, and `require_safety_context` defaults off there); true group-level (all-or-nothing)
-  multi-file publish (per-file atomic publish is implemented in **G2.2** — see above; wiring
-  `target_new_buy_budget_this_run` is implemented in **G5** — see §10).
+- **Standalone extractor CLI safety gate (G6 — implemented):** the standalone
+  `extract_orders_and_summary.main()` CLI is parser-development / debugging only and is **not** the
+  primary Step 4 safety path. It no longer silently runs weaker validation: by **default it refuses**
+  (prints a message directing the operator to `run_step4 parse`, **writes nothing**, exits non-zero).
+  The legacy weaker parse-only behavior (`require_safety_context=False`, no settings/budgets/universe/
+  audited packet) runs **only** behind the explicit `--unsafe-parse-only` flag, which prints a clear
+  non-safety **WARNING** that its output must not be treated as validated order output or used to
+  approve trades. The internal `extract_orders_and_summary` **function API is unchanged** (the primary
+  path and tests call it directly with full context); only the CLI `main()` gate changed.
+- **Still deferred:** true group-level (all-or-nothing) multi-file publish (per-file atomic publish is
+  implemented in **G2.2** — see above; wiring `target_new_buy_budget_this_run` is implemented in **G5**
+  — see §10; standalone CLI safety gate is implemented in **G6** — see above).
 
 ## 7. Non-goals
 

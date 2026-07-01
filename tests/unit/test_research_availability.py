@@ -380,3 +380,186 @@ def test_reader_handles_malformed_files_no_raise(tmp_path: Path) -> None:
     result = read_last_good_research_handoff(tmp_path)
     assert result.available is False
     assert result.read_errors
+
+
+# --- R2E.1: compiled evidence-first handoff recognition (non-actionable) ------
+
+
+COMPILED_VALID = {"valid": True}
+COMPILED_INVALID = {"valid": False, "blocker_reasons": ["x"]}
+
+
+def compiled_meta(mode: str, *, present: bool, valid: bool) -> dict[str, Any]:
+    return {
+        "compilation_mode": mode,
+        "analyst_memo_present": present,
+        "analyst_memo_valid": valid,
+    }
+
+
+def compiled_artifacts() -> dict[str, str]:
+    return {
+        "compiled_research_handoff_candidate": "artifacts/current/step1_research/compiled_research_handoff_candidate.json",
+        "compiled_research_handoff_validation": "artifacts/current/step1_research/compiled_research_handoff_validation.json",
+        "compiled_research_handoff_metadata": "artifacts/current/step1_research/compiled_research_handoff_metadata.json",
+    }
+
+
+def evaluate_with_compiled(
+    *,
+    candidate_validation: Any,
+    compiled_candidate_validation: Any,
+    compiled_metadata: dict[str, Any] | None,
+    compiled_as_of: str | None = NOW,
+    **kwargs: Any,
+) -> Any:
+    s = kwargs.pop("strategy_settings", settings())
+    return evaluate_research_availability(
+        candidate_validation=candidate_validation,
+        candidate=kwargs.pop("candidate", valid_candidate()),
+        strategy_settings=s,
+        source_as_of_date=kwargs.pop("source_as_of_date", NOW),
+        now_date=NOW,
+        compiled_candidate_validation=compiled_candidate_validation,
+        compiled_metadata=compiled_metadata,
+        compiled_source_as_of_date=compiled_as_of,
+        compiled_source_artifacts=compiled_artifacts(),
+        **kwargs,
+    )
+
+
+def test_raw_strict_fresh_is_never_overridden_by_compiled() -> None:
+    # Precedence A: a valid+fresh raw handoff keeps full actionable permissions
+    # even when a compiled handoff is also present.
+    s = settings()
+    result = evaluate_research_availability(
+        candidate_validation=valid_result(s),
+        candidate=valid_candidate(),
+        strategy_settings=s,
+        source_as_of_date=NOW,
+        now_date=NOW,
+        compiled_candidate_validation=COMPILED_VALID,
+        compiled_metadata=compiled_meta("evidence_plus_memo", present=True, valid=True),
+        compiled_source_as_of_date=NOW,
+    )
+    assert result.state == "STRICT_FRESH"
+    assert result.source == "raw_research_handoff"
+    assert "NEW_BUY" in result.allowed_actions
+
+
+def test_raw_invalid_compiled_evidence_only_is_strict_fresh_evidence_only() -> None:
+    result = evaluate_with_compiled(
+        candidate_validation=invalid_result(),
+        compiled_candidate_validation=COMPILED_VALID,
+        compiled_metadata=compiled_meta("evidence_only", present=False, valid=False),
+    )
+    assert result.state == "STRICT_FRESH_EVIDENCE_ONLY"
+    assert result.allowed_actions == ["HOLD", "NO_TRADE"]
+    assert "NEW_BUY" in result.blocked_actions
+    assert "ORDER_COMPILATION" in result.blocked_actions
+    assert result.fresh_research_available is False
+    assert result.manual_review_required is False
+    assert result.source == "compiled_research_handoff"
+    assert result.compilation_mode == "evidence_only"
+    assert result.source_artifacts == compiled_artifacts()
+
+
+def test_raw_invalid_compiled_evidence_plus_memo_is_still_non_actionable() -> None:
+    result = evaluate_with_compiled(
+        candidate_validation=invalid_result(),
+        compiled_candidate_validation=COMPILED_VALID,
+        compiled_metadata=compiled_meta("evidence_plus_memo", present=True, valid=True),
+    )
+    # R2E.1 stays non-actionable even with a valid memo (NEW_BUY is a future PR).
+    assert result.state == "STRICT_FRESH_EVIDENCE_ONLY"
+    assert result.allowed_actions == ["HOLD", "NO_TRADE"]
+    assert "NEW_BUY" in result.blocked_actions
+    assert result.analyst_memo_present is True
+    assert result.analyst_memo_valid is True
+
+
+def test_raw_invalid_compiled_invalid_keeps_existing_behavior() -> None:
+    result = evaluate_with_compiled(
+        candidate_validation=invalid_result(),
+        compiled_candidate_validation=COMPILED_INVALID,
+        compiled_metadata=compiled_meta("evidence_only", present=False, valid=False),
+    )
+    assert result.state == "INVALID_CONTRACT"
+    assert result.source == "raw_research_handoff"
+    assert "NEW_BUY" in result.blocked_actions
+
+
+def test_compiled_valid_but_metadata_malformed_fails_closed_to_existing_state() -> None:
+    # Missing / unrecognized compilation_mode -> do NOT relabel (fail closed).
+    for bad_meta in (None, {}, {"compilation_mode": "garbage"}, {"foo": "bar"}):
+        result = evaluate_with_compiled(
+            candidate_validation=invalid_result(),
+            compiled_candidate_validation=COMPILED_VALID,
+            compiled_metadata=bad_meta,
+        )
+        assert result.state == "INVALID_CONTRACT", bad_meta
+        assert "NEW_BUY" in result.blocked_actions
+
+
+def test_compiled_stale_does_not_relabel() -> None:
+    result = evaluate_with_compiled(
+        candidate_validation=invalid_result(),
+        compiled_candidate_validation=COMPILED_VALID,
+        compiled_metadata=compiled_meta("evidence_only", present=False, valid=False),
+        compiled_as_of="2026-05-01",  # age > fresh_days
+    )
+    assert result.state == "INVALID_CONTRACT"
+
+
+def test_compiled_preferred_over_usable_last_good_but_still_hold_no_trade() -> None:
+    s = settings()
+    result = evaluate_research_availability(
+        candidate_validation=invalid_result(),
+        candidate=valid_candidate(),
+        strategy_settings=s,
+        source_as_of_date=NOW,
+        now_date=NOW,
+        last_good_handoff=valid_candidate(),
+        last_good_metadata=last_good_metadata(as_of="2026-06-12", strategy_settings=s),
+        compiled_candidate_validation=COMPILED_VALID,
+        compiled_metadata=compiled_meta("evidence_only", present=False, valid=False),
+        compiled_source_as_of_date=NOW,
+    )
+    assert result.state == "STRICT_FRESH_EVIDENCE_ONLY"
+    assert result.allowed_actions == ["HOLD", "NO_TRADE"]
+    assert "NEW_BUY" in result.blocked_actions
+
+
+def test_degraded_with_last_good_unchanged_without_compiled() -> None:
+    # Regression: no compiled inputs -> pre-R2E.1 DEGRADED_WITH_LAST_GOOD preserved.
+    s = settings()
+    result = evaluate_research_availability(
+        candidate_validation=invalid_result(),
+        candidate=valid_candidate(),
+        strategy_settings=s,
+        source_as_of_date=NOW,
+        now_date=NOW,
+        last_good_handoff=valid_candidate(),
+        last_good_metadata=last_good_metadata(as_of="2026-06-12", strategy_settings=s),
+    )
+    assert result.state == "DEGRADED_WITH_LAST_GOOD"
+    assert result.source == "raw_research_handoff"
+    assert result.allowed_actions == ["HOLD", "NO_TRADE"]
+
+
+def test_strict_fresh_evidence_only_decision_dict_fields() -> None:
+    result = evaluate_with_compiled(
+        candidate_validation=invalid_result(),
+        compiled_candidate_validation=COMPILED_VALID,
+        compiled_metadata=compiled_meta("evidence_only", present=False, valid=False),
+    )
+    decision = research_degraded_mode_decision_to_dict(result)
+    assert decision["state"] == "STRICT_FRESH_EVIDENCE_ONLY"
+    assert decision["research_state"] == "STRICT_FRESH_EVIDENCE_ONLY"
+    assert decision["source"] == "compiled_research_handoff"
+    assert decision["compilation_mode"] == "evidence_only"
+    assert decision["permission_effect"] == "none"
+    assert decision["allowed_actions"] == ["HOLD", "NO_TRADE"]
+    assert decision["source_artifacts"] == compiled_artifacts()
+    assert any("evidence_only_no_new_buy" in r for r in decision["blocker_reasons"])
+    assert any("compiled_handoff_non_actionable" in r for r in decision["blocker_reasons"])

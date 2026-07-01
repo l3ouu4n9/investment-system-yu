@@ -569,10 +569,13 @@ def test_step1_valid_candidate_writes_availability_artifacts_strict_fresh(
     assert freshness["handoff_age_days"] == 1
 
 
-def test_step1_invalid_candidate_no_last_good_is_invalid_contract(
+def test_step1_invalid_raw_candidate_with_compiled_handoff_is_strict_fresh_evidence_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # R2E.1: pre-R2E this run was INVALID_CONTRACT. Now the deterministic compiled
+    # evidence-first handoff (Step 1C, valid + fresh) is recognized as
+    # STRICT_FRESH_EVIDENCE_ONLY — still HOLD / NO_TRADE only, never NEW_BUY.
     result = parse_with_tmp_repo(
         tmp_path,
         monkeypatch,
@@ -583,12 +586,18 @@ def test_step1_invalid_candidate_no_last_good_is_invalid_contract(
     decision = json.loads(
         Path(result["research_degraded_mode_decision_path"]).read_text(encoding="utf-8")
     )
-    assert result["research_availability_state"] == "INVALID_CONTRACT"
+    assert result["research_availability_state"] == "STRICT_FRESH_EVIDENCE_ONLY"
     assert decision["allowed_actions"] == ["HOLD", "NO_TRADE"]
     assert "NEW_BUY" in decision["blocked_actions"]
+    assert "ORDER_COMPILATION" in decision["blocked_actions"]
+    assert decision["fresh_research_available"] is False
+    assert decision["source"] == "compiled_research_handoff"
+    assert decision["compilation_mode"] == "evidence_only"
+    assert decision["permission_effect"] == "none"
+    assert any("evidence_only_no_new_buy" in r for r in decision["blocker_reasons"])
 
 
-def test_step1_invalid_candidate_with_existing_last_good_is_degraded_with_last_good(
+def test_step1_invalid_candidate_with_last_good_prefers_compiled_evidence_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -601,16 +610,19 @@ def test_step1_invalid_candidate_with_existing_last_good_is_degraded_with_last_g
     )
     assert last_good_research_handoff_path(state_dir(tmp_path)).exists()
 
-    # Second run: narrative/invalid output, but a usable last-good exists.
+    # Second run: narrative/invalid output. Pre-R2E this was DEGRADED_WITH_LAST_GOOD;
+    # R2E.1 prefers the valid+fresh compiled handoff -> STRICT_FRESH_EVIDENCE_ONLY.
+    # Permissions remain HOLD / NO_TRADE either way.
     overwrite_step1_raw_output(tmp_path, read_fixture("current_step1_raw_output_minimal.txt"))
     second = step1_research.parse_step1_output(strategy_settings=settings_with_as_of("2026-06-22"))
 
     decision = json.loads(
         Path(second["research_degraded_mode_decision_path"]).read_text(encoding="utf-8")
     )
-    assert second["research_availability_state"] == "DEGRADED_WITH_LAST_GOOD"
+    assert second["research_availability_state"] == "STRICT_FRESH_EVIDENCE_ONLY"
     assert decision["allowed_actions"] == ["HOLD", "NO_TRADE"]
     assert "NEW_BUY" in decision["blocked_actions"]
+    assert decision["source"] == "compiled_research_handoff"
 
 
 def test_step1_availability_layer_is_report_only_and_does_not_fail_parse(

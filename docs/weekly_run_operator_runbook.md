@@ -41,6 +41,15 @@ PYTHONPATH=src uv run python -m investment_orchestrator.cli.run_status
 A `render`/`parse` that **exits non-zero** means a deterministic gate blocked the step — do not work
 around it. See §4/§5.
 
+**Step 4 has exactly one safe path: `run_step4 parse`.** It supplies the audited packet / strategy
+settings / budgets / universe and runs the full fail-closed post-order validation before publishing.
+The standalone extractor module
+(`python -m investment_orchestrator.parsers.extract_orders_and_summary`) is **not** that path: it is a
+parser-development / debugging tool. By default it **refuses to run** and points back to
+`run_step4 parse`; its `--unsafe-parse-only` mode skips the substantive order-safety checks and prints
+a warning. **Never use `--unsafe-parse-only` output to place or approve orders, and automation must
+never call it to approve trades** — only `run_step4 parse` output is validated.
+
 ### 2.1 Weekly-level command (controlled routing)
 
 There is a top-level weekly command that routes the run deterministically from the Step 1

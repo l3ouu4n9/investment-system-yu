@@ -90,6 +90,16 @@ def test_doc_records_g2_2_atomic_publish_implemented(doc_text: str) -> None:
     assert "atomic publish / `os.replace`\n  (G2.2)" not in doc_text
 
 
+def test_doc_records_g6_standalone_cli_gate(doc_text: str) -> None:
+    assert "Standalone extractor CLI safety gate (G6 — implemented)" in doc_text
+    assert "default it refuses" in doc_text
+    assert "--unsafe-parse-only" in doc_text
+    # The internal function API is explicitly preserved.
+    assert "function API is unchanged" in doc_text
+    # No longer listed as a deferred standalone-hardening item.
+    assert "hardening the standalone `extract_orders_and_summary.main()` context coverage" not in doc_text
+
+
 def test_doc_has_per_run_operator_review_note(doc_text: str) -> None:
     # G5.1 / UX4: operational note pointing at runbook/README review guidance.
     assert "### 10.9 Operational note" in doc_text

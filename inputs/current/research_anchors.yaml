@@ -1,0 +1,25 @@
+# Operator-controlled research anchors (R2E.5a, report-only).
+#
+# A research anchor is a deterministic, operator-authored, dated, ticker-scoped
+# evidence item (structural theme or scheduled event) that a FUTURE analyst memo
+# may cite to ground a 12m+ buy thesis. An anchor is a CITATION, never a trade
+# authorization. In this version anchors are NOT consumed for support-signal
+# acceptance and cannot make any compiled row actionable; the live posture stays
+# STRICT_FRESH_EVIDENCE_ONLY (HOLD / NO_TRADE).
+#
+# Rules (enforced deterministically by research_anchors.py):
+#  - is_llm_generated must be false; anchors are operator-authored only.
+#  - applicable_tickers must be inside the deterministic base allowed universe
+#    (core ∪ satellite); extended ETFs are NOT admissible in v1.
+#  - no budgets / caps / allocations, no final_action / order_intent / orders,
+#    no execution authorization of any kind.
+#  - each anchor: anchor_id, anchor_type, applicable_tickers, anchor_date_et,
+#    valid_from, valid_until, source_type (operator), confidence_floor.
+#
+# Default is intentionally empty: no anchors ⇒ support signals stay
+# qualitative_support_only. Add anchors only after operator review.
+
+schema_version: research_anchors_v1
+as_of_date: 2026-06-30
+is_llm_generated: false
+anchors: []

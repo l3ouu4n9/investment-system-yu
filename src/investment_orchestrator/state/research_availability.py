@@ -30,11 +30,32 @@ from investment_orchestrator.state.last_good_research_handoff import (
 # --- states ------------------------------------------------------------------
 STRICT_FRESH = "STRICT_FRESH"
 STRICT_STALE = "STRICT_STALE"
+# R2E.1: a deterministic, strict-valid, fresh compiled evidence-first handoff
+# (Step 1C) exists, but the raw Deep Research handoff is not valid+fresh. This is
+# NON-ACTIONABLE by policy — HOLD / NO_TRADE only — and never permits NEW_BUY.
+# It exists only to recognize the compiled handoff instead of mislabeling the run
+# as INVALID_CONTRACT / DEGRADED_*; opening any actionable path requires a future
+# explicit PR.
+STRICT_FRESH_EVIDENCE_ONLY = "STRICT_FRESH_EVIDENCE_ONLY"
 DEGRADED_WITH_LAST_GOOD = "DEGRADED_WITH_LAST_GOOD"
 DEGRADED_NO_RESEARCH = "DEGRADED_NO_RESEARCH"
 INVALID_CONTRACT = "INVALID_CONTRACT"
 NO_OUTPUT = "NO_OUTPUT"
 MANUAL_REVIEW_REQUIRED = "MANUAL_REVIEW_REQUIRED"
+
+# Compiled-handoff modes (R2D metadata) recognized as a real compiler output.
+# Kept as literals to avoid a state->research layer import; the integration passes
+# the metadata the compiler wrote, so these match by construction.
+_COMPILED_MODES = ("evidence_only", "evidence_plus_memo", "invalid_memo_ignored")
+
+# Fallback states that a valid+fresh compiled handoff may relabel as
+# STRICT_FRESH_EVIDENCE_ONLY (permissions stay HOLD / NO_TRADE either way). Raw
+# valid states (STRICT_FRESH / STRICT_STALE) and MANUAL_REVIEW_REQUIRED are never
+# relabeled — the compiled handoff only improves observability over "no usable
+# fresh raw handoff", it never removes a manual-review escalation or SELL right.
+_EVIDENCE_ONLY_REPLACEABLE = frozenset(
+    {INVALID_CONTRACT, DEGRADED_NO_RESEARCH, NO_OUTPUT, DEGRADED_WITH_LAST_GOOD}
+)
 
 # --- actions -----------------------------------------------------------------
 ACTIONS = (
@@ -54,6 +75,7 @@ ACTIONS = (
 _ALLOWED_ACTIONS_BY_STATE: dict[str, tuple[str, ...]] = {
     STRICT_FRESH: ACTIONS,
     STRICT_STALE: ("HOLD", "NO_TRADE", "SELL"),
+    STRICT_FRESH_EVIDENCE_ONLY: ("HOLD", "NO_TRADE"),
     DEGRADED_WITH_LAST_GOOD: ("HOLD", "NO_TRADE"),
     DEGRADED_NO_RESEARCH: ("HOLD", "NO_TRADE"),
     INVALID_CONTRACT: ("HOLD", "NO_TRADE"),
@@ -94,6 +116,14 @@ class ResearchAvailabilityResult:
     source_as_of_date: str | None = None
     now_date: str | None = None
     last_good_as_of_date: str | None = None
+    # R2E.1 compiled evidence-first handoff recognition (report-only fields).
+    source: str = "raw_research_handoff"
+    compiled_handoff_valid: bool = False
+    compiled_handoff_fresh: bool = False
+    compilation_mode: str | None = None
+    analyst_memo_present: bool | None = None
+    analyst_memo_valid: bool | None = None
+    source_artifacts: dict[str, str] = field(default_factory=dict)
 
 
 def evaluate_research_availability(
@@ -107,12 +137,24 @@ def evaluate_research_availability(
     last_good_metadata: Mapping[str, Any] | None = None,
     stale_policy: Mapping[str, Any] | None = None,
     parsed_output_available: bool | None = None,
+    compiled_candidate_validation: Any | None = None,
+    compiled_metadata: Mapping[str, Any] | None = None,
+    compiled_source_as_of_date: str | None = None,
+    compiled_source_artifacts: Mapping[str, str] | None = None,
 ) -> ResearchAvailabilityResult:
     """Classify research availability and derive a deterministic permission.
 
     ``parsed_output_available`` disambiguates ``INVALID_CONTRACT`` /
     ``DEGRADED_NO_RESEARCH`` / ``NO_OUTPUT`` when there is no usable candidate;
     when omitted it is inferred from whether a candidate object was supplied.
+
+    R2E.1 (report-only recognition, conservative): when the raw handoff is NOT
+    valid+fresh, but a deterministic compiled evidence-first handoff (Step 1C) is
+    strict-valid and fresh and its metadata reports a recognized compilation
+    mode, the fallback state is relabeled ``STRICT_FRESH_EVIDENCE_ONLY``. This is
+    NON-ACTIONABLE — HOLD / NO_TRADE only; it never adds NEW_BUY / ORDER_COMPILATION
+    and never overrides STRICT_FRESH / STRICT_STALE / MANUAL_REVIEW_REQUIRED. When
+    no compiled inputs are supplied, behavior is byte-for-byte unchanged.
     """
     fresh_days, stale_days = _resolve_stale_policy(stale_policy)
 
@@ -169,6 +211,49 @@ def evaluate_research_availability(
             non_blocker_reasons=non_blocker_reasons,
         )
 
+    # --- R2E.1: recognize the compiled evidence-first handoff (non-actionable) ---
+    compiled_handoff_valid = _validation_is_valid(compiled_candidate_validation)
+    compiled_age_days = _age_days(now_date, compiled_source_as_of_date)
+    compiled_handoff_fresh = (
+        compiled_handoff_valid and compiled_age_days is not None and compiled_age_days <= fresh_days
+    )
+    compilation_mode = (
+        _str_or_none(compiled_metadata.get("compilation_mode"))
+        if isinstance(compiled_metadata, Mapping)
+        else None
+    )
+    analyst_memo_present = (
+        compiled_metadata.get("analyst_memo_present") if isinstance(compiled_metadata, Mapping) else None
+    )
+    analyst_memo_valid = (
+        compiled_metadata.get("analyst_memo_valid") if isinstance(compiled_metadata, Mapping) else None
+    )
+    # Fail closed: a missing / malformed metadata mode does NOT relabel the state.
+    compiled_metadata_ok = compilation_mode in _COMPILED_MODES
+    source = "raw_research_handoff"
+    source_artifacts: dict[str, str] = (
+        {str(k): str(v) for k, v in compiled_source_artifacts.items()}
+        if isinstance(compiled_source_artifacts, Mapping)
+        else {}
+    )
+    if (
+        not handoff_valid
+        and compiled_handoff_valid
+        and compiled_handoff_fresh
+        and compiled_metadata_ok
+        and state in _EVIDENCE_ONLY_REPLACEABLE
+    ):
+        state = STRICT_FRESH_EVIDENCE_ONLY
+        source = "compiled_research_handoff"
+        blocker_reasons.append(
+            "compiled_handoff_non_actionable: a deterministic evidence-first strict handoff is "
+            "valid and fresh, but it is non-actionable by policy."
+        )
+        blocker_reasons.append(
+            "evidence_only_no_new_buy: NEW_BUY / ORDER_COMPILATION require a future explicit PR; "
+            "this state permits HOLD / NO_TRADE only."
+        )
+
     last_good_usable = state == DEGRADED_WITH_LAST_GOOD
     age_for_label = handoff_age_days if handoff_valid else (last_good_age_days if last_good_available else None)
     stale_label = _stale_label(age_for_label, fresh_days, stale_days)
@@ -200,6 +285,13 @@ def evaluate_research_availability(
         source_as_of_date=source_as_of_date,
         now_date=now_date,
         last_good_as_of_date=last_good_as_of_date,
+        source=source,
+        compiled_handoff_valid=compiled_handoff_valid,
+        compiled_handoff_fresh=compiled_handoff_fresh,
+        compilation_mode=compilation_mode,
+        analyst_memo_present=analyst_memo_present,
+        analyst_memo_valid=analyst_memo_valid,
+        source_artifacts=source_artifacts,
     )
 
 
@@ -393,6 +485,13 @@ def research_availability_result_to_dict(result: ResearchAvailabilityResult) -> 
         "source_as_of_date": result.source_as_of_date,
         "now_date": result.now_date,
         "last_good_as_of_date": result.last_good_as_of_date,
+        "source": result.source,
+        "compiled_handoff_valid": result.compiled_handoff_valid,
+        "compiled_handoff_fresh": result.compiled_handoff_fresh,
+        "compilation_mode": result.compilation_mode,
+        "analyst_memo_present": result.analyst_memo_present,
+        "analyst_memo_valid": result.analyst_memo_valid,
+        "source_artifacts": dict(result.source_artifacts),
         "report_only": True,
     }
 
@@ -415,10 +514,20 @@ def research_freshness_report_to_dict(result: ResearchAvailabilityResult) -> dic
     }
 
 
+def _permission_effect(state: str) -> str:
+    """Human-readable permission summary for the decision artifact (informational)."""
+    if state == STRICT_FRESH:
+        return "actionable"
+    if state == STRICT_STALE:
+        return "sell_only"
+    return "none"
+
+
 def research_degraded_mode_decision_to_dict(result: ResearchAvailabilityResult) -> dict[str, Any]:
     """Permission decision view (the ``research_degraded_mode_decision.json`` artifact)."""
     return {
         "state": result.state,
+        "research_state": result.state,
         "research_availability": result.research_availability,
         "fresh_research_available": result.fresh_research_available,
         "handoff_valid": result.handoff_valid,
@@ -430,5 +539,11 @@ def research_degraded_mode_decision_to_dict(result: ResearchAvailabilityResult) 
         "manual_review_required": result.manual_review_required,
         "blocker_reasons": list(result.blocker_reasons),
         "non_blocker_reasons": list(result.non_blocker_reasons),
+        "source": result.source,
+        "compilation_mode": result.compilation_mode,
+        "analyst_memo_present": result.analyst_memo_present,
+        "analyst_memo_valid": result.analyst_memo_valid,
+        "permission_effect": _permission_effect(result.state),
+        "source_artifacts": dict(result.source_artifacts),
         "report_only": True,
     }

@@ -2,6 +2,45 @@
 # ChatGPT Deep Research
 # updated 2026-06-07
 
+────────────────────────────────────────
+REQUIRED OUTPUT CONTRACT — MACHINE-READABLE EXECUTION HANDOFF
+(讀我 FIRST。此為硬性輸出契約，凌駕下方任何敘述性研究說明；與檔末 strict_machine_readable_handoff_contract_rule / forbidden_output_shapes_rule 一致。)
+
+- 你最終只能輸出「一個 JSON object」，放在檔末的 RESEARCH_JSON_START / RESEARCH_JSON_END 之間。
+- 這個 JSON object 的 top-level 必須「直接」包含下列全部 required keys（strict execution handoff schema）。
+- research-report-only JSON 一律 REJECTED：若 top-level 只有 executive_summary / methodology / lane_a / lane_b / funds / charts / sources / validation_summary 之類 report 欄位，而缺少下列 required keys，視為 INVALID handoff（這正是先前 run 失敗的原因）。
+- validation_summary.passed=true 不能取代缺漏的 required 欄位；passed=true 但缺任何 required key 仍 REJECTED。
+- 不可把結果巢狀（wrap）在 RESEARCH_JSON / STRATEGY_SETTINGS_YAML 或任何 envelope key 之下，也不可輸出 markdown、prose、或第二份 JSON。
+- 若某些資訊不可得：仍必須輸出此 strict schema，並依既有契約在對應欄位標記 blocker / DATA_GAP；不得因此改用 report schema 或刪除 required key。
+- lane_a / lane_b 研究內容可以保留，但必須放在此 strict schema 之內（例如 strategy_a_research_handoff 或既有欄位），不得取代或省略 required top-level keys。
+
+REQUIRED TOP-LEVEL KEYS（必須與 validate_research_handoff.py 的 REQUIRED_TOP_LEVEL_FIELDS 完全一致；下為最小骨架，僅示意 key 名稱與容器型別，非完整範例，實際值依下方詳細欄位定義填寫）：
+
+{
+  "schema_version": "...",
+  "trade_universe": { "allowed_buy_tickers": [] },
+  "buy_universe_scorecard": [],
+  "scheduled_events": [],
+  "structural_themes_6_18m": [],
+  "regime_inputs": {},
+  "policy_items": [],
+  "top5_next_week": [],
+  "user_approved_extended_etf_static_list": [],
+  "proposed_extended_etf_candidates": [],
+  "extended_etf_candidate_universe": [],
+  "extended_etf_predecision_scorecard": [],
+  "approved_static_list_screening_log": [],
+  "optional_extended_etf_sleeve": { "enabled": false, "allowed_extended_etf_tickers": [] },
+  "strategy_a_research_handoff": {}
+}
+
+Rejected output shapes（任一即 INVALID handoff）：
+- top-level keys 只有 executive_summary / methodology / lane_a / lane_b 的 JSON
+- 有 funds / charts / sources 但沒有 trade_universe 的 JSON
+- 有 validation_summary.passed=true 但沒有 strategy_a_research_handoff 的 JSON
+- 被包在 RESEARCH_JSON envelope key 或 markdown code fence 內的 JSON
+────────────────────────────────────────
+
 投資目標：
 以 QQQ / Nasdaq-100 為核心 benchmark 與主要長期參照，並保留 QQQ 或 core buy universe 作為投資組合的 benchmark anchor；但願意在 3–5 年期內承擔明顯高於 QQQ 的 active risk、sector concentration、theme concentration、tracking error 與階段性回撤，以換取較高超額報酬的機會。
 

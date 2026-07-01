@@ -1,0 +1,77 @@
+# Analyst Memo Template - Yu (Evidence-First, small qualitative memo)
+# Step 1B — small LLM analyst memo (report-only; NOT the strict research handoff)
+# updated 2026-06-30
+
+────────────────────────────────────────
+ANALYST MEMO ONLY — REQUIRED OUTPUT CONTRACT
+(讀我 FIRST。此 prompt 只要求一份「小型 qualitative analyst memo」，不是 Deep Research strict handoff。)
+
+- 你最終只能輸出「一個 JSON object」，其 top-level 必須剛好符合下方 analyst_memo_v1 schema。
+- 這份 memo 是「qualitative opinion only / 質性意見」：只表達 regime view、風險、機會、相對偏好、事件解讀與信心。
+- 這份 memo 不是 execution authority、不是 order、不是 allowed universe、不是 budget 決策、不是 strict handoff。
+- 下游有一個 deterministic compiler 會決定 universe、budgets、roles、orders；你的 memo 只是「其中一個 qualitative input」，永遠不能單獨授權任何交易。
+
+analyst_memo_v1 schema（top-level keys，keep it intentionally small）：
+
+{
+  "schema_version": "analyst_memo_v1",
+  "is_llm_generated": true,
+  "as_of_date": "YYYY-MM-DD",
+  "regime_view": "一段簡短質性描述",
+  "key_risks": ["..."],
+  "opportunity_summary": "一段簡短質性描述",
+  "ticker_relative_view": [
+    { "ticker": "QQQ", "stance": "prefer|neutral|deprioritize", "rationale_12m_plus": "..." }
+  ],
+  "preferred_exposures": ["..."],
+  "avoid_or_deprioritize": ["..."],
+  "scheduled_event_interpretation": ["..."],
+  "confidence": "low|medium|high",
+  "data_gaps": ["..."],
+  "source_notes": [ { "claim": "...", "source": "...", "source_quality": "official|media_only" } ]
+}
+
+────────────────────────────────────────
+INPUT（你唯一的結構化輸入）：
+
+下方 evidence_packet 為 deterministic（is_llm_generated:false）的 evidence_packet.json。
+你只能在此 evidence_packet 的 universe（universe.allowed_buy_tickers ∪ universe.approved_extended_etf）範圍內表達 relative view。
+
+EVIDENCE_PACKET_START
+{{ evidence_packet_json }}
+EVIDENCE_PACKET_END
+
+────────────────────────────────────────
+HARD RULES（由 deterministic parser 強制，違反任一即 memo INVALID，且不會被下游採用）：
+
+- no_budgets_rule：不得設定或建議任何 budget / cap / allocation。
+  - 不得輸出 hard_cap_open_orders_budget。
+  - 不得輸出 target_new_buy_budget_this_run。
+  - 不得輸出任何含 budget / cap / allocation 的欄位。budgets 一律 deterministic，由下游決定。
+
+- no_allowed_universe_rule：不得建立或修改 allowed universe / strict handoff。
+  - 不得輸出 trade_universe。
+  - 不得輸出 allowed_buy_tickers。
+  - 不得輸出 buy_universe_scorecard。
+  - 不得輸出 strategy_a_research_handoff（這是舊版 Deep Research strict handoff，本 memo 一律不得產生）。
+  - universe 由 evidence_packet 與下游 deterministic compiler 決定，你只能在既有 universe 內表達意見。
+
+- no_orders_rule：不得輸出 orders 或建議 execution authorization。
+  - 不得輸出 orders / order / order_intent / order_compilation / buy_order / sell_order / order_sizing。
+  - 不得把 NEW_BUY / ORDER_COMPILATION / BUY_ORDER 當作 action / 指令輸出。
+  - 不得輸出 allowed_actions / final_action / execution_authorization。
+  - 不得建議或要求 execution authorization；是否允許 NEW_BUY 由下游 gate 決定，memo 永遠不能授權交易。
+
+- in_universe_only_rule：不得把 universe 以外的 ticker 當作 actionable candidate。
+  - ticker_relative_view 內每個 ticker 必須在 evidence_packet 的 universe 內。
+  - 任何 out-of-universe ticker 都會使 memo INVALID。
+
+- confidence_rule：confidence 只能是 low / medium / high 其中之一。
+
+- qualitative_only_rule：memo 只表達質性判斷；缺資料時用 data_gaps 明確標記，不要捏造數字、budget、universe、或 order。
+
+OUTPUT（self-check）：
+- 只輸出一個 analyst_memo_v1 JSON object。
+- 沒有 budgets、沒有 allowed universe、沒有 strict handoff、沒有 orders、沒有 execution authorization。
+- 所有 ticker 都在 evidence_packet universe 內。
+- 本 memo 必須遠比舊版 Deep Research dual-lane strict handoff prompt 短。

@@ -8,7 +8,14 @@ import re
 from pathlib import Path
 from typing import Any
 
-from investment_orchestrator.common.io import ensure_dir, file_exists, read_text, write_json, write_text
+from investment_orchestrator.common.io import (
+    ensure_dir,
+    file_exists,
+    read_json,
+    read_text,
+    write_json,
+    write_text,
+)
 from investment_orchestrator.common.paths import repo_root, require_prompt_path
 from investment_orchestrator.llm.manual_output import (
     ensure_manual_output_metadata_template,
@@ -20,8 +27,17 @@ from investment_orchestrator.normalizers.research_handoff_candidate import (
     research_handoff_normalization_result_to_dict,
 )
 from investment_orchestrator.parsers.extract_research_json import extract_research_json
+from investment_orchestrator.research.analyst_memo import (
+    analyst_memo_parse_result_to_dict,
+    evidence_universe_from_packet,
+    parse_analyst_memo_text,
+    render_analyst_memo_prompt,
+)
+from investment_orchestrator.research.evidence_packet import write_evidence_packet
+from investment_orchestrator.research.handoff_compiler import write_compiled_research_handoff
 from investment_orchestrator.state.last_good_research_handoff import (
     LastGoodResearchHandoffWriteResult,
+    last_good_research_handoff_metadata_path,
     last_good_research_handoff_write_result_to_dict,
     read_last_good_research_handoff,
     write_last_good_research_handoff_if_valid,
@@ -51,6 +67,16 @@ LAST_GOOD_WRITE_RESULT_FILENAME = "last_good_research_handoff_write_result.json"
 RESEARCH_AVAILABILITY_FILENAME = "research_availability.json"
 RESEARCH_FRESHNESS_REPORT_FILENAME = "research_freshness_report.json"
 RESEARCH_DEGRADED_MODE_DECISION_FILENAME = "research_degraded_mode_decision.json"
+EVIDENCE_PACKET_FILENAME = "evidence_packet.json"
+ANALYST_MEMO_PROMPT_FILENAME = "analyst_memo_prompt.txt"
+ANALYST_MEMO_RAW_OUTPUT_FILENAME = "analyst_memo_raw_output.txt"
+ANALYST_MEMO_FILENAME = "analyst_memo.json"
+ANALYST_MEMO_VALIDATION_FILENAME = "analyst_memo_validation.json"
+COMPILED_HANDOFF_CANDIDATE_FILENAME = "compiled_research_handoff_candidate.json"
+COMPILED_HANDOFF_VALIDATION_FILENAME = "compiled_research_handoff_validation.json"
+COMPILED_HANDOFF_METADATA_FILENAME = "compiled_research_handoff_metadata.json"
+COMPILED_SUPPORT_SIGNALS_FILENAME = "compiled_support_signals.json"
+RESEARCH_ANCHORS_INPUT_FILENAME = "research_anchors.yaml"
 CURRENT_RUN_INPUT_NOTES_RE = re.compile(
     r"(?:\r?\n)*────────────────────────────────────────\r?\n"
     r"【Current Run Inputs（injected by workflow; rendered prompt must contain actual values, not placeholder notes）】"
@@ -128,9 +154,59 @@ def step1_research_degraded_mode_decision_path() -> Path:
     return step1_artifact_dir() / RESEARCH_DEGRADED_MODE_DECISION_FILENAME
 
 
+def step1_evidence_packet_path() -> Path:
+    """Return the report-only deterministic evidence packet artifact path (R2B)."""
+    return step1_artifact_dir() / EVIDENCE_PACKET_FILENAME
+
+
+def step1_analyst_memo_prompt_path() -> Path:
+    """Return the rendered Step 1B analyst-memo prompt path (R2C, report-only)."""
+    return step1_artifact_dir() / ANALYST_MEMO_PROMPT_FILENAME
+
+
+def step1_analyst_memo_raw_output_path() -> Path:
+    """Return the manual Step 1B analyst-memo raw output path (R2C, report-only)."""
+    return step1_artifact_dir() / ANALYST_MEMO_RAW_OUTPUT_FILENAME
+
+
+def step1_analyst_memo_path() -> Path:
+    """Return the parsed Step 1B analyst-memo artifact path (R2C, report-only)."""
+    return step1_artifact_dir() / ANALYST_MEMO_FILENAME
+
+
+def step1_analyst_memo_validation_path() -> Path:
+    """Return the report-only Step 1B analyst-memo validation artifact path (R2C)."""
+    return step1_artifact_dir() / ANALYST_MEMO_VALIDATION_FILENAME
+
+
+def step1_compiled_handoff_candidate_path() -> Path:
+    """Return the report-only Step 1C compiled handoff candidate artifact path (R2D)."""
+    return step1_artifact_dir() / COMPILED_HANDOFF_CANDIDATE_FILENAME
+
+
+def step1_compiled_handoff_validation_path() -> Path:
+    """Return the report-only Step 1C compiled handoff validation artifact path (R2D)."""
+    return step1_artifact_dir() / COMPILED_HANDOFF_VALIDATION_FILENAME
+
+
+def step1_compiled_handoff_metadata_path() -> Path:
+    """Return the report-only Step 1C compiled handoff metadata artifact path (R2D)."""
+    return step1_artifact_dir() / COMPILED_HANDOFF_METADATA_FILENAME
+
+
+def step1_compiled_support_signals_path() -> Path:
+    """Return the report-only Step 1C support-signals artifact path (R2E.3)."""
+    return step1_artifact_dir() / COMPILED_SUPPORT_SIGNALS_FILENAME
+
+
 def resolve_step1_prompt_template_path() -> Path:
     """Resolve the formal Step 1 prompt template from prompts/."""
     return require_prompt_path("research_dual_lane.txt")
+
+
+def resolve_analyst_memo_prompt_template_path() -> Path:
+    """Resolve the small Step 1B analyst-memo prompt template from prompts/."""
+    return require_prompt_path("analyst_memo.txt")
 
 
 def _require_non_empty_text(path: Path, *, label: str) -> str:
@@ -242,6 +318,69 @@ def render_step1_prompt() -> dict[str, str]:
     }
 
 
+def render_step1_analyst_memo_prompt(
+    *,
+    strategy_settings: Mapping[str, Any] | None = None,
+) -> dict[str, str]:
+    """Render the small Step 1B analyst-memo prompt from the evidence packet (R2C).
+
+    Report-only: builds (or reuses) the deterministic ``evidence_packet.json``,
+    injects it into the small memo prompt template, and writes
+    ``analyst_memo_prompt.txt`` plus a blank ``analyst_memo_raw_output.txt`` for
+    the operator to paste the LLM memo into. This neither runs the model nor
+    changes any gate, permission, or degraded-mode decision.
+    """
+    settings = (
+        strategy_settings
+        if strategy_settings is not None
+        else load_strategy_settings_for_handoff_validation()
+    )
+
+    packet = _load_or_build_evidence_packet(strategy_settings=settings)
+    template = read_text(resolve_analyst_memo_prompt_template_path())
+    rendered = render_analyst_memo_prompt(prompt_template=template, evidence_packet=packet)
+
+    prompt_output_path = step1_analyst_memo_prompt_path()
+    write_text(prompt_output_path, rendered.rstrip() + "\n")
+    raw_output_path = step1_analyst_memo_raw_output_path()
+    if not file_exists(raw_output_path):
+        write_text(raw_output_path, "")
+
+    return {
+        "analyst_memo_prompt_path": str(prompt_output_path),
+        "analyst_memo_raw_output_path": str(raw_output_path),
+        "evidence_packet_path": str(step1_evidence_packet_path()),
+        "analyst_memo_prompt_template_path": str(resolve_analyst_memo_prompt_template_path()),
+    }
+
+
+def parse_step1_analyst_memo_output(
+    *,
+    strategy_settings: Mapping[str, Any] | None = None,
+) -> dict[str, str]:
+    """Standalone parse of a pasted analyst-memo output (R2C, report-only).
+
+    Requires ``analyst_memo_raw_output.txt`` to be present; writes
+    ``analyst_memo.json`` + ``analyst_memo_validation.json``. Unlike the layer
+    embedded in ``parse_step1_output`` (which silently skips when no raw memo
+    exists), this CLI-facing entrypoint raises if the raw memo is absent.
+    """
+    settings = (
+        strategy_settings
+        if strategy_settings is not None
+        else load_strategy_settings_for_handoff_validation()
+    )
+    raw_path = step1_analyst_memo_raw_output_path()
+    if not file_exists(raw_path) or not read_text(raw_path).strip():
+        raise FileNotFoundError(
+            f"Missing analyst memo raw output: {raw_path}. "
+            "Run `run_step1 analyst-memo-render` and paste the memo first."
+        )
+    result = _run_analyst_memo_parse(strategy_settings=settings)
+    assert result is not None  # raw is present per the guard above
+    return result
+
+
 def parse_step1_output(
     *,
     strategy_settings: Mapping[str, Any] | None = None,
@@ -252,6 +391,31 @@ def parse_step1_output(
         if strategy_settings is not None
         else load_strategy_settings_for_handoff_validation()
     )
+
+    # Report-only layer 0 (R2B): deterministic evidence packet. Built from
+    # operator inputs + last-good metadata only (no LLM, no parsed payload), so
+    # it is written regardless of whether the Deep Research output parses, and is
+    # fully independent of the degraded-mode decision below.
+    _write_evidence_packet_report_only(strategy_settings=handoff_strategy_settings)
+
+    # Report-only layer 0b (R2C): small analyst-memo parse/validation. Only runs
+    # when a raw memo output exists; it writes its own two artifacts and never
+    # gates the pipeline, never feeds the degraded-mode decision, and can never
+    # permit NEW_BUY.
+    analyst_memo_summary = _parse_analyst_memo_report_only(
+        strategy_settings=handoff_strategy_settings
+    )
+
+    # Report-only layer 0c (R2D): deterministic strict-handoff compiler. Compiles
+    # the evidence packet (+ optional valid analyst memo) into a structurally
+    # complete candidate, validates it with the existing validator, and writes
+    # compiled_* artifacts. It is NOT fed into research_degraded_mode_decision and
+    # never changes allowed_actions; evidence-only / invalid-memo never support
+    # NEW_BUY. The raw Deep Research candidate below remains the active source.
+    compiled_handoff_summary = _compile_research_handoff_report_only(
+        strategy_settings=handoff_strategy_settings
+    )
+
     try:
         payload = extract_research_json(
             raw_output_path=step1_raw_output_path(),
@@ -347,6 +511,17 @@ def parse_step1_output(
         "research_degraded_mode_decision_path": str(step1_research_degraded_mode_decision_path()),
         "research_availability_state": availability.state,
         "research_availability_fresh": str(availability.fresh_research_available),
+        "evidence_packet_path": str(step1_evidence_packet_path()),
+        "analyst_memo_present": str(analyst_memo_summary.get("present", False)),
+        "analyst_memo_valid": str(analyst_memo_summary.get("valid", False)),
+        "analyst_memo_validation_path": analyst_memo_summary.get("validation_path", ""),
+        "analyst_memo_path": analyst_memo_summary.get("memo_path", ""),
+        "compiled_research_handoff_candidate_path": compiled_handoff_summary.get("candidate_path", ""),
+        "compiled_research_handoff_validation_path": compiled_handoff_summary.get("validation_path", ""),
+        "compiled_research_handoff_metadata_path": compiled_handoff_summary.get("metadata_path", ""),
+        "compiled_support_signals_path": compiled_handoff_summary.get("support_signals_path", ""),
+        "compiled_research_handoff_mode": compiled_handoff_summary.get("compilation_mode", ""),
+        "compiled_research_handoff_valid": compiled_handoff_summary.get("compiled_candidate_valid", ""),
         "schema_version": str(payload.get("schema_version", "")),
     }
 
@@ -373,6 +548,14 @@ def _evaluate_research_availability_report_only(
             strategy_settings.get("as_of") if isinstance(strategy_settings, Mapping) else None
         )
         payload_as_of = payload.get("as_of") if isinstance(payload, Mapping) else None
+        # R2E.1 (report-only recognition): feed the deterministic compiled
+        # evidence-first handoff (Step 1C) so a valid+fresh compiled candidate is
+        # recognized as STRICT_FRESH_EVIDENCE_ONLY (HOLD / NO_TRADE only) instead
+        # of a misleading INVALID_CONTRACT / DEGRADED_*. This never adds NEW_BUY /
+        # ORDER_COMPILATION. Only the normal parse path (parsed output present) is
+        # fed compiled inputs; a hard parse failure stays NO_OUTPUT (see the
+        # no-output writer, which is intentionally left unchanged).
+        compiled_inputs = _compiled_handoff_availability_inputs()
         availability = evaluate_research_availability(
             candidate_validation=candidate_validation,
             candidate=candidate,
@@ -381,6 +564,10 @@ def _evaluate_research_availability_report_only(
             now_date=settings_as_of or payload_as_of,
             last_good_handoff=last_good.handoff,
             last_good_metadata=last_good.metadata,
+            compiled_candidate_validation=compiled_inputs["compiled_candidate_validation"],
+            compiled_metadata=compiled_inputs["compiled_metadata"],
+            compiled_source_as_of_date=settings_as_of,
+            compiled_source_artifacts=compiled_inputs["compiled_source_artifacts"],
         )
         write_json(
             step1_research_availability_path(),
@@ -420,6 +607,256 @@ def _evaluate_research_availability_report_only(
         except Exception:  # noqa: BLE001 - best-effort artifact emission
             pass
         return fallback
+
+
+def _write_evidence_packet_report_only(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+) -> None:
+    """Build and write the deterministic evidence packet defensively (R2B).
+
+    Report-only: never raises into the Step 1 parse flow, never gates the
+    pipeline, and never feeds the degraded-mode decision. Uses only operator
+    inputs + last-good metadata (no LLM, no parsed payload). A missing portfolio
+    snapshot becomes an explicit DATA_GAP inside the packet rather than a crash.
+    """
+    try:
+        snapshot_path = current_inputs_dir() / "portfolio_snapshot.txt"
+        research_anchors_path = current_inputs_dir() / RESEARCH_ANCHORS_INPUT_FILENAME
+        try:
+            snapshot_text: str | None = load_portfolio_snapshot_text()
+        except Exception:  # noqa: BLE001 - missing snapshot -> DATA_GAP, not crash
+            snapshot_text = None
+        last_good = read_last_good_research_handoff(step1_state_dir())
+        settings_as_of = (
+            strategy_settings.get("as_of") if isinstance(strategy_settings, Mapping) else None
+        )
+        write_evidence_packet(
+            output_path=step1_evidence_packet_path(),
+            strategy_settings=strategy_settings,
+            portfolio_snapshot_text=snapshot_text,
+            portfolio_snapshot_path=snapshot_path,
+            last_good_available=last_good.available,
+            last_good_metadata=last_good.metadata,
+            now_date=settings_as_of,
+            source_artifacts={
+                "strategy_settings": str(current_inputs_dir() / "strategy_settings.yaml"),
+                "portfolio_snapshot": str(snapshot_path),
+                "last_good_metadata": str(last_good_research_handoff_metadata_path(step1_state_dir())),
+                "research_anchors": str(research_anchors_path),
+            },
+            research_anchors_path=research_anchors_path,
+        )
+    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
+        # Best-effort only: do not mask or alter existing Step 1 behavior.
+        pass
+
+
+def _load_or_build_evidence_packet(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Ensure the deterministic evidence packet is fresh on disk, then return it.
+
+    Used by the analyst-memo render/parse (R2C). Falls back to an in-memory build
+    so rendering/parsing still works even if the disk write/read fails.
+    """
+    _write_evidence_packet_report_only(strategy_settings=strategy_settings)
+    try:
+        return read_json(step1_evidence_packet_path())
+    except Exception:  # noqa: BLE001 - report-only fallback to in-memory build
+        from investment_orchestrator.research.evidence_packet import build_evidence_packet
+
+        try:
+            snapshot_text: str | None = load_portfolio_snapshot_text()
+        except Exception:  # noqa: BLE001 - missing snapshot -> DATA_GAP, not crash
+            snapshot_text = None
+        return build_evidence_packet(
+            strategy_settings=strategy_settings,
+            portfolio_snapshot_text=snapshot_text,
+            generated_at=None,
+        )
+
+
+def _run_analyst_memo_parse(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+) -> dict[str, str] | None:
+    """Parse + validate a pasted analyst memo and write its two report-only artifacts.
+
+    Returns ``None`` when no raw memo output exists (treated as absent, not an
+    error). The evidence universe comes from the deterministic evidence packet;
+    the memo can only express a relative view inside that universe.
+    """
+    raw_path = step1_analyst_memo_raw_output_path()
+    if not file_exists(raw_path):
+        return None
+    raw_text = read_text(raw_path)
+    if not raw_text.strip():
+        return None
+
+    try:
+        packet = read_json(step1_evidence_packet_path())
+    except Exception:  # noqa: BLE001 - build the packet if it is not on disk yet
+        packet = _load_or_build_evidence_packet(strategy_settings=strategy_settings)
+    universe = evidence_universe_from_packet(packet)
+
+    result = parse_analyst_memo_text(raw_text, evidence_universe=universe)
+    if isinstance(result.memo, Mapping):
+        write_json(step1_analyst_memo_path(), dict(result.memo))
+    else:
+        write_json(
+            step1_analyst_memo_path(),
+            {
+                "schema_version": "analyst_memo_v1",
+                "present": result.present,
+                "valid": result.valid,
+                "note": "no parseable analyst_memo object (see analyst_memo_validation.json).",
+                "parse_error": result.parse_error,
+            },
+        )
+    write_json(
+        step1_analyst_memo_validation_path(),
+        analyst_memo_parse_result_to_dict(result),
+    )
+    return {
+        "present": str(result.present),
+        "valid": str(result.valid),
+        "memo_path": str(step1_analyst_memo_path()),
+        "validation_path": str(step1_analyst_memo_validation_path()),
+    }
+
+
+def _parse_analyst_memo_report_only(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Run the analyst-memo parse defensively as a report-only layer (R2C).
+
+    Step 1 parse must never fail because of this observer, and the memo must
+    never change the degraded-mode decision or any allowed action. A missing raw
+    memo is simply skipped; any error is swallowed.
+    """
+    absent = {"present": False, "valid": False, "validation_path": "", "memo_path": ""}
+    try:
+        result = _run_analyst_memo_parse(strategy_settings=strategy_settings)
+        return result if result is not None else absent
+    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
+        return absent
+
+
+def _read_json_if_exists(path: Path) -> Any | None:
+    """Read a JSON artifact if present; return None when absent or unreadable."""
+    if not file_exists(path):
+        return None
+    try:
+        return read_json(path)
+    except Exception:  # noqa: BLE001 - report-only: a malformed artifact is treated as absent
+        return None
+
+
+def _compiled_handoff_availability_inputs() -> dict[str, Any]:
+    """Load the R2D compiled-handoff validation + metadata for the availability evaluator.
+
+    Report-only: a missing / malformed compiled artifact is treated as absent, so
+    the evaluator falls back to its pre-R2E.1 behavior (no relabel).
+    """
+    return {
+        "compiled_candidate_validation": _read_json_if_exists(step1_compiled_handoff_validation_path()),
+        "compiled_metadata": _read_json_if_exists(step1_compiled_handoff_metadata_path()),
+        "compiled_source_artifacts": {
+            "compiled_research_handoff_candidate": str(step1_compiled_handoff_candidate_path()),
+            "compiled_research_handoff_validation": str(step1_compiled_handoff_validation_path()),
+            "compiled_research_handoff_metadata": str(step1_compiled_handoff_metadata_path()),
+        },
+    }
+
+
+def _load_analyst_memo_for_compiler() -> Mapping[str, Any] | None:
+    """Read the parsed analyst memo artifact for the compiler, if present.
+
+    The compiler re-validates whatever it is given, so a stub / invalid memo is
+    safely classified as ``invalid_memo_ignored``. A missing memo file means the
+    compiler runs in ``evidence_only`` mode.
+    """
+    memo_path = step1_analyst_memo_path()
+    if not file_exists(memo_path):
+        return None
+    try:
+        memo = read_json(memo_path)
+    except Exception:  # noqa: BLE001 - unreadable memo -> treated as absent
+        return None
+    return memo if isinstance(memo, Mapping) else None
+
+
+def _run_compile_research_handoff(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+) -> dict[str, str]:
+    """Compile + validate + write the three report-only R2D artifacts."""
+    packet = _load_or_build_evidence_packet(strategy_settings=strategy_settings)
+    analyst_memo = _load_analyst_memo_for_compiler()
+    result = write_compiled_research_handoff(
+        candidate_path=step1_compiled_handoff_candidate_path(),
+        validation_path=step1_compiled_handoff_validation_path(),
+        metadata_path=step1_compiled_handoff_metadata_path(),
+        evidence_packet=packet,
+        analyst_memo=analyst_memo,
+        strategy_settings=strategy_settings,
+        evidence_packet_path=str(step1_evidence_packet_path()),
+        analyst_memo_path=str(step1_analyst_memo_path()) if analyst_memo is not None else None,
+        support_signals_path=step1_compiled_support_signals_path(),
+    )
+    return {
+        "candidate_path": result["compiled_research_handoff_candidate_path"],
+        "validation_path": result["compiled_research_handoff_validation_path"],
+        "metadata_path": result["compiled_research_handoff_metadata_path"],
+        "support_signals_path": result.get("compiled_support_signals_path", ""),
+        "compilation_mode": result["compilation_mode"],
+        "compiled_candidate_valid": result["compiled_candidate_valid"],
+    }
+
+
+def _compile_research_handoff_report_only(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Run the deterministic handoff compiler defensively as a report-only layer (R2D).
+
+    Step 1 parse must never fail because of this observer, and the compiled
+    candidate must never change the degraded-mode decision or any allowed action
+    (it is not fed into the availability evaluator). Any error is swallowed.
+    """
+    empty = {
+        "candidate_path": "",
+        "validation_path": "",
+        "metadata_path": "",
+        "support_signals_path": "",
+        "compilation_mode": "",
+        "compiled_candidate_valid": "",
+    }
+    try:
+        return _run_compile_research_handoff(strategy_settings=strategy_settings)
+    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
+        return empty
+
+
+def compile_step1_research_handoff(
+    *,
+    strategy_settings: Mapping[str, Any] | None = None,
+) -> dict[str, str]:
+    """Standalone deterministic handoff compile (R2D, report-only) for the CLI.
+
+    Builds/reuses the evidence packet, reads the parsed analyst memo if present,
+    compiles the strict candidate, validates it, and writes the compiled_*
+    artifacts. Report-only: not fed into the degraded-mode decision.
+    """
+    settings = (
+        strategy_settings
+        if strategy_settings is not None
+        else load_strategy_settings_for_handoff_validation()
+    )
+    return _run_compile_research_handoff(strategy_settings=settings)
 
 
 def _write_no_output_research_availability_artifacts_report_only(

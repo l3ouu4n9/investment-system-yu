@@ -131,6 +131,9 @@ def test_strict_fresh_permission_allows_existing_step2_render_path(
         ("INVALID_CONTRACT", False),
         ("DEGRADED_WITH_LAST_GOOD", False),
         ("STRICT_STALE", False),
+        # R2E.1: the compiled evidence-first state is non-actionable and must be
+        # blocked by the Step 2 gate exactly like the degraded states.
+        ("STRICT_FRESH_EVIDENCE_ONLY", False),
         ("MANUAL_REVIEW_REQUIRED", True),
     ],
 )

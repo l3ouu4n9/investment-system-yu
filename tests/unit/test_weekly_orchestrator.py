@@ -163,6 +163,8 @@ def assert_no_downstream_artifacts_created(tmp_path: Path) -> None:
         ("DEGRADED_NO_RESEARCH", False),
         ("INVALID_CONTRACT", False),
         ("NO_OUTPUT", False),
+        # R2E.1: non-actionable compiled evidence-first state -> controlled NO_TRADE.
+        ("STRICT_FRESH_EVIDENCE_ONLY", False),
         ("MANUAL_REVIEW_REQUIRED", True),
     ],
 )

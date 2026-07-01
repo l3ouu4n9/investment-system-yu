@@ -29,14 +29,18 @@ STRICT_FRESH = "STRICT_FRESH"
 _ORDER_GENERATING_ACTIONS = ("NEW_BUY", "ORDER_COMPILATION")
 
 # Severity ordering for highest_severity_state (higher = more severe).
+# STRICT_FRESH_EVIDENCE_ONLY (R2E.1) is a benign, non-actionable HOLD/NO_TRADE
+# state — a deterministic compiled handoff exists — so it ranks low (just above
+# STRICT_FRESH), well below the degraded/invalid states.
 _STATE_SEVERITY = {
     "STRICT_FRESH": 0,
-    "STRICT_STALE": 1,
-    "DEGRADED_WITH_LAST_GOOD": 2,
-    "DEGRADED_NO_RESEARCH": 3,
-    "INVALID_CONTRACT": 4,
-    "NO_OUTPUT": 5,
-    "MANUAL_REVIEW_REQUIRED": 6,
+    "STRICT_FRESH_EVIDENCE_ONLY": 1,
+    "STRICT_STALE": 2,
+    "DEGRADED_WITH_LAST_GOOD": 3,
+    "DEGRADED_NO_RESEARCH": 4,
+    "INVALID_CONTRACT": 5,
+    "NO_OUTPUT": 6,
+    "MANUAL_REVIEW_REQUIRED": 7,
 }
 
 
