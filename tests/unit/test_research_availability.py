@@ -471,11 +471,151 @@ def test_raw_invalid_compiled_evidence_plus_memo_is_still_non_actionable() -> No
         compiled_metadata=compiled_meta("evidence_plus_memo", present=True, valid=True),
     )
     # R2E.1 stays non-actionable even with a valid memo (NEW_BUY is a future PR).
+    # Without a support-signals artifact it also stays evidence-only (R2E.4 needs it).
     assert result.state == "STRICT_FRESH_EVIDENCE_ONLY"
     assert result.allowed_actions == ["HOLD", "NO_TRADE"]
     assert "NEW_BUY" in result.blocked_actions
     assert result.analyst_memo_present is True
     assert result.analyst_memo_valid is True
+
+
+# --- R2E.4: grounded memo support recognition (still non-actionable) ----------
+
+
+def accepted_signals(
+    *,
+    present: bool = True,
+    valid: bool = True,
+    accepted: int = 1,
+    permission_effect: str = "none",
+    not_authorization: bool = True,
+) -> dict[str, Any]:
+    return {
+        "analyst_memo_present": present,
+        "analyst_memo_valid": valid,
+        "accepted_support_signals": [{"ticker": "QQQ"} for _ in range(accepted)],
+        "permission_effect": permission_effect,
+        "not_authorization": not_authorization,
+    }
+
+
+def test_accepted_grounded_support_upgrades_state_but_stays_non_actionable() -> None:
+    result = evaluate_with_compiled(
+        candidate_validation=invalid_result(),
+        compiled_candidate_validation=COMPILED_VALID,
+        compiled_metadata=compiled_meta("evidence_plus_memo", present=True, valid=True),
+        compiled_support_signals=accepted_signals(accepted=2),
+    )
+    assert result.state == "STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE"
+    # Permission set is IDENTICAL to evidence-only: HOLD / NO_TRADE only.
+    assert result.allowed_actions == ["HOLD", "NO_TRADE"]
+    for blocked in ("SELL", "NEW_BUY", "ROTATION", "REBALANCE", "EXTENDED_ETF_ADMISSION", "ORDER_COMPILATION"):
+        assert blocked in result.blocked_actions, blocked
+    assert result.grounded_memo_support_present is True
+    assert result.support_signals_present is True
+    assert result.accepted_support_signal_count == 2
+    assert result.support_signals_not_authorization is True
+    assert result.fresh_research_available is False
+    assert result.manual_review_required is False
+    assert result.source == "compiled_research_handoff"
+    # Explicit non-actionable blocker reasons.
+    assert any("grounded_memo_support_non_actionable" in r for r in result.blocker_reasons)
+    assert any("new_buy_requires_future_gate_pr" in r for r in result.blocker_reasons)
+
+
+def test_grounded_state_maps_to_hold_no_trade_in_action_table() -> None:
+    from investment_orchestrator.state.research_availability import (
+        STRICT_FRESH,
+        STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE,
+        _ALLOWED_ACTIONS_BY_STATE,
+    )
+
+    assert STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE != STRICT_FRESH
+    assert _ALLOWED_ACTIONS_BY_STATE[STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE] == ("HOLD", "NO_TRADE")
+    assert "NEW_BUY" not in _ALLOWED_ACTIONS_BY_STATE[STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE]
+
+
+def test_empty_accepted_support_signals_stays_evidence_only() -> None:
+    result = evaluate_with_compiled(
+        candidate_validation=invalid_result(),
+        compiled_candidate_validation=COMPILED_VALID,
+        compiled_metadata=compiled_meta("evidence_plus_memo", present=True, valid=True),
+        compiled_support_signals=accepted_signals(accepted=0),
+    )
+    assert result.state == "STRICT_FRESH_EVIDENCE_ONLY"
+    assert result.grounded_memo_support_present is False
+    assert result.accepted_support_signal_count == 0
+
+
+def test_support_signals_not_authorization_false_fails_closed() -> None:
+    result = evaluate_with_compiled(
+        candidate_validation=invalid_result(),
+        compiled_candidate_validation=COMPILED_VALID,
+        compiled_metadata=compiled_meta("evidence_plus_memo", present=True, valid=True),
+        compiled_support_signals=accepted_signals(not_authorization=False),
+    )
+    assert result.state == "STRICT_FRESH_EVIDENCE_ONLY"
+    assert result.grounded_memo_support_present is False
+
+
+def test_support_signals_permission_effect_not_none_fails_closed() -> None:
+    result = evaluate_with_compiled(
+        candidate_validation=invalid_result(),
+        compiled_candidate_validation=COMPILED_VALID,
+        compiled_metadata=compiled_meta("evidence_plus_memo", present=True, valid=True),
+        compiled_support_signals=accepted_signals(permission_effect="actionable"),
+    )
+    assert result.state == "STRICT_FRESH_EVIDENCE_ONLY"
+
+
+def test_malformed_support_signals_fails_closed_to_evidence_only() -> None:
+    result = evaluate_with_compiled(
+        candidate_validation=invalid_result(),
+        compiled_candidate_validation=COMPILED_VALID,
+        compiled_metadata=compiled_meta("evidence_plus_memo", present=True, valid=True),
+        compiled_support_signals=["not", "a", "mapping"],
+    )
+    assert result.state == "STRICT_FRESH_EVIDENCE_ONLY"
+    assert result.support_signals_present is False
+
+
+def test_raw_strict_fresh_not_upgraded_by_accepted_support_signals() -> None:
+    # Grounded state only sharpens the evidence-only compiled label; a valid+fresh
+    # RAW handoff keeps full STRICT_FRESH actionable permissions regardless.
+    s = settings()
+    result = evaluate_research_availability(
+        candidate_validation=valid_result(s),
+        candidate=valid_candidate(),
+        strategy_settings=s,
+        source_as_of_date=NOW,
+        now_date=NOW,
+        compiled_candidate_validation=COMPILED_VALID,
+        compiled_metadata=compiled_meta("evidence_plus_memo", present=True, valid=True),
+        compiled_source_as_of_date=NOW,
+        compiled_support_signals=accepted_signals(),
+    )
+    assert result.state == "STRICT_FRESH"
+    assert "NEW_BUY" in result.allowed_actions
+
+
+def test_grounded_state_permission_effect_is_none_in_decision_artifact() -> None:
+    from investment_orchestrator.state.research_availability import (
+        research_degraded_mode_decision_to_dict,
+    )
+
+    result = evaluate_with_compiled(
+        candidate_validation=invalid_result(),
+        compiled_candidate_validation=COMPILED_VALID,
+        compiled_metadata=compiled_meta("evidence_plus_memo", present=True, valid=True),
+        compiled_support_signals=accepted_signals(),
+    )
+    decision = research_degraded_mode_decision_to_dict(result)
+    assert decision["state"] == "STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE"
+    assert decision["permission_effect"] == "none"
+    assert decision["grounded_memo_support_present"] is True
+    assert decision["accepted_support_signal_count"] == 1
+    assert decision["not_authorization"] is True
+    assert "NEW_BUY" not in decision["allowed_actions"]
 
 
 def test_raw_invalid_compiled_invalid_keeps_existing_behavior() -> None:

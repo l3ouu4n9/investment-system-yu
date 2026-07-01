@@ -37,6 +37,14 @@ STRICT_STALE = "STRICT_STALE"
 # as INVALID_CONTRACT / DEGRADED_*; opening any actionable path requires a future
 # explicit PR.
 STRICT_FRESH_EVIDENCE_ONLY = "STRICT_FRESH_EVIDENCE_ONLY"
+# R2E.4: like STRICT_FRESH_EVIDENCE_ONLY, but the report-only compiled
+# support-signal artifact proves a valid analyst memo referenced valid, fresh,
+# applicable deterministic research anchors (accepted_support_signals non-empty,
+# permission_effect="none", not_authorization=true). It is NON-ACTIONABLE by
+# policy — HOLD / NO_TRADE only — and never permits NEW_BUY / ORDER_COMPILATION.
+# It only sharpens observability over STRICT_FRESH_EVIDENCE_ONLY; opening any
+# actionable path requires a future explicit gate PR (R2E.5b).
+STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE = "STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE"
 DEGRADED_WITH_LAST_GOOD = "DEGRADED_WITH_LAST_GOOD"
 DEGRADED_NO_RESEARCH = "DEGRADED_NO_RESEARCH"
 INVALID_CONTRACT = "INVALID_CONTRACT"
@@ -76,6 +84,7 @@ _ALLOWED_ACTIONS_BY_STATE: dict[str, tuple[str, ...]] = {
     STRICT_FRESH: ACTIONS,
     STRICT_STALE: ("HOLD", "NO_TRADE", "SELL"),
     STRICT_FRESH_EVIDENCE_ONLY: ("HOLD", "NO_TRADE"),
+    STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE: ("HOLD", "NO_TRADE"),
     DEGRADED_WITH_LAST_GOOD: ("HOLD", "NO_TRADE"),
     DEGRADED_NO_RESEARCH: ("HOLD", "NO_TRADE"),
     INVALID_CONTRACT: ("HOLD", "NO_TRADE"),
@@ -124,6 +133,11 @@ class ResearchAvailabilityResult:
     analyst_memo_present: bool | None = None
     analyst_memo_valid: bool | None = None
     source_artifacts: dict[str, str] = field(default_factory=dict)
+    # R2E.4 grounded-memo support recognition (report-only, non-actionable).
+    support_signals_present: bool = False
+    accepted_support_signal_count: int = 0
+    grounded_memo_support_present: bool = False
+    support_signals_not_authorization: bool | None = None
 
 
 def evaluate_research_availability(
@@ -141,6 +155,7 @@ def evaluate_research_availability(
     compiled_metadata: Mapping[str, Any] | None = None,
     compiled_source_as_of_date: str | None = None,
     compiled_source_artifacts: Mapping[str, str] | None = None,
+    compiled_support_signals: Mapping[str, Any] | None = None,
 ) -> ResearchAvailabilityResult:
     """Classify research availability and derive a deterministic permission.
 
@@ -254,6 +269,39 @@ def evaluate_research_availability(
             "this state permits HOLD / NO_TRADE only."
         )
 
+    # --- R2E.4: recognize grounded memo support (still non-actionable) ---
+    # Only sharpens the label when we are ALREADY in the evidence-only compiled
+    # state and the report-only support-signal artifact proves accepted grounded
+    # memo support. Permissions are identical (HOLD / NO_TRADE); fail closed on a
+    # missing / malformed / non-authorization artifact.
+    support_signals_present = isinstance(compiled_support_signals, Mapping)
+    support_signals = compiled_support_signals if support_signals_present else {}
+    accepted = support_signals.get("accepted_support_signals")
+    accepted_support_signal_count = len(accepted) if isinstance(accepted, list) else 0
+    support_signals_not_authorization = (
+        support_signals.get("not_authorization") if support_signals_present else None
+    )
+    grounded_criteria = (
+        support_signals_present
+        and support_signals.get("analyst_memo_present") is True
+        and support_signals.get("analyst_memo_valid") is True
+        and accepted_support_signal_count > 0
+        and support_signals.get("permission_effect") == "none"
+        and support_signals.get("not_authorization") is True
+    )
+    grounded_memo_support_present = False
+    if state == STRICT_FRESH_EVIDENCE_ONLY and grounded_criteria:
+        state = STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE
+        grounded_memo_support_present = True
+        blocker_reasons.append(
+            "grounded_memo_support_non_actionable: fresh evidence + a valid analyst memo + accepted "
+            "grounded support signals exist, but this state is non-actionable by policy."
+        )
+        blocker_reasons.append(
+            "new_buy_requires_future_gate_pr: NEW_BUY / ORDER_COMPILATION remain blocked and require a "
+            "future explicit gate PR; this state permits HOLD / NO_TRADE only."
+        )
+
     last_good_usable = state == DEGRADED_WITH_LAST_GOOD
     age_for_label = handoff_age_days if handoff_valid else (last_good_age_days if last_good_available else None)
     stale_label = _stale_label(age_for_label, fresh_days, stale_days)
@@ -292,6 +340,10 @@ def evaluate_research_availability(
         analyst_memo_present=analyst_memo_present,
         analyst_memo_valid=analyst_memo_valid,
         source_artifacts=source_artifacts,
+        support_signals_present=support_signals_present,
+        accepted_support_signal_count=accepted_support_signal_count,
+        grounded_memo_support_present=grounded_memo_support_present,
+        support_signals_not_authorization=support_signals_not_authorization,
     )
 
 
@@ -491,6 +543,10 @@ def research_availability_result_to_dict(result: ResearchAvailabilityResult) -> 
         "compilation_mode": result.compilation_mode,
         "analyst_memo_present": result.analyst_memo_present,
         "analyst_memo_valid": result.analyst_memo_valid,
+        "support_signals_present": result.support_signals_present,
+        "accepted_support_signal_count": result.accepted_support_signal_count,
+        "grounded_memo_support_present": result.grounded_memo_support_present,
+        "not_authorization": result.support_signals_not_authorization,
         "source_artifacts": dict(result.source_artifacts),
         "report_only": True,
     }
@@ -543,6 +599,10 @@ def research_degraded_mode_decision_to_dict(result: ResearchAvailabilityResult) 
         "compilation_mode": result.compilation_mode,
         "analyst_memo_present": result.analyst_memo_present,
         "analyst_memo_valid": result.analyst_memo_valid,
+        "support_signals_present": result.support_signals_present,
+        "accepted_support_signal_count": result.accepted_support_signal_count,
+        "grounded_memo_support_present": result.grounded_memo_support_present,
+        "not_authorization": result.support_signals_not_authorization,
         "permission_effect": _permission_effect(result.state),
         "source_artifacts": dict(result.source_artifacts),
         "report_only": True,

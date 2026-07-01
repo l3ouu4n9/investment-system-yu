@@ -281,6 +281,24 @@ def validate_analyst_memo(
                         f"(got {stance!r})."
                     )
 
+                # Optional anchor_id_refs: type/format only. The memo may only
+                # *reference* existing research anchors — it can never create one;
+                # existence / freshness / applicability are validated deterministically
+                # downstream (support_signals against evidence_packet.research_anchors).
+                refs = row.get("anchor_id_refs")
+                if refs is not None:
+                    if not isinstance(refs, list):
+                        problems.append(
+                            f"ticker_relative_view[{index}].anchor_id_refs must be a list when present."
+                        )
+                    else:
+                        for ref_index, ref in enumerate(refs):
+                            if not (isinstance(ref, str) and ref.strip()):
+                                problems.append(
+                                    f"ticker_relative_view[{index}].anchor_id_refs[{ref_index}] "
+                                    "must be a non-empty string."
+                                )
+
     return problems
 
 

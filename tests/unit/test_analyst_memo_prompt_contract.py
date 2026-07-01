@@ -81,6 +81,15 @@ def test_prompt_constrains_confidence(prompt_text: str) -> None:
     assert "low / medium / high" in prompt_text or "low|medium|high" in prompt_text
 
 
+def test_prompt_documents_anchor_id_refs_as_reference_only(prompt_text: str) -> None:
+    # R2E.5a-2: the memo MAY reference existing research_anchors ids, but must not
+    # invent them, and referencing is grounding — never trade authorization.
+    assert "anchor_id_refs" in prompt_text
+    assert "research_anchors" in prompt_text
+    assert "不得發明" in prompt_text or "不得" in prompt_text  # do not invent anchor ids
+    assert "not a trade authorization" in prompt_text or "不是 trade authorization" in prompt_text
+
+
 # --- much shorter than the monolithic Deep Research prompt -------------------
 
 

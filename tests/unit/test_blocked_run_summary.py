@@ -151,6 +151,26 @@ def test_strict_fresh_evidence_only_summarizes_to_no_trade() -> None:
     assert result.manual_review_required is False
 
 
+def test_grounded_memo_state_summarizes_to_no_trade() -> None:
+    # R2E.4: the grounded-memo state is also a controlled NO_TRADE run.
+    state = "STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE"
+    result = build_blocked_run_summary(
+        step1_decision=step1_decision(state=state),
+        step2_block=step2_block(state=state),
+        step3_block=None,
+        step4_block=None,
+    )
+
+    assert result.run_blocked is True
+    assert result.recommended_result == "NO_TRADE"
+    assert result.research_state == state
+    assert result.highest_severity_state == state  # known benign state (not -1/unknown)
+    assert result.allowed_actions == ["HOLD", "NO_TRADE"]
+    assert "NEW_BUY" in result.blocked_actions
+    assert "ORDER_COMPILATION" in result.blocked_actions
+    assert result.manual_review_required is False
+
+
 def test_step1_manual_review_propagates_to_summary() -> None:
     result = build_blocked_run_summary(
         step1_decision=step1_decision(state="MANUAL_REVIEW_REQUIRED", manual_review_required=True),

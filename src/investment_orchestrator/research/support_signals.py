@@ -1,30 +1,31 @@
-"""Step 1C deterministic support-signal extraction (R2E.3, report-only).
+"""Step 1C deterministic support-signal extraction (R2E.3 / R2E.5a-2, report-only).
 
 Extracts a **deterministic, non-authoritative** view of which analyst-memo
 opinions *would* be buy-support candidates for a *future* actionable
 evidence+memo path (``STRICT_FRESH_WITH_LLM_MEMO``), together with the exact
-deterministic reason each candidate is currently rejected.
+deterministic reason each candidate is currently accepted or rejected.
 
 This module changes **no** production behavior. It never authorizes a trade,
 never changes ``allowed_actions``, never feeds the availability / degraded-mode
-decision, and never makes the compiled handoff actionable. In R2E.3:
+decision, and never makes the compiled handoff actionable.
 
-* ``accepted_support_signals`` is **always empty** — no candidate can be accepted
-  for actionability because no deterministic anchor source exists yet (the
-  ``missing_valid_anchor_source`` global blocker always applies). Candidates that
-  pass every *qualitative* gate are surfaced under ``qualitative_support_only``
-  (clearly named so it is never mistaken for buy authorization).
-* Every candidate carries ``accepted_for_future_actionability: false`` and
-  ``has_valid_anchor_source: false``.
-
-The core ``build_compiled_support_signals`` is a pure function (mappings in,
-mapping out; never raises) so it is fully testable without disk.
+R2E.5a-2: a candidate may enter ``accepted_support_signals`` when a *valid* memo
+references a *valid, fresh, applicable* deterministic research anchor (from
+``evidence_packet.research_anchors``) and meets every qualitative gate. Acceptance
+is **still report-only and NOT authorization** (``permission_effect: "none"``,
+``not_authorization: true``). Candidates that pass every qualitative gate but lack
+valid anchor grounding are surfaced under ``qualitative_support_only``.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
+
+from investment_orchestrator.research.research_anchors import (
+    ANCHOR_TYPES,
+    SOURCE_TYPES,
+)
 
 
 SCHEMA_VERSION = "compiled_support_signals_v1"
@@ -38,6 +39,7 @@ _MODE_INVALID_MEMO_IGNORED = "invalid_memo_ignored"
 # A candidate is only ever a buy-support candidate when the memo prefers it.
 _PREFER_STANCE = "prefer"
 _LOW_CONFIDENCE = "low"
+_CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
 
 # --- deterministic rejection reason codes ------------------------------------
 # Global (whole-run) blockers.
@@ -53,6 +55,14 @@ REASON_MISSING_SOURCE_NOTES = "missing_source_notes"
 REASON_BLOCKING_DATA_GAP = "blocking_data_gap"
 REASON_EXTENDED_ETF_NOT_ALLOWED = "extended_etf_not_allowed_in_v1"
 REASON_STANCE_NOT_PREFER = "stance_not_prefer"
+# Per-ticker anchor-grounding reasons (R2E.5a-2).
+REASON_MISSING_ANCHOR_ID_REFS = "missing_anchor_id_refs"
+REASON_REFERENCED_ANCHOR_NOT_FOUND = "referenced_anchor_not_found"
+REASON_REFERENCED_ANCHOR_STALE = "referenced_anchor_stale"
+REASON_ANCHOR_NOT_APPLICABLE = "anchor_not_applicable_to_ticker"
+REASON_ANCHOR_CONFIDENCE_FLOOR_NOT_MET = "anchor_confidence_floor_not_met"
+REASON_ANCHOR_SOURCE_TYPE_NOT_ALLOWED = "anchor_source_type_not_allowed"
+REASON_ANCHOR_TYPE_NOT_ALLOWED = "anchor_type_not_allowed"
 
 REJECTION_REASON_CODES = (
     REASON_MISSING_VALID_ANCHOR_SOURCE,
@@ -66,17 +76,39 @@ REJECTION_REASON_CODES = (
     REASON_STANCE_NOT_PREFER,
     REASON_ANALYST_MEMO_ABSENT,
     REASON_ANALYST_MEMO_INVALID,
+    REASON_MISSING_ANCHOR_ID_REFS,
+    REASON_REFERENCED_ANCHOR_NOT_FOUND,
+    REASON_REFERENCED_ANCHOR_STALE,
+    REASON_ANCHOR_NOT_APPLICABLE,
+    REASON_ANCHOR_CONFIDENCE_FLOOR_NOT_MET,
+    REASON_ANCHOR_SOURCE_TYPE_NOT_ALLOWED,
+    REASON_ANCHOR_TYPE_NOT_ALLOWED,
 )
 
-# In R2E.3 no deterministic anchor source is wired in, so every candidate is
-# non-actionable by construction.
+# Anchor-grounding reasons: a candidate rejected *only* by these has passed every
+# qualitative gate and is surfaced as qualitative_support_only (not authorization).
+_ANCHOR_RELATED_REASONS = frozenset(
+    {
+        REASON_MISSING_VALID_ANCHOR_SOURCE,
+        REASON_MISSING_ANCHOR_ID_REFS,
+        REASON_REFERENCED_ANCHOR_NOT_FOUND,
+        REASON_REFERENCED_ANCHOR_STALE,
+        REASON_ANCHOR_NOT_APPLICABLE,
+        REASON_ANCHOR_CONFIDENCE_FLOOR_NOT_MET,
+        REASON_ANCHOR_SOURCE_TYPE_NOT_ALLOWED,
+        REASON_ANCHOR_TYPE_NOT_ALLOWED,
+    }
+)
+
+# No accepted anchor grounding for a candidate.
 ANCHOR_SOURCE_NONE = "none_available"
 
 _NON_AUTHORIZATION_NOTE = (
     "Report-only support signals. This artifact NEVER authorizes a trade, never "
     "changes allowed_actions, never enables STRICT_FRESH_WITH_LLM_MEMO, and does "
     "not feed the availability / degraded-mode decision. accepted_support_signals "
-    "is empty in this version because no deterministic anchor source exists."
+    "means only that a candidate has valid deterministic anchor grounding for a "
+    "FUTURE actionable path; it is NOT buy authorization (permission_effect=none)."
 )
 
 
@@ -103,6 +135,9 @@ def build_compiled_support_signals(
     allowed_buy = _normalized_set(universe.get("allowed_buy_tickers"))
     approved_extended = _normalized_set(universe.get("approved_extended_etf"))
 
+    anchors_by_id = _usable_anchors_by_id(packet)
+    any_usable_anchor = bool(anchors_by_id)
+
     analyst_memo_present = analyst_memo is not None
     analyst_memo_valid = compilation_mode == _MODE_EVIDENCE_PLUS_MEMO
 
@@ -122,11 +157,13 @@ def build_compiled_support_signals(
         global_blockers.append(REASON_ANALYST_MEMO_INVALID)
     if confidence_low:
         global_blockers.append(REASON_MEMO_CONFIDENCE_LOW)
-    # R2E.3 invariant: no deterministic anchor source exists yet.
-    global_blockers.append(REASON_MISSING_VALID_ANCHOR_SOURCE)
+    # Whole-run anchor blocker only when NO usable deterministic anchor exists.
+    if not any_usable_anchor:
+        global_blockers.append(REASON_MISSING_VALID_ANCHOR_SOURCE)
 
     # --- per-ticker candidate signals (defensive; works on raw/invalid memo) ---
     candidate_ticker_signals: list[dict[str, Any]] = []
+    accepted_support_signals: list[dict[str, Any]] = []
     rejected_support_signals: list[dict[str, Any]] = []
     qualitative_support_only: list[dict[str, Any]] = []
 
@@ -138,37 +175,45 @@ def build_compiled_support_signals(
         stance_str = stance.strip().lower() if isinstance(stance, str) else None
         rationale = row.get("rationale_12m_plus")
         rationale_present = isinstance(rationale, str) and rationale.strip() != ""
+        anchor_id_refs = _string_refs(row.get("anchor_id_refs"))
 
         in_allowed_universe = ticker in allowed_buy
         is_extended = ticker in approved_extended
         listed_in_avoid = ticker in avoid_set
         has_blocking_data_gap = _ticker_mentioned(ticker, data_gaps)
 
-        reasons: list[str] = []
+        # Non-anchor (qualitative + global) gates.
+        non_anchor_reasons: list[str] = []
         if stance_str != _PREFER_STANCE:
-            reasons.append(REASON_STANCE_NOT_PREFER)
+            non_anchor_reasons.append(REASON_STANCE_NOT_PREFER)
         if not rationale_present:
-            reasons.append(REASON_MISSING_RATIONALE)
+            non_anchor_reasons.append(REASON_MISSING_RATIONALE)
         if not source_notes_present:
-            reasons.append(REASON_MISSING_SOURCE_NOTES)
-        # Universe classification: recognized-but-extended vs genuinely out-of-universe.
+            non_anchor_reasons.append(REASON_MISSING_SOURCE_NOTES)
         if is_extended:
-            reasons.append(REASON_EXTENDED_ETF_NOT_ALLOWED)
+            non_anchor_reasons.append(REASON_EXTENDED_ETF_NOT_ALLOWED)
         elif not in_allowed_universe:
-            reasons.append(REASON_OUT_OF_UNIVERSE)
+            non_anchor_reasons.append(REASON_OUT_OF_UNIVERSE)
         if listed_in_avoid:
-            reasons.append(REASON_LISTED_IN_AVOID)
+            non_anchor_reasons.append(REASON_LISTED_IN_AVOID)
         if has_blocking_data_gap:
-            reasons.append(REASON_BLOCKING_DATA_GAP)
-        # Global reasons apply to every candidate too (self-contained rows).
+            non_anchor_reasons.append(REASON_BLOCKING_DATA_GAP)
         if confidence_low:
-            reasons.append(REASON_MEMO_CONFIDENCE_LOW)
+            non_anchor_reasons.append(REASON_MEMO_CONFIDENCE_LOW)
         if not analyst_memo_valid:
-            # An invalid / absent memo is never trusted for support.
-            reasons.append(
+            non_anchor_reasons.append(
                 REASON_ANALYST_MEMO_ABSENT if not analyst_memo_present else REASON_ANALYST_MEMO_INVALID
             )
-        reasons.append(REASON_MISSING_VALID_ANCHOR_SOURCE)
+
+        # Anchor-grounding gate (R2E.5a-2): find the first fully-valid referenced anchor.
+        matched_anchor_id, anchor_reasons, matched_anchor_type = _evaluate_anchor_refs(
+            anchor_id_refs, ticker=ticker, anchors_by_id=anchors_by_id, memo_confidence=confidence_str
+        )
+        has_valid_anchor = matched_anchor_id is not None
+
+        # Accept only when every qualitative/global gate passes AND a valid anchor grounds it.
+        accepted = not non_anchor_reasons and has_valid_anchor
+        reasons = list(non_anchor_reasons) if accepted else [*non_anchor_reasons, *anchor_reasons]
 
         signal = {
             "ticker": ticker,
@@ -179,38 +224,154 @@ def build_compiled_support_signals(
             "in_allowed_universe": in_allowed_universe,
             "listed_in_avoid_or_deprioritize": listed_in_avoid,
             "has_blocking_data_gap": has_blocking_data_gap,
-            "has_valid_anchor_source": False,
-            "anchor_source_type": ANCHOR_SOURCE_NONE,
-            "accepted_for_future_actionability": False,
-            "rejection_reasons": reasons,
+            "anchor_id_refs": anchor_id_refs,
+            "matched_anchor_id": matched_anchor_id,
+            "has_valid_anchor_source": has_valid_anchor,
+            "anchor_source_type": matched_anchor_type if has_valid_anchor else ANCHOR_SOURCE_NONE,
+            # "for a FUTURE actionable path" — never a live authorization (see notes).
+            "accepted_for_future_actionability": accepted,
+            "rejection_reasons": [] if accepted else reasons,
         }
         candidate_ticker_signals.append(signal)
 
-        # A candidate blocked *only* by the missing anchor source has passed every
-        # qualitative gate — surface it as qualitative-support-only (NOT accepted).
-        if reasons == [REASON_MISSING_VALID_ANCHOR_SOURCE]:
-            qualitative_support_only.append({"ticker": ticker, "stance": stance_str})
-        rejected_support_signals.append({"ticker": ticker, "rejection_reasons": reasons})
+        if accepted:
+            accepted_support_signals.append(
+                {
+                    "ticker": ticker,
+                    "stance": stance_str,
+                    "anchor_id": matched_anchor_id,
+                    "anchor_type": matched_anchor_type,
+                    "not_authorization": True,
+                }
+            )
+        elif not non_anchor_reasons:
+            # Passed every qualitative gate but lacks valid anchor grounding.
+            qualitative_support_only.append(
+                {"ticker": ticker, "stance": stance_str, "anchor_gap_reasons": anchor_reasons}
+            )
+        else:
+            rejected_support_signals.append({"ticker": ticker, "rejection_reasons": reasons})
 
     return {
         "schema_version": SCHEMA_VERSION,
         "is_llm_generated": False,
         "report_only": True,
         "permission_effect": "none",
+        # Unambiguous: acceptance here is grounding for a FUTURE path, not authorization.
+        "not_authorization": True,
         "generated_at": generated_at,
         "analyst_memo_present": analyst_memo_present,
         "analyst_memo_valid": analyst_memo_valid,
         "compilation_mode": compilation_mode,
-        "anchor_source_available": False,
-        "actionable_signals_possible": False,
+        "anchor_source_available": any_usable_anchor,
+        # Diagnostic only (paired with not_authorization/permission_effect=none): a
+        # future actionable path could ground these accepted signals.
+        "actionable_signals_possible": bool(accepted_support_signals),
         "candidate_ticker_signals": candidate_ticker_signals,
-        # Always empty in R2E.3: acceptance-for-actionability requires an anchor source.
-        "accepted_support_signals": [],
+        "accepted_support_signals": accepted_support_signals,
         "qualitative_support_only": qualitative_support_only,
         "rejected_support_signals": rejected_support_signals,
         "global_blockers": global_blockers,
         "notes": _NON_AUTHORIZATION_NOTE,
     }
+
+
+# --- anchor grounding --------------------------------------------------------
+
+
+def _usable_anchors_by_id(packet: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    """Index the evidence packet's deterministic research anchors by anchor_id.
+
+    Includes every anchor row the summary carries (usable / stale / invalid); the
+    per-ref evaluation decides usability so the reason can be specific. Returns an
+    empty map when no anchors are available.
+    """
+    research_anchors = packet.get("research_anchors")
+    if not isinstance(research_anchors, Mapping) or research_anchors.get("available") is not True:
+        return {}
+    anchors = research_anchors.get("anchors")
+    if not isinstance(anchors, list):
+        return {}
+    by_id: dict[str, Mapping[str, Any]] = {}
+    for anchor in anchors:
+        if not isinstance(anchor, Mapping):
+            continue
+        anchor_id = anchor.get("anchor_id")
+        if isinstance(anchor_id, str) and anchor_id.strip():
+            by_id[anchor_id.strip()] = anchor
+    return by_id
+
+
+def _evaluate_anchor_refs(
+    refs: list[str],
+    *,
+    ticker: str,
+    anchors_by_id: dict[str, Mapping[str, Any]],
+    memo_confidence: str | None,
+) -> tuple[str | None, list[str], str | None]:
+    """Return (matched_anchor_id, reasons, anchor_type) for a candidate's anchor refs.
+
+    Deterministic and defensive. Accepts the first referenced anchor that is
+    present + valid + fresh/usable + operator-sourced + type-allowed + applicable
+    to the ticker + confidence-floor-met. Otherwise returns the specific per-ref
+    reasons plus the umbrella ``missing_valid_anchor_source``.
+    """
+    if not refs:
+        return None, [REASON_MISSING_ANCHOR_ID_REFS, REASON_MISSING_VALID_ANCHOR_SOURCE], None
+
+    reasons: list[str] = []
+    for ref in refs:
+        anchor = anchors_by_id.get(ref)
+        if anchor is None or anchor.get("valid") is not True:
+            _add(reasons, REASON_REFERENCED_ANCHOR_NOT_FOUND)
+            continue
+        if anchor.get("stale") is True or anchor.get("usable") is not True:
+            _add(reasons, REASON_REFERENCED_ANCHOR_STALE)
+            continue
+        if anchor.get("anchor_type") not in ANCHOR_TYPES:
+            _add(reasons, REASON_ANCHOR_TYPE_NOT_ALLOWED)
+            continue
+        if anchor.get("source_type") not in SOURCE_TYPES:
+            _add(reasons, REASON_ANCHOR_SOURCE_TYPE_NOT_ALLOWED)
+            continue
+        if ticker not in _normalized_set(anchor.get("applicable_tickers")):
+            _add(reasons, REASON_ANCHOR_NOT_APPLICABLE)
+            continue
+        if not _confidence_meets_floor(memo_confidence, anchor.get("confidence_floor")):
+            _add(reasons, REASON_ANCHOR_CONFIDENCE_FLOOR_NOT_MET)
+            continue
+        return ref, [], anchor.get("anchor_type")  # first fully-valid grounding anchor
+
+    _add(reasons, REASON_MISSING_VALID_ANCHOR_SOURCE)
+    return None, reasons, None
+
+
+def _confidence_meets_floor(memo_confidence: str | None, floor: Any) -> bool:
+    memo_rank = _CONFIDENCE_RANK.get(memo_confidence) if isinstance(memo_confidence, str) else None
+    floor_rank = _CONFIDENCE_RANK.get(floor) if isinstance(floor, str) else None
+    if memo_rank is None or floor_rank is None:
+        return False
+    return memo_rank >= floor_rank
+
+
+def _string_refs(value: Any) -> list[str]:
+    """Normalize a ticker row's anchor_id_refs to a de-duped list of non-empty strings."""
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if isinstance(item, str) and item.strip():
+            ref = item.strip()
+            if ref not in seen:
+                seen.add(ref)
+                out.append(ref)
+    return out
+
+
+def _add(reasons: list[str], code: str) -> None:
+    if code not in reasons:
+        reasons.append(code)
 
 
 # --- helpers -----------------------------------------------------------------

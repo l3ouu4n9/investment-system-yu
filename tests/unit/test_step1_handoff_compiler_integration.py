@@ -291,6 +291,74 @@ def test_present_research_anchors_flow_through_but_no_acceptance(
     assert "NEW_BUY" not in decision["allowed_actions"]
 
 
+def test_step1_parse_accepts_anchor_grounded_signal_but_no_permission_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from investment_orchestrator.state.research_degraded_mode_gate import (
+        evaluate_step2_research_gate,
+    )
+
+    artifact_dir = _setup_repo(tmp_path, monkeypatch)
+    memo = {
+        "schema_version": "analyst_memo_v1",
+        "is_llm_generated": True,
+        "as_of_date": "2026-06-28",
+        "regime_view": "constructive",
+        "confidence": "high",
+        "ticker_relative_view": [
+            {"ticker": "QQQ", "stance": "prefer", "rationale_12m_plus": "AI anchor", "anchor_id_refs": ["AI_CAPEX_2026H2"]}
+        ],
+        "avoid_or_deprioritize": [],
+        "data_gaps": [],
+        "source_notes": [{"claim": "AI capex", "source": "10-K", "source_quality": "official"}],
+    }
+    (artifact_dir / "analyst_memo_raw_output.txt").write_text(json.dumps(memo), encoding="utf-8")
+    inputs_dir = tmp_path / "inputs" / "current"
+    inputs_dir.mkdir(parents=True)
+    (inputs_dir / "research_anchors.yaml").write_text(
+        "schema_version: research_anchors_v1\n"
+        "as_of_date: 2026-06-28\n"
+        "is_llm_generated: false\n"
+        "anchors:\n"
+        "  - anchor_id: AI_CAPEX_2026H2\n"
+        "    anchor_type: structural_theme\n"
+        "    applicable_tickers: [QQQ]\n"
+        "    anchor_date_et: 2026-06-15\n"
+        "    valid_from: 2026-06-01\n"
+        "    valid_until: 2026-07-31\n"
+        "    source_type: operator\n"
+        "    confidence_floor: medium\n",
+        encoding="utf-8",
+    )
+
+    result = step1_research.parse_step1_output(strategy_settings=_settings())
+
+    # Acceptance flows through the full parse path (report-only)...
+    signals = json.loads(Path(result["compiled_support_signals_path"]).read_text(encoding="utf-8"))
+    assert {s["ticker"] for s in signals["accepted_support_signals"]} == {"QQQ"}
+    assert signals["not_authorization"] is True
+    assert signals["permission_effect"] == "none"
+
+    # ...but the compiled handoff is still non-actionable...
+    candidate = json.loads(Path(result["compiled_research_handoff_candidate_path"]).read_text(encoding="utf-8"))
+    assert candidate["strategy_a_research_handoff"]["positive_delta_research_supported"] == []
+    assert all(r["actionability_status"] != "actionable_this_run" for r in candidate["buy_universe_scorecard"])
+
+    # ...availability recognizes the grounded memo state (R2E.4) but the permission
+    # set is unchanged: HOLD / NO_TRADE only, still non-actionable.
+    decision = json.loads(Path(result["research_degraded_mode_decision_path"]).read_text(encoding="utf-8"))
+    assert decision["state"] == "STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE"
+    assert decision["grounded_memo_support_present"] is True
+    assert decision["accepted_support_signal_count"] >= 1
+    assert decision["allowed_actions"] == ["HOLD", "NO_TRADE"]
+    assert decision["permission_effect"] == "none"
+
+    # ...and the Step 2 research gate still blocks the actionable path.
+    gate = evaluate_step2_research_gate(decision)
+    assert gate.allowed is False
+    assert "NEW_BUY" in gate.blocked_actions and "ORDER_COMPILATION" in gate.blocked_actions
+
+
 # --- standalone CLI workflow function ----------------------------------------
 
 

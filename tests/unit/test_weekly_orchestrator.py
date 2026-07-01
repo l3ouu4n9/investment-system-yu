@@ -165,6 +165,8 @@ def assert_no_downstream_artifacts_created(tmp_path: Path) -> None:
         ("NO_OUTPUT", False),
         # R2E.1: non-actionable compiled evidence-first state -> controlled NO_TRADE.
         ("STRICT_FRESH_EVIDENCE_ONLY", False),
+        # R2E.4: grounded-memo state is likewise non-actionable -> controlled NO_TRADE.
+        ("STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE", False),
         ("MANUAL_REVIEW_REQUIRED", True),
     ],
 )

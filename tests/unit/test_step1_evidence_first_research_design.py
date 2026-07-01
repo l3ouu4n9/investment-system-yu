@@ -526,3 +526,98 @@ def test_doc_r2e5a_impl_evidence_packet_field_documented(doc_text: str, r2e5a_im
         "invalid_anchor_count",
     ):
         assert summary_field in r2e5a_impl_text, summary_field
+
+
+# --- R2E.5a-2 status (§21): anchors → support acceptance --------------------
+
+
+@pytest.fixture(scope="module")
+def r2e5a2_text(doc_text: str) -> str:
+    marker = "## 21. R2E.5a-2 status"
+    assert marker in doc_text, "missing R2E.5a-2 section (§21)"
+    return doc_text[doc_text.index(marker) :]
+
+
+def test_doc_records_r2e5a2_report_only_not_authorization(r2e5a2_text: str) -> None:
+    assert "anchor_id_refs" in r2e5a2_text
+    assert "accepted_support_signals" in r2e5a2_text
+    assert "not_authorization" in r2e5a2_text
+    assert "NOT authorization" in r2e5a2_text or "not** authorization" in r2e5a2_text or "not trade\nauthorization" in r2e5a2_text
+    # Explicit no-permission / not-enabled statements.
+    assert "no `NEW_BUY` / `ORDER_COMPILATION` permission" in r2e5a2_text
+    assert "STRICT_FRESH_WITH_LLM_MEMO" in r2e5a2_text
+    assert "STRICT_FRESH_EVIDENCE_ONLY" in r2e5a2_text
+    # Compiled handoff invariants preserved.
+    assert "positive_delta_research_supported=[]" in r2e5a2_text
+    assert "primary_anchor_event_id" in r2e5a2_text
+
+
+def test_doc_r2e5a2_reason_codes_match_constants(doc_text: str, r2e5a2_text: str) -> None:
+    # Couple the documented new codes to the live extractor constants.
+    from investment_orchestrator.research.support_signals import (
+        REASON_ANCHOR_CONFIDENCE_FLOOR_NOT_MET,
+        REASON_ANCHOR_NOT_APPLICABLE,
+        REASON_ANCHOR_SOURCE_TYPE_NOT_ALLOWED,
+        REASON_ANCHOR_TYPE_NOT_ALLOWED,
+        REASON_MISSING_ANCHOR_ID_REFS,
+        REASON_REFERENCED_ANCHOR_NOT_FOUND,
+        REASON_REFERENCED_ANCHOR_STALE,
+        REJECTION_REASON_CODES,
+    )
+
+    for code in (
+        REASON_MISSING_ANCHOR_ID_REFS,
+        REASON_REFERENCED_ANCHOR_NOT_FOUND,
+        REASON_REFERENCED_ANCHOR_STALE,
+        REASON_ANCHOR_NOT_APPLICABLE,
+        REASON_ANCHOR_CONFIDENCE_FLOOR_NOT_MET,
+        REASON_ANCHOR_SOURCE_TYPE_NOT_ALLOWED,
+        REASON_ANCHOR_TYPE_NOT_ALLOWED,
+    ):
+        assert code in REJECTION_REASON_CODES
+        assert code in r2e5a2_text, code
+
+
+# --- R2E.4 status (§22): grounded memo state, non-actionable ----------------
+
+
+@pytest.fixture(scope="module")
+def r2e4_text(doc_text: str) -> str:
+    marker = "## 22. R2E.4 status"
+    assert marker in doc_text, "missing R2E.4 section (§22)"
+    return doc_text[doc_text.index(marker) :]
+
+
+def test_doc_records_r2e4_non_actionable_state(r2e4_text: str) -> None:
+    assert "STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE" in r2e4_text
+    # HOLD/NO_TRADE only; explicit no-permission.
+    assert "HOLD / NO_TRADE" in r2e4_text
+    assert "No\n`NEW_BUY` / `ORDER_COMPILATION` permission is added" in r2e4_text or "No `NEW_BUY` / `ORDER_COMPILATION` permission is added" in r2e4_text
+    assert "no gate is opened" in r2e4_text
+    # Blocked order-generating actions named.
+    for action in ("SELL", "NEW_BUY", "ROTATION", "REBALANCE", "EXTENDED_ETF_ADMISSION", "ORDER_COMPILATION"):
+        assert action in r2e4_text, action
+    # Trigger criteria + non-actionable invariant.
+    assert "accepted_support_signals" in r2e4_text
+    assert "not_authorization" in r2e4_text
+    assert "positive_delta_research_supported=[]" in r2e4_text
+
+
+def test_doc_r2e4_state_matches_constant_and_permissions(r2e4_text: str) -> None:
+    from investment_orchestrator.state.research_availability import (
+        STRICT_FRESH,
+        STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE,
+        _ALLOWED_ACTIONS_BY_STATE,
+    )
+
+    assert STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE in r2e4_text
+    assert STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE != STRICT_FRESH
+    assert _ALLOWED_ACTIONS_BY_STATE[STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE] == ("HOLD", "NO_TRADE")
+    assert "NEW_BUY" not in _ALLOWED_ACTIONS_BY_STATE[STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE]
+    # Step 2 gate still keys off STRICT_FRESH → grounded state is blocked.
+    from investment_orchestrator.state.research_degraded_mode_gate import (
+        ACTIONABLE_REQUIRED_STATE,
+    )
+
+    assert ACTIONABLE_REQUIRED_STATE == "STRICT_FRESH"
+    assert ACTIONABLE_REQUIRED_STATE != STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE

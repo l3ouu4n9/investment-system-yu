@@ -620,7 +620,7 @@ switch. `STRICT_FRESH_WITH_LLM_MEMO` is a **distinct new availability state** (n
 |---|---|---|
 | **R2E.2** (this section) | design doc + docs-content tests only | none (design only) |
 | **R2E.3** ✅ implemented | compiler emits a **report-only support signal** (per-ticker "would-be-actionable" evaluation of the §17.3 criteria) into a dedicated `compiled_support_signals.json` artifact; scorecard rows stay `ranking_hold_watch_only`; still not fed to availability (see §18) | additive; behavior unchanged |
-| **R2E.4** | availability introduces `STRICT_FRESH_WITH_LLM_MEMO`, but it maps to **HOLD / NO_TRADE** (still Step 2-blocked); begin *reading* memo `confidence` and the compiled support signal | new state, still non-actionable |
+| **R2E.4** ✅ implemented (§22) | availability introduces `STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE` (the safety-explicit name chosen instead of `STRICT_FRESH_WITH_LLM_MEMO`), mapping to **HOLD / NO_TRADE** (still Step 2-blocked); reads the compiled support-signal acceptance | new state, still non-actionable |
 | **R2E.5a** (design §19; parser ✅ §20) | land a **deterministic anchor source** (operator `research_anchors.yaml`; later events / themes / market-metrics feeds) so a Layer-1-actionable row is producible; add `source_notes` validation | additive; still gated |
 | **R2E.5b** | both gates (`research_degraded_mode_gate` **and** `final_execution_safety_gate`) + weekly / run-status readers accept `STRICT_FRESH_WITH_LLM_MEMO` **only** when all §17.3 criteria pass; enable limited `NEW_BUY` for core/satellite (option B), extended sleeve still disabled | first actionable path; caps enforced downstream |
 | **R2F** | shrink `research_dual_lane.txt` to the memo-only contract; deprecate the monolithic single-shot strict handoff | prompt change |
@@ -917,7 +917,88 @@ stays `STRICT_FRESH_EVIDENCE_ONLY` (HOLD / NO_TRADE); anchors are **not yet cons
   `consumed_for_support_acceptance: false`, `permission_effect: "none"`. Missing file ⇒ `available:false` +
   a `research_anchors` DATA_GAP; invalid file ⇒ `available:true`, `valid:false`, `errors` populated, and the
   packet still builds. The packet stays `is_llm_generated:false` (anchors are operator-authored, not LLM).
-- **Not consumed yet:** `support_signals` still emits the global `missing_valid_anchor_source` blocker,
-  `accepted_support_signals` stays `[]`, the compiler keeps every row `ranking_hold_watch_only` with empty
-  refs / `positive_delta_research_supported`, and availability stays `STRICT_FRESH_EVIDENCE_ONLY`. Wiring
-  anchors into acceptance + actionable rows is the separate R2E.4 / R2E.5 work.
+- **Not consumed yet (superseded by §21):** at R2E.5a-impl, `support_signals` still emitted the global
+  `missing_valid_anchor_source` blocker and `accepted_support_signals` stayed `[]`. **R2E.5a-2 (§21) wires
+  anchors into support-signal *acceptance*** (report-only, still not authorization). Wiring anchors into
+  *actionable compiled rows* + the availability state remains the separate R2E.4 / R2E.5b work — the
+  compiler still keeps every row `ranking_hold_watch_only`, `positive_delta_research_supported=[]`, and
+  availability stays `STRICT_FRESH_EVIDENCE_ONLY`.
+
+## 21. R2E.5a-2 status (research anchors → support-signal acceptance — implemented, report-only)
+
+R2E.5a-2 lets `compiled_support_signals.json` consume the deterministic research anchors so a *valid* analyst
+memo that **references** a *valid, fresh, applicable* anchor can move a candidate into
+`accepted_support_signals`. **This is still report-only and is NOT authorization: no gate, permission,
+`allowed_actions`, availability state, Step 2/3/4 workflow, order compiler, validator, or compiler
+actionability changes; no `NEW_BUY` / `ORDER_COMPILATION` permission is added and `STRICT_FRESH_WITH_LLM_MEMO`
+is NOT enabled.** The live posture stays `STRICT_FRESH_EVIDENCE_ONLY` (HOLD / NO_TRADE).
+
+- **Memo schema:** `ticker_relative_view` rows gain an **optional** `anchor_id_refs` list of strings
+  (`analyst_memo.py` validates type/format only; default empty). The memo may only *reference* existing
+  `evidence_packet.research_anchors` ids — it can **never create** an anchor; existence / freshness /
+  applicability are validated deterministically in `support_signals`. `prompts/analyst_memo.txt` documents
+  it: reference existing ids only, do not invent, empty list if none, reference is grounding — **not** trade
+  authorization. Universe / budget / order / action rules are unchanged.
+- **Acceptance criteria (all required):** analyst memo present **and** valid (`evidence_plus_memo`); memo
+  `confidence != low`; ticker `stance == prefer`; ticker in the base allowed universe (never extended in v1);
+  ticker not in `avoid_or_deprioritize`; rationale present; `source_notes` present; no blocking data gap for
+  the ticker; **at least one `anchor_id_ref` that resolves to an anchor which exists, is valid + fresh/usable,
+  is `source_type: operator`, has an allowed `anchor_type`, applies to the ticker, and whose `confidence_floor`
+  ≤ the memo confidence.** Any failure → `qualitative_support_only` (if only anchor grounding is missing) or
+  `rejected_support_signals` (if a qualitative/global gate fails).
+- **New rejection reason codes:** `missing_anchor_id_refs`, `referenced_anchor_not_found`,
+  `referenced_anchor_stale`, `anchor_not_applicable_to_ticker`, `anchor_confidence_floor_not_met`,
+  `anchor_source_type_not_allowed`, `anchor_type_not_allowed` (the umbrella `missing_valid_anchor_source` is
+  retained when a candidate has no valid referenced anchor).
+- **Artifact fields (`compiled_support_signals.json`):** `accepted_support_signals` may now be non-empty
+  (each entry: `ticker`, `stance`, `anchor_id`, `anchor_type`, `not_authorization: true`); each candidate
+  gains `anchor_id_refs`, `matched_anchor_id`, and a truthful `has_valid_anchor_source` /
+  `accepted_for_future_actionability`. Top-level adds **`not_authorization: true`**; `permission_effect`
+  stays `"none"`; `anchor_source_available` reflects whether any usable anchor exists; the diagnostic
+  `actionable_signals_possible` is true only when an accepted signal exists (paired with `not_authorization`
+  and `permission_effect: none` so it can never read as a live authorization).
+- **Invariants preserved (proven by tests):** the handoff compiler ignores support signals entirely — even
+  with an accepted signal, `positive_delta_research_supported=[]`, every scorecard row stays
+  `ranking_hold_watch_only`, and `primary_anchor_event_id` stays `null`. Availability stays
+  `STRICT_FRESH_EVIDENCE_ONLY`, `allowed_actions=["HOLD","NO_TRADE"]`, and the Step 2 gate still blocks. An
+  invented / stale / non-applicable / floor-missing anchor is never accepted; `source_notes` text alone never
+  creates or references an anchor.
+- **Not yet wired:** making a compiled row `actionable_this_run` from an accepted signal, and any availability
+  / gate change, remain the separate R2E.4 / R2E.5b work.
+
+## 22. R2E.4 status (availability recognizes grounded memo support — implemented, HOLD / NO_TRADE only)
+
+R2E.4 is a conservative **state-semantics** change: the availability evaluator now distinguishes a run with
+*fresh deterministic evidence + a valid analyst memo + accepted grounded support signals* from a plain
+evidence-only run — **while keeping the exact same non-actionable permission set (HOLD / NO_TRADE)**. **No
+`NEW_BUY` / `ORDER_COMPILATION` permission is added, no gate is opened, and no Step 2/3/4 workflow, order
+compiler, prompt, or compiled-handoff actionability changes.** The Step 2 gate still blocks.
+
+- **State name (chosen for safety):** **`STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE`**. The name states its
+  own non-actionability so it can never be mistaken for trading authorization. It **supersedes** the
+  tentative `STRICT_FRESH_WITH_LLM_MEMO` label used in §7 / §17.6 for the *non-actionable* case; the
+  `STRICT_FRESH_WITH_LLM_MEMO` name (or a successor) is reserved for a *future actionable* PR (R2E.5b).
+- **Trigger criteria (all required; fail closed otherwise):** the run is already
+  `STRICT_FRESH_EVIDENCE_ONLY` (raw handoff not valid+fresh, compiled handoff valid+fresh + recognized mode)
+  **and** the report-only `compiled_support_signals.json` proves `analyst_memo_present == true`,
+  `analyst_memo_valid == true`, `accepted_support_signals` non-empty, `permission_effect == "none"`, and
+  `not_authorization == true`. Missing / malformed / `not_authorization != true` / empty-accepted →
+  stays `STRICT_FRESH_EVIDENCE_ONLY`. A valid+fresh **raw** `STRICT_FRESH` (and `STRICT_STALE` /
+  `MANUAL_REVIEW_REQUIRED`) is **never** upgraded/relabeled.
+- **Allowed actions (exactly):** `HOLD`, `NO_TRADE`. **Blocked actions include:** `SELL`, `NEW_BUY`,
+  `ROTATION`, `REBALANCE`, `EXTENDED_ETF_ADMISSION`, `ORDER_COMPILATION`. Identical to
+  `STRICT_FRESH_EVIDENCE_ONLY`; only the *label* + diagnostics are sharper.
+- **Artifact fields (`research_availability.json` / `research_degraded_mode_decision.json`):**
+  `support_signals_present`, `accepted_support_signal_count`, `grounded_memo_support_present`,
+  `not_authorization`, `permission_effect: "none"`, `source_artifacts.compiled_support_signals`, and
+  `blocker_reasons` including `grounded_memo_support_non_actionable` and `new_buy_requires_future_gate_pr`.
+  Not LLM-generated (`report_only: true`).
+- **Gate / weekly / run_status (unchanged policy, verified):** the Step 2 research gate still keys off
+  `state == STRICT_FRESH` + `NEW_BUY`/`ORDER_COMPILATION` allowed, so the grounded state is **blocked** before
+  any Step 2 prompt render (recommended `NO_TRADE`); `run_weekly` completes a controlled `NO_TRADE` terminal
+  (`actionable=false`, exit 0) and never enters Step 2/3/4; `run_summary.json` records the grounded state and
+  `recommended_result: NO_TRADE`. No decision packet / order artifacts are produced.
+- **Non-actionable invariant (proven by tests):** even with a non-empty `accepted_support_signals`, the
+  compiled handoff stays non-actionable (`positive_delta_research_supported=[]`, no `actionable_this_run`
+  row, `primary_anchor_event_id=null`). Making an actionable row + opening the gate is the separate R2E.5b
+  work and requires a future explicit PR.

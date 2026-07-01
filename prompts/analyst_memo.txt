@@ -21,7 +21,7 @@ analyst_memo_v1 schema（top-level keys，keep it intentionally small）：
   "key_risks": ["..."],
   "opportunity_summary": "一段簡短質性描述",
   "ticker_relative_view": [
-    { "ticker": "QQQ", "stance": "prefer|neutral|deprioritize", "rationale_12m_plus": "..." }
+    { "ticker": "QQQ", "stance": "prefer|neutral|deprioritize", "rationale_12m_plus": "...", "anchor_id_refs": [] }
   ],
   "preferred_exposures": ["..."],
   "avoid_or_deprioritize": ["..."],
@@ -67,6 +67,13 @@ HARD RULES（由 deterministic parser 強制，違反任一即 memo INVALID，�
   - 任何 out-of-universe ticker 都會使 memo INVALID。
 
 - confidence_rule：confidence 只能是 low / medium / high 其中之一。
+
+- anchor_id_refs_rule（optional；grounding reference，非授權）：
+  - 你可以在 ticker_relative_view 內每個 ticker 加上 anchor_id_refs，引用 evidence_packet.research_anchors 內既有的 anchor_id。
+  - 只能引用 evidence_packet.research_anchors 已存在的 anchor_id；不得發明 / 捏造任何 anchor_id。
+  - 若沒有適用的 anchor，anchor_id_refs 請用空陣列 []。
+  - anchor_id_refs 必須是「字串陣列」；不得放入 budget / universe / order / action。
+  - 引用 anchor 只是提供 grounding citation，不是 trade authorization；是否 actionable 由下游 deterministic 判定，memo 永遠不能授權交易。
 
 - qualitative_only_rule：memo 只表達質性判斷；缺資料時用 data_gaps 明確標記，不要捏造數字、budget、universe、或 order。
 

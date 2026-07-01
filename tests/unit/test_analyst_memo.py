@@ -158,6 +158,39 @@ def test_ticker_relative_view_must_be_list() -> None:
     assert any("ticker_relative_view" in p for p in validate_analyst_memo(valid_memo(ticker_relative_view={"QQQ": "prefer"}), evidence_universe=UNIVERSE))
 
 
+# --- anchor_id_refs (R2E.5a-2): type/format only; may reference, never create --
+
+
+def test_valid_anchor_id_refs_list_passes() -> None:
+    memo = valid_memo(
+        ticker_relative_view=[
+            {"ticker": "QQQ", "stance": "prefer", "rationale_12m_plus": "x", "anchor_id_refs": ["AI_CAPEX_2026H2"]},
+        ]
+    )
+    assert validate_analyst_memo(memo, evidence_universe=UNIVERSE) == []
+
+
+def test_empty_anchor_id_refs_passes() -> None:
+    memo = valid_memo(
+        ticker_relative_view=[{"ticker": "QQQ", "stance": "prefer", "anchor_id_refs": []}]
+    )
+    assert validate_analyst_memo(memo, evidence_universe=UNIVERSE) == []
+
+
+def test_non_list_anchor_id_refs_fails() -> None:
+    memo = valid_memo(
+        ticker_relative_view=[{"ticker": "QQQ", "stance": "prefer", "anchor_id_refs": "AI_CAPEX_2026H2"}]
+    )
+    assert any("anchor_id_refs must be a list" in p for p in validate_analyst_memo(memo, evidence_universe=UNIVERSE))
+
+
+def test_non_string_anchor_id_ref_fails() -> None:
+    memo = valid_memo(
+        ticker_relative_view=[{"ticker": "QQQ", "stance": "prefer", "anchor_id_refs": ["ok", 123]}]
+    )
+    assert any("anchor_id_refs[1]" in p for p in validate_analyst_memo(memo, evidence_universe=UNIVERSE))
+
+
 # --- forbidden budget keys ---------------------------------------------------
 
 

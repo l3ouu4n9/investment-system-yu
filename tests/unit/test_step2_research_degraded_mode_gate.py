@@ -134,6 +134,8 @@ def test_strict_fresh_permission_allows_existing_step2_render_path(
         # R2E.1: the compiled evidence-first state is non-actionable and must be
         # blocked by the Step 2 gate exactly like the degraded states.
         ("STRICT_FRESH_EVIDENCE_ONLY", False),
+        # R2E.4: the grounded-memo state is likewise non-actionable and must block.
+        ("STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE", False),
         ("MANUAL_REVIEW_REQUIRED", True),
     ],
 )

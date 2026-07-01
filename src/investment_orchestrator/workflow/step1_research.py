@@ -568,6 +568,7 @@ def _evaluate_research_availability_report_only(
             compiled_metadata=compiled_inputs["compiled_metadata"],
             compiled_source_as_of_date=settings_as_of,
             compiled_source_artifacts=compiled_inputs["compiled_source_artifacts"],
+            compiled_support_signals=compiled_inputs["compiled_support_signals"],
         )
         write_json(
             step1_research_availability_path(),
@@ -764,10 +765,12 @@ def _compiled_handoff_availability_inputs() -> dict[str, Any]:
     return {
         "compiled_candidate_validation": _read_json_if_exists(step1_compiled_handoff_validation_path()),
         "compiled_metadata": _read_json_if_exists(step1_compiled_handoff_metadata_path()),
+        "compiled_support_signals": _read_json_if_exists(step1_compiled_support_signals_path()),
         "compiled_source_artifacts": {
             "compiled_research_handoff_candidate": str(step1_compiled_handoff_candidate_path()),
             "compiled_research_handoff_validation": str(step1_compiled_handoff_validation_path()),
             "compiled_research_handoff_metadata": str(step1_compiled_handoff_metadata_path()),
+            "compiled_support_signals": str(step1_compiled_support_signals_path()),
         },
     }
 
