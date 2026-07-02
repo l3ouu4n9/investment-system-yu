@@ -136,6 +136,8 @@ def test_strict_fresh_permission_allows_existing_step2_render_path(
         ("STRICT_FRESH_EVIDENCE_ONLY", False),
         # R2E.4: the grounded-memo state is likewise non-actionable and must block.
         ("STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE", False),
+        # R2E.5b-5b: promoted handoff recognized, but gates remain closed.
+        ("STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES", False),
         ("MANUAL_REVIEW_REQUIRED", True),
     ],
 )
@@ -222,3 +224,145 @@ def test_blocked_path_does_not_read_bad_research_into_step2_prompt(
 
     assert blocked["state"] == "NO_OUTPUT"
     assert not step2_decision_builder.step2_prompt_path().exists()
+
+
+# --- R2E.5b-6c promoted Step 2 decision-only path -----------------------------
+
+
+def promoted_decision_only_permission(**overrides: Any) -> dict[str, Any]:
+    permission = {
+        "state": "STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY",
+        "research_availability": "strict_fresh_compiled_actionable_step2_decision_only",
+        "fresh_research_available": False,
+        "handoff_valid": False,
+        "handoff_stale": False,
+        "settings_hash_match": None,
+        "universe_match": None,
+        "allowed_actions": ["HOLD", "NO_TRADE", "PROMOTED_RESEARCH_DECISION"],
+        "blocked_actions": [
+            "SELL",
+            "NEW_BUY",
+            "ROTATION",
+            "REBALANCE",
+            "EXTENDED_ETF_ADMISSION",
+            "ORDER_COMPILATION",
+        ],
+        "manual_review_required": False,
+        "blocker_reasons": [
+            "promoted_step2_decision_only_enabled",
+            "new_buy_requires_future_gate_pr",
+            "order_compilation_requires_future_gate_pr",
+            "final_execution_requires_future_gate_pr",
+        ],
+        "non_blocker_reasons": [],
+        "source": "promoted_compiled_actionable_handoff",
+        "promoted_step2_decision_only": True,
+        "order_compilation_allowed": False,
+        "new_buy_permission": False,
+        "permission_effect": "promoted_step2_decision_only",
+        "not_authorization": True,
+        "report_only": True,
+    }
+    permission.update(overrides)
+    return permission
+
+
+def test_promoted_decision_only_gate_allows_decision_only_mode() -> None:
+    from investment_orchestrator.state.research_degraded_mode_gate import (
+        evaluate_step2_research_gate,
+    )
+
+    gate = evaluate_step2_research_gate(promoted_decision_only_permission())
+
+    assert gate.allowed is True
+    assert gate.mode == "promoted_step2_decision_only"
+    assert gate.order_compilation_allowed is False
+    assert gate.new_buy_permission is False
+    assert gate.step3_allowed is False
+    assert gate.step4_allowed is False
+    assert gate.recommended_terminal_result_after_step2 == "NO_TRADE_PENDING_FINAL_GATES"
+    # The order actions stay explicitly blocked.
+    assert "NEW_BUY" in gate.blocked_actions
+    assert "ORDER_COMPILATION" in gate.blocked_actions
+
+
+def test_promoted_decision_only_gate_blocks_without_promoted_action() -> None:
+    from investment_orchestrator.state.research_degraded_mode_gate import (
+        evaluate_step2_research_gate,
+    )
+
+    gate = evaluate_step2_research_gate(
+        promoted_decision_only_permission(allowed_actions=["HOLD", "NO_TRADE"])
+    )
+    assert gate.allowed is False
+    assert gate.mode == "blocked"
+    assert any("PROMOTED_RESEARCH_DECISION" in reason for reason in gate.blocker_reasons)
+
+
+def test_promoted_decision_only_gate_blocks_widened_order_actions() -> None:
+    from investment_orchestrator.state.research_degraded_mode_gate import (
+        evaluate_step2_research_gate,
+    )
+
+    for widened in (
+        ["HOLD", "NO_TRADE", "PROMOTED_RESEARCH_DECISION", "NEW_BUY"],
+        ["HOLD", "NO_TRADE", "PROMOTED_RESEARCH_DECISION", "ORDER_COMPILATION"],
+    ):
+        gate = evaluate_step2_research_gate(
+            promoted_decision_only_permission(allowed_actions=widened)
+        )
+        assert gate.allowed is False, widened
+        assert gate.mode == "blocked"
+        assert any("must not allow NEW_BUY / ORDER_COMPILATION" in r for r in gate.blocker_reasons)
+
+
+def test_promoted_decision_only_gate_blocks_on_marker_or_source_mismatch() -> None:
+    from investment_orchestrator.state.research_degraded_mode_gate import (
+        evaluate_step2_research_gate,
+    )
+
+    for overrides in (
+        {"source": "raw_research_handoff"},
+        {"promoted_step2_decision_only": False},
+        {"manual_review_required": True},
+    ):
+        gate = evaluate_step2_research_gate(promoted_decision_only_permission(**overrides))
+        assert gate.allowed is False, overrides
+        assert gate.mode == "blocked"
+
+
+def test_legacy_strict_fresh_gate_fields_report_full_permissions() -> None:
+    from investment_orchestrator.state.research_degraded_mode_gate import (
+        evaluate_step2_research_gate,
+    )
+
+    gate = evaluate_step2_research_gate(strict_fresh_permission())
+
+    assert gate.allowed is True
+    assert gate.mode == "strict_fresh_actionable"
+    assert gate.order_compilation_allowed is True
+    assert gate.new_buy_permission is True
+    assert gate.step3_allowed is True
+    assert gate.step4_allowed is True
+    assert gate.recommended_terminal_result_after_step2 is None
+
+
+def test_promoted_decision_only_render_fails_closed_without_pointer_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The gate allows decision-only, but the promoted render re-verifies the
+    # pointer / effective handoff / validation on disk; with none present the
+    # render must fail closed and write the blocked artifact.
+    prepare_tmp_repo(tmp_path, monkeypatch, permission=promoted_decision_only_permission())
+
+    with pytest.raises(ResearchDegradedModeGateError, match="promoted decision-only verification"):
+        step2_decision_builder.render_step2_prompt()
+
+    assert not step2_decision_builder.step2_prompt_path().exists()
+    blocked = read_blocked_artifact()
+    assert blocked["reason"] == "promoted_step2_verification_failed"
+    assert blocked["state"] == "STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY"
+    assert blocked["order_compilation_allowed"] is False
+    assert "pointer_missing" in blocked["blocker_reasons"]
+    assert blocked["recommended_result"] == "NO_TRADE"

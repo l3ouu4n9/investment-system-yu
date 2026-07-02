@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import date
 import json
 import re
 from pathlib import Path
@@ -33,8 +34,29 @@ from investment_orchestrator.research.analyst_memo import (
     parse_analyst_memo_text,
     render_analyst_memo_prompt,
 )
+from investment_orchestrator.research.actionable_handoff_candidate import (
+    write_actionable_handoff_candidate,
+)
+from investment_orchestrator.research.actionable_handoff_preview import (
+    write_actionable_handoff_preview,
+)
+from investment_orchestrator.research.actionable_promotion_eligibility import (
+    write_actionable_promotion_eligibility,
+)
+from investment_orchestrator.research.actionable_promotion_pointer import (
+    write_actionable_promotion_pointer_if_eligible,
+)
+from investment_orchestrator.research.actionable_promotion_pointer_preview import (
+    write_actionable_promotion_pointer_preview,
+)
 from investment_orchestrator.research.evidence_packet import write_evidence_packet
 from investment_orchestrator.research.handoff_compiler import write_compiled_research_handoff
+from investment_orchestrator.research.promoted_handoff_verifier import (
+    verify_promoted_handoff_for_step2_decision,
+)
+from investment_orchestrator.research.promoted_step2_gate_dry_run import (
+    evaluate_promoted_step2_gate_dry_run,
+)
 from investment_orchestrator.state.last_good_research_handoff import (
     LastGoodResearchHandoffWriteResult,
     last_good_research_handoff_metadata_path,
@@ -76,6 +98,22 @@ COMPILED_HANDOFF_CANDIDATE_FILENAME = "compiled_research_handoff_candidate.json"
 COMPILED_HANDOFF_VALIDATION_FILENAME = "compiled_research_handoff_validation.json"
 COMPILED_HANDOFF_METADATA_FILENAME = "compiled_research_handoff_metadata.json"
 COMPILED_SUPPORT_SIGNALS_FILENAME = "compiled_support_signals.json"
+ACTIONABLE_HANDOFF_PREVIEW_FILENAME = "compiled_actionable_handoff_preview.json"
+ACTIONABLE_HANDOFF_CANDIDATE_FILENAME = "compiled_actionable_research_handoff_candidate.json"
+ACTIONABLE_HANDOFF_VALIDATION_FILENAME = "compiled_actionable_research_handoff_validation.json"
+ACTIONABLE_HANDOFF_METADATA_FILENAME = "compiled_actionable_research_handoff_metadata.json"
+ACTIONABLE_PROMOTION_ELIGIBILITY_FILENAME = "compiled_actionable_handoff_promotion_eligibility.json"
+ACTIONABLE_PROMOTION_POINTER_PREVIEW_FILENAME = "compiled_actionable_handoff_promotion_pointer_preview.json"
+ACTIONABLE_EFFECTIVE_HANDOFF_PREVIEW_FILENAME = "compiled_actionable_research_handoff_effective_preview.json"
+ACTIONABLE_EFFECTIVE_HANDOFF_PREVIEW_VALIDATION_FILENAME = (
+    "compiled_actionable_research_handoff_effective_preview_validation.json"
+)
+ACTIVE_RESEARCH_HANDOFF_SOURCE_FILENAME = "active_research_handoff_source.json"
+EFFECTIVE_RESEARCH_HANDOFF_FILENAME = "research_handoff_candidate_effective.json"
+EFFECTIVE_RESEARCH_HANDOFF_VALIDATION_FILENAME = "research_handoff_candidate_effective_validation.json"
+ACTIVE_POINTER_WRITE_STATUS_FILENAME = "active_research_handoff_source_write_status.json"
+PROMOTED_HANDOFF_STEP2_VERIFICATION_FILENAME = "promoted_handoff_step2_verification.json"
+PROMOTED_STEP2_GATE_DRY_RUN_FILENAME = "promoted_step2_gate_dry_run.json"
 RESEARCH_ANCHORS_INPUT_FILENAME = "research_anchors.yaml"
 CURRENT_RUN_INPUT_NOTES_RE = re.compile(
     r"(?:\r?\n)*────────────────────────────────────────\r?\n"
@@ -197,6 +235,76 @@ def step1_compiled_handoff_metadata_path() -> Path:
 def step1_compiled_support_signals_path() -> Path:
     """Return the report-only Step 1C support-signals artifact path (R2E.3)."""
     return step1_artifact_dir() / COMPILED_SUPPORT_SIGNALS_FILENAME
+
+
+def step1_actionable_handoff_preview_path() -> Path:
+    """Return the report-only Step 1C actionable-handoff preview artifact path (R2E.5b-0)."""
+    return step1_artifact_dir() / ACTIONABLE_HANDOFF_PREVIEW_FILENAME
+
+
+def step1_actionable_handoff_candidate_path() -> Path:
+    """Return the report-only Step 1C actionable handoff candidate artifact path (R2E.5b-1)."""
+    return step1_artifact_dir() / ACTIONABLE_HANDOFF_CANDIDATE_FILENAME
+
+
+def step1_actionable_handoff_validation_path() -> Path:
+    """Return the report-only Step 1C actionable handoff validation artifact path (R2E.5b-1)."""
+    return step1_artifact_dir() / ACTIONABLE_HANDOFF_VALIDATION_FILENAME
+
+
+def step1_actionable_handoff_metadata_path() -> Path:
+    """Return the report-only Step 1C actionable handoff metadata artifact path (R2E.5b-1)."""
+    return step1_artifact_dir() / ACTIONABLE_HANDOFF_METADATA_FILENAME
+
+
+def step1_actionable_promotion_eligibility_path() -> Path:
+    """Return the report-only promotion-eligibility artifact path (R2E.5b-3)."""
+    return step1_artifact_dir() / ACTIONABLE_PROMOTION_ELIGIBILITY_FILENAME
+
+
+def step1_actionable_promotion_pointer_preview_path() -> Path:
+    """Return the report-only promotion pointer-preview artifact path (R2E.5b-4)."""
+    return step1_artifact_dir() / ACTIONABLE_PROMOTION_POINTER_PREVIEW_FILENAME
+
+
+def step1_actionable_effective_handoff_preview_path() -> Path:
+    """Return the report-only effective-handoff preview artifact path (R2E.5b-4)."""
+    return step1_artifact_dir() / ACTIONABLE_EFFECTIVE_HANDOFF_PREVIEW_FILENAME
+
+
+def step1_actionable_effective_handoff_preview_validation_path() -> Path:
+    """Return the report-only effective-handoff preview validation path (R2E.5b-4)."""
+    return step1_artifact_dir() / ACTIONABLE_EFFECTIVE_HANDOFF_PREVIEW_VALIDATION_FILENAME
+
+
+def step1_active_research_handoff_source_path() -> Path:
+    """Return the REAL active-pointer artifact path (R2E.5b-5a; pending gates, no consumers)."""
+    return step1_artifact_dir() / ACTIVE_RESEARCH_HANDOFF_SOURCE_FILENAME
+
+
+def step1_effective_research_handoff_path() -> Path:
+    """Return the REAL effective-handoff artifact path (R2E.5b-5a; pending gates, no consumers)."""
+    return step1_artifact_dir() / EFFECTIVE_RESEARCH_HANDOFF_FILENAME
+
+
+def step1_effective_research_handoff_validation_path() -> Path:
+    """Return the REAL effective-handoff validation artifact path (R2E.5b-5a)."""
+    return step1_artifact_dir() / EFFECTIVE_RESEARCH_HANDOFF_VALIDATION_FILENAME
+
+
+def step1_active_pointer_write_status_path() -> Path:
+    """Return the active-pointer write-status artifact path (R2E.5b-5a)."""
+    return step1_artifact_dir() / ACTIVE_POINTER_WRITE_STATUS_FILENAME
+
+
+def step1_promoted_handoff_step2_verification_path() -> Path:
+    """Return the report-only promoted-handoff Step 2 verification path (R2E.5b-6b)."""
+    return step1_artifact_dir() / PROMOTED_HANDOFF_STEP2_VERIFICATION_FILENAME
+
+
+def step1_promoted_step2_gate_dry_run_path() -> Path:
+    """Return the report-only promoted Step 2 gate dry-run artifact path (R2E.5b-6b)."""
+    return step1_artifact_dir() / PROMOTED_STEP2_GATE_DRY_RUN_FILENAME
 
 
 def resolve_step1_prompt_template_path() -> Path:
@@ -416,6 +524,57 @@ def parse_step1_output(
         strategy_settings=handoff_strategy_settings
     )
 
+    # Report-only layer 0d (R2E.5b-0): a SEPARATE actionable-handoff preview built
+    # from the just-written compiled_support_signals + evidence packet + memo. It
+    # previews which tickers WOULD become actionable rows IF a future PR opened an
+    # actionable path; it never mutates the active compiled handoff (which stays
+    # non-actionable), is NOT fed into the availability evaluator or Step 2, and
+    # never changes allowed_actions / adds NEW_BUY / ORDER_COMPILATION.
+    actionable_handoff_preview_summary = _build_actionable_handoff_preview_report_only()
+
+    # Report-only layer 0e (R2E.5b-1): a SEPARATE actionable compiled-handoff
+    # candidate that overlays the preview's actionable rows onto a full strict
+    # handoff and validates it with the existing validator. It answers only "does
+    # the future actionable handoff shape validate?" — it never mutates the active
+    # compiled handoff (which stays non-actionable), is NOT fed into the availability
+    # evaluator / Step 2 / weekly path / final safety gate, and never adds NEW_BUY /
+    # ORDER_COMPILATION.
+    actionable_handoff_candidate_summary = _build_actionable_handoff_candidate_report_only(
+        strategy_settings=handoff_strategy_settings
+    )
+
+    # Report-only layer 0f (R2E.5b-3): deterministic promotion-ELIGIBILITY check
+    # over the just-written actionable candidate chain. It answers only "WOULD the
+    # separate actionable candidate be eligible for a future promotion?" — it never
+    # promotes (no active pointer / effective handoff is created), never mutates
+    # the active compiled handoff, is NOT fed into the availability evaluator /
+    # Step 2 / weekly / gates, and never adds NEW_BUY / ORDER_COMPILATION.
+    promotion_eligibility_summary = _build_actionable_promotion_eligibility_report_only(
+        strategy_settings=handoff_strategy_settings
+    )
+
+    # Report-only layer 0g (R2E.5b-4): pointer PREVIEW + effective-handoff PREVIEW.
+    # Previews what the future active-pointer promotion WOULD look like from the
+    # just-written eligibility verdict. Nothing is promoted: the reserved
+    # active_research_handoff_source.json / research_handoff_candidate_effective.json
+    # are NOT created, no consumer reads the previews (not fed into availability /
+    # Step 2 / weekly / gates), and no NEW_BUY / ORDER_COMPILATION is added.
+    pointer_preview_summary = _build_actionable_promotion_pointer_preview_report_only(
+        strategy_settings=handoff_strategy_settings
+    )
+
+    # Layer 0h (R2E.5b-5a): REAL active-pointer writer. When the pointer preview
+    # says would_promote, the real
+    # active_research_handoff_source.json + research_handoff_candidate_effective.json
+    # (+ validation) are written with promotion_status=pending_gates. Availability
+    # may recognize them only as a non-actionable pending-gates diagnostic; Step 2,
+    # weekly actionable flow, order compiler, and gates remain closed, and no
+    # NEW_BUY / ORDER_COMPILATION is added. Fail-closed: a non-promotable run
+    # writes only the status artifact and removes any stale pointer files.
+    active_pointer_summary = _write_actionable_promotion_pointer_report_only(
+        strategy_settings=handoff_strategy_settings
+    )
+
     try:
         payload = extract_research_json(
             raw_output_path=step1_raw_output_path(),
@@ -477,10 +636,16 @@ def parse_step1_output(
         last_good_research_handoff_write_result_to_dict(last_good_result),
     )
 
-    # Report-only layer 4 (PR C): deterministic research availability /
-    # freshness / degraded-mode decision artifacts. This only observes and
-    # classifies; it does not gate the pipeline and no downstream step reads it.
-    availability = _evaluate_research_availability_report_only(
+    # Layers 4-6: deterministic research availability / freshness / degraded-mode
+    # decision artifacts (PR C), the R2E.5b-6a/6b promoted verification + gate
+    # dry-run artifacts, and — R2E.5b-6c — the Step 2 decision-only permission
+    # upgrade. Two-pass: a preliminary (pending-gates-posture) evaluation feeds
+    # the verification/dry-run layer, then the final evaluation consumes those
+    # artifacts and may upgrade an eligible pending-gates run to
+    # STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY (HOLD / NO_TRADE /
+    # PROMOTED_RESEARCH_DECISION only — never NEW_BUY / ORDER_COMPILATION).
+    # Defensive: parse never fails because of this layer.
+    availability, promoted_dry_run_summary = _evaluate_research_availability_report_only(
         candidate=normalization.candidate,
         candidate_validation=candidate_validation,
         strategy_settings=handoff_strategy_settings,
@@ -520,10 +685,69 @@ def parse_step1_output(
         "compiled_research_handoff_validation_path": compiled_handoff_summary.get("validation_path", ""),
         "compiled_research_handoff_metadata_path": compiled_handoff_summary.get("metadata_path", ""),
         "compiled_support_signals_path": compiled_handoff_summary.get("support_signals_path", ""),
+        "actionable_handoff_preview_path": actionable_handoff_preview_summary.get(
+            "actionable_handoff_preview_path", ""
+        ),
+        "actionable_handoff_candidate_path": actionable_handoff_candidate_summary.get(
+            "actionable_candidate_path", ""
+        ),
+        "actionable_handoff_validation_path": actionable_handoff_candidate_summary.get(
+            "actionable_validation_path", ""
+        ),
+        "actionable_handoff_metadata_path": actionable_handoff_candidate_summary.get(
+            "actionable_metadata_path", ""
+        ),
+        "actionable_handoff_validation_passed": actionable_handoff_candidate_summary.get(
+            "validation_passed", ""
+        ),
+        "actionable_promotion_eligibility_path": promotion_eligibility_summary.get(
+            "actionable_promotion_eligibility_path", ""
+        ),
+        "actionable_promotion_eligible": promotion_eligibility_summary.get(
+            "eligible_for_promotion", ""
+        ),
+        "actionable_promotion_pointer_preview_path": pointer_preview_summary.get(
+            "actionable_promotion_pointer_preview_path", ""
+        ),
+        "actionable_promotion_would_promote": pointer_preview_summary.get("would_promote", ""),
+        "actionable_effective_handoff_preview_path": pointer_preview_summary.get(
+            "actionable_effective_handoff_preview_path", ""
+        ),
+        "actionable_effective_handoff_preview_validation_path": pointer_preview_summary.get(
+            "actionable_effective_handoff_preview_validation_path", ""
+        ),
+        "active_pointer_created": active_pointer_summary.get("active_pointer_created", ""),
+        "active_research_handoff_source_path": active_pointer_summary.get(
+            "active_research_handoff_source_path", ""
+        ),
+        "effective_research_handoff_path": active_pointer_summary.get(
+            "effective_research_handoff_path", ""
+        ),
+        "active_pointer_write_status_path": active_pointer_summary.get(
+            "active_pointer_write_status_path", ""
+        ),
+        "promoted_handoff_step2_verification_path": promoted_dry_run_summary.get(
+            "promoted_handoff_step2_verification_path", ""
+        ),
+        "promoted_step2_gate_dry_run_path": promoted_dry_run_summary.get(
+            "promoted_step2_gate_dry_run_path", ""
+        ),
+        "promoted_step2_gate_dry_run_would_allow": promoted_dry_run_summary.get(
+            "promoted_step2_gate_dry_run_would_allow", ""
+        ),
         "compiled_research_handoff_mode": compiled_handoff_summary.get("compilation_mode", ""),
         "compiled_research_handoff_valid": compiled_handoff_summary.get("compiled_candidate_valid", ""),
         "schema_version": str(payload.get("schema_version", "")),
     }
+
+
+_EMPTY_PROMOTED_STEP2_SUMMARY: dict[str, Any] = {
+    "promoted_handoff_step2_verification_path": "",
+    "promoted_step2_gate_dry_run_path": "",
+    "promoted_step2_gate_dry_run_would_allow": "",
+    "verification": None,
+    "dry_run": None,
+}
 
 
 def _evaluate_research_availability_report_only(
@@ -533,11 +757,19 @@ def _evaluate_research_availability_report_only(
     strategy_settings: Mapping[str, Any] | None,
     payload: Mapping[str, Any],
 ):
-    """Evaluate and write report-only availability artifacts defensively.
+    """Evaluate availability, write the promoted Step 2 artifacts, and persist.
 
-    Step 1 parse must never fail because of this observability layer, so any
-    error is swallowed and recorded into the artifacts as a conservative
-    NO_OUTPUT-style decision rather than raised.
+    Step 1 parse must never fail because of this layer, so any error is
+    swallowed and recorded into the artifacts as a conservative NO_OUTPUT-style
+    decision rather than raised.
+
+    R2E.5b-6c two-pass flow: pass 1 evaluates the availability WITHOUT the
+    promoted-Step-2 inputs (the pre-upgrade / pending-gates posture); the
+    R2E.5b-6a verification and R2E.5b-6b dry-run are computed against that
+    preliminary decision and written; pass 2 re-evaluates WITH this run's
+    verification + dry-run, which may upgrade an eligible pending-gates run to
+    the Step 2 decision-only state. Fail closed: if the promoted layer errors,
+    the preliminary (pending-gates) result is written unchanged.
     """
     try:
         last_good = read_last_good_research_handoff(step1_state_dir())
@@ -556,19 +788,47 @@ def _evaluate_research_availability_report_only(
         # fed compiled inputs; a hard parse failure stays NO_OUTPUT (see the
         # no-output writer, which is intentionally left unchanged).
         compiled_inputs = _compiled_handoff_availability_inputs()
-        availability = evaluate_research_availability(
-            candidate_validation=candidate_validation,
-            candidate=candidate,
+        base_kwargs: dict[str, Any] = {
+            "candidate_validation": candidate_validation,
+            "candidate": candidate,
+            "strategy_settings": strategy_settings,
+            "source_as_of_date": payload_as_of,
+            "now_date": settings_as_of or payload_as_of,
+            "last_good_handoff": last_good.handoff,
+            "last_good_metadata": last_good.metadata,
+            "compiled_candidate_validation": compiled_inputs["compiled_candidate_validation"],
+            "compiled_metadata": compiled_inputs["compiled_metadata"],
+            "compiled_source_as_of_date": settings_as_of,
+            "compiled_source_artifacts": compiled_inputs["compiled_source_artifacts"],
+            "compiled_support_signals": compiled_inputs["compiled_support_signals"],
+            "promoted_pointer": compiled_inputs["promoted_pointer"],
+            "promoted_effective_handoff": compiled_inputs["promoted_effective_handoff"],
+            "promoted_effective_validation": compiled_inputs["promoted_effective_validation"],
+            "promoted_source_artifacts": compiled_inputs["promoted_source_artifacts"],
+        }
+        # Pass 1: pre-upgrade posture; this is what the verification / dry-run
+        # layer diagnoses (the dry-run's pending-gates criteria stay meaningful).
+        preliminary = evaluate_research_availability(**base_kwargs)
+        promoted_step2 = _write_promoted_step2_gate_dry_run_report_only(
             strategy_settings=strategy_settings,
-            source_as_of_date=payload_as_of,
-            now_date=settings_as_of or payload_as_of,
-            last_good_handoff=last_good.handoff,
-            last_good_metadata=last_good.metadata,
-            compiled_candidate_validation=compiled_inputs["compiled_candidate_validation"],
-            compiled_metadata=compiled_inputs["compiled_metadata"],
-            compiled_source_as_of_date=settings_as_of,
-            compiled_source_artifacts=compiled_inputs["compiled_source_artifacts"],
-            compiled_support_signals=compiled_inputs["compiled_support_signals"],
+            research_decision=research_degraded_mode_decision_to_dict(preliminary),
+        )
+        # Pass 2 (R2E.5b-6c): consume this run's verification + dry-run. Only an
+        # eligible pending-gates run upgrades; every other outcome is identical
+        # to the preliminary evaluation.
+        promoted_source_artifacts = dict(compiled_inputs["promoted_source_artifacts"])
+        if promoted_step2.get("promoted_handoff_step2_verification_path"):
+            promoted_source_artifacts["promoted_handoff_step2_verification"] = promoted_step2[
+                "promoted_handoff_step2_verification_path"
+            ]
+        if promoted_step2.get("promoted_step2_gate_dry_run_path"):
+            promoted_source_artifacts["promoted_step2_gate_dry_run"] = promoted_step2[
+                "promoted_step2_gate_dry_run_path"
+            ]
+        availability = evaluate_research_availability(
+            **{**base_kwargs, "promoted_source_artifacts": promoted_source_artifacts},
+            promoted_step2_verification=promoted_step2.get("verification"),
+            promoted_step2_gate_dry_run=promoted_step2.get("dry_run"),
         )
         write_json(
             step1_research_availability_path(),
@@ -582,7 +842,7 @@ def _evaluate_research_availability_report_only(
             step1_research_degraded_mode_decision_path(),
             research_degraded_mode_decision_to_dict(availability),
         )
-        return availability
+        return availability, promoted_step2
     except Exception as exc:  # noqa: BLE001 - report-only: never break Step 1 parse
         fallback = evaluate_research_availability(
             candidate_validation=None,
@@ -607,7 +867,7 @@ def _evaluate_research_availability_report_only(
             )
         except Exception:  # noqa: BLE001 - best-effort artifact emission
             pass
-        return fallback
+        return fallback, dict(_EMPTY_PROMOTED_STEP2_SUMMARY)
 
 
 def _write_evidence_packet_report_only(
@@ -766,11 +1026,23 @@ def _compiled_handoff_availability_inputs() -> dict[str, Any]:
         "compiled_candidate_validation": _read_json_if_exists(step1_compiled_handoff_validation_path()),
         "compiled_metadata": _read_json_if_exists(step1_compiled_handoff_metadata_path()),
         "compiled_support_signals": _read_json_if_exists(step1_compiled_support_signals_path()),
+        "promoted_pointer": _read_json_if_exists(step1_active_research_handoff_source_path()),
+        "promoted_effective_handoff": _read_json_if_exists(step1_effective_research_handoff_path()),
+        "promoted_effective_validation": _read_json_if_exists(
+            step1_effective_research_handoff_validation_path()
+        ),
         "compiled_source_artifacts": {
             "compiled_research_handoff_candidate": str(step1_compiled_handoff_candidate_path()),
             "compiled_research_handoff_validation": str(step1_compiled_handoff_validation_path()),
             "compiled_research_handoff_metadata": str(step1_compiled_handoff_metadata_path()),
             "compiled_support_signals": str(step1_compiled_support_signals_path()),
+        },
+        "promoted_source_artifacts": {
+            "active_research_handoff_source": str(step1_active_research_handoff_source_path()),
+            "research_handoff_candidate_effective": str(step1_effective_research_handoff_path()),
+            "research_handoff_candidate_effective_validation": str(
+                step1_effective_research_handoff_validation_path()
+            ),
         },
     }
 
@@ -842,6 +1114,339 @@ def _compile_research_handoff_report_only(
         return _run_compile_research_handoff(strategy_settings=strategy_settings)
     except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
         return empty
+
+
+def _run_actionable_handoff_preview() -> dict[str, Any]:
+    """Build + write the R2E.5b-0 preview from the just-written report-only artifacts.
+
+    Only runs when ``compiled_support_signals.json`` exists (per R2E.5b-0 scope). It
+    reads the compiled support signals + evidence packet + parsed memo + compiled
+    handoff candidate that the R2D/R2E.3 flow already wrote, and derives a separate
+    preview artifact. It never mutates any of those inputs and is never fed into the
+    availability evaluator or Step 2.
+    """
+    signals_path = step1_compiled_support_signals_path()
+    compiled_support_signals = _read_json_if_exists(signals_path)
+    if not isinstance(compiled_support_signals, Mapping):
+        return {"actionable_handoff_preview_path": ""}
+
+    evidence_packet_path = step1_evidence_packet_path()
+    candidate_path = step1_compiled_handoff_candidate_path()
+    result = write_actionable_handoff_preview(
+        output_path=step1_actionable_handoff_preview_path(),
+        evidence_packet=_read_json_if_exists(evidence_packet_path),
+        analyst_memo=_load_analyst_memo_for_compiler(),
+        compiled_support_signals=compiled_support_signals,
+        compiled_handoff_candidate=_read_json_if_exists(candidate_path),
+        evidence_packet_path=str(evidence_packet_path),
+        compiled_support_signals_path=str(signals_path),
+        compiled_handoff_candidate_path=str(candidate_path),
+    )
+    return result
+
+
+def _build_actionable_handoff_preview_report_only() -> dict[str, Any]:
+    """Run the actionable-handoff preview defensively as a report-only layer (R2E.5b-0).
+
+    Step 1 parse must never fail because of this observer. The preview is a SEPARATE
+    artifact: it does not change the active compiled handoff (still non-actionable),
+    the availability state, ``allowed_actions``, the Step 2/3/4 workflow, the order
+    compiler, prompts, or any gate, and it never adds ``NEW_BUY`` /
+    ``ORDER_COMPILATION``. Any error is swallowed.
+    """
+    empty = {"actionable_handoff_preview_path": ""}
+    try:
+        return _run_actionable_handoff_preview()
+    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
+        return empty
+
+
+def _run_actionable_handoff_candidate(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+) -> dict[str, str]:
+    """Build + validate + write the R2E.5b-1 actionable candidate from the preview.
+
+    Only runs when ``compiled_actionable_handoff_preview.json`` exists. It reads the
+    just-written report-only artifacts (preview + support signals + evidence packet +
+    the active compiled handoff as base) and writes a SEPARATE candidate + validation
+    + metadata. It never mutates the active compiled handoff and is never fed into the
+    availability evaluator, Step 2, the weekly path, or the final safety gate.
+    """
+    preview_path = step1_actionable_handoff_preview_path()
+    preview = _read_json_if_exists(preview_path)
+    if not isinstance(preview, Mapping):
+        return {"actionable_candidate_path": ""}
+
+    evidence_packet_path = step1_evidence_packet_path()
+    support_signals_path = step1_compiled_support_signals_path()
+    base_path = step1_compiled_handoff_candidate_path()
+    result = write_actionable_handoff_candidate(
+        candidate_path=step1_actionable_handoff_candidate_path(),
+        validation_path=step1_actionable_handoff_validation_path(),
+        metadata_path=step1_actionable_handoff_metadata_path(),
+        evidence_packet=_read_json_if_exists(evidence_packet_path),
+        analyst_memo=_load_analyst_memo_for_compiler(),
+        actionable_handoff_preview=preview,
+        compiled_support_signals=_read_json_if_exists(support_signals_path),
+        base_candidate=_read_json_if_exists(base_path),
+        strategy_settings=strategy_settings,
+        actionable_handoff_preview_path=str(preview_path),
+        compiled_support_signals_path=str(support_signals_path),
+        evidence_packet_path=str(evidence_packet_path),
+        base_candidate_path=str(base_path),
+    )
+    return result
+
+
+def _build_actionable_handoff_candidate_report_only(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Run the actionable-candidate builder defensively as a report-only layer (R2E.5b-1).
+
+    Step 1 parse must never fail because of this observer. The candidate is a SEPARATE
+    artifact: it never mutates the active compiled handoff (still non-actionable), the
+    availability state, ``allowed_actions``, the Step 2/3/4 workflow, the order compiler,
+    prompts, or any gate, and adds no ``NEW_BUY`` / ``ORDER_COMPILATION``. Any error is
+    swallowed.
+    """
+    empty = {"actionable_candidate_path": ""}
+    try:
+        return _run_actionable_handoff_candidate(strategy_settings=strategy_settings)
+    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
+        return empty
+
+
+def _run_actionable_promotion_eligibility(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Evaluate + write the R2E.5b-3 promotion-eligibility artifact.
+
+    Only runs when the actionable candidate + metadata exist. It re-reads the
+    just-written report-only artifacts and writes a SEPARATE eligibility artifact;
+    it never creates the future active pointer / effective handoff, never mutates
+    the active compiled handoff, and is never fed into the availability evaluator,
+    Step 2, the weekly path, or any gate.
+    """
+    candidate = _read_json_if_exists(step1_actionable_handoff_candidate_path())
+    metadata = _read_json_if_exists(step1_actionable_handoff_metadata_path())
+    if not isinstance(candidate, Mapping) or not isinstance(metadata, Mapping):
+        return {"actionable_promotion_eligibility_path": ""}
+
+    settings_as_of = (
+        strategy_settings.get("as_of") if isinstance(strategy_settings, Mapping) else None
+    )
+    return write_actionable_promotion_eligibility(
+        output_path=step1_actionable_promotion_eligibility_path(),
+        evidence_packet=_read_json_if_exists(step1_evidence_packet_path()),
+        compiled_support_signals=_read_json_if_exists(step1_compiled_support_signals_path()),
+        actionable_preview=_read_json_if_exists(step1_actionable_handoff_preview_path()),
+        actionable_candidate=candidate,
+        actionable_candidate_validation=_read_json_if_exists(step1_actionable_handoff_validation_path()),
+        actionable_candidate_metadata=metadata,
+        active_compiled_handoff=_read_json_if_exists(step1_compiled_handoff_candidate_path()),
+        strategy_settings=strategy_settings,
+        today=settings_as_of,
+        evidence_packet_path=str(step1_evidence_packet_path()),
+        compiled_support_signals_path=str(step1_compiled_support_signals_path()),
+        actionable_preview_path=str(step1_actionable_handoff_preview_path()),
+        actionable_candidate_path=str(step1_actionable_handoff_candidate_path()),
+        actionable_candidate_validation_path=str(step1_actionable_handoff_validation_path()),
+        actionable_candidate_metadata_path=str(step1_actionable_handoff_metadata_path()),
+        active_compiled_handoff_path=str(step1_compiled_handoff_candidate_path()),
+    )
+
+
+def _build_actionable_promotion_eligibility_report_only(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Run the promotion-eligibility checker defensively as a report-only layer (R2E.5b-3).
+
+    Step 1 parse must never fail because of this observer. The eligibility artifact
+    is a SEPARATE report-only file: it never promotes, never creates the future
+    active pointer, never mutates the active compiled handoff (still non-actionable),
+    the availability state, ``allowed_actions``, the Step 2/3/4 workflow, the order
+    compiler, prompts, or any gate, and adds no ``NEW_BUY`` / ``ORDER_COMPILATION``.
+    Any error is swallowed.
+    """
+    empty = {"actionable_promotion_eligibility_path": ""}
+    try:
+        return _run_actionable_promotion_eligibility(strategy_settings=strategy_settings)
+    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
+        return empty
+
+
+def _run_actionable_promotion_pointer_preview(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Build + write the R2E.5b-4 pointer preview (+ effective preview when promotable).
+
+    Only runs when the eligibility artifact exists. Nothing is promoted: the
+    reserved active pointer / effective handoff names are never written, and no
+    consumer reads the previews.
+    """
+    eligibility = _read_json_if_exists(step1_actionable_promotion_eligibility_path())
+    if not isinstance(eligibility, Mapping):
+        return {"actionable_promotion_pointer_preview_path": ""}
+
+    settings_as_of = (
+        strategy_settings.get("as_of") if isinstance(strategy_settings, Mapping) else None
+    )
+    return write_actionable_promotion_pointer_preview(
+        pointer_preview_path=step1_actionable_promotion_pointer_preview_path(),
+        effective_preview_path=step1_actionable_effective_handoff_preview_path(),
+        effective_preview_validation_path=step1_actionable_effective_handoff_preview_validation_path(),
+        eligibility=eligibility,
+        actionable_candidate=_read_json_if_exists(step1_actionable_handoff_candidate_path()),
+        actionable_candidate_validation=_read_json_if_exists(step1_actionable_handoff_validation_path()),
+        actionable_candidate_metadata=_read_json_if_exists(step1_actionable_handoff_metadata_path()),
+        strategy_settings=strategy_settings,
+        today=settings_as_of,
+        candidate_path=str(step1_actionable_handoff_candidate_path()),
+        eligibility_path=str(step1_actionable_promotion_eligibility_path()),
+    )
+
+
+def _build_actionable_promotion_pointer_preview_report_only(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Run the pointer-preview builder defensively as a report-only layer (R2E.5b-4).
+
+    Step 1 parse must never fail because of this observer. The pointer preview and
+    effective-handoff preview are SEPARATE report-only files: nothing is promoted,
+    the reserved active pointer / effective handoff names are never created, the
+    active compiled handoff (still non-actionable), availability state,
+    ``allowed_actions``, the Step 2/3/4 workflow, the order compiler, prompts, and
+    every gate are unchanged, and no ``NEW_BUY`` / ``ORDER_COMPILATION`` is added.
+    Any error is swallowed.
+    """
+    empty = {"actionable_promotion_pointer_preview_path": ""}
+    try:
+        return _run_actionable_promotion_pointer_preview(strategy_settings=strategy_settings)
+    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
+        return empty
+
+
+def _run_actionable_promotion_pointer(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Attempt the R2E.5b-5a real pointer write from the just-written previews.
+
+    Only runs when the pointer-preview artifact exists. Availability may observe
+    the pointer as pending-gates only; Step 2, the weekly actionable path, and
+    every gate remain unchanged. The writer itself is fail-closed and never raises.
+    """
+    preview = _read_json_if_exists(step1_actionable_promotion_pointer_preview_path())
+    if not isinstance(preview, Mapping):
+        return {"active_pointer_created": "", "active_research_handoff_source_path": ""}
+
+    settings_as_of = (
+        strategy_settings.get("as_of") if isinstance(strategy_settings, Mapping) else None
+    )
+    return write_actionable_promotion_pointer_if_eligible(
+        pointer_preview=preview,
+        effective_preview=_read_json_if_exists(step1_actionable_effective_handoff_preview_path()),
+        effective_preview_validation=_read_json_if_exists(
+            step1_actionable_effective_handoff_preview_validation_path()
+        ),
+        output_pointer_path=step1_active_research_handoff_source_path(),
+        output_effective_path=step1_effective_research_handoff_path(),
+        output_effective_validation_path=step1_effective_research_handoff_validation_path(),
+        output_status_path=step1_active_pointer_write_status_path(),
+        strategy_settings=strategy_settings,
+        today=settings_as_of,
+        pointer_preview_path=str(step1_actionable_promotion_pointer_preview_path()),
+    )
+
+
+def _write_actionable_promotion_pointer_report_only(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Run the real pointer writer defensively as layer 0h (R2E.5b-5a).
+
+    Step 1 parse must never fail because of this layer. The pointer + effective
+    handoff remain non-authorizing: availability may recognize them as
+    pending-gates only, the active compiled handoff stays the non-actionable
+    source of record for existing compiled behavior, the Step 2/3/4 workflow,
+    order compiler, prompts, and every gate are unchanged, and no ``NEW_BUY`` /
+    ``ORDER_COMPILATION`` is added. Any error is swallowed.
+    """
+    empty = {"active_pointer_created": "", "active_research_handoff_source_path": ""}
+    try:
+        return _run_actionable_promotion_pointer(strategy_settings=strategy_settings)
+    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
+        return empty
+
+
+def _write_promoted_step2_gate_dry_run_report_only(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+    research_decision: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Run the R2E.5b-6a verification + R2E.5b-6b dry-run writers defensively.
+
+    Step 1 parse must never fail because of this layer. It re-verifies the real
+    pointer / effective handoff / validation with the R2E.5b-6a helper, writes
+    ``promoted_handoff_step2_verification.json``, then simulates the promoted
+    decision-only gate against the supplied PRELIMINARY (pre-upgrade) decision
+    and writes ``promoted_step2_gate_dry_run.json``.
+
+    R2E.5b-6c: the availability evaluator now consumes the returned
+    ``verification`` / ``dry_run`` objects — a fully passing pair upgrades an
+    eligible pending-gates run to the Step 2 decision-only state. The dry-run's
+    recorded ``would_allow`` / ``current_real_gate_allows`` remain the
+    pre-upgrade diagnostic; the artifacts still never feed Step 3/4, the order
+    compiler, or the final execution safety gate, and no ``NEW_BUY`` /
+    ``ORDER_COMPILATION`` is added. Any error is swallowed (no upgrade).
+    """
+    try:
+        settings_as_of = (
+            strategy_settings.get("as_of") if isinstance(strategy_settings, Mapping) else None
+        )
+        verification = verify_promoted_handoff_for_step2_decision(
+            active_pointer=_read_json_if_exists(step1_active_research_handoff_source_path()),
+            effective_handoff=_read_json_if_exists(step1_effective_research_handoff_path()),
+            effective_validation=_read_json_if_exists(
+                step1_effective_research_handoff_validation_path()
+            ),
+            today=_parse_iso_date_or_none(settings_as_of),
+        )
+        write_json(step1_promoted_handoff_step2_verification_path(), verification)
+
+        dry_run = evaluate_promoted_step2_gate_dry_run(
+            research_decision=research_decision,
+            promoted_verification=verification,
+        )
+        write_json(step1_promoted_step2_gate_dry_run_path(), dry_run)
+        return {
+            "promoted_handoff_step2_verification_path": str(
+                step1_promoted_handoff_step2_verification_path()
+            ),
+            "promoted_step2_gate_dry_run_path": str(step1_promoted_step2_gate_dry_run_path()),
+            "promoted_step2_gate_dry_run_would_allow": str(
+                dry_run.get("would_allow_step2_promoted_decision")
+            ),
+            "verification": verification,
+            "dry_run": dry_run,
+        }
+    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
+        return dict(_EMPTY_PROMOTED_STEP2_SUMMARY)
+
+
+def _parse_iso_date_or_none(value: Any) -> date | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return date.fromisoformat(value.strip())
+    except ValueError:
+        return None
 
 
 def compile_step1_research_handoff(

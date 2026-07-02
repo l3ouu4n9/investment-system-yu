@@ -39,6 +39,7 @@ from investment_orchestrator.workflow.step2_decision_builder import (
 )
 from investment_orchestrator.workflow.step3_audit_engine import (
     step3_audited_decision_packet_path,
+    step3_blocked_by_promoted_decision_only_gate_path,
     step3_blocked_by_upstream_gate_path,
     step3_prompt_path,
     step3_raw_output_path,
@@ -104,12 +105,19 @@ def step4_blocked_by_final_execution_safety_gate_path() -> Path:
 
 
 def enforce_step4_upstream_guard() -> None:
-    """Fail closed before Step 4 consumes blocked or missing upstream artifacts."""
+    """Fail closed before Step 4 consumes blocked or missing upstream artifacts.
+
+    R2E.5b-6c: the promoted decision-only Step 3 block artifact is watched here
+    too, so a decision-only run can never progress into order compilation even
+    before the final execution safety gate independently rejects it (state is
+    not STRICT_FRESH and ORDER_COMPILATION is absent from allowed_actions).
+    """
     enforce_upstream_artifact_guard(
         blocked_artifact_path=step4_blocked_by_upstream_gate_path(),
         upstream_blocked_artifacts=[
             step2_blocked_by_research_gate_path(),
             step3_blocked_by_upstream_gate_path(),
+            step3_blocked_by_promoted_decision_only_gate_path(),
         ],
         required_artifacts=[
             step2_prompt_path(),

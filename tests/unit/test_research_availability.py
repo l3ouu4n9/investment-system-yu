@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -618,6 +619,265 @@ def test_grounded_state_permission_effect_is_none_in_decision_artifact() -> None
     assert "NEW_BUY" not in decision["allowed_actions"]
 
 
+# --- R2E.5b-5b: promoted handoff pending-gates recognition ------------------
+
+
+PENDING_GATES_STATE = "STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES"
+
+
+def effective_handoff() -> dict[str, Any]:
+    return {
+        "schema_version": "compiled_actionable_research_handoff_candidate_v1",
+        "is_llm_generated": False,
+        "report_only": True,
+        "not_authorization": True,
+        "buy_universe_scorecard": [
+            {"ticker": "QQQ", "actionability_status": "actionable_this_run"}
+        ],
+    }
+
+
+def sha256_of(value: Any) -> str:
+    serialized = json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def pending_pointer(
+    effective: dict[str, Any],
+    *,
+    promotion_expires_at: str = "2026-06-29",
+    status: str = "pending_gates",
+    permission_effect: str = "none_until_consumed_by_future_gate_pr",
+    not_authorization: bool = True,
+    future_pr_required: bool = True,
+    consumed_by_availability: bool = False,
+    consumed_by_step2: bool = False,
+    consumed_by_gates: bool = False,
+    row_count: int = 1,
+    tickers: list[str] | None = None,
+) -> dict[str, Any]:
+    digest = sha256_of(effective)
+    return {
+        "schema_version": "active_research_handoff_source_v1",
+        "is_llm_generated": False,
+        "source": "promoted_compiled_actionable_handoff",
+        "promotion_status": status,
+        "active_pointer_created": True,
+        "effective_handoff_created": True,
+        "permission_effect": permission_effect,
+        "not_authorization": not_authorization,
+        "future_pr_required": future_pr_required,
+        "effective_handoff_path": "artifacts/current/step1_research/research_handoff_candidate_effective.json",
+        "effective_validation_path": (
+            "artifacts/current/step1_research/research_handoff_candidate_effective_validation.json"
+        ),
+        "candidate_sha256": digest,
+        "effective_handoff_sha256": digest,
+        "candidate_actionable_row_count": row_count,
+        "actionable_this_run_tickers": tickers if tickers is not None else ["QQQ"],
+        "promotion_expires_at": promotion_expires_at,
+        "consumed_by_availability": consumed_by_availability,
+        "consumed_by_step2": consumed_by_step2,
+        "consumed_by_gates": consumed_by_gates,
+    }
+
+
+def pending_artifacts() -> dict[str, str]:
+    return {
+        "active_research_handoff_source": (
+            "artifacts/current/step1_research/active_research_handoff_source.json"
+        ),
+        "research_handoff_candidate_effective": (
+            "artifacts/current/step1_research/research_handoff_candidate_effective.json"
+        ),
+        "research_handoff_candidate_effective_validation": (
+            "artifacts/current/step1_research/research_handoff_candidate_effective_validation.json"
+        ),
+    }
+
+
+def evaluate_with_pending_pointer(
+    *,
+    pointer: dict[str, Any] | None = None,
+    effective: dict[str, Any] | None = None,
+    validation: dict[str, Any] | None = None,
+    compiled_support_signals: dict[str, Any] | None = None,
+) -> Any:
+    effective = effective if effective is not None else effective_handoff()
+    pointer = pointer if pointer is not None else pending_pointer(effective)
+    validation = validation if validation is not None else {"valid": True}
+    return evaluate_with_compiled(
+        candidate_validation=invalid_result(),
+        compiled_candidate_validation=COMPILED_VALID,
+        compiled_metadata=compiled_meta("evidence_plus_memo", present=True, valid=True),
+        compiled_support_signals=compiled_support_signals or accepted_signals(),
+        promoted_pointer=pointer,
+        promoted_effective_handoff=effective,
+        promoted_effective_validation=validation,
+        promoted_source_artifacts=pending_artifacts(),
+    )
+
+
+def test_pointer_absent_keeps_grounded_memo_non_actionable_state() -> None:
+    result = evaluate_with_compiled(
+        candidate_validation=invalid_result(),
+        compiled_candidate_validation=COMPILED_VALID,
+        compiled_metadata=compiled_meta("evidence_plus_memo", present=True, valid=True),
+        compiled_support_signals=accepted_signals(),
+    )
+    assert result.state == "STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE"
+    assert result.allowed_actions == ["HOLD", "NO_TRADE"]
+
+
+def test_valid_pending_pointer_upgrades_to_pending_gates_hold_no_trade_only() -> None:
+    result = evaluate_with_pending_pointer()
+
+    assert result.state == PENDING_GATES_STATE
+    assert result.source == "promoted_compiled_actionable_handoff"
+    assert result.allowed_actions == ["HOLD", "NO_TRADE"]
+    for blocked in ("SELL", "NEW_BUY", "ROTATION", "REBALANCE", "EXTENDED_ETF_ADMISSION", "ORDER_COMPILATION"):
+        assert blocked in result.blocked_actions
+    assert result.promoted_pointer_present is True
+    assert result.promoted_pointer_valid is True
+    assert result.promotion_status == "pending_gates"
+    assert result.effective_handoff_present is True
+    assert result.effective_handoff_valid is True
+    assert result.candidate_actionable_row_count == 1
+    assert result.actionable_this_run_tickers == ["QQQ"]
+    assert result.promotion_expires_at == "2026-06-29"
+    assert result.permission_effect == "none_until_consumed_by_future_gate_pr"
+    assert result.not_authorization is True
+    assert result.source_artifacts | pending_artifacts() == result.source_artifacts
+    for reason in (
+        "promoted_actionable_handoff_pending_gates",
+        "new_buy_requires_future_gate_pr",
+        "order_compilation_requires_future_gate_pr",
+    ):
+        assert reason in result.blocker_reasons
+
+
+def test_pending_gates_state_serializes_diagnostics() -> None:
+    result = evaluate_with_pending_pointer()
+    availability = research_availability_result_to_dict(result)
+    decision = research_degraded_mode_decision_to_dict(result)
+
+    for artifact in (availability, decision):
+        assert artifact["state"] == PENDING_GATES_STATE
+        assert artifact["promoted_pointer_present"] is True
+        assert artifact["promoted_pointer_valid"] is True
+        assert artifact["promotion_status"] == "pending_gates"
+        assert artifact["effective_handoff_present"] is True
+        assert artifact["effective_handoff_valid"] is True
+        assert artifact["candidate_actionable_row_count"] == 1
+        assert artifact["actionable_this_run_tickers"] == ["QQQ"]
+        assert artifact["permission_effect"] == "none_until_consumed_by_future_gate_pr"
+        assert artifact["not_authorization"] is True
+        assert artifact["source_artifacts"]["active_research_handoff_source"].endswith(
+            "active_research_handoff_source.json"
+        )
+        assert "NEW_BUY" not in artifact["allowed_actions"]
+
+
+def test_pending_gates_state_maps_to_hold_no_trade_in_action_table() -> None:
+    from investment_orchestrator.state.research_availability import _ALLOWED_ACTIONS_BY_STATE
+
+    assert _ALLOWED_ACTIONS_BY_STATE[PENDING_GATES_STATE] == ("HOLD", "NO_TRADE")
+
+
+def test_malformed_pending_pointer_fails_closed_to_grounded_state() -> None:
+    effective = effective_handoff()
+    pointer = pending_pointer(effective)
+    pointer["schema_version"] = "unexpected"
+
+    result = evaluate_with_pending_pointer(pointer=pointer, effective=effective)
+
+    assert result.state == "STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE"
+    assert result.promoted_pointer_present is True
+    assert result.promoted_pointer_valid is False
+    assert "NEW_BUY" not in result.allowed_actions
+
+
+def test_stale_pending_pointer_fails_closed_to_grounded_state() -> None:
+    effective = effective_handoff()
+    result = evaluate_with_pending_pointer(
+        pointer=pending_pointer(effective, promotion_expires_at="2026-06-21"),
+        effective=effective,
+    )
+
+    assert result.state == "STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE"
+    assert result.promoted_pointer_valid is False
+
+
+def test_hash_mismatch_fails_closed_to_grounded_state() -> None:
+    effective = effective_handoff()
+    pointer = pending_pointer(effective)
+    mutated = {**effective, "mutated": True}
+
+    result = evaluate_with_pending_pointer(pointer=pointer, effective=mutated)
+
+    assert result.state == "STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE"
+    assert result.effective_handoff_valid is False
+
+
+def test_effective_validation_failure_fails_closed_to_grounded_state() -> None:
+    result = evaluate_with_pending_pointer(validation={"valid": False})
+
+    assert result.state == "STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE"
+    assert result.effective_handoff_valid is False
+
+
+def test_pending_pointer_requires_unconsumed_gate_markers() -> None:
+    effective = effective_handoff()
+    result = evaluate_with_pending_pointer(
+        pointer=pending_pointer(effective, consumed_by_step2=True),
+        effective=effective,
+    )
+
+    assert result.state == "STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE"
+    assert result.promoted_pointer_valid is False
+
+
+def test_pending_pointer_requires_actionable_rows_and_tickers() -> None:
+    effective = effective_handoff()
+    result = evaluate_with_pending_pointer(
+        pointer=pending_pointer(effective, row_count=0, tickers=[]),
+        effective=effective,
+    )
+
+    assert result.state == "STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE"
+    assert result.promoted_pointer_valid is False
+
+
+def test_pending_pointer_does_not_upgrade_without_grounded_memo_state() -> None:
+    result = evaluate_with_pending_pointer(compiled_support_signals=accepted_signals(accepted=0))
+
+    assert result.state == "STRICT_FRESH_EVIDENCE_ONLY"
+    assert result.promoted_pointer_valid is True
+
+
+def test_raw_strict_fresh_still_wins_over_pending_pointer() -> None:
+    s = settings()
+    effective = effective_handoff()
+    result = evaluate_research_availability(
+        candidate_validation=valid_result(s),
+        candidate=valid_candidate(),
+        strategy_settings=s,
+        source_as_of_date=NOW,
+        now_date=NOW,
+        compiled_candidate_validation=COMPILED_VALID,
+        compiled_metadata=compiled_meta("evidence_plus_memo", present=True, valid=True),
+        compiled_source_as_of_date=NOW,
+        compiled_support_signals=accepted_signals(),
+        promoted_pointer=pending_pointer(effective),
+        promoted_effective_handoff=effective,
+        promoted_effective_validation={"valid": True},
+    )
+
+    assert result.state == "STRICT_FRESH"
+    assert "NEW_BUY" in result.allowed_actions
+    assert "ORDER_COMPILATION" in result.allowed_actions
+
+
 def test_raw_invalid_compiled_invalid_keeps_existing_behavior() -> None:
     result = evaluate_with_compiled(
         candidate_validation=invalid_result(),
@@ -703,3 +963,229 @@ def test_strict_fresh_evidence_only_decision_dict_fields() -> None:
     assert decision["source_artifacts"] == compiled_artifacts()
     assert any("evidence_only_no_new_buy" in r for r in decision["blocker_reasons"])
     assert any("compiled_handoff_non_actionable" in r for r in decision["blocker_reasons"])
+
+
+# --- R2E.5b-6c: Step 2 decision-only upgrade (first true permission change) ----
+
+
+STEP2_DECISION_ONLY_STATE = "STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY"
+
+
+def valid_step2_verification(effective: dict[str, Any], **overrides: Any) -> dict[str, Any]:
+    digest = sha256_of(effective)
+    verification = {
+        "schema_version": "promoted_handoff_step2_verification_v1",
+        "is_llm_generated": False,
+        "report_only": True,
+        "permission_effect": "none",
+        "not_authorization": True,
+        "valid_for_step2_decision": True,
+        "verification_blockers": [],
+        "future_permission_required": "PROMOTED_RESEARCH_DECISION",
+        "promotion_status": "pending_gates",
+        "consumed_by_step2": False,
+        "promotion_expires_at": "2026-06-29",
+        "effective_handoff_sha256": digest,
+        "pointer_effective_handoff_sha256": digest,
+    }
+    verification.update(overrides)
+    return verification
+
+
+def valid_step2_dry_run(**overrides: Any) -> dict[str, Any]:
+    dry_run = {
+        "schema_version": "promoted_step2_gate_dry_run_v1",
+        "is_llm_generated": False,
+        "report_only": True,
+        "dry_run_only": True,
+        "permission_effect": "none",
+        "not_authorization": True,
+        "would_allow_step2_promoted_decision": True,
+        "current_real_gate_allows": False,
+        "future_permission_required": "PROMOTED_RESEARCH_DECISION",
+        "future_state_required": STEP2_DECISION_ONLY_STATE,
+        "dry_run_blockers": ["real_gate_still_closed_by_policy"],
+    }
+    dry_run.update(overrides)
+    return dry_run
+
+
+def evaluate_step2_decision_only(
+    *,
+    effective: dict[str, Any] | None = None,
+    verification: dict[str, Any] | None = None,
+    dry_run: dict[str, Any] | None = None,
+) -> Any:
+    effective = effective if effective is not None else effective_handoff()
+    pointer = pending_pointer(effective)
+    return evaluate_with_compiled(
+        candidate_validation=invalid_result(),
+        compiled_candidate_validation=COMPILED_VALID,
+        compiled_metadata=compiled_meta("evidence_plus_memo", present=True, valid=True),
+        compiled_support_signals=accepted_signals(),
+        promoted_pointer=pointer,
+        promoted_effective_handoff=effective,
+        promoted_effective_validation={"valid": True},
+        promoted_source_artifacts=pending_artifacts(),
+        promoted_step2_verification=(
+            verification if verification is not None else valid_step2_verification(effective)
+        ),
+        promoted_step2_gate_dry_run=dry_run if dry_run is not None else valid_step2_dry_run(),
+    )
+
+
+def test_pending_gates_with_valid_verification_and_dry_run_upgrades_to_decision_only() -> None:
+    result = evaluate_step2_decision_only()
+
+    assert result.state == STEP2_DECISION_ONLY_STATE
+    assert result.promoted_step2_decision_only is True
+    assert result.source == "promoted_compiled_actionable_handoff"
+    # Allowed actions are EXACTLY HOLD / NO_TRADE / PROMOTED_RESEARCH_DECISION.
+    assert result.allowed_actions == ["HOLD", "NO_TRADE", "PROMOTED_RESEARCH_DECISION"]
+    for blocked in (
+        "SELL",
+        "NEW_BUY",
+        "ROTATION",
+        "REBALANCE",
+        "EXTENDED_ETF_ADMISSION",
+        "ORDER_COMPILATION",
+    ):
+        assert blocked in result.blocked_actions
+    assert result.permission_effect == "promoted_step2_decision_only"
+    assert result.not_authorization is True
+    for reason in (
+        "promoted_step2_decision_only_enabled",
+        "new_buy_requires_future_gate_pr",
+        "order_compilation_requires_future_gate_pr",
+        "final_execution_requires_future_gate_pr",
+    ):
+        assert reason in result.blocker_reasons
+    assert "promoted_actionable_handoff_pending_gates" not in result.blocker_reasons
+
+
+def test_step2_decision_only_serializes_permission_fields() -> None:
+    result = evaluate_step2_decision_only()
+    availability = research_availability_result_to_dict(result)
+    decision = research_degraded_mode_decision_to_dict(result)
+
+    for artifact in (availability, decision):
+        assert artifact["state"] == STEP2_DECISION_ONLY_STATE
+        assert artifact["allowed_actions"] == ["HOLD", "NO_TRADE", "PROMOTED_RESEARCH_DECISION"]
+        assert artifact["promoted_step2_decision_only"] is True
+        assert artifact["order_compilation_allowed"] is False
+        assert artifact["new_buy_permission"] is False
+        assert artifact["permission_effect"] == "promoted_step2_decision_only"
+        assert artifact["not_authorization"] is True
+        assert "NEW_BUY" in artifact["blocked_actions"]
+        assert "ORDER_COMPILATION" in artifact["blocked_actions"]
+
+
+def test_step2_decision_only_action_table_is_exact() -> None:
+    from investment_orchestrator.state.research_availability import (
+        _ALLOWED_ACTIONS_BY_STATE,
+    )
+
+    assert _ALLOWED_ACTIONS_BY_STATE[STEP2_DECISION_ONLY_STATE] == (
+        "HOLD",
+        "NO_TRADE",
+        "PROMOTED_RESEARCH_DECISION",
+    )
+    # The full order-eligible state remains absent / disabled.
+    assert "STRICT_FRESH_COMPILED_ACTIONABLE" not in _ALLOWED_ACTIONS_BY_STATE
+    # PROMOTED_RESEARCH_DECISION exists ONLY on the decision-only state.
+    for state, actions in _ALLOWED_ACTIONS_BY_STATE.items():
+        if state != STEP2_DECISION_ONLY_STATE:
+            assert "PROMOTED_RESEARCH_DECISION" not in actions, state
+
+
+def test_missing_dry_run_stays_pending_gates() -> None:
+    effective = effective_handoff()
+    result = evaluate_step2_decision_only(
+        effective=effective,
+        verification=valid_step2_verification(effective),
+        dry_run={},
+    )
+    assert result.state == PENDING_GATES_STATE
+    assert result.promoted_step2_decision_only is False
+    assert result.allowed_actions == ["HOLD", "NO_TRADE"]
+
+    result_none = evaluate_with_pending_pointer()
+    assert result_none.state == PENDING_GATES_STATE
+
+
+def test_dry_run_false_or_malformed_stays_pending_gates() -> None:
+    effective = effective_handoff()
+    for overrides in (
+        {"would_allow_step2_promoted_decision": False},
+        {"current_real_gate_allows": True},
+        {"schema_version": "unexpected"},
+        {"dry_run_only": False},
+        {"report_only": False},
+        {"not_authorization": False},
+        {"permission_effect": "actionable"},
+        {"future_permission_required": "NEW_BUY"},
+        {"future_state_required": "STRICT_FRESH"},
+        {"dry_run_blockers": []},
+        {"dry_run_blockers": "not-a-list"},
+    ):
+        result = evaluate_step2_decision_only(
+            effective=effective, dry_run=valid_step2_dry_run(**overrides)
+        )
+        assert result.state == PENDING_GATES_STATE, overrides
+        assert result.promoted_step2_decision_only is False
+        assert "PROMOTED_RESEARCH_DECISION" not in result.allowed_actions
+
+
+def test_verification_invalid_or_stale_stays_pending_gates() -> None:
+    effective = effective_handoff()
+    for overrides in (
+        {"valid_for_step2_decision": False},
+        {"verification_blockers": ["promotion_expired"]},
+        {"future_permission_required": "NEW_BUY"},
+        {"promotion_status": "consumed"},
+        {"consumed_by_step2": True},
+        {"promotion_expires_at": "2026-06-21"},  # stale vs NOW=2026-06-22
+        {"promotion_expires_at": None},
+        {"schema_version": "unexpected"},
+        {"report_only": False},
+        {"not_authorization": False},
+    ):
+        result = evaluate_step2_decision_only(
+            effective=effective, verification=valid_step2_verification(effective, **overrides)
+        )
+        assert result.state == PENDING_GATES_STATE, overrides
+        assert "PROMOTED_RESEARCH_DECISION" not in result.allowed_actions
+
+
+def test_verification_hash_mismatch_stays_pending_gates() -> None:
+    effective = effective_handoff()
+    mismatched = valid_step2_verification(effective)
+    mismatched["effective_handoff_sha256"] = "0" * 64
+    mismatched["pointer_effective_handoff_sha256"] = "0" * 64
+
+    result = evaluate_step2_decision_only(effective=effective, verification=mismatched)
+
+    assert result.state == PENDING_GATES_STATE
+    assert result.promoted_step2_decision_only is False
+
+
+def test_raw_strict_fresh_unchanged_by_step2_decision_only_inputs() -> None:
+    effective = effective_handoff()
+    strategy_settings = settings()
+    result = evaluate_research_availability(
+        candidate_validation=valid_result(strategy_settings),
+        candidate=valid_candidate(),
+        strategy_settings=strategy_settings,
+        source_as_of_date=NOW,
+        now_date=NOW,
+        promoted_pointer=pending_pointer(effective),
+        promoted_effective_handoff=effective,
+        promoted_effective_validation={"valid": True},
+        promoted_step2_verification=valid_step2_verification(effective),
+        promoted_step2_gate_dry_run=valid_step2_dry_run(),
+    )
+    assert result.state == "STRICT_FRESH"
+    assert result.promoted_step2_decision_only is False
+    assert "PROMOTED_RESEARCH_DECISION" not in result.allowed_actions
+    assert result.allowed_actions[:2] == ["HOLD", "NO_TRADE"]
+    assert "NEW_BUY" in result.allowed_actions and "ORDER_COMPILATION" in result.allowed_actions

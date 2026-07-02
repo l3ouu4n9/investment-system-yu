@@ -789,6 +789,9 @@ anchors:
 `applicable_tickers` (non-empty, subset of the allowed universe), `anchor_date_et`, `valid_from`,
 `valid_until`, `source_type`, `confidence_floor`. Optional: `summary`, `source_note`, `blocks_if_stale`
 (default `true`). Top-level: `schema_version`, `as_of_date`, `is_llm_generated: false`, `anchors`.
+Every ISO date field above (`as_of_date`, `anchor_date_et`, `valid_from`, `valid_until`) may be written
+quoted or unquoted, as in the example — the parser normalizes both to the same canonical `"YYYY-MM-DD"`
+string internally.
 
 **Anchor hard rules (mirroring the memo denylist; enforced by a deterministic parser, never trusting input):**
 
@@ -906,8 +909,11 @@ stays `STRICT_FRESH_EVIDENCE_ONLY` (HOLD / NO_TRADE); anchors are **not yet cons
   `source_type`, `confidence_floor`; `anchor_type ∈ {structural_theme, scheduled_macro_event,
   scheduled_earnings_event, scheduled_rebalance_event}`; `source_type ∈ {operator}`; `confidence_floor ∈
   {low, medium, high}`; `applicable_tickers` non-empty and a subset of the deterministic base allowed
-  universe (`core ∪ satellite`) — **v1 rejects extended-ETF / out-of-universe tickers**; dates parse as ISO;
-  duplicate `anchor_id` fails; forbidden budget/`cap`/`allocation` keys and any
+  universe (`core ∪ satellite`) — **v1 rejects extended-ETF / out-of-universe tickers**; dates parse as ISO
+  (`YYYY-MM-DD`) — a date may be written **quoted or unquoted** in YAML (PyYAML decodes an unquoted date
+  scalar as a `datetime.date` / `datetime.datetime`; the parser normalizes either form to the same canonical
+  ISO string, so `2026-06-15` and `"2026-06-15"` are equivalent); an unparseable or ambiguous non-ISO string
+  still fails validation; duplicate `anchor_id` fails; forbidden budget/`cap`/`allocation` keys and any
   `final_action`/`order_intent`/order/execution-authorization key (or `NEW_BUY`/`ORDER_COMPILATION`/`BUY_ORDER`
   scalar token) are rejected recursively. **Stale** anchors (`valid_until < today`, `blocks_if_stale`) are
   flagged `stale:true` / `usable:false` and excluded from `valid_anchor_count` — they never crash the build.
@@ -1002,3 +1008,1118 @@ compiler, prompt, or compiled-handoff actionability changes.** The Step 2 gate s
   compiled handoff stays non-actionable (`positive_delta_research_supported=[]`, no `actionable_this_run`
   row, `primary_anchor_event_id=null`). Making an actionable row + opening the gate is the separate R2E.5b
   work and requires a future explicit PR.
+
+## 23. R2E.5b-0 status (actionable-handoff PREVIEW — implemented, report-only *separate* artifact)
+
+R2E.5b-0 adds a **separate, report-only preview artifact** so we can observe whether the *future* actionable
+mapping looks reasonable — **without changing any active trading path today**. It takes the already-compiled
+`accepted_support_signals` + `evidence_packet.research_anchors` + the analyst memo and previews which tickers
+**would** become `actionable_this_run` rows **IF** a future PR opened an actionable path. **This is NOT
+authorization.** No gate, permission, `allowed_actions`, availability state, Step 2/3/4 workflow, order
+compiler, prompt, validator, or *active* compiled-handoff actionability changes.
+**No `NEW_BUY` / `ORDER_COMPILATION` permission is added** and `STRICT_FRESH_WITH_LLM_MEMO` is **not** enabled.
+The live posture stays `STRICT_FRESH_EVIDENCE_ONLY` / `STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE` (HOLD /
+NO_TRADE).
+
+- **Artifact (new, separate):** `artifacts/current/step1_research/compiled_actionable_handoff_preview.json`
+  (schema `compiled_actionable_handoff_preview_v1`). It is a *distinct* file — it never mutates
+  `compiled_research_handoff_candidate.json`, `compiled_support_signals.json`, or the evidence packet, and no
+  downstream step reads it.
+- **Top-level fields:** `schema_version`, `is_llm_generated: false`, `report_only: true`,
+  `permission_effect: "none"`, `not_authorization: true`, `source_compiled_support_signals` /
+  `source_compiled_handoff_candidate` / `source_evidence_packet` (each `{path, schema_version, sha256}`),
+  `max_new_tickers_per_week_snapshot`, `base_new_ticker_cap_applied`,
+  `extended_etf_sleeve_preview_enabled: false`, `preview_actionable_rows[]`,
+  `preview_positive_delta_research_supported[]`, `rejected_preview_rows[]`, `global_blockers[]`, `notes`.
+- **Row acceptance criteria (all required; inherited from `accepted_support_signals`, then two preview-only
+  gates):** an accepted support signal exists; ticker is in the base allowed universe; ticker is **not** an
+  extended ETF; a matching valid research anchor exists and applies to the ticker; the memo confidence meets the
+  anchor `confidence_floor`; memo `stance == prefer`; rationale non-empty; `source_notes` present; ticker not in
+  `avoid_or_deprioritize`; no blocking `data_gap`; **plus** (preview-only) the anchor yields a
+  `structural_theme_refs` or `event_id_refs`, a scheduled-event anchor carries a `primary_anchor_date_et`, and
+  the running count does not exceed `max_new_tickers_per_week` (base-universe cap; **fail-closed to 0** when
+  unset — the current production default of `0` yields an empty preview).
+- **Preview row fields:** `ticker`, `source_anchor_id`, `anchor_type`, `primary_anchor_event_id` /
+  `primary_anchor_ref`, `primary_anchor_date_et`, `structural_theme_refs` / `event_id_refs`,
+  `thesis_12m_plus_supported_preview: true`, `thesis_linkage_quality_preview`,
+  `actionability_status_preview: "actionable_this_run"`, `not_authorization: true`.
+- **Deterministic rejection reason codes:** `preview_limit_max_new_tickers_exceeded`, `preview_missing_anchor`,
+  `preview_extended_etf_not_allowed`, `preview_missing_primary_anchor_date`, `preview_missing_event_or_theme_ref`,
+  `preview_blocking_data_gap`, `preview_low_confidence`, `preview_no_accepted_support_signal`,
+  `preview_out_of_base_allowed_universe`, `preview_avoid_or_deprioritize`, `preview_missing_rationale`,
+  `preview_missing_source_notes`, `preview_stance_not_prefer`, `preview_analyst_memo_absent`,
+  `preview_analyst_memo_invalid`. Each rejected row also retains the granular `source_rejection_reasons` from the
+  support extractor. **Global blockers:** with no accepted support signals the preview is empty and
+  `global_blockers` includes `no_accepted_support_signals`; a zero base cap adds
+  `preview_base_new_ticker_cap_zero`.
+- **Step 1 integration point:** built as report-only *layer 0d* in `parse_step1_output`, immediately **after**
+  the R2E.3 support-signals / R2D compiler flow. It only runs when `compiled_support_signals.json` exists, reads
+  the just-written report-only artifacts, and is fully defensive — a preview-builder failure is swallowed and
+  **never breaks Step 1 parse**. The preview path is surfaced in the parse result
+  (`actionable_handoff_preview_path`). The preview is **not** passed into the availability evaluator and **not**
+  into Step 2.
+- **Non-actionable invariant (proven by tests):** even when the preview surfaces a
+  `preview_actionable_rows` entry (`actionability_status_preview: "actionable_this_run"`), the **active**
+  compiled handoff stays non-actionable (`positive_delta_research_supported=[]`, no `actionable_this_run`
+  scorecard row, `primary_anchor_event_id=null`), availability stays
+  `STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE` / `STRICT_FRESH_EVIDENCE_ONLY` with
+  `allowed_actions=["HOLD","NO_TRADE"]`, the Step 2 research gate still blocks, and `run_weekly` still terminates
+  `NO_TRADE`. The preview is an observation, not authorization.
+- **Promotion path (future, separate PRs):** promoting this preview into the **active** compiled handoff (making
+  `positive_delta_research_supported` / `actionable_this_run` rows real) would be one future explicit PR; opening
+  the availability state + Step 2 gate for `NEW_BUY` / `ORDER_COMPILATION` would be a **separate** future PR
+  after that. Neither is done here.
+
+## 24. R2E.5b-1 status (actionable compiled-handoff CANDIDATE — implemented, report-only *separate* artifact)
+
+R2E.5b-1 adds a **separate, report-only** actionable *compiled-handoff candidate* that answers only: **"can the
+R2E.5b-0 preview rows be transformed into a full strict handoff candidate that passes
+`validate_research_handoff`, without yet being used for availability or trading?"** It overlays the preview's
+`preview_actionable_rows` onto a full strict handoff and validates the *shape*. **This validates the future
+actionable handoff shape only — it is NOT authorization.** No gate, permission, `allowed_actions`, availability
+state, Step 2/3/4 workflow, order compiler, prompt, or *active* compiled-handoff actionability changes.
+**No `NEW_BUY` / `ORDER_COMPILATION` permission is added** and `STRICT_FRESH_WITH_LLM_MEMO` is **not** enabled.
+
+- **Artifacts (new, separate):**
+  `artifacts/current/step1_research/compiled_actionable_research_handoff_candidate.json`
+  (schema `research_handoff_compiled_actionable_v1`),
+  `.../compiled_actionable_research_handoff_validation.json`, and
+  `.../compiled_actionable_research_handoff_metadata.json` (schema
+  `compiled_actionable_research_handoff_metadata_v1`). These are **distinct** files — they never overwrite or
+  change the active `compiled_research_handoff_candidate.json` (which stays non-actionable), and no downstream
+  step reads them.
+- **Construction rules:** for each ticker in `preview_actionable_rows` the matching scorecard row is overlaid to
+  `actionability_status = actionable_this_run`, `thesis_12m_plus_supported = true`, `thesis_linkage_quality`
+  from the preview (`strong`/`adequate`), `event_id_refs` / `structural_theme_refs` from the preview,
+  `primary_anchor_event_id` (falling back to the anchor ref for a `structural_theme`) + `primary_anchor_date_et`
+  from the preview, `primary_anchor_type` from the preview, and `compile_blocker_if_any = null` with no DATA_GAP
+  marker on the row (a DATA_GAP-tainted 12m+ summary is replaced with a clean deterministic thesis).
+  `strategy_a_research_handoff.positive_delta_research_supported` is populated from the promoted rows **only in
+  this separate candidate**; the base-universe `max_new_tickers_per_week` cap is re-asserted; the extended ETF
+  sleeve stays **disabled**; no budgets / order sizing are set; no out-of-universe tickers are added. Rejected /
+  non-preview tickers stay watch-only.
+- **Fail-closed:** a preview row that cannot satisfy the strict validator's actionable-row contract (no
+  event/theme ref, no `primary_anchor_event_id`/ref, or **no `primary_anchor_date_et`** — e.g. an anchor whose
+  YAML date was not a string) is left **watch-only** rather than emitted invalid. With no promotable rows the
+  candidate is a valid **non-actionable** handoff and the metadata records
+  `candidate_actionable_row_count: 0`. Any builder / validation failure is isolated to these artifacts and
+  **never crashes Step 1 parse** and never affects the active handoff or availability.
+- **Validation:** the separate candidate is validated with the existing `validate_research_handoff`; the result
+  is written to the validation artifact (errors included on failure).
+- **Metadata fields:** `source_actionable_handoff_preview` / `source_compiled_support_signals` /
+  `source_evidence_packet` / `source_active_compiled_handoff` (each `{path, schema_version, sha256}`),
+  `used_active_compiled_handoff_as_base`, `preview_actionable_row_count`, `candidate_actionable_row_count`,
+  `actionable_this_run_tickers`, `validation_passed`, `report_only: true`, `permission_effect: "none"`,
+  `not_authorization: true`, `consumed_by_availability: false`, `consumed_by_step2: false`.
+- **Step 1 integration point:** built as report-only *layer 0e* in `parse_step1_output`, immediately **after**
+  the R2E.5b-0 preview (layer 0d). It only runs when `compiled_actionable_handoff_preview.json` exists, reads
+  the just-written report-only artifacts (preview + support signals + evidence packet + the active compiled
+  handoff as base), and is fully defensive. The paths are surfaced in the parse result
+  (`actionable_handoff_candidate_path` / `_validation_path` / `_metadata_path`).
+- **Separation invariant (proven by tests):** even when the separate candidate validates with a promoted
+  `actionable_this_run` row and non-empty `positive_delta_research_supported`, the **active** compiled handoff
+  is untouched and non-actionable (`positive_delta_research_supported=[]`, no `actionable_this_run` row,
+  `primary_anchor_event_id=null`), availability stays `STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE` /
+  `STRICT_FRESH_EVIDENCE_ONLY` with `allowed_actions=["HOLD","NO_TRADE"]`, the Step 2 research gate still blocks,
+  and `run_weekly` still terminates `NO_TRADE`. The candidate is **not** consumed by the availability evaluator,
+  the degraded-mode decision, Step 2 render, the weekly actionable path, or the final execution safety gate.
+- **Promotion path (future, separate PRs):** using this validated shape as the **active** compiled handoff, and
+  then opening the availability state + gates for `NEW_BUY` / `ORDER_COMPILATION`, each require a **separate**
+  future explicit PR. Neither is done here.
+
+## 25. R2E.5b-2 design — promotion path for the actionable compiled handoff (design/inspection only)
+
+> **DESIGN / INSPECTION ONLY.** This section designs the future promotion path from the report-only
+> `compiled_actionable_research_handoff_candidate.json` to the active compiled handoff, and from there — in
+> later, separate PRs — to a gated actionable workflow. **Nothing here is implemented in R2E.5b-2**: no
+> production behavior, `allowed_actions`, gate, availability state, Step 2/3/4 workflow, order compiler, or
+> prompt changes; **no `NEW_BUY` / `ORDER_COMPILATION` permission is added** and `STRICT_FRESH_WITH_LLM_MEMO`
+> is **not** enabled. The live posture stays `STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE` /
+> `STRICT_FRESH_EVIDENCE_ONLY` (HOLD / NO_TRADE).
+
+### 25.1 Inspected surfaces
+
+- `research/actionable_handoff_candidate.py` + `research/actionable_handoff_preview.py` — the R2E.5b-0/1
+  report-only chain; the candidate metadata already records `{path, schema_version, sha256}` source refs for
+  the preview, support signals, evidence packet, and the active base candidate.
+- `research/support_signals.py`, `research/handoff_compiler.py`, `research/research_anchors.py` — the
+  deterministic grounding chain (`accepted_support_signals`, compilation modes, anchor staleness).
+- `state/research_availability.py` — states + `_ALLOWED_ACTIONS_BY_STATE`; the evaluator is fed the compiled
+  handoff and support signals but **never** the actionable candidate; relabeling only ever lands on
+  HOLD/NO_TRADE states.
+- `state/research_degraded_mode_gate.py` — Step 2 gate: hardcodes `ACTIONABLE_REQUIRED_STATE = "STRICT_FRESH"`
+  and `REQUIRED_ACTIONS = ("NEW_BUY", "ORDER_COMPILATION")`; fails closed on missing/malformed permission.
+- `state/final_execution_safety_gate.py` — final gate before Step 4 order compilation: independently
+  re-requires `ACTIONABLE_REQUIRED_STATE = "STRICT_FRESH"`, `ORDER_COMPILATION` allowed, `NEW_BUY` when buy
+  intent exists, structural Step 2/3 packet checks, no upstream block artifacts, no manual review.
+- `workflow/step2_decision_builder.py` — `render_step2_prompt` re-enforces the Step 2 gate (defense in depth)
+  and renders from `research_output.json` (the raw parsed handoff), not the compiled candidate.
+- `workflow/weekly_orchestrator.py` — routes on the Step 2 gate evaluator's `.allowed`; not-allowed is a
+  controlled `NO_TRADE` terminal (`weekly_outcome.json` + `run_summary.json`).
+- `state/last_good_research_handoff.py` — writes only the strict-valid **raw normalized** candidate
+  (`handoff_source="research_handoff_candidate"`); records `strategy_settings_hash` over
+  `DECISION_RELEVANT_SETTINGS_KEYS` (incl. `hard_cap_open_orders_budget`, `max_new_tickers_per_week`) and the
+  universe; the report-only actionable candidate is never passed to it today.
+- `workflow/step4_order_compiler.py` — reads `hard_cap_open_orders_budget`, `target_new_buy_budget_this_run`,
+  `max_new_tickers_per_week` from strategy settings (deterministic caps live downstream, as designed in §17).
+- `cli/run_status.py` — currently has no promotion/actionable observability (a future surface).
+- Validator tests + docs tests (`test_step1_evidence_first_research_design.py`,
+  `test_step1_handoff_compiler_integration.py`) — prove the separation invariants this design must preserve
+  until each explicit gate PR.
+
+### 25.2 Promotion preconditions (deterministic checklist)
+
+Promotion means: designating the validated actionable candidate as the **effective** research handoff for a
+run. Every precondition below must pass deterministically (fail closed — any missing / malformed / stale input
+⇒ not eligible, never a crash). Grouped:
+
+**A. Input-chain validity & freshness**
+
+1. `evidence_packet.json` present, `schema_version=evidence_packet_v1`, invariant-valid,
+   `is_llm_generated=false`, and fresh (`as_of` within `fresh_days` of `now_date`).
+2. `evidence_packet.research_anchors` `available:true`, `valid:true`, `valid_anchor_count ≥ 1`.
+3. `analyst_memo.json` present and valid — compiled metadata `compilation_mode == evidence_plus_memo`; memo
+   `confidence` is not `low`; memo `as_of_date` fresh.
+4. `compiled_support_signals.json` present with `accepted_support_signals` non-empty,
+   `permission_effect: "none"`, `not_authorization: true` (the artifact itself must still be report-only —
+   promotion consumes it; it never self-authorizes).
+5. `compiled_actionable_handoff_preview.json` present, `report_only: true`, `not_authorization: true`,
+   `preview_actionable_rows` non-empty.
+
+**B. Actionable-candidate quality**
+
+6. `compiled_actionable_research_handoff_candidate.json` present and its validation artifact reports
+   `validation_passed: true` (strict `validate_research_handoff`).
+7. `candidate_actionable_row_count > 0` and `candidate_actionable_row_count ≤` the base-universe
+   `max_new_tickers_per_week` cap (re-asserted a third time here; preview and candidate builder already
+   enforce it).
+8. Every `actionable_this_run` ticker ∈ `allowed_buy_tickers` (base universe); **no out-of-universe tickers**.
+9. `optional_extended_etf_sleeve.enabled == false` and no extended-ETF ticker appears in any promoted row.
+10. **No stale anchors at promotion time**: every anchor cited by a promoted row is re-checked against
+    `now_date` (`valid_until ≥ now_date`); staleness is re-evaluated at promotion, not frozen at build time.
+11. No blocking data gaps: no `data_gaps` entry with `blocking: true` in the evidence packet, and no DATA_GAP
+    marker on any promoted row.
+
+**C. Consistency (hash chain)**
+
+12. **Source-hash match**: the candidate metadata's recorded `sha256` for
+    `source_evidence_packet` / `source_compiled_support_signals` / `source_actionable_handoff_preview` /
+    `source_active_compiled_handoff` must equal freshly recomputed hashes of the on-disk artifacts — the
+    candidate must have been derived from exactly the bytes present now (protects against partial re-runs).
+13. **Settings/universe match**: `strategy_settings_hash` over `DECISION_RELEVANT_SETTINGS_KEYS` at
+    promotion time equals the hash at compile time, and the core∪satellite universe set is identical.
+
+**D. Downstream budget context**
+
+14. Strategy settings carry `hard_cap_open_orders_budget` and `max_new_tickers_per_week` (and Step 4 will
+    additionally require `target_new_buy_budget_this_run` before compiling); promotion never proceeds into a
+    run whose order compiler would lack its deterministic caps.
+
+### 25.3 Promotion artifact strategy
+
+| option | mechanism | safety | observability | accidental-consumption risk | rollback | verdict |
+|---|---|---|---|---|---|---|
+| **A. overwrite** `compiled_research_handoff_candidate.json` | promotion silently replaces the active file | poor — destroys the non-actionable baseline; every existing separation test breaks | poor (no decision record) | high — anything reading the active file becomes actionable with zero diff | hard (restore from where?) | **rejected** |
+| **B. pointer** `active_research_handoff_source.json` | small deterministic pointer records which candidate is *effective* + hashes + the eligibility result | strong — both files stay put; missing/malformed pointer ⇒ consumers fall back to the active non-actionable candidate | strong (the pointer *is* the audit record) | low — consumers must opt in to pointer resolution | pointer flip / delete | **recommended core** |
+| **C. availability reads the actionable candidate directly** | evaluator consumes it and relabels | weak — conflates the *observer* with the *promotion mechanism*; promotion becomes implicit | poor | highest | unclear | **rejected** |
+| **D. new canonical** `research_handoff_candidate_effective.json` | materialized copy written only on eligibility pass | good if hash-stamped | good | low-moderate (stable filename invites casual readers) | delete file | **optional companion to B** |
+
+**Recommendation: B as the single source of truth, with D as an optional materialized view.** The pointer
+(`active_research_handoff_source.json`) records: `source` (`active_compiled_handoff` |
+`promoted_compiled_actionable_handoff`), the referenced candidate path + `sha256`, the eligibility artifact
+path + `sha256`, `promoted_at`, the earliest cited-anchor `valid_until` (an expiry), and `report_only` /
+`permission_effect` markers until the gate PRs land. Consumption rules (future PRs): a consumer resolves the
+pointer, re-verifies the `sha256` of whatever file it reads, and **falls back to the active non-actionable
+candidate on any mismatch / absence** (fail closed). If D is added, the pointer remains the SSOT and the
+effective copy is only valid when its hash matches the pointer. A silent overwrite (A) and implicit evaluator
+consumption (C) are rejected outright.
+
+### 25.4 Future availability states
+
+Current non-actionable states stay exactly as-is: `STRICT_FRESH_EVIDENCE_ONLY` and
+`STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE` both map to `["HOLD", "NO_TRADE"]` and must remain HOLD / NO_TRADE
+forever (they describe *grounding without promotion*).
+
+Recommended new states (names chosen so no existing gate literal ever matches them):
+
+| state | introduced by | semantics | allowed_actions |
+|---|---|---|---|
+| `STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES` | R2E.5b-5 | eligibility passed + pointer written + hashes verified, but the gate PRs have not landed; promotion exists and is visible, gates stay closed | `["HOLD", "NO_TRADE"]` |
+| `STRICT_FRESH_COMPILED_ACTIONABLE` | R2E.5b-6 (**first permission change**) | same preconditions **and** the explicit permission PR landed | `["HOLD", "NO_TRADE", "NEW_BUY", "ORDER_COMPILATION"]` — `SELL` / `ROTATION` / `REBALANCE` / `EXTENDED_ETF_ADMISSION` stay blocked |
+
+- **Do not reuse `STRICT_FRESH`.** Both gates compare against the literal `STRICT_FRESH`; reusing it would
+  silently open Step 2 *and* the final gate with zero diff at the gate layer — precisely the implicit
+  permission change this program forbids. A new literal keeps both gates closed until each is explicitly
+  changed in its own PR.
+- **`STRICT_FRESH_WITH_LLM_MEMO` is superseded as a name** (already once replaced by the safety-explicit
+  R2E.4 naming): what becomes actionable is the *compiled, anchor-grounded* handoff — naming the state after
+  the LLM memo overstates the memo's authority. Keep the old name in this doc as a historical alias only.
+- The buy-side compiled path deliberately does **not** grant `SELL`: sell-side validation is a separately
+  deferred trigger (see the operator runbook), and `SELL` continues to come only from the raw
+  `STRICT_FRESH` / `STRICT_STALE` states.
+
+### 25.5 Gate change design (Step 2 + final execution safety gate)
+
+Split across separate PRs, one gate each; both gates keep failing closed on anything unexpected.
+
+- **Step 2 gate (R2E.5b-6):** replace the single-literal comparison with a tuple
+  `ACTIONABLE_ALLOWED_STATES = ("STRICT_FRESH", "STRICT_FRESH_COMPILED_ACTIONABLE")`. `REQUIRED_ACTIONS`
+  stays `("NEW_BUY", "ORDER_COMPILATION")`. When the state is `STRICT_FRESH_COMPILED_ACTIONABLE`, the gate
+  additionally requires: the decision artifact's `source == "promoted_compiled_actionable_handoff"`; the
+  promotion pointer exists; the pointer's `sha256` matches the effective candidate's content; the referenced
+  eligibility artifact reports pass; and `now_date` has not passed the pointer's recorded earliest-anchor
+  `valid_until`. Any failed check ⇒ blocked exactly as today.
+- **Final execution safety gate (R2E.5b-7):** accept the same state tuple, keep
+  `REQUIRED_ALLOWED_ACTION = "ORDER_COMPILATION"` and the buy-intent `NEW_BUY` check, and add two new
+  deterministic checks for the promoted state: (a) **budget context present** —
+  `hard_cap_open_orders_budget`, `max_new_tickers_per_week`, and `target_new_buy_budget_this_run` must be
+  present before order compilation; (b) **promoted-ticker subset** — every buy-side ticker in the Step 2/3
+  packets must be ∈ the effective handoff's `actionable_this_run_tickers` (the order compiler can never buy
+  a ticker research did not promote).
+- **Both gates verify source + hashes independently** (defense in depth, mirroring how Step 2 render already
+  re-enforces its gate): neither gate ever trusts the other's verification.
+- **Blocker artifact when promotion exists but a gate stays closed:** `step2_blocked_by_research_gate.json`
+  (and the final-gate block artifact) gain `promotion_present: true`, the pointer path + hash, and a
+  deterministic code `promotion_present_but_gates_closed` — the operator sees "a promoted candidate exists;
+  the gate PR intentionally has not opened this state" instead of a generic state mismatch.
+
+### 25.6 Last-good writer
+
+- **Report-only actionable candidate: excluded — yes, and defensively.** Today the writer is only ever
+  called with the raw normalized candidate; keep that, and add a defensive rejection of any candidate whose
+  `schema_version == research_handoff_compiled_actionable_v1` or that carries `report_only: true` /
+  `not_authorization: true` markers, so a future wiring mistake cannot seed last-good with a report-only
+  artifact.
+- **Promoted handoff eligibility: yes, but only after R2E.5b-7 and into a separate slot** —
+  `last_good_promoted_handoff.json` + metadata, never overwriting the raw
+  `last_good_research_handoff.json` (whose `DEGRADED_WITH_LAST_GOOD` semantics assume raw Deep Research
+  provenance; mixing sources would corrupt the fallback contract).
+- **Required metadata for a promoted last-good:** `handoff_source="promoted_compiled_actionable_handoff"`,
+  promotion pointer hash, the full source-chain sha256s (evidence packet / memo / support signals / preview /
+  candidate), the cited anchor ids **with their `valid_until` dates**, memo `as_of_date` + `confidence`,
+  `strategy_settings_hash`, and the universe snapshot.
+- **Stale-anchor / stale-memo protection:** a promoted last-good records
+  `promoted_last_good_valid_until = min(cited anchor valid_until)` and is **re-checked at read time**: it is
+  usable only while `now_date ≤ promoted_last_good_valid_until` and the memo age is within `fresh_days`;
+  past either bound it degrades to observability-only (HOLD / NO_TRADE), never actionable. Staleness is
+  always evaluated at consumption, never frozen at write.
+
+### 25.7 Risk analysis
+
+- **Preview accidentally promoted into the active trading path** — the preview's schema
+  (`compiled_actionable_handoff_preview_v1`) is never an accepted consumer schema; promotion goes only
+  through the pointer; consumers hash-verify; existing separation tests keep asserting the preview is never
+  read by availability / Step 2 / weekly / the final gate.
+- **Stale anchors** — three-layer defense: eligibility re-check at promotion (25.2 #10), pointer expiry
+  (`valid_until`) re-check at each gate, and read-time re-check on any promoted last-good.
+- **Memo overconfidence** — unchanged deterministic controls: `low` confidence never accepted, anchor
+  `confidence_floor` must be met, the memo can never create anchors / tickers / budgets (denylists), and the
+  memo is only ever one input into an anchor-grounded chain.
+- **Source hash mismatch** (partial re-run, manual file edit) — eligibility fails closed; gates re-verify
+  independently; result is the controlled NO_TRADE terminal, never a crash.
+- **Step 2 over-interpreting the qualitative memo** — when Step 2 later consumes the effective handoff, the
+  render should pass only the compiled deterministic fields; qualitative memo context stays display-only and
+  clearly labeled non-authoritative (no memo text is ever re-promoted to authority by the prompt).
+- **Order compiler receiving actionable rows without budget context** — final-gate precondition (25.5b):
+  missing `hard_cap_open_orders_budget` / `max_new_tickers_per_week` / `target_new_buy_budget_this_run` ⇒
+  blocked; the weekly cap is enforced at preview, candidate build, AND promotion eligibility.
+- **Rollback complexity** — every step is a small artifact or constant: delete/flip the pointer ⇒ consumers
+  fall back to the non-actionable active candidate; revert a gate PR ⇒ that gate closes again (new state
+  literals guarantee reverts restore closed behavior); no step rewrites history.
+- **Operator observability confusion** — the `PENDING_GATES` state name, the pointer-as-audit-record, the
+  `promotion_present_but_gates_closed` blocker code, and run-status surfacing of
+  eligibility/pointer/gate status together give a single-glance answer to "why is this run not actionable?".
+
+### 25.8 Recommended PR sequence
+
+| PR | scope | permission change? |
+|---|---|---|
+| **R2E.5b-2** (this) | design + docs tests only | none |
+| **R2E.5b-3** ✅ implemented (§26) | deterministic promotion-eligibility checker, report-only: new module evaluating the 25.2 checklist into a promotion-eligibility artifact; consumed by nothing | none |
+| **R2E.5b-4** ✅ implemented as report-only PREVIEW (§27) | pointer + effective handoff implemented as report-only *previews*; the real `active_research_handoff_source.json` (+ `research_handoff_candidate_effective.json`) remain **reserved** for a future explicit promotion PR; consumed by nothing | none |
+| **R2E.5b-5** (split: **5a** ✅ real pointer writer (§28); **5b** ✅ availability recognition (§29)) | 5a: write the real pending-gates pointer artifacts. 5b: availability recognizes the verified pointer ⇒ new state `STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES`, **still `["HOLD", "NO_TRADE"]`**; blocker artifacts gain pending-gates blockers; weekly still terminates NO_TRADE | none (new state is HOLD/NO_TRADE) |
+| **R2E.5b-6** | **first true permission change**: state `STRICT_FRESH_COMPILED_ACTIONABLE` with `NEW_BUY` + `ORDER_COMPILATION`; Step 2 gate accepts the state tuple + pointer/hash/expiry verification. The final gate is intentionally NOT changed yet, so Step 4 still blocks — the actionable surface opens one gate at a time | **yes** (Step 2 render path opens) |
+| **R2E.5b-7** | final execution safety gate accepts the new state + budget-context + promoted-ticker-subset checks; weekly actionable-path polish; promoted last-good slot | yes (order compilation can complete) |
+| **R2F** | shrink/deprecate the monolithic Deep Research strict handoff | none |
+
+R2E.5b-6 is the first PR after which any live permission differs; everything before it is observability. Its
+review must treat the `_ALLOWED_ACTIONS_BY_STATE` diff and the Step 2 gate tuple as the entire risk surface.
+
+### 25.9 Non-goals (R2E.5b-2)
+
+No promotion-eligibility checker, pointer, effective file, new availability state, gate change, weekly /
+run-status change, last-good change, order-compiler change, or prompt change is implemented here. This PR does
+**not** add `NEW_BUY` / `ORDER_COMPILATION` permission, does **not** enable `STRICT_FRESH_WITH_LLM_MEMO` or
+either recommended future state, and leaves every live artifact, gate constant, and test invariant byte-for-byte
+unchanged. Each subsequent step (R2E.5b-3 … R2E.5b-7) requires its own explicit PR.
+
+## 26. R2E.5b-3 status (promotion-eligibility checker — implemented, report-only, no promotion)
+
+R2E.5b-3 implements the deterministic **promotion-eligibility checker** designed in §25: it evaluates whether
+the separate, report-only `compiled_actionable_research_handoff_candidate.json` **would** be eligible for a
+*future* promotion — and writes only its own report-only artifact. **It never promotes.** No
+`active_research_handoff_source.json` pointer and no `research_handoff_candidate_effective.json` effective
+handoff is created (those remain the future R2E.5b-4 pointer PR); the active
+`compiled_research_handoff_candidate.json` stays non-actionable; no gate, permission, `allowed_actions`,
+availability state, Step 2/3/4 workflow, order compiler, or prompt changes. **No `NEW_BUY` /
+`ORDER_COMPILATION` permission is added** and `STRICT_FRESH_COMPILED_ACTIONABLE` /
+`STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES` / `STRICT_FRESH_WITH_LLM_MEMO` are **not** enabled. The live
+posture stays `STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE` / `STRICT_FRESH_EVIDENCE_ONLY` (HOLD / NO_TRADE).
+
+- **Module:** `src/investment_orchestrator/research/actionable_promotion_eligibility.py` — pure
+  `evaluate_actionable_handoff_promotion_eligibility(...)` (never raises; any missing / malformed input fails
+  its check deterministically) + disk wrapper `write_actionable_promotion_eligibility(...)`.
+- **Artifact (new, separate):**
+  `artifacts/current/step1_research/compiled_actionable_handoff_promotion_eligibility.json` (schema
+  `compiled_actionable_handoff_promotion_eligibility_v1`). Top-level fields: `eligible_for_promotion`,
+  `promotion_blockers[]`, `promotion_warnings[]`, `checks[]` (each
+  `{check_id, passed, severity, details}`), `source_artifacts`, `source_hashes`, `hash_chain_valid`,
+  `candidate_sha256` (content hash of the evaluated candidate, so the R2E.5b-4 pointer preview can verify it
+  points at exactly the candidate this verdict approved),
+  `candidate_validation_passed`, `candidate_actionable_row_count`, `preview_actionable_row_count`,
+  `accepted_support_signal_count`, `actionable_this_run_tickers[]`, `strategy_settings_hash`,
+  `earliest_anchor_valid_until`, `promotion_expires_at`, `today`, plus the standard report-only markers
+  (`is_llm_generated: false`, `report_only: true`, `permission_effect: "none"`, `not_authorization: true`,
+  `consumed_by_availability: false`, `consumed_by_step2: false`, `consumed_by_gates: false`).
+- **Check groups (the §25.2 fail-closed checklist):**
+  **A. input chain** — evidence packet present / `evidence_packet_v1` / `is_llm_generated:false`;
+  `research_anchors` available+valid; `valid_anchor_count ≥ 1`; analyst memo present+valid (via the
+  support-signal artifact); memo confidence not low; `accepted_support_signals` non-empty; preview present
+  (schema + report markers); `preview_actionable_rows` non-empty.
+  **B. candidate quality** — candidate present (schema + report markers); strict validation passed;
+  `candidate_actionable_row_count > 0` and `≤` the base-universe `max_new_tickers_per_week` cap (cap must be
+  present and `> 0`); extended ETF sleeve disabled and no extended ticker promoted; every promoted ticker in
+  the base allowed universe; no DATA_GAP marker on any promoted row; `primary_anchor_event_id` /
+  `primary_anchor_date_et` / event-or-theme refs present on every promoted row; every referenced anchor
+  resolves in the packet, is valid/usable/not stale, and (re-checked at eligibility time) `valid_until ≥ today`.
+  **C. hash chain** — the candidate metadata's recorded `sha256` for the evidence packet / support signals /
+  preview are recomputed and must match (fail closed on missing metadata / hash / object); the active-base ref
+  is verified when both sides are available, otherwise recorded as unverified (`match: null`); the current
+  `strategy_settings_hash` (over `DECISION_RELEVANT_SETTINGS_KEYS`) must equal the hash recorded in the
+  evidence packet; the candidate's `trade_universe.allowed_buy_tickers` must equal the packet universe.
+  **D. budget context** — `hard_cap_open_orders_budget`, `target_new_buy_budget_this_run`, and
+  `max_new_tickers_per_week` must be present in the packet's deterministic `budget_settings` snapshot (this
+  never approves orders; it only confirms the deterministic caps exist before any future Step 4 path).
+- **Blocker reason codes (deterministic; one owning check each):** `missing_evidence_packet`,
+  `invalid_research_anchors`, `no_valid_research_anchor`, `analyst_memo_absent_or_invalid`,
+  `memo_confidence_low`, `no_accepted_support_signals`, `missing_actionable_preview`,
+  `no_preview_actionable_rows`, `missing_actionable_candidate`, `candidate_validation_failed`,
+  `no_candidate_actionable_rows`, `max_new_tickers_cap_missing_or_zero`, `candidate_exceeds_max_new_tickers`,
+  `extended_etf_enabled`, `out_of_universe_actionable_ticker`, `blocking_data_gap_on_actionable_row`,
+  `missing_primary_anchor`, `stale_referenced_anchor`, `hash_chain_mismatch`,
+  `strategy_settings_hash_mismatch`, `universe_mismatch`, `missing_budget_context`. **Warnings (never affect
+  eligibility):** `recompiled_base_used_not_active_compiled_handoff`, `non_blocking_data_gaps_present`.
+- **Anchor expiry:** `earliest_anchor_valid_until` = min `valid_until` among anchors referenced by promoted
+  rows; `promotion_expires_at` carries the same date — a future promotion must never be consumed past it
+  (recorded for the R2E.5b-4 pointer). Staleness is **re-checked at eligibility time** against `today`
+  (settings `as_of`), not frozen at candidate-build time: an anchor that expired between build and check
+  fails with `stale_referenced_anchor`.
+- **Step 1 integration point:** report-only *layer 0f* in `parse_step1_output`, immediately after the
+  R2E.5b-1 candidate (layer 0e). It only runs when the actionable candidate + metadata exist, re-reads the
+  just-written report-only artifacts, and is fully defensive (a checker failure yields an empty summary and
+  **never crashes Step 1 parse**). Paths surface in the parse result
+  (`actionable_promotion_eligibility_path` / `actionable_promotion_eligible`).
+- **No-promotion invariant (proven by tests):** even when `eligible_for_promotion: true`, **nothing is
+  promoted** — no `active_research_handoff_source.json` / `research_handoff_candidate_effective.json` exists,
+  the active compiled handoff stays non-actionable (`positive_delta_research_supported=[]`, no
+  `actionable_this_run` row), availability stays `STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE` with
+  `allowed_actions=["HOLD","NO_TRADE"]`, the degraded-mode decision never references the eligibility
+  artifact, the Step 2 research gate still blocks, and `run_weekly` still terminates `NO_TRADE`. The artifact
+  is **not** consumed by the availability evaluator, the degraded-mode decision, Step 2 render, the weekly
+  path, the order compiler, or any gate.
+- **Next (future, separate PRs):** R2E.5b-4 creates the pointer (`active_research_handoff_source.json`),
+  R2E.5b-5 the `PENDING_GATES` availability state (still HOLD / NO_TRADE), R2E.5b-6/7 the explicit gate
+  openings. None of that is done here.
+
+## 27. R2E.5b-4 status (promotion pointer PREVIEW + effective-handoff PREVIEW — implemented, report-only, nothing promoted)
+
+R2E.5b-4 implements the §25.3 pointer strategy as a **report-only PREVIEW**: it shows what the future active
+pointer and effective handoff *would* look like — **without making them active or consumed**. `would_promote:
+true` is **strictly diagnostic**. The reserved real-promotion names
+`active_research_handoff_source.json` and `research_handoff_candidate_effective.json` are **NOT created** —
+they stay reserved for a future explicit promotion PR (R2E.5b-5 may create the real pointer and/or the
+`STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES` availability state; neither is done here). No consumer reads
+the previews: they are never fed into the availability evaluator, the degraded-mode decision, Step 2 render,
+the weekly path, the order compiler, or any gate. No gate, permission, `allowed_actions`, availability state,
+Step 2/3/4 workflow, order compiler, or prompt changes. **No `NEW_BUY` / `ORDER_COMPILATION` permission is
+added** and `STRICT_FRESH_COMPILED_ACTIONABLE` / `STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES` are **not**
+enabled. The live posture stays `STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE` / `STRICT_FRESH_EVIDENCE_ONLY`
+(HOLD / NO_TRADE).
+
+- **Module:** `src/investment_orchestrator/research/actionable_promotion_pointer_preview.py` — pure
+  `build_actionable_promotion_pointer_preview(...)` (never raises; missing / malformed inputs yield
+  `would_promote: false` with deterministic blockers) + disk wrapper
+  `write_actionable_promotion_pointer_preview(...)`.
+- **Artifacts (new, separate, report-only):**
+  `artifacts/current/step1_research/compiled_actionable_handoff_promotion_pointer_preview.json` (schema
+  `compiled_actionable_handoff_promotion_pointer_preview_v1`); when `would_promote: true` also
+  `compiled_actionable_research_handoff_effective_preview.json` (a byte-identical, **unmutated** copy of the
+  actionable candidate — promotion metadata lives only in the pointer preview so the strict validator sees the
+  handoff body unchanged) and `compiled_actionable_research_handoff_effective_preview_validation.json`
+  (re-validated with the existing `validate_research_handoff`). When `would_promote: false` the effective
+  preview files are not written — the pointer preview's explicit `pointer_blockers[]` are the record.
+- **Pointer-preview fields:** `would_promote`,
+  `promotion_source: "compiled_actionable_research_handoff_candidate"`, `candidate_path`, `candidate_sha256`,
+  `candidate_schema_version`, `eligibility_path`, `eligibility_sha256`, `eligibility_schema_version`,
+  `eligibility_hash` (alias of `eligibility_sha256` under the future real pointer's field name),
+  `candidate_validation_passed`, `candidate_actionable_row_count`, `actionable_this_run_tickers[]`,
+  `earliest_anchor_valid_until`, `promotion_expires_at`, `source_chain_hashes`, `pointer_blockers[]`,
+  `pointer_warnings[]`, `effective_preview_written` / `effective_preview_path` /
+  `effective_preview_validation_path` / `effective_preview_valid`,
+  `reserved_active_pointer_path: "artifacts/current/step1_research/active_research_handoff_source.json"`,
+  `reserved_effective_handoff_path: "artifacts/current/step1_research/research_handoff_candidate_effective.json"`,
+  plus the loud no-promotion markers `active_pointer_created: false`, `effective_handoff_created: false`,
+  `future_pr_required: true`, and the standard report-only markers (`is_llm_generated: false`,
+  `report_only: true`, `permission_effect: "none"`, `not_authorization: true`,
+  `consumed_by_availability: false`, `consumed_by_step2: false`, `consumed_by_gates: false`).
+- **`would_promote` decision rules (all fail closed):** the R2E.5b-3 eligibility artifact exists, has the
+  expected schema, carries valid report-only / not-authorization / `permission_effect: "none"` markers, and
+  reports `eligible_for_promotion: true`; the actionable candidate exists with its report markers intact; the
+  strict validation artifact passes (and metadata `validation_passed` agrees); the candidate's recomputed
+  content hash equals the `candidate_sha256` the eligibility verdict approved (a candidate edited after the
+  eligibility check can never preview-promote); `promotion_expires_at` is present and not past `today`
+  (falling back to the eligibility artifact's own `today`; unverifiable expiry fails closed); the candidate
+  has `> 0` actionable rows whose count/tickers are consistent with the eligibility verdict; and the
+  eligibility's `source_chain_hashes` are present with every required entry matched (`hash_chain_valid`).
+- **Blocker reason codes:** `eligibility_missing`, `eligibility_malformed`, `eligibility_not_eligible`,
+  `permission_markers_invalid`, `candidate_missing`, `candidate_validation_failed`,
+  `candidate_hash_mismatch`, `candidate_expired`, `no_candidate_actionable_rows`, `source_chain_missing`.
+  **Warnings (never affect `would_promote`):** `active_compiled_handoff_hash_unverified`.
+- **Step 1 integration point:** report-only *layer 0g* in `parse_step1_output`, immediately after the
+  R2E.5b-3 eligibility layer (0f). It only runs when the eligibility artifact exists and is fully defensive
+  (a builder failure yields an empty summary and **never crashes Step 1 parse**). Paths surface in the parse
+  result (`actionable_promotion_pointer_preview_path` / `actionable_promotion_would_promote` /
+  `actionable_effective_handoff_preview_path` / `actionable_effective_handoff_preview_validation_path`).
+- **Nothing-promoted invariant (proven by tests):** even on a `would_promote: true` run, the reserved
+  `active_research_handoff_source.json` / `research_handoff_candidate_effective.json` do **not** exist; the
+  effective preview is a distinct file that equals the candidate and validates, while the active
+  `compiled_research_handoff_candidate.json` stays non-actionable
+  (`positive_delta_research_supported=[]`, no `actionable_this_run` row); availability stays
+  `STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE` with `allowed_actions=["HOLD","NO_TRADE"]`; the degraded-mode
+  decision contains no reference to the eligibility / pointer / effective previews; the Step 2 research gate
+  still blocks; and `run_weekly` still terminates `NO_TRADE`.
+- **Next (future, separate PRs):** R2E.5b-5 may create the real pointer and/or the
+  `STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES` state (still HOLD / NO_TRADE); R2E.5b-6/7 are the explicit
+  gate openings. None of that is done here.
+
+## 28. R2E.5b-5a status (REAL active pointer writer — pending-gates artifacts, HOLD / NO_TRADE unchanged)
+
+R2E.5b-5a creates the **real** promotion-pointer artifacts (superseding §27's "reserved / NOT created"
+status): when the R2E.5b-4 pointer preview reports `would_promote: true` and every fail-closed creation rule
+passes, Step 1 now writes `active_research_handoff_source.json`, a byte-identical
+`research_handoff_candidate_effective.json`, and `research_handoff_candidate_effective_validation.json`.
+**This PR creates artifacts only — it does not make them trading authority.** In 5a itself, nothing read the
+pointer or the effective handoff: the availability evaluator, degraded-mode decision, Step 2 render, weekly
+path, order compiler, and every gate stayed unchanged and keyed off the non-actionable active
+`compiled_research_handoff_candidate.json`. The pointer explicitly carries
+`promotion_status: "pending_gates"` and `permission_effect: "none_until_consumed_by_future_gate_pr"` — it is
+**not** trading authorization. **No `NEW_BUY` / `ORDER_COMPILATION` permission is added** and
+`STRICT_FRESH_COMPILED_ACTIONABLE` is **not** enabled;
+the live posture stays `STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE` / `STRICT_FRESH_EVIDENCE_ONLY`
+(HOLD / NO_TRADE). **R2E.5b-5b** (§29) is the follow-on availability *recognition* of this pointer (the
+`PENDING_GATES` state, still HOLD / NO_TRADE); the R2E.5b-6/7 gate openings remain future explicit PRs.
+
+- **Module:** `src/investment_orchestrator/research/actionable_promotion_pointer.py` —
+  `write_actionable_promotion_pointer_if_eligible(...)` (never raises; fail-closed).
+- **Artifacts (real, pending gates, unconsumed):**
+  `artifacts/current/step1_research/active_research_handoff_source.json` (schema
+  `active_research_handoff_source_v1`), `.../research_handoff_candidate_effective.json` (byte-identical copy
+  of the R2E.5b-4 effective preview — the strict handoff body is **not** mutated and carries no wrapper
+  metadata), `.../research_handoff_candidate_effective_validation.json` (independent re-validation with the
+  existing `validate_research_handoff`; it **must pass or the pointer is not created**), plus an
+  always-written outcome record `.../active_research_handoff_source_write_status.json` (schema
+  `active_research_handoff_source_write_status_v1`, `active_pointer_created: true/false` +
+  `pointer_blockers[]`).
+- **Pointer fields:** `source: "promoted_compiled_actionable_handoff"`,
+  `promotion_status: "pending_gates"`, `active_pointer_created: true`, `effective_handoff_created: true`,
+  `permission_effect: "none_until_consumed_by_future_gate_pr"`, `not_authorization: true`,
+  `candidate_path` / `candidate_sha256` / `candidate_schema_version` / `candidate_validation_passed`,
+  `effective_handoff_path` / `effective_handoff_sha256` (equals the approved `candidate_sha256`),
+  `effective_validation_path`, `eligibility_path` / `eligibility_sha256`, `pointer_preview_path` /
+  `pointer_preview_sha256`, `candidate_actionable_row_count`, `actionable_this_run_tickers[]`,
+  `earliest_anchor_valid_until`, `promotion_expires_at`, `source_chain_hashes`, `created_at`,
+  `consumed_by_availability: false`, `consumed_by_step2: false`, `consumed_by_gates: false`,
+  `future_pr_required: true`.
+- **Creation rules (all fail closed):** the pointer preview exists with the expected schema, internally
+  consistent `would_promote`/`pointer_blockers`, and intact report-only / `permission_effect: "none"` /
+  `not_authorization` / `future_pr_required` / `active_pointer_created: false` markers;
+  `would_promote: true`; the effective preview exists (candidate schema); its validation artifact passes AND
+  the exact body about to be written independently re-passes `validate_research_handoff`; the effective
+  body's recomputed sha256 equals the preview's approved `candidate_sha256`; `promotion_expires_at` is
+  present and not past `today` (falling back to the preview's own `today`; unverifiable expiry fails
+  closed); and `candidate_actionable_row_count > 0` with non-empty tickers.
+- **Blocker reason codes:** `pointer_preview_missing`, `pointer_preview_malformed`,
+  `preview_markers_invalid`, `would_promote_false`, `effective_preview_missing`,
+  `effective_preview_validation_failed`, `effective_hash_mismatch`, `promotion_expired`,
+  `no_actionable_rows`.
+- **Fail-closed hygiene:** on any failed rule no pointer / effective files are written, and any **stale**
+  pointer files from a previous promotable run are removed (recorded in the status artifact's
+  `removed_stale_artifacts`) — the pointer file exists **iff** the latest run was promotable, so a stale
+  pointer can never linger for a future consumer.
+- **Step 1 integration point:** *layer 0h* in `parse_step1_output`, immediately after the R2E.5b-4 preview
+  layer (0g). Runs only when the pointer-preview artifact exists; fully defensive (a writer crash yields an
+  empty summary and **never breaks Step 1 parse**). Paths surface in the parse result
+  (`active_pointer_created` / `active_research_handoff_source_path` / `effective_research_handoff_path` /
+  `active_pointer_write_status_path`).
+- **5a nothing-consumed invariant (proven by tests at that step):** on a run where the real pointer IS created, the active
+  compiled handoff remains non-actionable (`positive_delta_research_supported=[]`, no `actionable_this_run`
+  row), availability stays `STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE` with
+  `allowed_actions=["HOLD","NO_TRADE"]`, neither the availability artifact nor the degraded-mode decision
+  contains any reference to `active_research_handoff_source` or the effective handoff, the Step 2 research
+  gate still blocks, and `run_weekly` still terminates `NO_TRADE`. At 5a, both gates still hardcoded the
+  literal `STRICT_FRESH` and the proposed future states remained absent from `_ALLOWED_ACTIONS_BY_STATE`.
+
+## 29. R2E.5b-5b status (availability recognizes pending-gates pointer — implemented, HOLD / NO_TRADE only)
+
+R2E.5b-5b is a conservative **availability state-semantics** change. The availability evaluator may now
+recognize that a real promoted actionable handoff exists via `active_research_handoff_source.json` and
+`research_handoff_candidate_effective.json`, but only as a pending-gates diagnostic. **No production gate is
+opened.** The new state is **`STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES`** and its allowed actions are
+exactly `["HOLD", "NO_TRADE"]`; blocked actions include `SELL`, `NEW_BUY`, `ROTATION`, `REBALANCE`,
+`EXTENDED_ETF_ADMISSION`, and `ORDER_COMPILATION`.
+
+- **Recognition criteria (all required; fail closed otherwise):** the run would otherwise be
+  `STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE`; the active pointer exists with schema
+  `active_research_handoff_source_v1`; `promotion_status == "pending_gates"`; `source ==
+  "promoted_compiled_actionable_handoff"`; `not_authorization == true`; `future_pr_required == true`;
+  `permission_effect == "none_until_consumed_by_future_gate_pr"`; `consumed_by_availability`,
+  `consumed_by_step2`, and `consumed_by_gates` are all false; the effective handoff and validation artifacts
+  exist; the effective validation passes; the effective handoff sha256 matches the pointer; `promotion_expires_at`
+  is present and not stale; `candidate_actionable_row_count > 0`; and `actionable_this_run_tickers` is non-empty.
+  A raw valid+fresh `STRICT_FRESH` still wins and is never relabeled.
+- **Artifact fields (`research_availability.json` / `research_degraded_mode_decision.json`):**
+  `promoted_pointer_present`, `promoted_pointer_valid`, `promotion_status`, `effective_handoff_present`,
+  `effective_handoff_valid`, `candidate_actionable_row_count`, `actionable_this_run_tickers`,
+  `promotion_expires_at`, `permission_effect`, `not_authorization`, and
+  `source_artifacts.active_research_handoff_source` /
+  `source_artifacts.research_handoff_candidate_effective` /
+  `source_artifacts.research_handoff_candidate_effective_validation`. Blocker reasons include
+  `promoted_actionable_handoff_pending_gates`, `new_buy_requires_future_gate_pr`, and
+  `order_compilation_requires_future_gate_pr`. These are deterministic artifacts, not LLM-generated.
+- **Step 1 integration point:** `_compiled_handoff_availability_inputs()` passes the pointer, effective handoff,
+  effective validation, and source-artifact paths into `evaluate_research_availability(...)`. The effective
+  handoff is **not** passed to Step 2, the active `compiled_research_handoff_candidate.json` behavior is
+  unchanged, `research_handoff_candidate.json` remains the raw path, and no order artifacts are created.
+- **Fail-closed behavior:** missing pointer keeps the existing grounded state; malformed markers, stale expiry,
+  hash mismatch, failed effective validation, consumed markers, zero actionable rows, or missing tickers all
+  keep the existing safe state and never become actionable.
+- **Gate / weekly / run-status behavior:** the Step 2 gate still requires literal `STRICT_FRESH` plus
+  `NEW_BUY` and `ORDER_COMPILATION` in `allowed_actions`, so the pending-gates state blocks before any Step 2
+  prompt or decision packet is generated (recommended `NO_TRADE`). The final execution safety gate still
+  requires literal `STRICT_FRESH` and `ORDER_COMPILATION`; it also remains closed. `run_weekly` treats the
+  state as controlled `NO_TRADE` (`actionable=false`, exit 0), writes `run_summary.json` with
+  `run_blocked=true` and `recommended_result: NO_TRADE`, and produces no Step 2/3/4 downstream artifacts.
+- **Still not enabled:** `STRICT_FRESH_COMPILED_ACTIONABLE` remains absent / non-enabled. `NEW_BUY` and
+  `ORDER_COMPILATION` require future explicit gate PRs (R2E.5b-6/7).
+
+## 30. R2E.5b-6-design (first permission-change design — Step 2 decision-only recommended)
+
+R2E.5b-6-design is **DESIGN / INSPECTION ONLY**. It does not change production behavior, does not change
+`_ALLOWED_ACTIONS_BY_STATE`, does not change the Step 2/3/4 workflow, does not change the order compiler, does
+not change prompts, does not change either gate, and does **not** add `NEW_BUY` / `ORDER_COMPILATION`
+permission. `STRICT_FRESH_COMPILED_ACTIONABLE` remains absent / non-enabled. The live posture remains
+`STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES` with exactly `["HOLD", "NO_TRADE"]`; the current Step 2 gate
+still requires literal `STRICT_FRESH` plus `("NEW_BUY", "ORDER_COMPILATION")`, and the final execution safety
+gate still requires literal `STRICT_FRESH` plus `ORDER_COMPILATION`.
+
+Explicit invariant for this design PR: it **does not change `_ALLOWED_ACTIONS_BY_STATE`**.
+
+### 30.1 Boundary recommendation
+
+Recommended first permission boundary: **Option A — Step 2 decision-only**.
+
+| Option | Scope | Risk | Recommendation |
+|---|---|---|---|
+| A. Step 2 only | Allow render + manual Step 2 decision packet from the promoted effective handoff; Step 3/4 remain blocked | Lowest useful permission change; lets operators inspect LLM decision quality without an order path | **Recommend** |
+| B. Step 2 + Step 3 audit | Allow decision and audit; Step 4/final gate remain blocked | More observability, but Step 3 audited packets can be mistaken for order readiness | Defer until Step 2-only artifacts and operator UX are proven |
+| C. Full Step 2→4 path | Allow `NEW_BUY` + `ORDER_COMPILATION` if all gates pass | Highest risk; couples prompt, audit, final gate, budgets, and orders in one PR | Do **not** use as first permission PR |
+| D. Keep pending-gates | No new permission | Safest, but no LLM decision dry-run from the promoted handoff | Current state; useful fallback if Step 2-only design is not accepted |
+
+The design separates four permissions that are currently entangled by the old Step 2 gate:
+
+1. **Step 2 render / LLM decision** — first permission change, decision-only.
+2. **Step 3 audit** — still blocked in the first PR unless a later explicit audit-only PR opens it.
+3. **Step 4 order compilation** — still blocked; no `ORDER_COMPILATION`.
+4. **Final execution safety gate** — unchanged and still closed for promoted states.
+
+The final execution safety gate still requires literal `STRICT_FRESH` in the current production code.
+
+### 30.2 State / action model
+
+Do **not** reuse `NEW_BUY` or `ORDER_COMPILATION` for the first Step 2-only PR. Today, the Step 2 gate treats
+`ORDER_COMPILATION` as part of its entry condition, so adding only `NEW_BUY` would still block; adding both
+would accidentally make the permission artifact look order-eligible to downstream code and operators.
+
+Recommended new action literal for a future implementation PR:
+
+```text
+PROMOTED_RESEARCH_DECISION
+```
+
+Rationale:
+
+- It names the specific permission: Step 2 may render a decision from promoted research.
+- It is not an order action and must never be accepted by Step 4.
+- It is clearer than `STEP2_DECISION` because it applies only to the promoted/effective handoff path, not raw
+  `STRICT_FRESH`.
+- It avoids the ambiguous `ORDER_COMPILATION_PENDING_FINAL_GATE`, which contains the order permission name and
+  can be misread as a partial order-compiler release.
+
+Future state split:
+
+- Keep `STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES` as HOLD / NO_TRADE only.
+- Add a future decision-only state such as
+  **`STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY`** when the first true permission PR lands.
+- Map that future state to `["HOLD", "NO_TRADE", "PROMOTED_RESEARCH_DECISION"]` only.
+- Keep `NEW_BUY` and `ORDER_COMPILATION` absent until the later order-path PRs.
+- Reserve `STRICT_FRESH_COMPILED_ACTIONABLE` for the full order-eligible state, not for Step 2-only.
+
+### 30.3 Effective handoff consumption design
+
+When Step 2 is opened in a future PR, Step 2 should read
+`research_handoff_candidate_effective.json`, not the raw `research_output.json`, for the promoted path. The
+effective handoff must be treated as deterministic compiled research context, not as trade authorization.
+
+Future Step 2 source rules:
+
+- `research_degraded_mode_decision.json` remains required and remains the permission source.
+- `active_research_handoff_source.json` is required for the promoted path.
+- `research_handoff_candidate_effective.json` is required for the promoted path.
+- `research_handoff_candidate_effective_validation.json` is required and must pass.
+- Step 2 re-verifies pointer schema `active_research_handoff_source_v1`, `source:
+  "promoted_compiled_actionable_handoff"`, `promotion_status`, `permission_effect:
+  "none_until_consumed_by_future_gate_pr"`, `not_authorization`, `future_pr_required`, and consumed markers.
+- Step 2 recomputes the effective handoff sha256 and checks it against the pointer before rendering.
+- Step 2 re-checks `promotion_expires_at` at render time; if the pointer expired between Step 1 and Step 2,
+  rendering blocks.
+- Step 2 checks that `candidate_actionable_row_count > 0` and `actionable_this_run_tickers` are non-empty and
+  match the effective handoff's actionable rows.
+- The rendered prompt should include explicit source metadata: `source=promoted_compiled_actionable_handoff`,
+  `promotion_status`, `promotion_expires_at`, `actionable_this_run_tickers`, anchor ids / event refs already in
+  the effective handoff, and a clear statement that the source is **not raw Deep Research** and is **not order
+  authorization**.
+- The existing `research_degraded_mode_decision` should still be included so Step 2 sees the permission state,
+  blocker language, and not-authorization markers.
+
+The future prompt should not include the pointer as free-form authority text. It should include only a compact
+deterministic source summary plus the effective handoff JSON body, so the LLM cannot reinterpret marker prose as
+permission.
+
+### 30.4 Future Step 2 gate checks
+
+The future Step 2 decision-only gate should be a separate mode from the current order-generating gate. Suggested
+shape:
+
+- Current mode remains unchanged: `STRICT_FRESH` + `NEW_BUY` + `ORDER_COMPILATION` ⇒ existing raw actionable
+  render path.
+- New promoted decision-only mode:
+  - state is `STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY`;
+  - `allowed_actions` contains `PROMOTED_RESEARCH_DECISION`;
+  - `allowed_actions` does **not** contain `NEW_BUY` or `ORDER_COMPILATION`;
+  - active pointer exists and has schema `active_research_handoff_source_v1`;
+  - pointer `source == "promoted_compiled_actionable_handoff"`;
+  - pointer status indicates the expected Step 2-only state, not final order authorization;
+  - pointer hash matches the effective handoff;
+  - effective validation passes;
+  - promotion is not expired;
+  - `candidate_actionable_row_count > 0`;
+  - `actionable_this_run_tickers` exactly match effective handoff actionable rows;
+  - extended ETF sleeve remains disabled for v1;
+  - budget context is present as diagnostics if already available, but final budget enforcement remains deferred
+    to the final execution safety gate / order path.
+
+If this mode renders Step 2, it should also write a deterministic **Step 2 decision-only permission artifact**
+or mark the Step 2 output as `decision_only: true`, `order_compilation_allowed: false`, and
+`not_execution_authorization: true`. Step 3 and Step 4 guards should refuse to proceed from a decision-only Step
+2 artifact unless a later explicit audit/order PR changes them.
+
+### 30.5 Weekly behavior
+
+Conservative recommendation: keep weekly terminal `NO_TRADE` until the final order path is deliberately opened.
+Do not let weekly automatically run Step 2 for promoted states in the first permission PR.
+
+For a future Step 2-only PR:
+
+- CLI/manual `run_step2 render` may be allowed for the promoted decision-only state.
+- `run_weekly` should remain a controlled non-order terminal by default:
+  `terminal_result=NO_TRADE_PENDING_FINAL_GATES`, `actionable=false`, exit 0.
+- If a manual flag is later added, it may render Step 2 and then stop with
+  `terminal_result=NO_TRADE_PENDING_FINAL_GATES`; it must not call Step 3/4 automatically.
+- `weekly_outcome.json` should clearly say that Step 2 decision-only was allowed or available, but final gates
+  and order compilation remain closed.
+
+This avoids operator confusion where a weekly command appears to progress through an actionable workflow but
+still must end in no orders.
+
+### 30.6 Last-good recommendation
+
+Do **not** write the Step 2-only promoted handoff to the existing last-good slot. A decision-only run is not an
+audited, order-eligible run, and treating it as last-good would blur the boundary between research observability
+and execution authorization.
+
+Recommended later path:
+
+- No last-good write until the full final-gate/order path is enabled and audited.
+- If useful, create a separate promoted-research slot only after the final gate PR, for example
+  `last_good_promoted_handoff.json`, with independent expiry and pointer hash checks.
+- The existing last-good research fallback must not consume the Step 2-only promoted handoff.
+
+### 30.7 Risk analysis
+
+- **LLM sees actionable rows before orders are open:** Step 2 may generate buy-like language. Mitigate by
+  `decision_only`, `not_execution_authorization`, no `ORDER_COMPILATION`, and no Step 3/4 progression.
+- **Step 2 output misread as authorization:** require explicit output artifact markers and weekly/run-summary
+  wording that says `NO_TRADE_PENDING_FINAL_GATES`.
+- **Accidental Step 3/4 progression:** Step 3/4 guards must reject decision-only artifacts; Step 4 final gate
+  remains unchanged and still requires literal `STRICT_FRESH` + `ORDER_COMPILATION`.
+- **Pointer expiry mid-run:** Step 2 must re-check expiry at render time, not trust the Step 1 availability
+  result.
+- **Source hash mismatch:** Step 2 must recompute the effective handoff sha256 and compare to the active pointer.
+- **Prompt confusion between raw Deep Research and compiled promoted handoff:** prompt source metadata must say
+  promoted compiled handoff, not raw Deep Research; raw `research_output.json` should not be the promoted-path
+  research body.
+- **Operator confusion after Step 2:** weekly should remain `NO_TRADE_PENDING_FINAL_GATES` until final gates are
+  opened, and manual Step 2 should emit decision-only markers.
+
+### 30.8 Recommended implementation sequence
+
+1. **R2E.5b-6-design** — this section and docs-content tests only; no behavior change.
+2. **R2E.5b-6a** — add a reusable promoted-pointer verification helper for gates; no behavior change. It
+   should verify schema, marker fields, hash, effective validation, expiry, ticker/actionable-row consistency,
+   and extended-ETF exclusion.
+3. **R2E.5b-6b** — add a report-only Step 2 gate dry-run artifact for promoted decision-only eligibility; no
+   render permission yet.
+4. **R2E.5b-6c** — first true permission change: add `PROMOTED_RESEARCH_DECISION` and
+   `STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY`; allow `run_step2 render` to use the effective
+   handoff in decision-only mode; Step 3/4 remain blocked and weekly remains `NO_TRADE_PENDING_FINAL_GATES`.
+5. **R2E.5b-6d** — optional audit-only PR if desired: Step 3 can audit decision-only packets, but Step 4 and
+   final safety remain closed.
+6. **R2E.5b-7** — final gate + order compilation permission. This is where `NEW_BUY`, `ORDER_COMPILATION`,
+   promoted-ticker subset checks, deterministic budget checks, and any promoted last-good slot are enabled.
+
+The first true permission change is **R2E.5b-6c**, and it is Step 2 decision-only. It must not add
+`NEW_BUY` or `ORDER_COMPILATION`.
+
+## 31. R2E.5b-6a status (promoted pointer verification helper, no behavior change)
+
+**R2E.5b-6a** adds a reusable pure verifier for the future Step 2 decision-only gate. It is a helper only: no
+Step 1 report-only artifact is added in this PR, no workflow consumes the helper, and no production behavior
+changes. The active live state remains `STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES` with exactly
+`["HOLD", "NO_TRADE"]`; `_ALLOWED_ACTIONS_BY_STATE` is unchanged; `PROMOTED_RESEARCH_DECISION` is not added;
+`NEW_BUY` and `ORDER_COMPILATION` remain absent from the promoted pending-gates state.
+
+The helper lives at:
+
+```text
+src/investment_orchestrator/research/promoted_handoff_verifier.py
+```
+
+Public API:
+
+```python
+verify_promoted_handoff_for_step2_decision(
+    *,
+    active_pointer: Mapping[str, Any] | None,
+    effective_handoff: Mapping[str, Any] | None,
+    effective_validation: Mapping[str, Any] | None,
+    today: date | None = None,
+) -> dict[str, Any]
+```
+
+The function is deterministic, pure, fail-closed, and must never raise. It returns schema
+`promoted_handoff_step2_verification_v1` and `is_llm_generated: false`. The result includes
+`valid_for_step2_decision`, `verification_blockers`, `verification_warnings`, `checks`, `source`,
+`promotion_status`, `pointer_permission_effect`, `permission_effect: "none"`, `not_authorization`,
+`candidate_actionable_row_count`, `actionable_this_run_tickers`, `promotion_expires_at`,
+`effective_handoff_sha256`, `pointer_effective_handoff_sha256`, `effective_validation_valid`,
+`consumed_by_step2`, `future_permission_required: "PROMOTED_RESEARCH_DECISION"`, and `report_only: true`.
+This result is diagnostic only; `future_permission_required` names the later PR boundary and is not live
+authorization.
+
+### 31.1 Verification criteria
+
+The verifier accepts only a fully consistent promoted handoff candidate for future Step 2 decision-only use:
+
+- active pointer exists and is a mapping;
+- pointer schema is `active_research_handoff_source_v1`;
+- pointer source is `promoted_compiled_actionable_handoff`;
+- pointer `promotion_status == "pending_gates"`;
+- pointer has safe markers: `not_authorization == true`, `future_pr_required == true`, `consumed_by_availability
+  == false`, `consumed_by_step2 == false`, `consumed_by_gates == false`, and `permission_effect ==
+  "none_until_consumed_by_future_gate_pr"`;
+- `promotion_expires_at` is present and not stale as of `today`;
+- `candidate_actionable_row_count > 0` and `actionable_this_run_tickers` is non-empty;
+- effective handoff exists, has schema `research_handoff_compiled_actionable_v1`, and its canonical sha256
+  matches `effective_handoff_sha256` in the pointer;
+- effective handoff actionable rows, `positive_delta_research_supported`, and pointer
+  `actionable_this_run_tickers` match exactly; when `trade_universe.allowed_buy_tickers` is present, promoted
+  tickers must be a subset of that universe;
+- optional extended ETF sleeve remains disabled for v1;
+- effective validation exists and reports `valid == true` or `validation_passed == true`; if validation carries
+  hash fields such as `candidate_sha256`, `effective_handoff_sha256`, `handoff_sha256`, or `source_sha256`, each
+  present hash must match the recomputed effective handoff sha256.
+
+Blocker reason-code contract:
+
+```text
+pointer_missing
+pointer_malformed
+pointer_schema_invalid
+pointer_source_invalid
+pointer_status_invalid
+pointer_permission_markers_invalid
+promotion_expired
+no_actionable_rows
+effective_handoff_missing
+effective_handoff_hash_mismatch
+effective_handoff_schema_invalid
+effective_handoff_actionable_ticker_mismatch
+effective_handoff_extended_sleeve_enabled
+effective_validation_missing
+effective_validation_failed
+```
+
+### 31.2 No gate or workflow changes
+
+This PR deliberately does not call the helper from Step 1, Step 2, Step 3, Step 4, weekly, prompts, or the order
+compiler. The Step 2 gate still requires literal `STRICT_FRESH` plus `("NEW_BUY", "ORDER_COMPILATION")`; the
+final execution safety gate still requires literal `STRICT_FRESH` plus `ORDER_COMPILATION`. Therefore promoted
+pending-gates research still blocks before Step 2 render and still cannot reach Step 3, Step 4, order
+compilation, or execution.
+
+Recommended next step remains **R2E.5b-6b**: add a report-only Step 2 gate dry-run artifact that may call this
+helper, but still grants no render permission and adds no order-path action.
+
+## 32. R2E.5b-6b status (promoted Step 2 gate dry-run, report-only)
+
+**R2E.5b-6b** adds a report-only DRY-RUN of the future Step 2 promoted decision-only gate. It answers two
+questions per run: *if a future PR added the `PROMOTED_RESEARCH_DECISION` permission, would this promoted
+handoff be sufficient for Step 2 decision-only?* and *why is real Step 2 still not allowed today?*
+
+**`would_allow_step2_promoted_decision: true` is diagnostic only — it is NOT permission.** At R2E.5b-6b the
+real Step 2 gate was unchanged and remained closed: it required literal `STRICT_FRESH` plus
+`("NEW_BUY", "ORDER_COMPILATION")`, so every promoted pending-gates run still blocked before any Step 2 prompt
+or decision packet was generated. **No `PROMOTED_RESEARCH_DECISION` permission was added by R2E.5b-6b** (and no
+`NEW_BUY` / `ORDER_COMPILATION`): `_ALLOWED_ACTIONS_BY_STATE` was unchanged, the live pending-gates state
+remained `STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES` with exactly `["HOLD", "NO_TRADE"]`, the
+`STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY` state remained unimplemented at R2E.5b-6b, the
+availability evaluator / Step 2/3/4 workflow / weekly behavior / order compiler / prompts / final execution
+safety gate were untouched, and no consumer read the dry-run artifacts. **R2E.5b-6c was the designated first
+true permission change and has since been implemented — see §33.** For the pending-gates posture this dry-run
+diagnoses, the real Step 2 gate still blocks today; only a fully-verified upgrade to the decision-only state
+(§33) opens the Step 2 decision-only mode.
+
+The evaluator lives at:
+
+```text
+src/investment_orchestrator/research/promoted_step2_gate_dry_run.py
+```
+
+Public API (deterministic, fail-closed, never raises):
+
+```python
+evaluate_promoted_step2_gate_dry_run(
+    *,
+    research_decision: Mapping[str, Any] | None,
+    promoted_verification: Mapping[str, Any] | None,
+) -> Mapping[str, Any]
+```
+
+### 32.1 Step 1 report-only artifacts
+
+Step 1 parse gained a defensive report-only layer 5 (`_write_promoted_step2_gate_dry_run_report_only`) that
+runs after the availability artifacts are written. It loads the real active pointer / effective handoff /
+effective validation, runs the R2E.5b-6a verifier, and writes:
+
+```text
+artifacts/current/step1_research/promoted_handoff_step2_verification.json
+```
+
+then feeds that verification plus the pre-upgrade degraded-mode decision into the dry-run evaluator and writes:
+
+```text
+artifacts/current/step1_research/promoted_step2_gate_dry_run.json
+```
+
+Any error in this layer is swallowed; Step 1 parse never fails because of it. At R2E.5b-6b neither artifact was
+fed into the availability evaluator, Step 2, weekly, the order compiler, or any gate. (R2E.5b-6c later
+restructured this into the two-pass availability flow of §33.2: the dry-run is evaluated against the in-memory
+pre-upgrade decision, and the final availability evaluation consumes both artifacts as upgrade inputs.)
+
+### 32.2 Dry-run artifact schema
+
+Schema `promoted_step2_gate_dry_run_v1`. Top-level fields: `schema_version`, `is_llm_generated: false`,
+`report_only: true`, `permission_effect: "none"`, `not_authorization: true`, `dry_run_only: true`,
+`would_allow_step2_promoted_decision`, `current_real_gate_allows: false` (computed read-only with the existing
+production gate evaluation and false unless that real gate already allows, which it does not),
+`future_permission_required: "PROMOTED_RESEARCH_DECISION"`,
+`future_state_required: "STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY"`, `current_state`,
+`current_allowed_actions`, `verification_valid_for_step2_decision`, `dry_run_blockers[]`, `dry_run_warnings[]`,
+`checks[]`, `consumed_by_step2: false`, and `consumed_by_gates: false`.
+
+### 32.3 Dry-run criteria
+
+`would_allow_step2_promoted_decision` is `true` only when every criterion passes:
+
+- the degraded-mode decision exists and its state is `STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES`;
+- the decision's `allowed_actions` are exactly `HOLD` / `NO_TRADE`;
+- the R2E.5b-6a promoted verification exists, reports `valid_for_step2_decision: true`, and has no
+  `verification_blockers`;
+- verification `future_permission_required == PROMOTED_RESEARCH_DECISION`;
+- verification report-only / not-authorization markers are intact (schema
+  `promoted_handoff_step2_verification_v1`, `report_only: true`, `permission_effect: "none"`,
+  `not_authorization: true`, `is_llm_generated: false`, pointer/effective status still pending gates:
+  `promotion_status == "pending_gates"`, `pointer_permission_effect ==
+  "none_until_consumed_by_future_gate_pr"`, `consumed_by_step2 == false`).
+
+Even when all criteria pass, the policy blocker `real_gate_still_closed_by_policy` is recorded in
+`dry_run_blockers`, so the artifact can never be read as an actual Step 2 render permission.
+
+Dry-run blocker reason-code contract:
+
+```text
+decision_missing
+decision_state_not_pending_gates
+decision_actions_not_hold_no_trade
+verification_missing
+verification_invalid
+verification_permission_mismatch
+verification_markers_invalid
+real_gate_still_closed_by_policy
+```
+
+### 32.4 No gate, permission, or workflow changes (in R2E.5b-6b)
+
+At R2E.5b-6b the real Step 2 gate (`enforce_step2_research_gate`) was byte-for-byte unchanged and still blocked
+promoted pending-gates research; the final execution safety gate still required literal `STRICT_FRESH` plus
+`ORDER_COMPILATION`; `run_weekly` still terminated as controlled `NO_TRADE` with no Step 2/3/4 downstream
+artifacts; Step 2 never rendered the promoted handoff. The first true permission change is **R2E.5b-6c**
+(add `PROMOTED_RESEARCH_DECISION` + `STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY`, Step 2
+decision-only), which landed as its own PR after this one — see §33.
+
+## 33. R2E.5b-6c status (Step 2 promoted decision-only — FIRST TRUE PERMISSION CHANGE)
+
+**R2E.5b-6c is the first true permission change in the R2E.5b series.** It permits exactly one new thing:
+**Step 2 may render and parse a research decision from the promoted effective handoff** under the new
+`PROMOTED_RESEARCH_DECISION` action. Nothing else opens:
+
+- **No `NEW_BUY` permission is added.** **No `ORDER_COMPILATION` permission is added.**
+- **Step 3 audit, Step 4 order compilation, and the order path stay blocked.** Step 3 deterministically blocks
+  with `promoted_step2_decision_only_no_audit_permission`; Step 4 blocks on its upstream guard and on the
+  **final execution safety gate, which is unchanged** and still requires literal `STRICT_FRESH` plus
+  `ORDER_COMPILATION`.
+- The full order-eligible `STRICT_FRESH_COMPILED_ACTIONABLE` state remains absent / non-enabled.
+- Raw `STRICT_FRESH` behavior is unchanged (it does not gain `PROMOTED_RESEARCH_DECISION`).
+- `run_weekly` never auto-runs Step 2 for the promoted state and never compiles orders: it terminates as a
+  controlled `NO_TRADE_PENDING_FINAL_GATES` (reason `promoted_step2_decision_only_pending_final_gates`).
+- The last-good writer is untouched: no promoted handoff is written to the existing last-good slot, no raw
+  last-good is written from the promoted path, and no promoted last-good slot is created.
+
+### 33.1 New state / action
+
+New availability state and action (`state/research_availability.py`):
+
+```text
+STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY
+PROMOTED_RESEARCH_DECISION
+```
+
+`_ALLOWED_ACTIONS_BY_STATE` maps the new state to exactly
+`("HOLD", "NO_TRADE", "PROMOTED_RESEARCH_DECISION")`. Blocked actions are derived from the unchanged ACTIONS
+baseline and are exactly `SELL`, `NEW_BUY`, `ROTATION`, `REBALANCE`, `EXTENDED_ETF_ADMISSION`, and
+`ORDER_COMPILATION`. `PROMOTED_RESEARCH_DECISION` is deliberately NOT added to the ACTIONS baseline so every
+other state's allowed/blocked artifact stays byte-identical; it appears in no other state's allowed_actions.
+The decision-only artifacts carry `permission_effect: "promoted_step2_decision_only"`,
+`promoted_step2_decision_only: true`, `order_compilation_allowed: false`, `new_buy_permission: false`,
+`not_authorization: true` (the order path stays unauthorized), and blocker reasons
+`promoted_step2_decision_only_enabled`, `new_buy_requires_future_gate_pr`,
+`order_compilation_requires_future_gate_pr`, and `final_execution_requires_future_gate_pr`. `source_artifacts`
+references `active_research_handoff_source`, `research_handoff_candidate_effective`,
+`research_handoff_candidate_effective_validation`, `promoted_handoff_step2_verification`, and
+`promoted_step2_gate_dry_run`. Permission artifacts remain deterministic (`is_llm_generated: false`).
+
+### 33.2 Availability upgrade criteria (fail closed)
+
+Step 1 evaluates availability in two passes: pass 1 (pre-upgrade posture) feeds the R2E.5b-6a verification and
+R2E.5b-6b dry-run writers; pass 2 consumes this run's `promoted_handoff_step2_verification.json` /
+`promoted_step2_gate_dry_run.json` objects. A run upgrades from
+`STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES` to `STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY`
+only when ALL criteria pass (`_step2_decision_only_upgrade_ok`):
+
+- the state would otherwise be exactly the pending-gates state;
+- dry-run present with schema `promoted_step2_gate_dry_run_v1`, `would_allow_step2_promoted_decision: true`,
+  `current_real_gate_allows: false`, `future_permission_required: "PROMOTED_RESEARCH_DECISION"`,
+  `future_state_required: "STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY"`,
+  `permission_effect: "none"`, `not_authorization: true`, `dry_run_only: true`, `report_only: true`, and
+  `real_gate_still_closed_by_policy` present in `dry_run_blockers`;
+- verification present with schema `promoted_handoff_step2_verification_v1`,
+  `valid_for_step2_decision: true`, empty `verification_blockers`, intact report-only / not-authorization
+  markers, `promotion_status: "pending_gates"`, `consumed_by_step2: false`, `promotion_expires_at` not stale
+  as of `now_date`, and `effective_handoff_sha256` / `pointer_effective_handoff_sha256` both equal to the
+  recomputed sha256 of the promoted effective handoff (hash re-check).
+
+Fail closed: a missing / malformed / false dry-run, a missing / invalid / stale verification, or a hash
+mismatch keeps the run at pending-gates HOLD / NO_TRADE. Raw `STRICT_FRESH` is never upgraded or altered.
+
+### 33.3 Step 2 gate: two disjoint paths
+
+`evaluate_step2_research_gate` recognizes two disjoint allowed paths and reports a `mode`:
+
+- **Legacy path (unchanged):** literal `STRICT_FRESH` + `NEW_BUY` + `ORDER_COMPILATION` ⇒
+  `mode: "strict_fresh_actionable"` with `order_compilation_allowed / new_buy_permission / step3_allowed /
+  step4_allowed` all true. The legacy conditions are not loosened.
+- **Promoted decision-only path (new):** state `STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY`,
+  `PROMOTED_RESEARCH_DECISION` allowed, NEITHER `NEW_BUY` nor `ORDER_COMPILATION` allowed (a widened artifact
+  is refused), `source: "promoted_compiled_actionable_handoff"`, `promoted_step2_decision_only: true`, and no
+  manual review ⇒ `allowed: true`, `mode: "promoted_step2_decision_only"`,
+  `order_compilation_allowed: false`, `new_buy_permission: false`, `step3_allowed: false`,
+  `step4_allowed: false`, `recommended_terminal_result_after_step2: "NO_TRADE_PENDING_FINAL_GATES"`.
+
+Every other state — including the pending-gates state — still fails closed exactly as before.
+
+### 33.4 Step 2 promoted handoff source
+
+On the promoted path, Step 2 renders from `research_handoff_candidate_effective.json` — never from the raw
+Deep Research `research_output.json` and never from the active non-actionable compiled candidate. Rendering
+requires `active_research_handoff_source.json`, `research_handoff_candidate_effective.json`, and
+`research_handoff_candidate_effective_validation.json`, and re-runs
+`verify_promoted_handoff_for_step2_decision` live at render time (pointer markers, hashes, actionable-ticker
+consistency, and `promotion_expires_at` are re-checked *now*). A failed verification writes the Step 2 blocked
+artifact with reason `promoted_step2_verification_failed` and renders nothing. The rendered prompt appends a
+deterministic source-metadata block: `source: promoted_compiled_actionable_handoff`, `promotion_status`, the
+active pointer sha256, the effective handoff sha256, `promotion_expires_at`, the actionable tickers, and
+explicit notes that the run is Step 2 decision-only, NOT order authorization, and that `ORDER_COMPILATION` and
+`NEW_BUY` are NOT allowed in this state. Render and parse both write the deterministic marker artifact
+`step2_promoted_decision_only.json` (schema `step2_promoted_decision_only_v1`, `is_llm_generated: false`) with
+`decision_only: true`, `order_compilation_allowed: false`, `new_buy_permission: false`, `step3_allowed: false`,
+`step4_allowed: false`, `not_execution_authorization: true`, and
+`recommended_terminal_result_after_step2: "NO_TRADE_PENDING_FINAL_GATES"`. The LLM decision packet itself is
+never mutated by deterministic code.
+
+### 33.5 Step 3 / Step 4 blocking
+
+`enforce_step3_upstream_guard` first evaluates the research gate: when the mode is
+`promoted_step2_decision_only`, Step 3 writes the deterministic block artifact
+`step3_blocked_by_promoted_decision_only_gate.json` with reason
+`promoted_step2_decision_only_no_audit_permission` and raises — regardless of which Step 2 artifacts exist.
+Step 4's upstream guard additionally watches that block artifact, and the **final execution safety gate is
+unchanged**: it still requires literal `STRICT_FRESH` and `ORDER_COMPILATION` in `allowed_actions`, so the
+decision-only state fails both checks. Opening Step 3 audit requires a future explicit PR (**R2E.5b-6d**);
+opening `NEW_BUY` / `ORDER_COMPILATION` / the final gate / any order path requires **R2E.5b-7**.
+
+### 33.6 Weekly behavior
+
+`run_weekly` routes the promoted decision-only mode to a controlled terminal WITHOUT auto-running Step 2:
+`actionable: false`, `weekly_completed: true`, `terminal_result: "NO_TRADE_PENDING_FINAL_GATES"`, reason
+`promoted_step2_decision_only_pending_final_gates`, exit 0, `order_compilation_allowed: false`,
+`new_buy_permission: false`, and no Step 2/3/4 or order artifacts. The manual `run_step2 render` / `parse`
+commands are the only enabled decision-only flow. `run_summary.json` reports the decision-only state with
+`run_blocked: true` and `recommended_result: "NO_TRADE"` (severity remains benign).
+
+### 33.7 Future PRs
+
+- **R2E.5b-6d** (optional, future): audit-only PR — Step 3 may audit decision-only packets; Step 4 and the
+  final execution safety gate stay closed.
+- **R2E.5b-7** (future): the order path — `NEW_BUY`, `ORDER_COMPILATION`, final-gate opening for promoted
+  states, promoted-ticker subset checks, deterministic budget checks, and any promoted last-good slot. Until
+  it lands, every promoted run must end in `NO_TRADE` / `NO_TRADE_PENDING_FINAL_GATES` with zero orders.

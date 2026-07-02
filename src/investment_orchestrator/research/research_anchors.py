@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Iterator
 
 import yaml
@@ -141,7 +141,7 @@ def validate_research_anchors(
     if payload.get("is_llm_generated") is not False:
         errors.append("is_llm_generated must be exactly false (anchors are operator-authored).")
 
-    as_of_date = payload.get("as_of_date") if isinstance(payload.get("as_of_date"), str) else None
+    as_of_date = normalize_iso_date_value(payload.get("as_of_date"))
 
     # Forbidden keys / tokens anywhere (defense in depth; anchors never authorize).
     for raw_key in _iter_keys(payload):
@@ -259,9 +259,9 @@ def _evaluate_anchor(
         "anchor_id": anchor_id,
         "anchor_type": anchor_type if anchor_type in ANCHOR_TYPES else None,
         "applicable_tickers": tickers,
-        "anchor_date_et": anchor.get("anchor_date_et") if isinstance(anchor.get("anchor_date_et"), str) else None,
-        "valid_from": anchor.get("valid_from") if isinstance(anchor.get("valid_from"), str) else None,
-        "valid_until": anchor.get("valid_until") if isinstance(anchor.get("valid_until"), str) else None,
+        "anchor_date_et": anchor_date.isoformat() if anchor_date is not None else None,
+        "valid_from": valid_from.isoformat() if valid_from is not None else None,
+        "valid_until": valid_until.isoformat() if valid_until is not None else None,
         "source_type": source_type if source_type in SOURCE_TYPES else None,
         "confidence_floor": confidence_floor.strip().lower()
         if isinstance(confidence_floor, str) and confidence_floor.strip().lower() in CONFIDENCE_VALUES
@@ -406,12 +406,39 @@ def _normalize_ticker_set(value: Any) -> set[str]:
     return set(_normalize_ticker_list(value if isinstance(value, list) else list(value or [])))
 
 
-def _to_date(value: Any) -> date | None:
+def normalize_iso_date_value(value: Any) -> str | None:
+    """Normalize an ISO-date-like value to a canonical ``"YYYY-MM-DD"`` string.
+
+    PyYAML decodes an *unquoted* YAML date scalar (e.g. ``2026-06-30``) into a
+    ``datetime.date`` (or ``datetime.datetime`` for a timestamp), not a string —
+    while a *quoted* scalar (``"2026-06-30"``) stays a plain string. Both must be
+    treated identically. Accepts:
+
+    * ``datetime.datetime`` -> its date component, ``.isoformat()``
+    * ``datetime.date`` -> ``.isoformat()``
+    * ``str`` -> parsed strictly as ``date.fromisoformat`` (rejects ambiguous /
+      non-ISO formats)
+
+    Anything else (``None``, wrong type, unparseable string) returns ``None`` —
+    callers treat that as invalid/missing, never crash.
+    """
+    if isinstance(value, datetime):
+        return value.date().isoformat()
     if isinstance(value, date):
-        return value
+        return value.isoformat()
     if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
         try:
-            return date.fromisoformat(value.strip())
+            return date.fromisoformat(stripped).isoformat()
         except ValueError:
             return None
     return None
+
+
+def _to_date(value: Any) -> date | None:
+    normalized = normalize_iso_date_value(value)
+    if normalized is None:
+        return None
+    return date.fromisoformat(normalized)

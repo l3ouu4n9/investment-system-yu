@@ -167,6 +167,8 @@ def assert_no_downstream_artifacts_created(tmp_path: Path) -> None:
         ("STRICT_FRESH_EVIDENCE_ONLY", False),
         # R2E.4: grounded-memo state is likewise non-actionable -> controlled NO_TRADE.
         ("STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE", False),
+        # R2E.5b-5b: promoted pointer is recognized, but gates remain closed.
+        ("STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES", False),
         ("MANUAL_REVIEW_REQUIRED", True),
     ],
 )
@@ -418,3 +420,87 @@ def test_cli_exit_zero_on_actionable_proceed(
     assert exit_code == 0
     out = capsys.readouterr().out
     assert "weekly_actionable=true" in out
+
+
+# --- R2E.5b-6c promoted Step 2 decision-only weekly terminal -------------------
+
+
+def promoted_decision_only_permission() -> dict[str, Any]:
+    return {
+        "state": "STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY",
+        "research_availability": "strict_fresh_compiled_actionable_step2_decision_only",
+        "fresh_research_available": False,
+        "handoff_valid": False,
+        "handoff_stale": False,
+        "settings_hash_match": None,
+        "universe_match": None,
+        "allowed_actions": ["HOLD", "NO_TRADE", "PROMOTED_RESEARCH_DECISION"],
+        "blocked_actions": [
+            "SELL",
+            "NEW_BUY",
+            "ROTATION",
+            "REBALANCE",
+            "EXTENDED_ETF_ADMISSION",
+            "ORDER_COMPILATION",
+        ],
+        "manual_review_required": False,
+        "blocker_reasons": [
+            "promoted_step2_decision_only_enabled",
+            "order_compilation_requires_future_gate_pr",
+            "final_execution_requires_future_gate_pr",
+        ],
+        "non_blocker_reasons": [],
+        "source": "promoted_compiled_actionable_handoff",
+        "promoted_step2_decision_only": True,
+        "order_compilation_allowed": False,
+        "new_buy_permission": False,
+        "report_only": True,
+    }
+
+
+def test_promoted_decision_only_terminates_no_trade_pending_final_gates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepare_repo(
+        tmp_path,
+        monkeypatch,
+        permission=promoted_decision_only_permission(),
+        with_step2_render_inputs=True,  # even with render inputs available...
+    )
+
+    result = weekly_orchestrator.run_weekly()
+
+    # ...weekly never auto-runs the Step 2 LLM path for the decision-only state.
+    assert result.actionable is False
+    assert result.weekly_completed is True
+    assert result.terminal_result == "NO_TRADE_PENDING_FINAL_GATES"
+    assert result.research_state == "STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY"
+    assert result.exit_code == 0
+    assert result.step2_prompt_path is None
+    assert not step2_decision_builder.step2_prompt_path().exists()
+
+    outcome = read_weekly_outcome(tmp_path)
+    assert outcome["terminal_result"] == "NO_TRADE_PENDING_FINAL_GATES"
+    assert outcome["reason"] == "promoted_step2_decision_only_pending_final_gates"
+    assert outcome["actionable"] is False
+    assert outcome["weekly_completed"] is True
+    assert outcome["mode"] == "promoted_step2_decision_only"
+    assert outcome["allowed_actions"] == ["HOLD", "NO_TRADE", "PROMOTED_RESEARCH_DECISION"]
+    assert "NEW_BUY" in outcome["blocked_actions"]
+    assert "ORDER_COMPILATION" in outcome["blocked_actions"]
+    assert outcome["order_compilation_allowed"] is False
+    assert outcome["new_buy_permission"] is False
+    assert outcome["is_llm_generated"] is False
+    assert "run_step2" in outcome["next_step"]  # manual decision-only flow is enabled
+
+    # run_summary agrees: blocked run, NO_TRADE recommendation, decision-only state.
+    run_summary_path = tmp_path / "artifacts" / "current" / "run_summary.json"
+    assert run_summary_path.is_file()
+    run_summary = json.loads(run_summary_path.read_text(encoding="utf-8"))
+    assert run_summary["run_blocked"] is True
+    assert run_summary["recommended_result"] == "NO_TRADE"
+    assert run_summary["research_state"] == "STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY"
+
+    # No Step 2/3/4 decision / audit / order artifacts are fabricated.
+    assert_no_downstream_artifacts_created(tmp_path)

@@ -126,6 +126,22 @@ def test_step1_not_strict_fresh_blocks() -> None:
     assert result.checked_conditions["step1_state_strict_fresh"] is False
 
 
+def test_pending_gates_state_still_blocks_final_execution_safety_gate() -> None:
+    result = evaluate_final_execution_safety(
+        step1_permission=step1_permission(
+            state="STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES",
+            allowed_actions=["HOLD", "NO_TRADE"],
+        ),
+        step2_decision_packet=step2_decision_packet(),
+        step3_audited_packet=step3_audited_packet(),
+    )
+
+    assert result.ready_for_order_compilation is False
+    assert result.recommended_result == "NO_TRADE"
+    assert result.checked_conditions["step1_state_strict_fresh"] is False
+    assert result.checked_conditions["order_compilation_allowed"] is False
+
+
 def test_order_compilation_not_allowed_blocks() -> None:
     result = evaluate_final_execution_safety(
         step1_permission=step1_permission(allowed_actions=["HOLD", "NO_TRADE"]),
@@ -417,3 +433,22 @@ def test_load_effective_allowed_buy_universe_none_when_missing(
     # No decision packet written -> None, so the validator falls back to the
     # static strategy-settings universe floor (never weaker than settings).
     assert step4_order_compiler.load_effective_allowed_buy_universe() is None
+
+
+def test_promoted_step2_decision_only_state_still_blocks_final_execution_safety_gate() -> None:
+    # R2E.5b-6c: the decision-only state permits Step 2 ONLY; the final gate is
+    # unchanged and must reject it (state != STRICT_FRESH, ORDER_COMPILATION absent).
+    result = evaluate_final_execution_safety(
+        step2_decision_packet=step2_decision_packet(),
+        step3_audited_packet=step3_audited_packet(),
+        step1_permission=step1_permission(
+            state="STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY",
+            allowed_actions=["HOLD", "NO_TRADE", "PROMOTED_RESEARCH_DECISION"],
+        ),
+    )
+
+    assert result.ready_for_order_compilation is False
+    assert result.blocked is True
+    assert result.checked_conditions["step1_state_strict_fresh"] is False
+    assert result.checked_conditions["order_compilation_allowed"] is False
+    assert result.recommended_result == "NO_TRADE"

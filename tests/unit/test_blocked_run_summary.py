@@ -171,6 +171,26 @@ def test_grounded_memo_state_summarizes_to_no_trade() -> None:
     assert result.manual_review_required is False
 
 
+def test_pending_gates_state_summarizes_to_no_trade() -> None:
+    # R2E.5b-5b: promoted actionable handoff exists, but gates are still closed.
+    state = "STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES"
+    result = build_blocked_run_summary(
+        step1_decision=step1_decision(state=state),
+        step2_block=step2_block(state=state),
+        step3_block=None,
+        step4_block=None,
+    )
+
+    assert result.run_blocked is True
+    assert result.recommended_result == "NO_TRADE"
+    assert result.research_state == state
+    assert result.highest_severity_state == state
+    assert result.allowed_actions == ["HOLD", "NO_TRADE"]
+    assert "NEW_BUY" in result.blocked_actions
+    assert "ORDER_COMPILATION" in result.blocked_actions
+    assert result.manual_review_required is False
+
+
 def test_step1_manual_review_propagates_to_summary() -> None:
     result = build_blocked_run_summary(
         step1_decision=step1_decision(state="MANUAL_REVIEW_REQUIRED", manual_review_required=True),
@@ -503,3 +523,26 @@ def test_summarize_current_run_malformed_final_gate_records_read_error(tmp_path:
     assert any(
         "step4_blocked_by_final_execution_safety_gate.json" in err for err in result.read_errors
     )
+
+
+def test_step2_decision_only_state_summarizes_to_blocked_no_trade() -> None:
+    # R2E.5b-6c: Step 2 decision-only is permitted, but the run still summarizes
+    # as blocked / NO_TRADE because the order path stays closed.
+    state = "STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY"
+    result = build_blocked_run_summary(
+        step1_decision=step1_decision(
+            state=state,
+            allowed_actions=["HOLD", "NO_TRADE", "PROMOTED_RESEARCH_DECISION"],
+        ),
+        step2_block=None,
+        step3_block=None,
+        step4_block=None,
+    )
+
+    assert result.run_blocked is True
+    assert result.recommended_result == "NO_TRADE"
+    assert result.research_state == state
+    assert result.highest_severity_state == state
+    assert result.allowed_actions == ["HOLD", "NO_TRADE", "PROMOTED_RESEARCH_DECISION"]
+    assert "NEW_BUY" in result.blocked_actions
+    assert "ORDER_COMPILATION" in result.blocked_actions

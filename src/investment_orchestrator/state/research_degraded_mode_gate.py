@@ -1,4 +1,22 @@
-"""Step 2 enforcement gate for Step 1 degraded-mode permissions."""
+"""Step 2 enforcement gate for Step 1 degraded-mode permissions.
+
+R2E.5b-6c: the gate now recognizes two DISJOINT allowed paths:
+
+* **Legacy actionable path (unchanged):** literal ``STRICT_FRESH`` with both
+  ``NEW_BUY`` and ``ORDER_COMPILATION`` allowed — the existing full render path.
+* **Promoted Step 2 decision-only path (new):** literal
+  ``STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY`` with
+  ``PROMOTED_RESEARCH_DECISION`` allowed and NEITHER ``NEW_BUY`` nor
+  ``ORDER_COMPILATION`` allowed. This permits Step 2 render/parse of a research
+  decision from the promoted effective handoff ONLY: the result explicitly
+  carries ``order_compilation_allowed=False``, ``new_buy_permission=False``,
+  ``step3_allowed=False``, ``step4_allowed=False``, and a recommended
+  post-Step-2 terminal of ``NO_TRADE_PENDING_FINAL_GATES``. Step 3/4 and the
+  final execution safety gate are NOT opened by this mode.
+
+Every other state (including ``STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES``)
+still fails closed exactly as before.
+"""
 
 from __future__ import annotations
 
@@ -17,6 +35,17 @@ HOLD_NO_TRADE_ACTIONS = ("HOLD", "NO_TRADE")
 MISSING_RESEARCH_PERMISSION = "MISSING_RESEARCH_PERMISSION"
 MALFORMED_RESEARCH_PERMISSION = "MALFORMED_RESEARCH_PERMISSION"
 
+# --- R2E.5b-6c promoted Step 2 decision-only path ------------------------------
+PROMOTED_STEP2_DECISION_ONLY_STATE = "STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY"
+PROMOTED_RESEARCH_DECISION_ACTION = "PROMOTED_RESEARCH_DECISION"
+PROMOTED_SOURCE = "promoted_compiled_actionable_handoff"
+
+MODE_STRICT_FRESH_ACTIONABLE = "strict_fresh_actionable"
+MODE_PROMOTED_STEP2_DECISION_ONLY = "promoted_step2_decision_only"
+MODE_BLOCKED = "blocked"
+
+NO_TRADE_PENDING_FINAL_GATES = "NO_TRADE_PENDING_FINAL_GATES"
+
 
 class ResearchDegradedModeGateError(RuntimeError):
     """Raised when Step 2 must not render an actionable prompt."""
@@ -24,7 +53,12 @@ class ResearchDegradedModeGateError(RuntimeError):
 
 @dataclass(frozen=True)
 class ResearchDegradedModeGateResult:
-    """Decision for whether Step 2 may enter the actionable render path."""
+    """Decision for whether Step 2 may enter a render path.
+
+    ``mode`` distinguishes the legacy STRICT_FRESH actionable path from the
+    promoted Step 2 decision-only path; the order/step permission fields state
+    exactly what each mode does and does not release.
+    """
 
     allowed: bool
     state: str
@@ -33,6 +67,12 @@ class ResearchDegradedModeGateResult:
     manual_review_required: bool
     blocker_reasons: list[str]
     malformed_reasons: list[str]
+    mode: str = MODE_BLOCKED
+    order_compilation_allowed: bool = False
+    new_buy_permission: bool = False
+    step3_allowed: bool = False
+    step4_allowed: bool = False
+    recommended_terminal_result_after_step2: str | None = None
 
 
 def enforce_step2_research_gate(
@@ -116,26 +156,74 @@ def evaluate_step2_research_gate(payload: Any) -> ResearchDegradedModeGateResult
     blocker_reasons = _string_list(blocker_reasons_value) or []
     blocker_reasons.extend(malformed_reasons)
 
-    allowed = (
+    # Path A (legacy, unchanged): literal STRICT_FRESH + both order actions.
+    legacy_allowed = (
         not malformed_reasons
         and state == ACTIONABLE_REQUIRED_STATE
         and all(action in allowed_actions for action in REQUIRED_ACTIONS)
         and manual_review_required is False
     )
 
+    # Path B (R2E.5b-6c): promoted Step 2 decision-only. Requires the promoted
+    # decision-only state, PROMOTED_RESEARCH_DECISION allowed, NO order action
+    # allowed, the promoted source + upgrade markers, and no manual review.
+    order_actions_absent = all(action not in allowed_actions for action in REQUIRED_ACTIONS)
+    promoted_allowed = (
+        not malformed_reasons
+        and state == PROMOTED_STEP2_DECISION_ONLY_STATE
+        and PROMOTED_RESEARCH_DECISION_ACTION in allowed_actions
+        and order_actions_absent
+        and payload.get("source") == PROMOTED_SOURCE
+        and payload.get("promoted_step2_decision_only") is True
+        and manual_review_required is False
+    )
+
+    allowed = legacy_allowed or promoted_allowed
+
     if not allowed and not malformed_reasons:
-        missing_actions = [action for action in REQUIRED_ACTIONS if action not in allowed_actions]
-        if state != ACTIONABLE_REQUIRED_STATE:
-            blocker_reasons.append(
-                f"research state {state} is not {ACTIONABLE_REQUIRED_STATE}."
-            )
-        if missing_actions:
-            blocker_reasons.append(
-                "research permission does not allow required actions: "
-                + ", ".join(missing_actions)
-            )
-        if manual_review_required is True:
-            blocker_reasons.append("research permission requires manual review.")
+        if state == PROMOTED_STEP2_DECISION_ONLY_STATE:
+            # The promoted state failed its own decision-only conditions.
+            if PROMOTED_RESEARCH_DECISION_ACTION not in allowed_actions:
+                blocker_reasons.append(
+                    f"promoted decision-only state does not allow {PROMOTED_RESEARCH_DECISION_ACTION}."
+                )
+            if not order_actions_absent:
+                blocker_reasons.append(
+                    "promoted decision-only state must not allow NEW_BUY / ORDER_COMPILATION; "
+                    "refusing the widened permission artifact."
+                )
+            if payload.get("source") != PROMOTED_SOURCE:
+                blocker_reasons.append(
+                    f"promoted decision-only state requires source {PROMOTED_SOURCE}."
+                )
+            if payload.get("promoted_step2_decision_only") is not True:
+                blocker_reasons.append(
+                    "promoted decision-only state requires promoted_step2_decision_only: true."
+                )
+            if manual_review_required is True:
+                blocker_reasons.append("research permission requires manual review.")
+        else:
+            missing_actions = [
+                action for action in REQUIRED_ACTIONS if action not in allowed_actions
+            ]
+            if state != ACTIONABLE_REQUIRED_STATE:
+                blocker_reasons.append(
+                    f"research state {state} is not {ACTIONABLE_REQUIRED_STATE}."
+                )
+            if missing_actions:
+                blocker_reasons.append(
+                    "research permission does not allow required actions: "
+                    + ", ".join(missing_actions)
+                )
+            if manual_review_required is True:
+                blocker_reasons.append("research permission requires manual review.")
+
+    if legacy_allowed:
+        mode = MODE_STRICT_FRESH_ACTIONABLE
+    elif promoted_allowed:
+        mode = MODE_PROMOTED_STEP2_DECISION_ONLY
+    else:
+        mode = MODE_BLOCKED
 
     return ResearchDegradedModeGateResult(
         allowed=allowed,
@@ -145,6 +233,14 @@ def evaluate_step2_research_gate(payload: Any) -> ResearchDegradedModeGateResult
         manual_review_required=manual_review_required,
         blocker_reasons=blocker_reasons,
         malformed_reasons=malformed_reasons,
+        mode=mode,
+        order_compilation_allowed=legacy_allowed,
+        new_buy_permission=legacy_allowed,
+        step3_allowed=legacy_allowed,
+        step4_allowed=legacy_allowed,
+        recommended_terminal_result_after_step2=(
+            NO_TRADE_PENDING_FINAL_GATES if promoted_allowed else None
+        ),
     )
 
 
@@ -159,8 +255,11 @@ def step2_research_gate_blocked_artifact(
         "blocked": True,
         "reason": "research_degraded_mode_gate",
         "state": result.state,
+        "mode": result.mode,
         "allowed_actions": result.allowed_actions,
         "blocked_actions": result.blocked_actions,
+        "order_compilation_allowed": result.order_compilation_allowed,
+        "new_buy_permission": result.new_buy_permission,
         "manual_review_required": result.manual_review_required,
         "blocker_reasons": result.blocker_reasons,
         "source_artifact": _display_path(source_artifact_path, repo_root_path),

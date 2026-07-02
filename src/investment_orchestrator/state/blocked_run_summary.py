@@ -37,6 +37,11 @@ _STATE_SEVERITY = {
     "STRICT_FRESH_EVIDENCE_ONLY": 1,
     # R2E.4: grounded memo support, still benign / non-actionable (HOLD/NO_TRADE).
     "STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE": 1,
+    # R2E.5b-5b: promoted handoff recognized, still pending gates / non-actionable.
+    "STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES": 1,
+    # R2E.5b-6c: Step 2 decision-only permitted; order path still blocked, so the
+    # run still summarizes as blocked / NO_TRADE (benign severity).
+    "STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY": 1,
     "STRICT_STALE": 2,
     "DEGRADED_WITH_LAST_GOOD": 3,
     "DEGRADED_NO_RESEARCH": 4,

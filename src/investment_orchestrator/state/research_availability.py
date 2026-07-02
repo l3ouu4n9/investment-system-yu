@@ -16,6 +16,8 @@ Key safety property: missing / stale / invalid research can never yield
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date
@@ -45,6 +47,22 @@ STRICT_FRESH_EVIDENCE_ONLY = "STRICT_FRESH_EVIDENCE_ONLY"
 # It only sharpens observability over STRICT_FRESH_EVIDENCE_ONLY; opening any
 # actionable path requires a future explicit gate PR (R2E.5b).
 STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE = "STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE"
+# R2E.5b-5b: a real active promotion pointer exists and proves that a compiled
+# actionable handoff was promoted to the effective artifact, but the pointer is
+# explicitly pending future gates. NON-ACTIONABLE by policy — HOLD / NO_TRADE
+# only — and never permits NEW_BUY / ORDER_COMPILATION.
+STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES = "STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES"
+# R2E.5b-6c: FIRST TRUE PERMISSION CHANGE — Step 2 decision-only. The
+# pending-gates promotion additionally passed the R2E.5b-6a verification and the
+# R2E.5b-6b dry-run this run, so Step 2 may render/parse a decision from the
+# promoted effective handoff under PROMOTED_RESEARCH_DECISION. It permits
+# NOTHING else: NEW_BUY / ORDER_COMPILATION / SELL / ROTATION / REBALANCE /
+# EXTENDED_ETF_ADMISSION stay blocked, Step 3/4 stay blocked, the final
+# execution safety gate is unchanged, and the full order-eligible
+# STRICT_FRESH_COMPILED_ACTIONABLE state remains absent / non-enabled.
+STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY = (
+    "STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY"
+)
 DEGRADED_WITH_LAST_GOOD = "DEGRADED_WITH_LAST_GOOD"
 DEGRADED_NO_RESEARCH = "DEGRADED_NO_RESEARCH"
 INVALID_CONTRACT = "INVALID_CONTRACT"
@@ -77,6 +95,12 @@ ACTIONS = (
     "ORDER_COMPILATION",
 )
 
+# R2E.5b-6c: the Step 2 decision-only action. Deliberately NOT appended to the
+# ACTIONS baseline above: blocked_actions are derived from ACTIONS, so keeping
+# it out leaves every other state's allowed/blocked artifact byte-identical
+# (raw STRICT_FRESH in particular must NOT gain this action).
+PROMOTED_RESEARCH_DECISION_ACTION = "PROMOTED_RESEARCH_DECISION"
+
 # Allowed action set per state. Default-deny for order-generating actions;
 # HOLD / NO_TRADE are always allowed. Blocked actions are derived as the
 # complement, preserving ACTIONS order.
@@ -85,12 +109,30 @@ _ALLOWED_ACTIONS_BY_STATE: dict[str, tuple[str, ...]] = {
     STRICT_STALE: ("HOLD", "NO_TRADE", "SELL"),
     STRICT_FRESH_EVIDENCE_ONLY: ("HOLD", "NO_TRADE"),
     STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE: ("HOLD", "NO_TRADE"),
+    STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES: ("HOLD", "NO_TRADE"),
+    # R2E.5b-6c: exactly HOLD / NO_TRADE / PROMOTED_RESEARCH_DECISION — no
+    # NEW_BUY, no ORDER_COMPILATION, no SELL/ROTATION/REBALANCE/EXTENDED sleeve.
+    STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY: (
+        "HOLD",
+        "NO_TRADE",
+        PROMOTED_RESEARCH_DECISION_ACTION,
+    ),
     DEGRADED_WITH_LAST_GOOD: ("HOLD", "NO_TRADE"),
     DEGRADED_NO_RESEARCH: ("HOLD", "NO_TRADE"),
     INVALID_CONTRACT: ("HOLD", "NO_TRADE"),
     NO_OUTPUT: ("HOLD", "NO_TRADE"),
     MANUAL_REVIEW_REQUIRED: ("HOLD", "NO_TRADE"),
 }
+
+# R2E.5b-6b artifact contract literals, kept as literals to avoid a
+# state->research layer import; Step 1 passes the artifacts those modules wrote,
+# so these match by construction and any drift fails closed (no upgrade).
+_PROMOTED_STEP2_VERIFICATION_SCHEMA = "promoted_handoff_step2_verification_v1"
+_PROMOTED_STEP2_DRY_RUN_SCHEMA = "promoted_step2_gate_dry_run_v1"
+_DRY_RUN_REAL_GATE_POLICY_BLOCKER = "real_gate_still_closed_by_policy"
+# permission_effect label for the decision-only state's artifacts: Step 2 may
+# decide from promoted research; the order path stays closed.
+PERMISSION_EFFECT_STEP2_DECISION_ONLY = "promoted_step2_decision_only"
 
 # --- stale policy ------------------------------------------------------------
 # age <= fresh_days       -> fresh
@@ -138,6 +180,19 @@ class ResearchAvailabilityResult:
     accepted_support_signal_count: int = 0
     grounded_memo_support_present: bool = False
     support_signals_not_authorization: bool | None = None
+    # R2E.5b-5b promoted pointer recognition (diagnostic, non-actionable).
+    promoted_pointer_present: bool = False
+    promoted_pointer_valid: bool = False
+    promotion_status: str | None = None
+    effective_handoff_present: bool = False
+    effective_handoff_valid: bool = False
+    candidate_actionable_row_count: int | None = None
+    actionable_this_run_tickers: list[str] = field(default_factory=list)
+    promotion_expires_at: str | None = None
+    permission_effect: str | None = None
+    not_authorization: bool | None = None
+    # R2E.5b-6c Step 2 decision-only upgrade (first true permission change).
+    promoted_step2_decision_only: bool = False
 
 
 def evaluate_research_availability(
@@ -156,6 +211,12 @@ def evaluate_research_availability(
     compiled_source_as_of_date: str | None = None,
     compiled_source_artifacts: Mapping[str, str] | None = None,
     compiled_support_signals: Mapping[str, Any] | None = None,
+    promoted_pointer: Mapping[str, Any] | None = None,
+    promoted_effective_handoff: Mapping[str, Any] | None = None,
+    promoted_effective_validation: Mapping[str, Any] | None = None,
+    promoted_source_artifacts: Mapping[str, str] | None = None,
+    promoted_step2_verification: Mapping[str, Any] | None = None,
+    promoted_step2_gate_dry_run: Mapping[str, Any] | None = None,
 ) -> ResearchAvailabilityResult:
     """Classify research availability and derive a deterministic permission.
 
@@ -302,6 +363,48 @@ def evaluate_research_availability(
             "future explicit gate PR; this state permits HOLD / NO_TRADE only."
         )
 
+    # --- R2E.5b-5b: recognize promoted effective handoff pending gates --------
+    # This is only a label/diagnostic upgrade from the grounded non-actionable
+    # state. Raw STRICT_FRESH and all stale/degraded/manual-review states keep
+    # their existing precedence. Every criterion must pass; otherwise fail closed
+    # to the current safe state and permissions.
+    pending = _evaluate_pending_gates_promotion(
+        promoted_pointer=promoted_pointer,
+        promoted_effective_handoff=promoted_effective_handoff,
+        promoted_effective_validation=promoted_effective_validation,
+        now_date=now_date,
+    )
+    if isinstance(promoted_source_artifacts, Mapping):
+        for key, value in promoted_source_artifacts.items():
+            source_artifacts[str(key)] = str(value)
+    if state == STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE and pending["recognized"] is True:
+        state = STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES
+        source = "promoted_compiled_actionable_handoff"
+        blocker_reasons.append("promoted_actionable_handoff_pending_gates")
+        blocker_reasons.append("new_buy_requires_future_gate_pr")
+        blocker_reasons.append("order_compilation_requires_future_gate_pr")
+
+    # --- R2E.5b-6c: Step 2 decision-only upgrade (FIRST TRUE PERMISSION CHANGE) --
+    # Only the pending-gates promoted state may upgrade, and only when the
+    # R2E.5b-6a verification and the R2E.5b-6b dry-run for THIS run both fully
+    # pass (fail closed on anything missing / malformed / false / stale /
+    # hash-mismatched: the state simply stays pending-gates HOLD / NO_TRADE).
+    # The upgrade adds exactly PROMOTED_RESEARCH_DECISION — Step 2 decision-only.
+    # It never touches raw STRICT_FRESH, never adds NEW_BUY / ORDER_COMPILATION,
+    # and leaves the final execution safety gate closed.
+    promoted_step2_decision_only = False
+    if state == STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES and _step2_decision_only_upgrade_ok(
+        verification=promoted_step2_verification,
+        dry_run=promoted_step2_gate_dry_run,
+        promoted_effective_handoff=promoted_effective_handoff,
+        now_date=now_date,
+    ):
+        state = STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY
+        promoted_step2_decision_only = True
+        blocker_reasons.remove("promoted_actionable_handoff_pending_gates")
+        blocker_reasons.append("promoted_step2_decision_only_enabled")
+        blocker_reasons.append("final_execution_requires_future_gate_pr")
+
     last_good_usable = state == DEGRADED_WITH_LAST_GOOD
     age_for_label = handoff_age_days if handoff_valid else (last_good_age_days if last_good_available else None)
     stale_label = _stale_label(age_for_label, fresh_days, stale_days)
@@ -344,6 +447,83 @@ def evaluate_research_availability(
         accepted_support_signal_count=accepted_support_signal_count,
         grounded_memo_support_present=grounded_memo_support_present,
         support_signals_not_authorization=support_signals_not_authorization,
+        promoted_pointer_present=pending["promoted_pointer_present"],
+        promoted_pointer_valid=pending["promoted_pointer_valid"],
+        promotion_status=pending["promotion_status"],
+        effective_handoff_present=pending["effective_handoff_present"],
+        effective_handoff_valid=pending["effective_handoff_valid"],
+        candidate_actionable_row_count=pending["candidate_actionable_row_count"],
+        actionable_this_run_tickers=pending["actionable_this_run_tickers"],
+        promotion_expires_at=pending["promotion_expires_at"],
+        permission_effect=(
+            PERMISSION_EFFECT_STEP2_DECISION_ONLY
+            if promoted_step2_decision_only
+            else pending["permission_effect"]
+        ),
+        not_authorization=pending["not_authorization"],
+        promoted_step2_decision_only=promoted_step2_decision_only,
+    )
+
+
+def _step2_decision_only_upgrade_ok(
+    *,
+    verification: Mapping[str, Any] | None,
+    dry_run: Mapping[str, Any] | None,
+    promoted_effective_handoff: Mapping[str, Any] | None,
+    now_date: Any,
+) -> bool:
+    """R2E.5b-6c upgrade criteria over the R2E.5b-6a/6b artifacts. Fail closed.
+
+    Every criterion must pass; a missing / malformed / false / stale artifact
+    keeps the pending-gates state. ``current_real_gate_allows`` / the policy
+    blocker are asserted against the dry-run's recorded pre-upgrade posture, so
+    an artifact claiming the real gate was already open can never upgrade.
+    """
+    v = verification if isinstance(verification, Mapping) else None
+    d = dry_run if isinstance(dry_run, Mapping) else None
+    if v is None or d is None:
+        return False
+
+    dry_run_blockers = d.get("dry_run_blockers")
+    dry_run_ok = (
+        d.get("schema_version") == _PROMOTED_STEP2_DRY_RUN_SCHEMA
+        and d.get("is_llm_generated") is False
+        and d.get("report_only") is True
+        and d.get("dry_run_only") is True
+        and d.get("permission_effect") == "none"
+        and d.get("not_authorization") is True
+        and d.get("would_allow_step2_promoted_decision") is True
+        and d.get("current_real_gate_allows") is False
+        and d.get("future_permission_required") == PROMOTED_RESEARCH_DECISION_ACTION
+        and d.get("future_state_required") == STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY
+        and isinstance(dry_run_blockers, list)
+        and _DRY_RUN_REAL_GATE_POLICY_BLOCKER in dry_run_blockers
+    )
+    if not dry_run_ok:
+        return False
+
+    verification_blockers = v.get("verification_blockers")
+    effective_hash = (
+        _sha256_of(promoted_effective_handoff)
+        if isinstance(promoted_effective_handoff, Mapping)
+        else None
+    )
+    return (
+        v.get("schema_version") == _PROMOTED_STEP2_VERIFICATION_SCHEMA
+        and v.get("is_llm_generated") is False
+        and v.get("report_only") is True
+        and v.get("permission_effect") == "none"
+        and v.get("not_authorization") is True
+        and v.get("valid_for_step2_decision") is True
+        and isinstance(verification_blockers, list)
+        and not verification_blockers
+        and v.get("future_permission_required") == PROMOTED_RESEARCH_DECISION_ACTION
+        and v.get("promotion_status") == "pending_gates"
+        and v.get("consumed_by_step2") is False
+        and _expires_not_stale(v.get("promotion_expires_at"), now_date)
+        and effective_hash is not None
+        and v.get("effective_handoff_sha256") == effective_hash
+        and v.get("pointer_effective_handoff_sha256") == effective_hash
     )
 
 
@@ -448,6 +628,115 @@ def _validation_is_valid(candidate_validation: Any | None) -> bool:
     return getattr(candidate_validation, "valid", False) is True
 
 
+def _evaluate_pending_gates_promotion(
+    *,
+    promoted_pointer: Mapping[str, Any] | None,
+    promoted_effective_handoff: Mapping[str, Any] | None,
+    promoted_effective_validation: Mapping[str, Any] | None,
+    now_date: Any,
+) -> dict[str, Any]:
+    pointer = promoted_pointer if isinstance(promoted_pointer, Mapping) else None
+    effective = (
+        promoted_effective_handoff if isinstance(promoted_effective_handoff, Mapping) else None
+    )
+    validation = (
+        promoted_effective_validation
+        if isinstance(promoted_effective_validation, Mapping)
+        else None
+    )
+
+    promotion_status = _str_or_none(pointer.get("promotion_status")) if pointer else None
+    permission_effect = _str_or_none(pointer.get("permission_effect")) if pointer else None
+    expires_at = _str_or_none(pointer.get("promotion_expires_at")) if pointer else None
+    row_count_value = pointer.get("candidate_actionable_row_count") if pointer else None
+    row_count = (
+        row_count_value
+        if isinstance(row_count_value, int) and not isinstance(row_count_value, bool)
+        else None
+    )
+    tickers = (
+        [ticker for ticker in _string_list(pointer.get("actionable_this_run_tickers")) if ticker.strip()]
+        if pointer
+        else []
+    )
+
+    pointer_markers_valid = (
+        pointer is not None
+        and pointer.get("schema_version") == "active_research_handoff_source_v1"
+        and promotion_status == "pending_gates"
+        and pointer.get("source") == "promoted_compiled_actionable_handoff"
+        and pointer.get("not_authorization") is True
+        and pointer.get("future_pr_required") is True
+        and permission_effect == "none_until_consumed_by_future_gate_pr"
+        and pointer.get("consumed_by_availability") is False
+        and pointer.get("consumed_by_step2") is False
+        and pointer.get("consumed_by_gates") is False
+        and row_count is not None
+        and row_count > 0
+        and bool(tickers)
+        and _expires_not_stale(expires_at, now_date)
+    )
+
+    effective_validation_valid = _validation_is_valid(validation)
+    effective_hash = _sha256_of(effective) if effective is not None else None
+    pointer_effective_hash = (
+        _str_or_none(pointer.get("effective_handoff_sha256")) if pointer is not None else None
+    )
+    candidate_hash = _str_or_none(pointer.get("candidate_sha256")) if pointer is not None else None
+    hash_matches = (
+        effective_hash is not None
+        and pointer_effective_hash is not None
+        and effective_hash == pointer_effective_hash
+        and (candidate_hash is None or candidate_hash == effective_hash)
+    )
+
+    effective_paths_present = (
+        pointer is not None
+        and isinstance(pointer.get("effective_handoff_path"), str)
+        and bool(pointer.get("effective_handoff_path"))
+        and isinstance(pointer.get("effective_validation_path"), str)
+        and bool(pointer.get("effective_validation_path"))
+    )
+    effective_handoff_valid = (
+        effective is not None
+        and validation is not None
+        and effective_paths_present
+        and effective_validation_valid
+        and hash_matches
+    )
+
+    recognized = pointer_markers_valid and effective_handoff_valid
+    return {
+        "recognized": recognized,
+        "promoted_pointer_present": pointer is not None,
+        "promoted_pointer_valid": pointer_markers_valid,
+        "promotion_status": promotion_status,
+        "effective_handoff_present": effective is not None,
+        "effective_handoff_valid": effective_handoff_valid,
+        "candidate_actionable_row_count": row_count,
+        "actionable_this_run_tickers": tickers,
+        "promotion_expires_at": expires_at,
+        "permission_effect": permission_effect,
+        "not_authorization": pointer.get("not_authorization") if pointer else None,
+    }
+
+
+def _expires_not_stale(expires_at: Any, now_date: Any) -> bool:
+    expires = _parse_date(expires_at)
+    now = _parse_date(now_date)
+    return expires is not None and now is not None and expires >= now
+
+
+def _sha256_of(value: Any) -> str | None:
+    if value is None:
+        return None
+    try:
+        serialized = json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return None
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
 def _parse_date(value: Any) -> date | None:
     if not isinstance(value, str):
         return None
@@ -546,7 +835,21 @@ def research_availability_result_to_dict(result: ResearchAvailabilityResult) -> 
         "support_signals_present": result.support_signals_present,
         "accepted_support_signal_count": result.accepted_support_signal_count,
         "grounded_memo_support_present": result.grounded_memo_support_present,
-        "not_authorization": result.support_signals_not_authorization,
+        "not_authorization": result.not_authorization
+        if result.not_authorization is not None
+        else result.support_signals_not_authorization,
+        "promoted_pointer_present": result.promoted_pointer_present,
+        "promoted_pointer_valid": result.promoted_pointer_valid,
+        "promotion_status": result.promotion_status,
+        "effective_handoff_present": result.effective_handoff_present,
+        "effective_handoff_valid": result.effective_handoff_valid,
+        "candidate_actionable_row_count": result.candidate_actionable_row_count,
+        "actionable_this_run_tickers": list(result.actionable_this_run_tickers),
+        "promotion_expires_at": result.promotion_expires_at,
+        "permission_effect": result.permission_effect or _permission_effect(result.state),
+        "promoted_step2_decision_only": result.promoted_step2_decision_only,
+        "order_compilation_allowed": "ORDER_COMPILATION" in result.allowed_actions,
+        "new_buy_permission": "NEW_BUY" in result.allowed_actions,
         "source_artifacts": dict(result.source_artifacts),
         "report_only": True,
     }
@@ -602,8 +905,21 @@ def research_degraded_mode_decision_to_dict(result: ResearchAvailabilityResult) 
         "support_signals_present": result.support_signals_present,
         "accepted_support_signal_count": result.accepted_support_signal_count,
         "grounded_memo_support_present": result.grounded_memo_support_present,
-        "not_authorization": result.support_signals_not_authorization,
-        "permission_effect": _permission_effect(result.state),
+        "not_authorization": result.not_authorization
+        if result.not_authorization is not None
+        else result.support_signals_not_authorization,
+        "promoted_pointer_present": result.promoted_pointer_present,
+        "promoted_pointer_valid": result.promoted_pointer_valid,
+        "promotion_status": result.promotion_status,
+        "effective_handoff_present": result.effective_handoff_present,
+        "effective_handoff_valid": result.effective_handoff_valid,
+        "candidate_actionable_row_count": result.candidate_actionable_row_count,
+        "actionable_this_run_tickers": list(result.actionable_this_run_tickers),
+        "promotion_expires_at": result.promotion_expires_at,
+        "permission_effect": result.permission_effect or _permission_effect(result.state),
+        "promoted_step2_decision_only": result.promoted_step2_decision_only,
+        "order_compilation_allowed": "ORDER_COMPILATION" in result.allowed_actions,
+        "new_buy_permission": "NEW_BUY" in result.allowed_actions,
         "source_artifacts": dict(result.source_artifacts),
         "report_only": True,
     }

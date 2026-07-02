@@ -12,10 +12,19 @@ from investment_orchestrator.llm.manual_output import (
     render_prompt,
     write_rendered_prompt,
 )
+from investment_orchestrator.common.io import write_json
 from investment_orchestrator.parsers.extract_audit_and_audited_packet import (
     extract_audit_and_audited_packet,
 )
-from investment_orchestrator.state.upstream_artifact_guard import enforce_upstream_artifact_guard
+from investment_orchestrator.state.research_degraded_mode_gate import (
+    MODE_PROMOTED_STEP2_DECISION_ONLY,
+    NO_TRADE_PENDING_FINAL_GATES,
+    load_and_evaluate_step2_research_gate,
+)
+from investment_orchestrator.state.upstream_artifact_guard import (
+    UpstreamArtifactGuardError,
+    enforce_upstream_artifact_guard,
+)
 from investment_orchestrator.workflow.step1_research import (
     step1_research_degraded_mode_decision_path,
     step1_research_output_path,
@@ -36,6 +45,10 @@ TEMPLATE3_AUDIT_FILENAME = "template3_audit.txt"
 TEMPLATE2_PATCH_FILENAME = "template2_patch.txt"
 AUDITED_DECISION_PACKET_FILENAME = "audited_decision_packet.json"
 STEP3_BLOCKED_BY_UPSTREAM_GATE_FILENAME = "step3_blocked_by_upstream_gate.json"
+STEP3_BLOCKED_BY_PROMOTED_DECISION_ONLY_GATE_FILENAME = (
+    "step3_blocked_by_promoted_decision_only_gate.json"
+)
+PROMOTED_DECISION_ONLY_NO_AUDIT_REASON = "promoted_step2_decision_only_no_audit_permission"
 
 STRATEGY_SETTINGS_BLOCK_RE = re.compile(
     r"STRATEGY_SETTINGS_START\s*\n.*?\nSTRATEGY_SETTINGS_END",
@@ -83,8 +96,21 @@ def step3_blocked_by_upstream_gate_path() -> Path:
     return step3_artifact_dir() / STEP3_BLOCKED_BY_UPSTREAM_GATE_FILENAME
 
 
+def step3_blocked_by_promoted_decision_only_gate_path() -> Path:
+    """Return the deterministic promoted decision-only Step 3 block artifact path (R2E.5b-6c)."""
+    return step3_artifact_dir() / STEP3_BLOCKED_BY_PROMOTED_DECISION_ONLY_GATE_FILENAME
+
+
 def enforce_step3_upstream_guard() -> None:
-    """Fail closed before Step 3 consumes blocked or missing Step 2 artifacts."""
+    """Fail closed before Step 3 consumes blocked or missing Step 2 artifacts.
+
+    R2E.5b-6c: the promoted Step 2 decision-only mode permits Step 2 ONLY. When
+    the research gate resolves to that mode, Step 3 deterministically blocks
+    (``promoted_step2_decision_only_no_audit_permission``) regardless of which
+    Step 2 artifacts exist — a decision-only packet must never be audited into
+    order readiness without a future explicit audit-permission PR.
+    """
+    _enforce_step3_promoted_decision_only_block()
     enforce_upstream_artifact_guard(
         blocked_artifact_path=step3_blocked_by_upstream_gate_path(),
         upstream_blocked_artifacts=[step2_blocked_by_research_gate_path()],
@@ -97,6 +123,49 @@ def enforce_step3_upstream_guard() -> None:
         repo_root_path=repo_root(),
         permission_fallback_artifacts=[step1_research_degraded_mode_decision_path()],
     )
+
+
+def _enforce_step3_promoted_decision_only_block() -> None:
+    """Block Step 3 when Step 2 ran (or would run) in promoted decision-only mode."""
+    gate = load_and_evaluate_step2_research_gate(step1_research_degraded_mode_decision_path())
+    if not (gate.allowed and gate.mode == MODE_PROMOTED_STEP2_DECISION_ONLY):
+        return
+    blocked_artifact_path = step3_blocked_by_promoted_decision_only_gate_path()
+    write_json(
+        blocked_artifact_path,
+        {
+            "blocked": True,
+            "reason": PROMOTED_DECISION_ONLY_NO_AUDIT_REASON,
+            "state": gate.state,
+            "mode": gate.mode,
+            "allowed_actions": list(gate.allowed_actions),
+            "blocked_actions": list(gate.blocked_actions),
+            "order_compilation_allowed": False,
+            "new_buy_permission": False,
+            "step3_allowed": False,
+            "step4_allowed": False,
+            "manual_review_required": gate.manual_review_required,
+            "blocker_reasons": [
+                "promoted Step 2 decision-only permits Step 2 render/parse only; "
+                "Step 3 audit requires a future explicit audit-permission PR."
+            ],
+            "recommended_result": NO_TRADE_PENDING_FINAL_GATES,
+            "source_artifact": _display_path(step1_research_degraded_mode_decision_path()),
+            "report_only": False,
+        },
+    )
+    raise UpstreamArtifactGuardError(
+        "Step 3 blocked by promoted decision-only gate: "
+        f"reason={PROMOTED_DECISION_ONLY_NO_AUDIT_REASON}; "
+        f"blocked_artifact={_display_path(blocked_artifact_path)}"
+    )
+
+
+def _display_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(repo_root()))
+    except ValueError:
+        return str(path)
 
 
 def _require_non_empty_text(path: Path, *, label: str) -> str:

@@ -36,6 +36,8 @@ from investment_orchestrator.state.blocked_run_summary import (
     summarize_current_run,
 )
 from investment_orchestrator.state.research_degraded_mode_gate import (
+    MODE_PROMOTED_STEP2_DECISION_ONLY,
+    NO_TRADE_PENDING_FINAL_GATES,
     ResearchDegradedModeGateResult,
     load_and_evaluate_step2_research_gate,
 )
@@ -59,8 +61,13 @@ from investment_orchestrator.workflow.step4_order_compiler import (
 WEEKLY_OUTCOME_FILENAME = "weekly_outcome.json"
 
 TERMINAL_NO_TRADE = "NO_TRADE"
+# R2E.5b-6c: controlled terminal for the promoted Step 2 decision-only state —
+# manual Step 2 render/parse is permitted, but weekly itself never runs the LLM
+# path and never proceeds to Step 3/4 / order compilation.
+TERMINAL_NO_TRADE_PENDING_FINAL_GATES = NO_TRADE_PENDING_FINAL_GATES
 DEGRADED_TERMINAL_REASON = "research_degraded_mode"
 ACTIONABLE_REASON = "research_strict_fresh_actionable"
+PROMOTED_DECISION_ONLY_TERMINAL_REASON = "promoted_step2_decision_only_pending_final_gates"
 
 # Order-generating actions that a controlled NO_TRADE weekly run must never
 # enter; surfaced in the terminal artifact for operator clarity.
@@ -120,6 +127,29 @@ def run_weekly(
     weekly_outcome_output_path = weekly_outcome_output_path or weekly_outcome_path(root)
 
     gate = load_and_evaluate_step2_research_gate(decision_path)
+
+    if gate.allowed and gate.mode == MODE_PROMOTED_STEP2_DECISION_ONLY:
+        # R2E.5b-6c conservative weekly behavior: weekly does NOT auto-run the
+        # Step 2 LLM path for the promoted decision-only state and never touches
+        # Step 3/4 or the order compiler. It terminates as a controlled
+        # NO_TRADE_PENDING_FINAL_GATES; manual `run_step2 render/parse` is the
+        # enabled decision-only flow.
+        return _terminal_promoted_decision_only(
+            gate=gate,
+            decision_path=decision_path,
+            step2_block_path=step2_block_path or step2_blocked_by_research_gate_path(),
+            step3_block_path=step3_block_path or step3_blocked_by_upstream_gate_path(),
+            step4_block_path=step4_block_path or step4_blocked_by_upstream_gate_path(),
+            step4_final_safety_block_path=(
+                step4_final_safety_block_path
+                or step4_blocked_by_final_execution_safety_gate_path()
+            ),
+            run_summary_output_path=(
+                run_summary_output_path or (root / "artifacts" / "current" / RUN_SUMMARY_FILENAME)
+            ),
+            weekly_outcome_output_path=weekly_outcome_output_path,
+            repo_root_path=root,
+        )
 
     if gate.allowed:
         return _proceed_actionable(
@@ -204,6 +234,81 @@ def _proceed_actionable(
         run_summary_path=None,
         step2_prompt_path=rendered_prompt_path,
         source_artifacts=source_artifacts,
+        exit_code=0,
+    )
+
+
+def _terminal_promoted_decision_only(
+    *,
+    gate: ResearchDegradedModeGateResult,
+    decision_path: Path,
+    step2_block_path: Path,
+    step3_block_path: Path,
+    step4_block_path: Path,
+    step4_final_safety_block_path: Path,
+    run_summary_output_path: Path,
+    weekly_outcome_output_path: Path,
+    repo_root_path: Path,
+) -> WeeklyRunResult:
+    """Controlled NO_TRADE_PENDING_FINAL_GATES terminal for decision-only runs.
+
+    Writes ``run_summary.json`` + ``weekly_outcome.json`` and exits 0. Does not
+    render Step 2, does not call Step 3/4, and compiles no orders: the state
+    permits only HOLD / NO_TRADE / PROMOTED_RESEARCH_DECISION, and the manual
+    ``run_step2`` decision-only flow is the sole enabled consumer.
+    """
+    summarize_current_run(
+        step1_decision_path=decision_path,
+        step2_block_path=step2_block_path,
+        step3_block_path=step3_block_path,
+        step4_block_path=step4_block_path,
+        step4_final_safety_block_path=step4_final_safety_block_path,
+        output_path=run_summary_output_path,
+        repo_root_path=repo_root_path,
+    )
+
+    blocked_actions = _with_order_actions_blocked(gate.allowed_actions, gate.blocked_actions)
+
+    payload = {
+        "weekly_completed": True,
+        "actionable": False,
+        "terminal_result": TERMINAL_NO_TRADE_PENDING_FINAL_GATES,
+        "reason": PROMOTED_DECISION_ONLY_TERMINAL_REASON,
+        "research_state": gate.state,
+        "mode": gate.mode,
+        "allowed_actions": list(gate.allowed_actions),
+        "blocked_actions": blocked_actions,
+        "order_compilation_allowed": False,
+        "new_buy_permission": False,
+        "manual_review_required": gate.manual_review_required,
+        "blocker_reasons": list(gate.blocker_reasons),
+        "next_step": (
+            "manual run_step2 render/parse (promoted decision-only) is enabled; Step 3 audit, "
+            "Step 4 order compilation, and the final execution safety gate remain blocked "
+            "pending future gate PRs"
+        ),
+        "is_llm_generated": False,
+        "report_only": False,
+        "source_artifacts": {
+            "research_degraded_mode_decision": _display_path(decision_path, repo_root_path),
+            "run_summary": _display_path(run_summary_output_path, repo_root_path),
+        },
+    }
+    write_json(weekly_outcome_output_path, payload)
+
+    return WeeklyRunResult(
+        actionable=False,
+        weekly_completed=True,
+        terminal_result=TERMINAL_NO_TRADE_PENDING_FINAL_GATES,
+        research_state=gate.state,
+        manual_review_required=gate.manual_review_required,
+        allowed_actions=list(gate.allowed_actions),
+        blocked_actions=blocked_actions,
+        blocker_reasons=list(gate.blocker_reasons),
+        weekly_outcome_path=weekly_outcome_output_path,
+        run_summary_path=run_summary_output_path,
+        step2_prompt_path=None,
+        source_artifacts=dict(payload["source_artifacts"]),
         exit_code=0,
     )
 

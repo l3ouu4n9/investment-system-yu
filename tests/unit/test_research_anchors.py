@@ -7,8 +7,11 @@ NOT consumed for support acceptance and never change permissions.
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from investment_orchestrator.research.research_anchors import (
     ANCHOR_TYPES,
@@ -16,6 +19,7 @@ from investment_orchestrator.research.research_anchors import (
     SCHEMA_VERSION,
     build_research_anchors_summary,
     load_research_anchors,
+    normalize_iso_date_value,
     summarize_research_anchors,
     validate_research_anchors,
 )
@@ -139,6 +143,101 @@ def test_invalid_date_fails() -> None:
     assert any("anchor_date_et" in p for p in result.anchors[0]["problems"])
 
 
+# --- date normalization (R2E.5a-date-normalization) --------------------------
+
+
+def test_normalize_iso_date_value_quoted_string() -> None:
+    assert normalize_iso_date_value("2026-06-30") == "2026-06-30"
+
+
+def test_normalize_iso_date_value_date_object() -> None:
+    assert normalize_iso_date_value(date(2026, 6, 30)) == "2026-06-30"
+
+
+def test_normalize_iso_date_value_datetime_object() -> None:
+    assert normalize_iso_date_value(datetime(2026, 6, 30, 13, 45, 0)) == "2026-06-30"
+
+
+def test_normalize_iso_date_value_invalid_string_returns_none() -> None:
+    assert normalize_iso_date_value("2026-13-40") is None
+    assert normalize_iso_date_value("not-a-date") is None
+
+
+def test_normalize_iso_date_value_missing_or_wrong_type_returns_none() -> None:
+    assert normalize_iso_date_value(None) is None
+    assert normalize_iso_date_value(12345) is None
+    assert normalize_iso_date_value(["2026-06-30"]) is None
+
+
+def test_unquoted_yaml_date_object_normalizes_in_anchor() -> None:
+    # PyYAML decodes an unquoted `2026-06-15` scalar into a datetime.date object.
+    result = _validate(
+        payload(
+            as_of_date=date(2026, 6, 30),
+            anchors=[
+                anchor(
+                    anchor_date_et=date(2026, 6, 15),
+                    valid_from=date(2026, 6, 1),
+                    valid_until=date(2026, 7, 15),
+                )
+            ],
+        )
+    )
+    assert result.valid is True
+    assert result.as_of_date == "2026-06-30"
+    a = result.anchors[0]
+    assert a["anchor_date_et"] == "2026-06-15"
+    assert a["valid_from"] == "2026-06-01"
+    assert a["valid_until"] == "2026-07-15"
+    assert a["valid"] is True
+    assert a["usable"] is True
+
+
+def test_datetime_object_values_normalize_in_anchor() -> None:
+    result = _validate(
+        payload(
+            anchors=[
+                anchor(
+                    anchor_date_et=datetime(2026, 6, 15, 9, 30, 0),
+                    valid_from=datetime(2026, 6, 1, 0, 0, 0),
+                    valid_until=datetime(2026, 7, 15, 23, 59, 59),
+                )
+            ]
+        )
+    )
+    assert result.valid is True
+    a = result.anchors[0]
+    assert a["anchor_date_et"] == "2026-06-15"
+    assert a["valid_from"] == "2026-06-01"
+    assert a["valid_until"] == "2026-07-15"
+
+
+def test_quoted_and_unquoted_yaml_dates_produce_identical_anchor() -> None:
+    quoted_text = (
+        "schema_version: research_anchors_v1\n"
+        "as_of_date: '2026-06-30'\n"
+        "is_llm_generated: false\n"
+        "anchors:\n"
+        "  - anchor_id: AI_CAPEX_2026H2\n"
+        "    anchor_type: structural_theme\n"
+        "    applicable_tickers: [QQQ, SMH]\n"
+        "    source_type: operator\n"
+        "    anchor_date_et: '2026-06-15'\n"
+        "    valid_from: '2026-06-01'\n"
+        "    valid_until: '2026-07-15'\n"
+        "    confidence_floor: medium\n"
+    )
+    unquoted_text = quoted_text.replace("'", "")
+    quoted_result = _validate(yaml.safe_load(quoted_text))
+    unquoted_result = _validate(yaml.safe_load(unquoted_text))
+    assert quoted_result.valid is True
+    assert unquoted_result.valid is True
+    assert quoted_result.as_of_date == unquoted_result.as_of_date == "2026-06-30"
+    assert quoted_result.anchors[0]["anchor_date_et"] == unquoted_result.anchors[0]["anchor_date_et"] == "2026-06-15"
+    assert quoted_result.anchors[0]["valid_from"] == unquoted_result.anchors[0]["valid_from"] == "2026-06-01"
+    assert quoted_result.anchors[0]["valid_until"] == unquoted_result.anchors[0]["valid_until"] == "2026-07-15"
+
+
 def test_missing_required_field_fails() -> None:
     bad = anchor()
     del bad["valid_until"]
@@ -189,6 +288,17 @@ def test_stale_but_blocks_if_stale_false_is_usable() -> None:
     a = result.anchors[0]
     assert a["stale"] is True
     assert a["usable"] is True  # operator explicitly allows a stale anchor
+
+
+def test_stale_detection_works_for_unquoted_yaml_date_object() -> None:
+    # today (TODAY) is 2026-06-30; an unquoted valid_until decoded as a date object
+    # must still be detected as stale, exactly like the quoted-string case above.
+    result = _validate(payload(anchors=[anchor(valid_until=date(2026, 6, 1))]))
+    a = result.anchors[0]
+    assert a["valid"] is True
+    assert a["stale"] is True
+    assert a["usable"] is False
+    assert a["valid_until"] == "2026-06-01"
 
 
 # --- forbidden keys / tokens (recursive) -------------------------------------
@@ -253,6 +363,38 @@ def test_build_summary_valid_file(tmp_path: Path) -> None:
     assert summary["available"] is True
     assert summary["valid"] is True
     assert summary["anchor_count"] == 0
+
+
+def test_build_summary_valid_file_with_unquoted_dates(tmp_path: Path) -> None:
+    # Regression (R2E.5b-1 report): an unquoted YAML date decodes to
+    # datetime.date, not str. The summary must still expose normalized ISO
+    # date strings, not null.
+    p = tmp_path / "research_anchors.yaml"
+    p.write_text(
+        "schema_version: research_anchors_v1\n"
+        "as_of_date: 2026-06-30\n"
+        "is_llm_generated: false\n"
+        "anchors:\n"
+        "  - anchor_id: AI_CAPEX_2026H2\n"
+        "    anchor_type: structural_theme\n"
+        "    applicable_tickers: [QQQ, SMH]\n"
+        "    source_type: operator\n"
+        "    anchor_date_et: 2026-06-15\n"
+        "    valid_from: 2026-06-01\n"
+        "    valid_until: 2026-07-15\n"
+        "    confidence_floor: medium\n",
+        encoding="utf-8",
+    )
+    summary = build_research_anchors_summary(p, allowed_universe=ALLOWED, today=TODAY)
+    assert summary["available"] is True
+    assert summary["valid"] is True
+    assert summary["as_of_date"] == "2026-06-30"
+    assert summary["anchor_count"] == 1
+    assert summary["valid_anchor_count"] == 1
+    anchor_row = summary["anchors"][0]
+    assert anchor_row["anchor_date_et"] == "2026-06-15"
+    assert anchor_row["valid_from"] == "2026-06-01"
+    assert anchor_row["valid_until"] == "2026-07-15"
 
 
 def test_build_summary_malformed_yaml_is_available_but_invalid(tmp_path: Path) -> None:
