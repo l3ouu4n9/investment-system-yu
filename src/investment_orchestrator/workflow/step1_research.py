@@ -866,6 +866,25 @@ def _evaluate_research_availability_report_only(
             strategy_settings=strategy_settings,
             research_decision=research_degraded_mode_decision_to_dict(availability),
         )
+        if promoted_step3_audit.get("promoted_handoff_step3_audit_verification_path"):
+            promoted_source_artifacts["promoted_handoff_step3_audit_verification"] = (
+                promoted_step3_audit["promoted_handoff_step3_audit_verification_path"]
+            )
+        if promoted_step3_audit.get("promoted_step3_audit_gate_dry_run_path"):
+            promoted_source_artifacts["promoted_step3_audit_gate_dry_run"] = (
+                promoted_step3_audit["promoted_step3_audit_gate_dry_run_path"]
+            )
+        availability = evaluate_research_availability(
+            **{**base_kwargs, "promoted_source_artifacts": promoted_source_artifacts},
+            promoted_step2_verification=promoted_step2.get("verification"),
+            promoted_step2_gate_dry_run=promoted_step2.get("dry_run"),
+            promoted_step3_audit_verification=promoted_step3_audit.get(
+                "step3_audit_verification"
+            ),
+            promoted_step3_audit_gate_dry_run=promoted_step3_audit.get(
+                "step3_audit_dry_run"
+            ),
+        )
         promoted_summary = {**promoted_step2, **promoted_step3_audit}
         write_json(
             step1_research_availability_path(),
@@ -905,6 +924,57 @@ def _evaluate_research_availability_report_only(
         except Exception:  # noqa: BLE001 - best-effort artifact emission
             pass
         return fallback, dict(_EMPTY_PROMOTED_STEP2_SUMMARY)
+
+
+def refresh_promoted_step3_audit_only_permission_after_step2(
+    *,
+    strategy_settings: Mapping[str, Any] | None = None,
+) -> dict[str, str]:
+    """Refresh Step 3 audit-only eligibility after Step 2 parse writes its artifacts.
+
+    Step 1 parse runs before the promoted Step 2 marker and decision packet
+    exist, so the 6e Step 3 verifier/dry-run fail closed at that point. The
+    promoted Step 2 parse calls this deterministic hook after it writes those
+    artifacts. This rewrites only the availability/permission diagnostics and
+    the promoted Step 3 verification/dry-run files; it does not run Step 3,
+    Step 4, an order compiler, broker automation, or any live execution path.
+    """
+    settings = (
+        strategy_settings
+        if strategy_settings is not None
+        else load_strategy_settings_for_handoff_validation()
+    )
+    candidate = _read_json_if_exists(step1_research_handoff_candidate_path())
+    candidate_validation = _read_json_if_exists(step1_research_handoff_candidate_validation_path())
+    payload = _read_json_if_exists(step1_research_output_path())
+    if not isinstance(candidate, Mapping) or not isinstance(payload, Mapping):
+        return {
+            "promoted_handoff_step3_audit_verification_path": "",
+            "promoted_step3_audit_gate_dry_run_path": "",
+            "promoted_step3_audit_gate_dry_run_would_allow": "",
+            "research_availability_state": "",
+            "promoted_step3_audit_only": "False",
+        }
+
+    availability, promoted_summary = _evaluate_research_availability_report_only(
+        candidate=candidate,
+        candidate_validation=candidate_validation,
+        strategy_settings=settings,
+        payload=payload,
+    )
+    return {
+        "promoted_handoff_step3_audit_verification_path": str(
+            promoted_summary.get("promoted_handoff_step3_audit_verification_path", "")
+        ),
+        "promoted_step3_audit_gate_dry_run_path": str(
+            promoted_summary.get("promoted_step3_audit_gate_dry_run_path", "")
+        ),
+        "promoted_step3_audit_gate_dry_run_would_allow": str(
+            promoted_summary.get("promoted_step3_audit_gate_dry_run_would_allow", "")
+        ),
+        "research_availability_state": availability.state,
+        "promoted_step3_audit_only": str(availability.promoted_step3_audit_only),
+    }
 
 
 def _write_evidence_packet_report_only(
@@ -1482,12 +1552,13 @@ def _write_promoted_step3_audit_dry_run_report_only(
     strategy_settings: Mapping[str, Any] | None,
     research_decision: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """Write R2E.5b-6e future Step 3 audit-only diagnostics.
+    """Write R2E.5b-6e Step 3 audit-only prerequisite diagnostics.
 
-    This is report-only instrumentation. It does not add a Step 3 state/action,
-    does not feed availability, and never changes any Step 2/3/4/final/order
-    gate. Missing Step 2 marker or decision-packet artifacts simply produce a
-    fail-closed dry-run verdict.
+    The artifacts remain deterministic and non-authorizing. R2E.5b-6f may
+    consume a passing pair as a prerequisite for the audit-only state, but the
+    artifacts still never open Step 4, ORDER_COMPILATION, final execution, or
+    live/broker paths. Missing Step 2 marker or decision-packet artifacts simply
+    produce a fail-closed dry-run verdict.
     """
     try:
         settings_as_of = (

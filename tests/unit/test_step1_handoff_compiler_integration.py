@@ -1656,3 +1656,216 @@ def test_promoted_step3_audit_verifier_fails_closed_on_effective_hash_mismatch(
     assert "promoted_handoff_verification_invalid" in verification["verification_blockers"]
     assert "step2_promoted_marker_hash_mismatch" in verification["verification_blockers"]
     assert "effective_handoff_hash_mismatch" in verification["live_step2_verification_blockers"]
+
+
+# --- R2E.5b-6f promoted Step 3 audit-only manual path ------------------------
+
+
+def _write_step2_raw_output_for_parse(packet: dict[str, Any]) -> None:
+    from investment_orchestrator.workflow import step2_decision_builder
+
+    step2_decision_builder.step2_raw_output_path().write_text(
+        "TEMPLATE2_OUTPUT_START\n"
+        "Fixture promoted Step 2 decision-only output.\n"
+        "TEMPLATE2_OUTPUT_END\n"
+        "DECISION_PACKET_START\n"
+        + json.dumps(packet)
+        + "\nDECISION_PACKET_END\n",
+        encoding="utf-8",
+    )
+
+
+def _write_step3_prompt_inputs(tmp_path: Path) -> None:
+    (tmp_path / "prompts" / "strategy_b_audit_engine.txt").write_text(
+        "RESEARCH\n{{ research_json }}\nPORTFOLIO\n{{ portfolio_snapshot }}\n"
+        "TEMPLATE2\n{{ template2_output }}\nDECISION\n{{ decision_packet }}\n",
+        encoding="utf-8",
+    )
+
+
+def _promote_to_step3_audit_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, Any]:
+    from investment_orchestrator.workflow import step2_decision_builder
+
+    monkeypatch.setattr(step2_decision_builder, "repo_root", lambda: tmp_path)
+    artifact_dir = _setup_repo(tmp_path, monkeypatch)
+    (artifact_dir / "analyst_memo_raw_output.txt").write_text(
+        json.dumps(_anchor_grounded_memo()), encoding="utf-8"
+    )
+    _write_anchor_yaml(tmp_path)
+    result = step1_research.parse_step1_output(strategy_settings=_settings_with_cap())
+    _prepare_step2_render_inputs(tmp_path)
+    step2_decision_builder.render_step2_prompt()
+    _write_step2_raw_output_for_parse(_valid_step2_decision_packet())
+    parse = step2_decision_builder.parse_step2_output()
+    assert parse["promoted_step3_audit_only"] == "True"
+    decision = json.loads(
+        Path(result["research_degraded_mode_decision_path"]).read_text(encoding="utf-8")
+    )
+    assert decision["state"] == "STRICT_FRESH_COMPILED_ACTIONABLE_STEP3_AUDIT_ONLY"
+    assert decision["allowed_actions"] == [
+        "HOLD",
+        "NO_TRADE",
+        "PROMOTED_RESEARCH_DECISION",
+        "PROMOTED_RESEARCH_AUDIT",
+    ]
+    assert "NEW_BUY" not in decision["allowed_actions"]
+    assert "ORDER_COMPILATION" not in decision["allowed_actions"]
+    assert decision["promoted_step3_audit_only"] is True
+    assert decision["order_compilation_allowed"] is False
+    assert decision["new_buy_permission"] is False
+    return {"step1_result": result, "decision": decision, "step2_parse": parse}
+
+
+def test_promoted_step3_audit_only_render_parse_blocks_downstream(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from investment_orchestrator.state.final_execution_safety_gate import (
+        evaluate_final_execution_safety,
+    )
+    from investment_orchestrator.state.upstream_artifact_guard import UpstreamArtifactGuardError
+    from investment_orchestrator.workflow import (
+        step3_audit_engine,
+        step4_order_compiler,
+    )
+
+    monkeypatch.setattr(step3_audit_engine, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(step4_order_compiler, "repo_root", lambda: tmp_path)
+    setup = _promote_to_step3_audit_only(tmp_path, monkeypatch)
+    result = setup["step1_result"]
+    decision = setup["decision"]
+    _write_step3_prompt_inputs(tmp_path)
+
+    raw_only_marker = "RAW_DEEP_RESEARCH_FIXTURE_ONLY_MARKER_DO_NOT_RENDER_PROMOTED_STEP3"
+    raw_path = Path(result["research_output_path"])
+    raw_research = json.loads(raw_path.read_text(encoding="utf-8"))
+    raw_research["fixture_only_raw_deep_research_marker"] = raw_only_marker
+    raw_path.write_text(json.dumps(raw_research), encoding="utf-8")
+
+    render = step3_audit_engine.render_step3_prompt()
+    assert render["mode"] == "promoted_step3_audit_only"
+    prompt = Path(render["prompt_path"]).read_text(encoding="utf-8")
+    effective = json.loads(Path(result["effective_research_handoff_path"]).read_text(encoding="utf-8"))
+    assert effective["schema_version"] in prompt
+    assert raw_only_marker in json.dumps(raw_research)
+    assert raw_only_marker not in prompt
+    assert "research_handoff_candidate_effective.json" in prompt
+    assert "NOT raw Deep Research output" in prompt
+    assert "PROMOTED_RESEARCH_AUDIT" in prompt
+    assert "NOT order authorization" in prompt
+    assert "NEW_BUY and ORDER_COMPILATION are NOT allowed" in prompt
+
+    marker = json.loads(
+        step3_audit_engine.step3_promoted_audit_only_path().read_text(encoding="utf-8")
+    )
+    assert marker["schema_version"] == "step3_promoted_audit_only_v1"
+    assert marker["is_llm_generated"] is False
+    assert marker["mode"] == "promoted_step3_audit_only"
+    assert marker["state"] == "STRICT_FRESH_COMPILED_ACTIONABLE_STEP3_AUDIT_ONLY"
+    assert marker["allowed_actions"] == [
+        "HOLD",
+        "NO_TRADE",
+        "PROMOTED_RESEARCH_DECISION",
+        "PROMOTED_RESEARCH_AUDIT",
+    ]
+    assert "NEW_BUY" not in marker["allowed_actions"]
+    assert "ORDER_COMPILATION" not in marker["allowed_actions"]
+    assert marker["audit_only"] is True
+    assert marker["permission_effect"] == "step3_audit_only"
+    assert marker["not_authorization"] is True
+    assert marker["not_execution_authorization"] is True
+    assert marker["order_compilation_allowed"] is False
+    assert marker["new_buy_permission"] is False
+    assert marker["step4_allowed"] is False
+    assert marker["final_execution_allowed"] is False
+    assert marker["broker_automation_allowed"] is False
+    assert marker["future_step3_source_artifact"] == "research_handoff_candidate_effective.json"
+    assert "research_output.json" not in json.dumps(marker["source_artifacts"])
+
+    downstream_block = json.loads(
+        step3_audit_engine.step3_promoted_audit_only_downstream_block_path().read_text(
+            encoding="utf-8"
+        )
+    )
+    assert downstream_block["blocked"] is True
+    assert downstream_block["reason"] == "promoted_step3_audit_only_no_order_compilation_permission"
+    assert downstream_block["order_compilation_allowed"] is False
+
+    step3_audit_engine.step3_raw_output_path().write_text(
+        "Promoted Step 3 audit-only findings. No order readiness asserted.\n",
+        encoding="utf-8",
+    )
+    parsed = step3_audit_engine.parse_step3_output()
+    assert parsed["mode"] == "promoted_step3_audit_only"
+    assert step3_audit_engine.step3_template3_audit_path().exists()
+    assert step3_audit_engine.step3_template2_patch_path().exists()
+    assert not step3_audit_engine.step3_audited_decision_packet_path().exists()
+
+    with pytest.raises(UpstreamArtifactGuardError):
+        step4_order_compiler.render_step4_prompt()
+    step4_block = json.loads(
+        step4_order_compiler.step4_blocked_by_upstream_gate_path().read_text(encoding="utf-8")
+    )
+    assert step4_block["blocked_by_artifact"].endswith(
+        "step3_promoted_audit_only_downstream_block.json"
+    )
+    assert not step4_order_compiler.step4_prompt_path().exists()
+    assert not step4_order_compiler.step4_template4_orders_path().exists()
+    assert not step4_order_compiler.step4_order_state_export_path().exists()
+    assert not step4_order_compiler.step4_exec_summary_path().exists()
+
+    final = evaluate_final_execution_safety(
+        step1_permission=decision,
+        step2_decision_packet=_valid_step2_decision_packet(),
+        step3_audited_packet=None,
+    )
+    assert final.ready_for_order_compilation is False
+    assert final.checked_conditions["step1_state_strict_fresh"] is False
+    assert final.checked_conditions["order_compilation_allowed"] is False
+
+
+def test_promoted_step3_audit_only_fails_closed_without_step2_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from investment_orchestrator.state.upstream_artifact_guard import UpstreamArtifactGuardError
+    from investment_orchestrator.workflow import step2_decision_builder, step3_audit_engine
+
+    monkeypatch.setattr(step3_audit_engine, "repo_root", lambda: tmp_path)
+    _promote_to_step3_audit_only(tmp_path, monkeypatch)
+    _write_step3_prompt_inputs(tmp_path)
+    step2_decision_builder.step2_promoted_decision_only_path().unlink()
+
+    with pytest.raises(UpstreamArtifactGuardError, match="promoted audit-only verification"):
+        step3_audit_engine.render_step3_prompt()
+    blocked = json.loads(
+        step3_audit_engine.step3_blocked_by_upstream_gate_path().read_text(encoding="utf-8")
+    )
+    assert blocked["reason"] == "promoted_step3_audit_only_verification_failed"
+    assert "step2_promoted_marker_missing" in blocked["blocker_reasons"]
+    assert not step3_audit_engine.step3_prompt_path().exists()
+
+
+def test_promoted_step3_audit_only_fails_closed_on_effective_hash_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from investment_orchestrator.state.upstream_artifact_guard import UpstreamArtifactGuardError
+    from investment_orchestrator.workflow import step3_audit_engine
+
+    monkeypatch.setattr(step3_audit_engine, "repo_root", lambda: tmp_path)
+    setup = _promote_to_step3_audit_only(tmp_path, monkeypatch)
+    _write_step3_prompt_inputs(tmp_path)
+    effective_path = Path(setup["step1_result"]["effective_research_handoff_path"])
+    tampered = json.loads(effective_path.read_text(encoding="utf-8"))
+    tampered["tampered_before_step3"] = True
+    effective_path.write_text(json.dumps(tampered), encoding="utf-8")
+
+    with pytest.raises(UpstreamArtifactGuardError, match="promoted audit-only verification"):
+        step3_audit_engine.render_step3_prompt()
+    blocked = json.loads(
+        step3_audit_engine.step3_blocked_by_upstream_gate_path().read_text(encoding="utf-8")
+    )
+    assert "promoted_handoff_verification_invalid" in blocked["blocker_reasons"]
+    assert "step2_promoted_marker_hash_mismatch" in blocked["blocker_reasons"]
+    assert not step3_audit_engine.step3_prompt_path().exists()

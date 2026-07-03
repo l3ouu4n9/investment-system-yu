@@ -1607,6 +1607,7 @@ def test_doc_r2e5b6b_era_invariants_now_reflect_6c_decision_only() -> None:
     from investment_orchestrator.state.research_availability import (
         STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES,
         STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY,
+        STRICT_FRESH_COMPILED_ACTIONABLE_STEP3_AUDIT_ONLY,
         _ALLOWED_ACTIONS_BY_STATE,
     )
     from investment_orchestrator.state.research_degraded_mode_gate import (
@@ -1623,15 +1624,25 @@ def test_doc_r2e5b6b_era_invariants_now_reflect_6c_decision_only() -> None:
         "HOLD",
         "NO_TRADE",
     )
-    # R2E.5b-6c implemented the dry-run's target state: PROMOTED_RESEARCH_DECISION
-    # exists on EXACTLY that state and nowhere else.
+    # R2E.5b-6c implemented the dry-run's target state; R2E.5b-6f adds only the
+    # promoted audit-only state. No unrelated state gets promoted actions.
     assert FUTURE_STATE_REQUIRED == STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY
     assert FUTURE_STATE_REQUIRED in _ALLOWED_ACTIONS_BY_STATE
     for state, actions in _ALLOWED_ACTIONS_BY_STATE.items():
         if state == FUTURE_STATE_REQUIRED:
             assert actions == ("HOLD", "NO_TRADE", "PROMOTED_RESEARCH_DECISION")
+        elif state == STRICT_FRESH_COMPILED_ACTIONABLE_STEP3_AUDIT_ONLY:
+            assert actions == (
+                "HOLD",
+                "NO_TRADE",
+                "PROMOTED_RESEARCH_DECISION",
+                "PROMOTED_RESEARCH_AUDIT",
+            )
+            assert "NEW_BUY" not in actions
+            assert "ORDER_COMPILATION" not in actions
         else:
             assert "PROMOTED_RESEARCH_DECISION" not in actions, state
+            assert "PROMOTED_RESEARCH_AUDIT" not in actions, state
     # The LEGACY Step 2 gate path still requires literal STRICT_FRESH + both
     # order actions (the promoted decision-only path is separate and additive).
     assert STEP2_STATE == "STRICT_FRESH"

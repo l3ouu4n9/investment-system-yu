@@ -41,6 +41,7 @@ from investment_orchestrator.workflow.step3_audit_engine import (
     step3_audited_decision_packet_path,
     step3_blocked_by_promoted_decision_only_gate_path,
     step3_blocked_by_upstream_gate_path,
+    step3_promoted_audit_only_downstream_block_path,
     step3_prompt_path,
     step3_raw_output_path,
     step3_template3_audit_path,
@@ -118,6 +119,7 @@ def enforce_step4_upstream_guard() -> None:
             step2_blocked_by_research_gate_path(),
             step3_blocked_by_upstream_gate_path(),
             step3_blocked_by_promoted_decision_only_gate_path(),
+            step3_promoted_audit_only_downstream_block_path(),
         ],
         required_artifacts=[
             step2_prompt_path(),

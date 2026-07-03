@@ -143,6 +143,8 @@ def assert_no_downstream_artifacts_created(tmp_path: Path) -> None:
         base / "step2_decision_builder" / "prompt.txt",
         base / "step2_decision_builder" / "decision_packet.json",
         base / "step2_decision_builder" / "template2_output.txt",
+        base / "step3_audit_engine" / "step3_promoted_audit_only.json",
+        base / "step3_audit_engine" / "step3_promoted_audit_only_downstream_block.json",
         base / "step3_audit_engine" / "audited_decision_packet.json",
         base / "step4_order_compiler" / "template4_orders.txt",
         base / "step4_order_compiler" / "order_state_export.txt",
@@ -458,6 +460,26 @@ def promoted_decision_only_permission() -> dict[str, Any]:
     }
 
 
+def promoted_step3_audit_only_permission() -> dict[str, Any]:
+    payload = promoted_decision_only_permission()
+    payload.update(
+        {
+            "state": "STRICT_FRESH_COMPILED_ACTIONABLE_STEP3_AUDIT_ONLY",
+            "research_availability": "strict_fresh_compiled_actionable_step3_audit_only",
+            "allowed_actions": [
+                "HOLD",
+                "NO_TRADE",
+                "PROMOTED_RESEARCH_DECISION",
+                "PROMOTED_RESEARCH_AUDIT",
+            ],
+            "promoted_step3_audit_only": True,
+            "step3_audit_only_allowed": True,
+            "permission_effect": "promoted_step3_audit_only",
+        }
+    )
+    return payload
+
+
 def test_promoted_decision_only_terminates_no_trade_pending_final_gates(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -503,4 +525,41 @@ def test_promoted_decision_only_terminates_no_trade_pending_final_gates(
     assert run_summary["research_state"] == "STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY"
 
     # No Step 2/3/4 decision / audit / order artifacts are fabricated.
+    assert_no_downstream_artifacts_created(tmp_path)
+
+
+def test_weekly_promoted_step3_audit_only_remains_no_order_terminal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepare_repo(
+        tmp_path,
+        monkeypatch,
+        permission=promoted_step3_audit_only_permission(),
+        with_step2_render_inputs=True,
+    )
+
+    result = weekly_orchestrator.run_weekly()
+
+    assert result.actionable is False
+    assert result.weekly_completed is True
+    assert result.terminal_result == "NO_TRADE"
+    assert result.research_state == "STRICT_FRESH_COMPILED_ACTIONABLE_STEP3_AUDIT_ONLY"
+    assert result.step2_prompt_path is None
+    assert not step2_decision_builder.step2_prompt_path().exists()
+    assert not step3_audit_engine.step3_prompt_path().exists()
+    assert not step4_order_compiler.step4_prompt_path().exists()
+
+    outcome = read_weekly_outcome(tmp_path)
+    assert outcome["terminal_result"] == "NO_TRADE"
+    assert outcome["reason"] == "research_degraded_mode"
+    assert outcome["allowed_actions"] == [
+        "HOLD",
+        "NO_TRADE",
+        "PROMOTED_RESEARCH_DECISION",
+        "PROMOTED_RESEARCH_AUDIT",
+    ]
+    assert "NEW_BUY" in outcome["blocked_actions"]
+    assert "ORDER_COMPILATION" in outcome["blocked_actions"]
+    assert outcome["is_llm_generated"] is False
     assert_no_downstream_artifacts_created(tmp_path)

@@ -335,12 +335,23 @@ def test_marker_hash_mismatch_fails_closed() -> None:
     ]
 
 
-def test_future_state_and_action_are_not_real_availability_permissions() -> None:
-    assert not hasattr(research_availability, FUTURE_STATE_REQUIRED)
-    assert FUTURE_STATE_REQUIRED not in research_availability._ALLOWED_ACTIONS_BY_STATE
+def test_step3_audit_only_state_and_action_are_real_but_non_ordering() -> None:
+    assert hasattr(research_availability, FUTURE_STATE_REQUIRED)
+    assert FUTURE_STATE_REQUIRED in research_availability._ALLOWED_ACTIONS_BY_STATE
     assert FUTURE_ACTION_REQUIRED not in research_availability.ACTIONS
-    for allowed_actions in research_availability._ALLOWED_ACTIONS_BY_STATE.values():
-        assert FUTURE_ACTION_REQUIRED not in allowed_actions
     assert research_availability._ALLOWED_ACTIONS_BY_STATE[
         research_availability.STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY
     ] == ("HOLD", "NO_TRADE", "PROMOTED_RESEARCH_DECISION")
+    assert research_availability._ALLOWED_ACTIONS_BY_STATE[FUTURE_STATE_REQUIRED] == (
+        "HOLD",
+        "NO_TRADE",
+        "PROMOTED_RESEARCH_DECISION",
+        FUTURE_ACTION_REQUIRED,
+    )
+    assert "NEW_BUY" not in research_availability._ALLOWED_ACTIONS_BY_STATE[FUTURE_STATE_REQUIRED]
+    assert "ORDER_COMPILATION" not in research_availability._ALLOWED_ACTIONS_BY_STATE[
+        FUTURE_STATE_REQUIRED
+    ]
+    for state, allowed_actions in research_availability._ALLOWED_ACTIONS_BY_STATE.items():
+        if state != FUTURE_STATE_REQUIRED:
+            assert FUTURE_ACTION_REQUIRED not in allowed_actions

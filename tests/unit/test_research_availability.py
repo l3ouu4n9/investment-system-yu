@@ -969,6 +969,9 @@ def test_strict_fresh_evidence_only_decision_dict_fields() -> None:
 
 
 STEP2_DECISION_ONLY_STATE = "STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY"
+STEP3_AUDIT_ONLY_STATE = "STRICT_FRESH_COMPILED_ACTIONABLE_STEP3_AUDIT_ONLY"
+PROMOTED_RESEARCH_DECISION = "PROMOTED_RESEARCH_DECISION"
+PROMOTED_RESEARCH_AUDIT = "PROMOTED_RESEARCH_AUDIT"
 
 
 def valid_step2_verification(effective: dict[str, Any], **overrides: Any) -> dict[str, Any]:
@@ -1015,6 +1018,8 @@ def evaluate_step2_decision_only(
     effective: dict[str, Any] | None = None,
     verification: dict[str, Any] | None = None,
     dry_run: dict[str, Any] | None = None,
+    step3_verification: dict[str, Any] | None = None,
+    step3_dry_run: dict[str, Any] | None = None,
 ) -> Any:
     effective = effective if effective is not None else effective_handoff()
     pointer = pending_pointer(effective)
@@ -1031,6 +1036,97 @@ def evaluate_step2_decision_only(
             verification if verification is not None else valid_step2_verification(effective)
         ),
         promoted_step2_gate_dry_run=dry_run if dry_run is not None else valid_step2_dry_run(),
+        promoted_step3_audit_verification=step3_verification,
+        promoted_step3_audit_gate_dry_run=step3_dry_run,
+    )
+
+
+def step3_source_artifacts() -> dict[str, str]:
+    return {
+        **pending_artifacts(),
+        "step2_promoted_decision_only": (
+            "artifacts/current/step2_decision_builder/step2_promoted_decision_only.json"
+        ),
+        "step2_decision_packet": "artifacts/current/step2_decision_builder/decision_packet.json",
+    }
+
+
+def valid_step3_verification(effective: dict[str, Any], **overrides: Any) -> dict[str, Any]:
+    digest = sha256_of(effective)
+    verification = {
+        "schema_version": "promoted_handoff_step3_audit_verification_v1",
+        "is_llm_generated": False,
+        "report_only": True,
+        "permission_effect": "none",
+        "not_authorization": True,
+        "not_execution_authorization": True,
+        "valid_for_promoted_step3_audit": True,
+        "verification_blockers": [],
+        "future_state_required": STEP3_AUDIT_ONLY_STATE,
+        "future_action_required": PROMOTED_RESEARCH_AUDIT,
+        "future_step3_source_artifact": "research_handoff_candidate_effective.json",
+        "raw_deep_research_source_used": False,
+        "promotion_expires_at": "2026-06-29",
+        "effective_handoff_sha256": digest,
+        "pointer_effective_handoff_sha256": digest,
+        "order_compilation_allowed": False,
+        "new_buy_permission": False,
+        "step4_allowed": False,
+        "final_execution_allowed": False,
+        "broker_automation_allowed": False,
+        "live_step2_verification_valid": True,
+        "live_step2_verification_blockers": [],
+        "source_artifacts": step3_source_artifacts(),
+    }
+    verification.update(overrides)
+    return verification
+
+
+def valid_step3_dry_run(**overrides: Any) -> dict[str, Any]:
+    dry_run = {
+        "schema_version": "promoted_step3_audit_gate_dry_run_v1",
+        "is_llm_generated": False,
+        "report_only": True,
+        "dry_run_only": True,
+        "permission_effect": "none",
+        "not_authorization": True,
+        "not_execution_authorization": True,
+        "would_allow_promoted_step3_audit": True,
+        "current_real_gate_allows": False,
+        "future_state_required": STEP3_AUDIT_ONLY_STATE,
+        "future_action_required": PROMOTED_RESEARCH_AUDIT,
+        "current_state": STEP2_DECISION_ONLY_STATE,
+        "current_allowed_actions": ["HOLD", "NO_TRADE", PROMOTED_RESEARCH_DECISION],
+        "verification_valid_for_promoted_step3_audit": True,
+        "order_compilation_allowed": False,
+        "new_buy_permission": False,
+        "step4_allowed": False,
+        "final_execution_allowed": False,
+        "broker_automation_allowed": False,
+        "future_step3_source_artifact": "research_handoff_candidate_effective.json",
+        "raw_deep_research_source_used": False,
+        "dry_run_blockers": ["real_gate_still_closed_by_policy"],
+        "source_artifacts": step3_source_artifacts(),
+    }
+    dry_run.update(overrides)
+    return dry_run
+
+
+def evaluate_step3_audit_only(
+    *,
+    effective: dict[str, Any] | None = None,
+    step3_verification: dict[str, Any] | None = None,
+    step3_dry_run: dict[str, Any] | None = None,
+) -> Any:
+    effective = effective if effective is not None else effective_handoff()
+    return evaluate_step2_decision_only(
+        effective=effective,
+        step3_verification=(
+            step3_verification
+            if step3_verification is not None
+            else valid_step3_verification(effective)
+        ),
+        step3_dry_run=step3_dry_run if step3_dry_run is not None else valid_step3_dry_run(),
     )
 
 
@@ -1041,7 +1137,7 @@ def test_pending_gates_with_valid_verification_and_dry_run_upgrades_to_decision_
     assert result.promoted_step2_decision_only is True
     assert result.source == "promoted_compiled_actionable_handoff"
     # Allowed actions are EXACTLY HOLD / NO_TRADE / PROMOTED_RESEARCH_DECISION.
-    assert result.allowed_actions == ["HOLD", "NO_TRADE", "PROMOTED_RESEARCH_DECISION"]
+    assert result.allowed_actions == ["HOLD", "NO_TRADE", PROMOTED_RESEARCH_DECISION]
     for blocked in (
         "SELL",
         "NEW_BUY",
@@ -1070,8 +1166,9 @@ def test_step2_decision_only_serializes_permission_fields() -> None:
 
     for artifact in (availability, decision):
         assert artifact["state"] == STEP2_DECISION_ONLY_STATE
-        assert artifact["allowed_actions"] == ["HOLD", "NO_TRADE", "PROMOTED_RESEARCH_DECISION"]
+        assert artifact["allowed_actions"] == ["HOLD", "NO_TRADE", PROMOTED_RESEARCH_DECISION]
         assert artifact["promoted_step2_decision_only"] is True
+        assert artifact["promoted_step3_audit_only"] is False
         assert artifact["order_compilation_allowed"] is False
         assert artifact["new_buy_permission"] is False
         assert artifact["permission_effect"] == "promoted_step2_decision_only"
@@ -1088,14 +1185,23 @@ def test_step2_decision_only_action_table_is_exact() -> None:
     assert _ALLOWED_ACTIONS_BY_STATE[STEP2_DECISION_ONLY_STATE] == (
         "HOLD",
         "NO_TRADE",
-        "PROMOTED_RESEARCH_DECISION",
+        PROMOTED_RESEARCH_DECISION,
+    )
+    assert _ALLOWED_ACTIONS_BY_STATE[STEP3_AUDIT_ONLY_STATE] == (
+        "HOLD",
+        "NO_TRADE",
+        PROMOTED_RESEARCH_DECISION,
+        PROMOTED_RESEARCH_AUDIT,
     )
     # The full order-eligible state remains absent / disabled.
     assert "STRICT_FRESH_COMPILED_ACTIONABLE" not in _ALLOWED_ACTIONS_BY_STATE
-    # PROMOTED_RESEARCH_DECISION exists ONLY on the decision-only state.
+    # PROMOTED_RESEARCH_DECISION exists only on promoted states; audit is only on Step 3.
     for state, actions in _ALLOWED_ACTIONS_BY_STATE.items():
-        if state != STEP2_DECISION_ONLY_STATE:
-            assert "PROMOTED_RESEARCH_DECISION" not in actions, state
+        if state not in (STEP2_DECISION_ONLY_STATE, STEP3_AUDIT_ONLY_STATE):
+            assert PROMOTED_RESEARCH_DECISION not in actions, state
+            assert PROMOTED_RESEARCH_AUDIT not in actions, state
+        if state != STEP3_AUDIT_ONLY_STATE:
+            assert PROMOTED_RESEARCH_AUDIT not in actions, state
 
 
 def test_missing_dry_run_stays_pending_gates() -> None:
@@ -1167,6 +1273,144 @@ def test_verification_hash_mismatch_stays_pending_gates() -> None:
 
     assert result.state == PENDING_GATES_STATE
     assert result.promoted_step2_decision_only is False
+
+
+def test_step3_audit_only_happy_path_upgrades_from_step2_only() -> None:
+    result = evaluate_step3_audit_only()
+
+    assert result.state == STEP3_AUDIT_ONLY_STATE
+    assert result.promoted_step2_decision_only is True
+    assert result.promoted_step3_audit_only is True
+    assert result.allowed_actions == [
+        "HOLD",
+        "NO_TRADE",
+        PROMOTED_RESEARCH_DECISION,
+        PROMOTED_RESEARCH_AUDIT,
+    ]
+    for blocked in (
+        "SELL",
+        "NEW_BUY",
+        "ROTATION",
+        "REBALANCE",
+        "EXTENDED_ETF_ADMISSION",
+        "ORDER_COMPILATION",
+    ):
+        assert blocked in result.blocked_actions
+    assert result.permission_effect == "promoted_step3_audit_only"
+    assert "promoted_step3_audit_only_enabled" in result.blocker_reasons
+    assert "step4_order_compilation_requires_future_gate_pr" in result.blocker_reasons
+
+
+def test_step3_audit_only_serializes_no_order_authority() -> None:
+    result = evaluate_step3_audit_only()
+    availability = research_availability_result_to_dict(result)
+    decision = research_degraded_mode_decision_to_dict(result)
+
+    for artifact in (availability, decision):
+        assert artifact["state"] == STEP3_AUDIT_ONLY_STATE
+        assert artifact["allowed_actions"] == [
+            "HOLD",
+            "NO_TRADE",
+            PROMOTED_RESEARCH_DECISION,
+            PROMOTED_RESEARCH_AUDIT,
+        ]
+        assert artifact["promoted_step2_decision_only"] is True
+        assert artifact["promoted_step3_audit_only"] is True
+        assert artifact["step3_audit_only_allowed"] is True
+        assert artifact["order_compilation_allowed"] is False
+        assert artifact["new_buy_permission"] is False
+        assert artifact["step4_allowed"] is False
+        assert artifact["final_execution_allowed"] is False
+        assert artifact["broker_automation_allowed"] is False
+        assert "NEW_BUY" in artifact["blocked_actions"]
+        assert "ORDER_COMPILATION" in artifact["blocked_actions"]
+
+
+def test_step3_audit_only_missing_or_malformed_dry_run_stays_step2_only() -> None:
+    effective = effective_handoff()
+    for dry_run in (
+        None,
+        {},
+        valid_step3_dry_run(schema_version="unexpected"),
+        valid_step3_dry_run(would_allow_promoted_step3_audit=False),
+        valid_step3_dry_run(current_real_gate_allows=True),
+        valid_step3_dry_run(future_state_required=STEP2_DECISION_ONLY_STATE),
+        valid_step3_dry_run(future_action_required="ORDER_COMPILATION"),
+        valid_step3_dry_run(permission_effect="step3_audit_only"),
+        valid_step3_dry_run(raw_deep_research_source_used=True),
+        valid_step3_dry_run(
+            current_allowed_actions=["HOLD", "NO_TRADE", PROMOTED_RESEARCH_DECISION, "NEW_BUY"]
+        ),
+        valid_step3_dry_run(
+            source_artifacts={
+                **step3_source_artifacts(),
+                "raw_research": "artifacts/current/step1_research/research_output.json",
+            }
+        ),
+    ):
+        result = evaluate_step2_decision_only(
+            effective=effective,
+            step3_verification=valid_step3_verification(effective),
+            step3_dry_run=dry_run,
+        )
+        assert result.state == STEP2_DECISION_ONLY_STATE, dry_run
+        assert result.promoted_step3_audit_only is False
+        assert PROMOTED_RESEARCH_AUDIT not in result.allowed_actions
+
+
+def test_step3_audit_only_invalid_verification_stays_step2_only() -> None:
+    effective = effective_handoff()
+    for verification in (
+        None,
+        {},
+        valid_step3_verification(effective, schema_version="unexpected"),
+        valid_step3_verification(effective, valid_for_promoted_step3_audit=False),
+        valid_step3_verification(effective, verification_blockers=["x"]),
+        valid_step3_verification(effective, not_execution_authorization=False),
+        valid_step3_verification(effective, future_state_required=STEP2_DECISION_ONLY_STATE),
+        valid_step3_verification(effective, future_action_required="NEW_BUY"),
+        valid_step3_verification(effective, future_step3_source_artifact="research_output.json"),
+        valid_step3_verification(effective, raw_deep_research_source_used=True),
+        valid_step3_verification(effective, order_compilation_allowed=True),
+        valid_step3_verification(effective, new_buy_permission=True),
+        valid_step3_verification(effective, step4_allowed=True),
+        valid_step3_verification(effective, final_execution_allowed=True),
+        valid_step3_verification(effective, broker_automation_allowed=True),
+        valid_step3_verification(effective, live_step2_verification_valid=False),
+        valid_step3_verification(effective, live_step2_verification_blockers=["x"]),
+        valid_step3_verification(effective, promotion_expires_at="2026-06-21"),
+        valid_step3_verification(
+            effective,
+            source_artifacts={
+                **step3_source_artifacts(),
+                "raw_research": "artifacts/current/step1_research/research_output.json",
+            },
+        ),
+    ):
+        result = evaluate_step2_decision_only(
+            effective=effective,
+            step3_verification=verification,
+            step3_dry_run=valid_step3_dry_run(),
+        )
+        assert result.state == STEP2_DECISION_ONLY_STATE, verification
+        assert result.promoted_step3_audit_only is False
+        assert PROMOTED_RESEARCH_AUDIT not in result.allowed_actions
+
+
+def test_step3_audit_only_hash_mismatch_stays_step2_only() -> None:
+    effective = effective_handoff()
+    mismatched = valid_step3_verification(effective)
+    mismatched["effective_handoff_sha256"] = "0" * 64
+    mismatched["pointer_effective_handoff_sha256"] = "0" * 64
+
+    result = evaluate_step2_decision_only(
+        effective=effective,
+        step3_verification=mismatched,
+        step3_dry_run=valid_step3_dry_run(),
+    )
+
+    assert result.state == STEP2_DECISION_ONLY_STATE
+    assert result.promoted_step3_audit_only is False
 
 
 def test_raw_strict_fresh_unchanged_by_step2_decision_only_inputs() -> None:

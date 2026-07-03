@@ -51,6 +51,7 @@ from investment_orchestrator.state.research_degraded_mode_gate import (
 )
 from investment_orchestrator.validators.strategy_settings import parse_strategy_settings_text
 from investment_orchestrator.workflow.step1_research import (
+    refresh_promoted_step3_audit_only_permission_after_step2,
     step1_active_research_handoff_source_path,
     step1_effective_research_handoff_path,
     step1_effective_research_handoff_validation_path,
@@ -253,6 +254,19 @@ def parse_step2_output() -> dict[str, str]:
         result["order_compilation_allowed"] = "False"
         result["new_buy_permission"] = "False"
         result["recommended_terminal_result_after_step2"] = NO_TRADE_PENDING_FINAL_GATES
+        step3_refresh = refresh_promoted_step3_audit_only_permission_after_step2()
+        result["promoted_handoff_step3_audit_verification_path"] = step3_refresh.get(
+            "promoted_handoff_step3_audit_verification_path", ""
+        )
+        result["promoted_step3_audit_gate_dry_run_path"] = step3_refresh.get(
+            "promoted_step3_audit_gate_dry_run_path", ""
+        )
+        result["promoted_step3_audit_gate_dry_run_would_allow"] = step3_refresh.get(
+            "promoted_step3_audit_gate_dry_run_would_allow", ""
+        )
+        result["promoted_step3_audit_only"] = step3_refresh.get(
+            "promoted_step3_audit_only", "False"
+        )
     return result
 
 
