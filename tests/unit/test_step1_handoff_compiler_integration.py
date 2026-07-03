@@ -1201,17 +1201,73 @@ def _prepare_step2_render_inputs(tmp_path: Path) -> None:
     _write_text(tmp_path / "inputs" / "current" / "portfolio_snapshot.txt", "QQQ | 1 | 100\n")
 
 
+def _valid_step2_decision_packet() -> dict[str, Any]:
+    return {
+        "effective_allowed_buy_universe": ["QQQ"],
+        "MARKET_DATA_SNAPSHOT": {
+            "schema_version": "1.0",
+            "snapshot_type": "MARKET_DATA_SNAPSHOT",
+            "run_timestamp_et": "2026-06-28 16:00 ET",
+            "execution_date_et": "2026-06-28",
+            "market_data_target_close_date_et": "2026-06-28",
+            "close_time_zone": "America/New_York",
+            "display_time_zone": "America/Los_Angeles",
+            "primary_source": "fixture",
+            "fallback_source_for_last_close_and_price_asof_only": "fixture",
+            "holiday_aware_close_resolution": True,
+            "tickers": [
+                {
+                    "ticker": "QQQ",
+                    "last_close": 420.0,
+                    "price_asof": "2026-06-28",
+                    "atr_20_30d_pct": 2.0,
+                    "ma50": 410.0,
+                    "ma200": 390.0,
+                    "avg_volume_3m": 50000000,
+                    "last_close_source": "fixture",
+                    "price_asof_source": "fixture",
+                    "technicals_source": "fixture",
+                    "retrieved_at_utc": None,
+                    "same_day_close_required": False,
+                    "freshness_ok": True,
+                    "data_gap": False,
+                    "data_gap_reason": None,
+                    "notes": [],
+                }
+            ],
+        },
+        "active_shortlist": [],
+        "buy_side_delta_table": [],
+        "rotation_decision_layer_8_15": [],
+        "sell_side_delta_table_8_2": [],
+        "execution_plan_drafts_8_5": [
+            {"ticker": "QQQ", "action_draft": "KEEP_EXISTING", "why": "audit-only fixture"}
+        ],
+        "sell_execution_plan_drafts_8_6": [],
+        "assumptions_and_data_gaps": [],
+        "decision_builder_ready_for_audit": True,
+    }
+
+
 def test_promoted_step2_renders_from_effective_handoff_and_step34_stay_blocked(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from investment_orchestrator.state.final_execution_safety_gate import (
         evaluate_final_execution_safety,
     )
+    from investment_orchestrator.state.research_degraded_mode_gate import (
+        evaluate_step2_research_gate,
+    )
     from investment_orchestrator.state.upstream_artifact_guard import UpstreamArtifactGuardError
-    from investment_orchestrator.workflow import step2_decision_builder, step3_audit_engine
+    from investment_orchestrator.workflow import (
+        step2_decision_builder,
+        step3_audit_engine,
+        step4_order_compiler,
+    )
 
     monkeypatch.setattr(step2_decision_builder, "repo_root", lambda: tmp_path)
     monkeypatch.setattr(step3_audit_engine, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(step4_order_compiler, "repo_root", lambda: tmp_path)
 
     artifact_dir = _setup_repo(tmp_path, monkeypatch)
     (artifact_dir / "analyst_memo_raw_output.txt").write_text(
@@ -1223,33 +1279,80 @@ def test_promoted_step2_renders_from_effective_handoff_and_step34_stay_blocked(
     _prepare_step2_render_inputs(tmp_path)
     decision = json.loads(Path(result["research_degraded_mode_decision_path"]).read_text(encoding="utf-8"))
     _assert_step2_decision_only_decision(decision)
+    gate = evaluate_step2_research_gate(decision)
+    _assert_gate_promoted_decision_only(gate)
+
+    raw_only_marker = "RAW_DEEP_RESEARCH_FIXTURE_ONLY_MARKER_DO_NOT_RENDER_PROMOTED_STEP2"
+    raw_path = Path(result["research_output_path"])
+    raw_research = json.loads(raw_path.read_text(encoding="utf-8"))
+    raw_research["fixture_only_raw_deep_research_marker"] = raw_only_marker
+    raw_path.write_text(json.dumps(raw_research), encoding="utf-8")
 
     # The promoted Step 2 render succeeds from the EFFECTIVE handoff, not from
     # the raw Deep Research output...
     render = step2_decision_builder.render_step2_prompt()
     assert render["mode"] == "promoted_step2_decision_only"
+    assert render["order_compilation_allowed"] == "False"
+    assert render["new_buy_permission"] == "False"
+    assert render["recommended_terminal_result_after_step2"] == "NO_TRADE_PENDING_FINAL_GATES"
     prompt = Path(render["prompt_path"]).read_text(encoding="utf-8")
     effective = json.loads(Path(result["effective_research_handoff_path"]).read_text(encoding="utf-8"))
-    raw_research = json.loads(Path(result["research_output_path"]).read_text(encoding="utf-8"))
+    pointer = json.loads(Path(result["active_research_handoff_source_path"]).read_text(encoding="utf-8"))
     assert effective["schema_version"] in prompt  # effective handoff body is embedded
+    assert effective["actionable_this_run_tickers"] == ["QQQ"]
+    assert '"actionable_this_run_tickers": [\n    "QQQ"\n  ]' in prompt
     # The raw parsed research body is NOT embedded (its fixture-unique summary is absent).
     assert "Minimal fixture derived from" in json.dumps(raw_research)
     assert "Minimal fixture derived from" not in prompt
+    assert raw_only_marker in json.dumps(raw_research)
+    assert raw_only_marker not in prompt
     assert "PROMOTED RESEARCH SOURCE" in prompt
-    assert "promoted_compiled_actionable_handoff" in prompt
+    assert "source: promoted_compiled_actionable_handoff" in prompt
+    assert "promotion_status: pending_gates" in prompt
+    assert f"effective_handoff_sha256: {pointer['effective_handoff_sha256']}" in prompt
+    assert "active_pointer_sha256:" in prompt
     assert "NOT order authorization" in prompt
+    assert "NOT execution authorization" in prompt
+    assert "PROMOTED_RESEARCH_DECISION" in prompt
     assert "ORDER_COMPILATION and NEW_BUY are NOT allowed" in prompt
     assert "NO_TRADE_PENDING_FINAL_GATES" in prompt
 
     # ...the deterministic decision-only marker records no order permission...
     marker = json.loads(Path(render["step2_promoted_decision_only_path"]).read_text(encoding="utf-8"))
+    assert marker["schema_version"] == "step2_promoted_decision_only_v1"
+    assert marker["mode"] == "promoted_step2_decision_only"
+    assert marker["research_state"] == "STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY"
+    assert marker["source"] == "promoted_compiled_actionable_handoff"
     assert marker["promoted_step2_decision_only"] is True
+    assert marker["decision_only"] is True
+    assert marker["allowed_actions"] == ["HOLD", "NO_TRADE", "PROMOTED_RESEARCH_DECISION"]
+    assert "NEW_BUY" not in marker["allowed_actions"]
+    assert "ORDER_COMPILATION" not in marker["allowed_actions"]
+    assert "NEW_BUY" in marker["blocked_actions"]
+    assert "ORDER_COMPILATION" in marker["blocked_actions"]
     assert marker["order_compilation_allowed"] is False
     assert marker["new_buy_permission"] is False
     assert marker["step3_allowed"] is False and marker["step4_allowed"] is False
     assert marker["not_execution_authorization"] is True
     assert marker["is_llm_generated"] is False
     assert marker["recommended_terminal_result_after_step2"] == "NO_TRADE_PENDING_FINAL_GATES"
+    assert marker["promotion_status"] == "pending_gates"
+    assert marker["effective_handoff_sha256"] == pointer["effective_handoff_sha256"]
+    assert marker["source_artifacts"]["research_handoff_candidate_effective"].endswith(
+        "research_handoff_candidate_effective.json"
+    )
+
+    # Rendering Step 2 decision-only creates no Step 3 / Step 4 / order compiler artifacts.
+    step3_dir = tmp_path / "artifacts" / "current" / "step3_audit_engine"
+    step4_dir = tmp_path / "artifacts" / "current" / "step4_order_compiler"
+    assert not step3_dir.exists()
+    assert not step4_dir.exists()
+    for order_artifact in (
+        step4_dir / "template4_orders.txt",
+        step4_dir / "order_state_export.txt",
+        step4_dir / "exec_summary.txt",
+    ):
+        assert not order_artifact.exists()
 
     # ...Step 3 deterministically blocks with the promoted decision-only reason...
     with pytest.raises(UpstreamArtifactGuardError, match="promoted decision-only gate"):
@@ -1307,3 +1410,249 @@ def test_promoted_step2_render_fails_closed_when_effective_handoff_tampered(
     )
     assert blocked["reason"] == "promoted_step2_verification_failed"
     assert "effective_handoff_hash_mismatch" in blocked["blocker_reasons"]
+
+
+# --- R2E.5b-6e report-only promoted Step 3 audit verifier / dry-run -----------
+
+
+def test_promoted_step3_audit_dry_run_happy_path_is_report_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from investment_orchestrator.state.final_execution_safety_gate import (
+        evaluate_final_execution_safety,
+    )
+    from investment_orchestrator.state.research_degraded_mode_gate import (
+        evaluate_step2_research_gate,
+    )
+    from investment_orchestrator.state.upstream_artifact_guard import UpstreamArtifactGuardError
+    from investment_orchestrator.workflow import (
+        step2_decision_builder,
+        step3_audit_engine,
+        step4_order_compiler,
+    )
+
+    monkeypatch.setattr(step2_decision_builder, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(step3_audit_engine, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(step4_order_compiler, "repo_root", lambda: tmp_path)
+
+    artifact_dir = _setup_repo(tmp_path, monkeypatch)
+    (artifact_dir / "analyst_memo_raw_output.txt").write_text(
+        json.dumps(_anchor_grounded_memo()), encoding="utf-8"
+    )
+    _write_anchor_yaml(tmp_path)
+
+    result = step1_research.parse_step1_output(strategy_settings=_settings_with_cap())
+    _prepare_step2_render_inputs(tmp_path)
+    render = step2_decision_builder.render_step2_prompt()
+    decision = json.loads(Path(result["research_degraded_mode_decision_path"]).read_text(encoding="utf-8"))
+    _assert_step2_decision_only_decision(decision)
+    _assert_gate_promoted_decision_only(evaluate_step2_research_gate(decision))
+    assert Path(render["step2_promoted_decision_only_path"]).exists()
+
+    packet_path = step2_decision_builder.step2_decision_packet_path()
+    packet_path.write_text(json.dumps(_valid_step2_decision_packet()), encoding="utf-8")
+
+    summary = step1_research._write_promoted_step3_audit_dry_run_report_only(  # noqa: SLF001
+        strategy_settings=_settings_with_cap(),
+        research_decision=decision,
+    )
+
+    verification_path = Path(summary["promoted_handoff_step3_audit_verification_path"])
+    assert verification_path.name == "promoted_handoff_step3_audit_verification.json"
+    verification = json.loads(verification_path.read_text(encoding="utf-8"))
+    assert verification["schema_version"] == "promoted_handoff_step3_audit_verification_v1"
+    assert verification["is_llm_generated"] is False
+    assert verification["report_only"] is True
+    assert verification["permission_effect"] == "none"
+    assert verification["not_authorization"] is True
+    assert verification["not_execution_authorization"] is True
+    assert verification["valid_for_promoted_step3_audit"] is True
+    assert verification["verification_blockers"] == []
+    assert verification["future_state_required"] == "STRICT_FRESH_COMPILED_ACTIONABLE_STEP3_AUDIT_ONLY"
+    assert verification["future_action_required"] == "PROMOTED_RESEARCH_AUDIT"
+    assert verification["future_step3_source_artifact"] == "research_handoff_candidate_effective.json"
+    assert verification["raw_deep_research_source_used"] is False
+    assert verification["step2_decision_packet_valid"] is True
+    assert verification["source_artifacts"]["step2_promoted_decision_only"].endswith(
+        "step2_promoted_decision_only.json"
+    )
+    assert verification["source_artifacts"]["research_handoff_candidate_effective"].endswith(
+        "research_handoff_candidate_effective.json"
+    )
+    assert "research_output.json" not in json.dumps(verification["source_artifacts"])
+    assert verification["order_compilation_allowed"] is False
+    assert verification["new_buy_permission"] is False
+    assert verification["step4_allowed"] is False
+    assert verification["final_execution_allowed"] is False
+    assert verification["broker_automation_allowed"] is False
+
+    dry_run_path = Path(summary["promoted_step3_audit_gate_dry_run_path"])
+    assert dry_run_path.name == "promoted_step3_audit_gate_dry_run.json"
+    dry_run = json.loads(dry_run_path.read_text(encoding="utf-8"))
+    assert dry_run["schema_version"] == "promoted_step3_audit_gate_dry_run_v1"
+    assert dry_run["is_llm_generated"] is False
+    assert dry_run["report_only"] is True
+    assert dry_run["dry_run_only"] is True
+    assert dry_run["permission_effect"] == "none"
+    assert dry_run["not_authorization"] is True
+    assert dry_run["not_execution_authorization"] is True
+    assert dry_run["would_allow_promoted_step3_audit"] is True
+    assert summary["promoted_step3_audit_gate_dry_run_would_allow"] == "True"
+    assert dry_run["current_real_gate_allows"] is False
+    assert "real_gate_still_closed_by_policy" in dry_run["dry_run_blockers"]
+    assert dry_run["current_state"] == "STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY"
+    assert dry_run["current_allowed_actions"] == ["HOLD", "NO_TRADE", "PROMOTED_RESEARCH_DECISION"]
+    assert "NEW_BUY" not in dry_run["current_allowed_actions"]
+    assert "ORDER_COMPILATION" not in dry_run["current_allowed_actions"]
+    assert dry_run["order_compilation_allowed"] is False
+    assert dry_run["new_buy_permission"] is False
+    assert dry_run["step4_allowed"] is False
+    assert dry_run["final_execution_allowed"] is False
+    assert dry_run["broker_automation_allowed"] is False
+    assert dry_run["consumed_by_availability"] is False
+    assert dry_run["consumed_by_step3"] is False
+    assert dry_run["consumed_by_gates"] is False
+
+    with pytest.raises(UpstreamArtifactGuardError, match="promoted decision-only gate"):
+        step3_audit_engine.enforce_step3_upstream_guard()
+    assert step3_audit_engine.step3_blocked_by_promoted_decision_only_gate_path().exists()
+    assert not step3_audit_engine.step3_prompt_path().exists()
+
+    with pytest.raises(UpstreamArtifactGuardError):
+        step4_order_compiler.enforce_step4_upstream_guard()
+    assert step4_order_compiler.step4_blocked_by_upstream_gate_path().exists()
+    assert not step4_order_compiler.step4_prompt_path().exists()
+    assert not step4_order_compiler.step4_template4_orders_path().exists()
+    assert not step4_order_compiler.step4_order_state_export_path().exists()
+    assert not step4_order_compiler.step4_exec_summary_path().exists()
+
+    final = evaluate_final_execution_safety(
+        step1_permission=decision,
+        step2_decision_packet=_valid_step2_decision_packet(),
+        step3_audited_packet=None,
+    )
+    assert final.ready_for_order_compilation is False
+    assert final.checked_conditions["step1_state_strict_fresh"] is False
+    assert final.checked_conditions["order_compilation_allowed"] is False
+
+
+def test_promoted_step3_audit_dry_run_fails_closed_without_step2_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _setup_repo(tmp_path, monkeypatch)
+    result = step1_research.parse_step1_output(strategy_settings=_settings())
+
+    verification = json.loads(
+        Path(result["promoted_handoff_step3_audit_verification_path"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert verification["valid_for_promoted_step3_audit"] is False
+    assert "step2_promoted_marker_missing" in verification["verification_blockers"]
+    assert "step2_decision_packet_missing" in verification["verification_blockers"]
+    assert verification["report_only"] is True
+    assert verification["permission_effect"] == "none"
+
+    dry_run = json.loads(
+        Path(result["promoted_step3_audit_gate_dry_run_path"]).read_text(encoding="utf-8")
+    )
+    assert dry_run["would_allow_promoted_step3_audit"] is False
+    assert result["promoted_step3_audit_gate_dry_run_would_allow"] == "False"
+    assert dry_run["current_real_gate_allows"] is False
+    assert dry_run["order_compilation_allowed"] is False
+    assert dry_run["new_buy_permission"] is False
+
+
+@pytest.mark.parametrize(
+    ("widened_action", "expected_blocker"),
+    [
+        ("NEW_BUY", "step2_promoted_marker_widened_new_buy"),
+        ("ORDER_COMPILATION", "step2_promoted_marker_widened_order_compilation"),
+    ],
+)
+def test_promoted_step3_audit_verifier_rejects_widened_step2_marker_actions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    widened_action: str,
+    expected_blocker: str,
+) -> None:
+    from investment_orchestrator.workflow import step2_decision_builder
+
+    monkeypatch.setattr(step2_decision_builder, "repo_root", lambda: tmp_path)
+
+    artifact_dir = _setup_repo(tmp_path, monkeypatch)
+    (artifact_dir / "analyst_memo_raw_output.txt").write_text(
+        json.dumps(_anchor_grounded_memo()), encoding="utf-8"
+    )
+    _write_anchor_yaml(tmp_path)
+
+    result = step1_research.parse_step1_output(strategy_settings=_settings_with_cap())
+    _prepare_step2_render_inputs(tmp_path)
+    render = step2_decision_builder.render_step2_prompt()
+    decision = json.loads(Path(result["research_degraded_mode_decision_path"]).read_text(encoding="utf-8"))
+
+    marker_path = Path(render["step2_promoted_decision_only_path"])
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    marker["allowed_actions"] = [*marker["allowed_actions"], widened_action]
+    marker_path.write_text(json.dumps(marker), encoding="utf-8")
+    step2_decision_builder.step2_decision_packet_path().write_text(
+        json.dumps(_valid_step2_decision_packet()), encoding="utf-8"
+    )
+
+    summary = step1_research._write_promoted_step3_audit_dry_run_report_only(  # noqa: SLF001
+        strategy_settings=_settings_with_cap(),
+        research_decision=decision,
+    )
+    verification = json.loads(
+        Path(summary["promoted_handoff_step3_audit_verification_path"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert verification["valid_for_promoted_step3_audit"] is False
+    assert expected_blocker in verification["verification_blockers"]
+    dry_run = json.loads(
+        Path(summary["promoted_step3_audit_gate_dry_run_path"]).read_text(encoding="utf-8")
+    )
+    assert dry_run["would_allow_promoted_step3_audit"] is False
+    assert dry_run["current_real_gate_allows"] is False
+
+
+def test_promoted_step3_audit_verifier_fails_closed_on_effective_hash_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from investment_orchestrator.workflow import step2_decision_builder
+
+    monkeypatch.setattr(step2_decision_builder, "repo_root", lambda: tmp_path)
+
+    artifact_dir = _setup_repo(tmp_path, monkeypatch)
+    (artifact_dir / "analyst_memo_raw_output.txt").write_text(
+        json.dumps(_anchor_grounded_memo()), encoding="utf-8"
+    )
+    _write_anchor_yaml(tmp_path)
+
+    result = step1_research.parse_step1_output(strategy_settings=_settings_with_cap())
+    _prepare_step2_render_inputs(tmp_path)
+    step2_decision_builder.render_step2_prompt()
+    decision = json.loads(Path(result["research_degraded_mode_decision_path"]).read_text(encoding="utf-8"))
+    step2_decision_builder.step2_decision_packet_path().write_text(
+        json.dumps(_valid_step2_decision_packet()), encoding="utf-8"
+    )
+
+    effective_path = Path(result["effective_research_handoff_path"])
+    tampered = json.loads(effective_path.read_text(encoding="utf-8"))
+    tampered["tampered_after_marker"] = True
+    effective_path.write_text(json.dumps(tampered), encoding="utf-8")
+
+    summary = step1_research._write_promoted_step3_audit_dry_run_report_only(  # noqa: SLF001
+        strategy_settings=_settings_with_cap(),
+        research_decision=decision,
+    )
+    verification = json.loads(
+        Path(summary["promoted_handoff_step3_audit_verification_path"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert verification["valid_for_promoted_step3_audit"] is False
+    assert "promoted_handoff_verification_invalid" in verification["verification_blockers"]
+    assert "step2_promoted_marker_hash_mismatch" in verification["verification_blockers"]
+    assert "effective_handoff_hash_mismatch" in verification["live_step2_verification_blockers"]

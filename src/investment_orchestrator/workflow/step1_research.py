@@ -57,6 +57,10 @@ from investment_orchestrator.research.promoted_handoff_verifier import (
 from investment_orchestrator.research.promoted_step2_gate_dry_run import (
     evaluate_promoted_step2_gate_dry_run,
 )
+from investment_orchestrator.research.promoted_step3_audit_dry_run import (
+    evaluate_promoted_step3_audit_gate_dry_run,
+    verify_promoted_handoff_for_step3_audit,
+)
 from investment_orchestrator.state.last_good_research_handoff import (
     LastGoodResearchHandoffWriteResult,
     last_good_research_handoff_metadata_path,
@@ -114,6 +118,10 @@ EFFECTIVE_RESEARCH_HANDOFF_VALIDATION_FILENAME = "research_handoff_candidate_eff
 ACTIVE_POINTER_WRITE_STATUS_FILENAME = "active_research_handoff_source_write_status.json"
 PROMOTED_HANDOFF_STEP2_VERIFICATION_FILENAME = "promoted_handoff_step2_verification.json"
 PROMOTED_STEP2_GATE_DRY_RUN_FILENAME = "promoted_step2_gate_dry_run.json"
+PROMOTED_HANDOFF_STEP3_AUDIT_VERIFICATION_FILENAME = (
+    "promoted_handoff_step3_audit_verification.json"
+)
+PROMOTED_STEP3_AUDIT_GATE_DRY_RUN_FILENAME = "promoted_step3_audit_gate_dry_run.json"
 RESEARCH_ANCHORS_INPUT_FILENAME = "research_anchors.yaml"
 CURRENT_RUN_INPUT_NOTES_RE = re.compile(
     r"(?:\r?\n)*────────────────────────────────────────\r?\n"
@@ -305,6 +313,16 @@ def step1_promoted_handoff_step2_verification_path() -> Path:
 def step1_promoted_step2_gate_dry_run_path() -> Path:
     """Return the report-only promoted Step 2 gate dry-run artifact path (R2E.5b-6b)."""
     return step1_artifact_dir() / PROMOTED_STEP2_GATE_DRY_RUN_FILENAME
+
+
+def step1_promoted_handoff_step3_audit_verification_path() -> Path:
+    """Return the report-only promoted-handoff Step 3 audit verification path (R2E.5b-6e)."""
+    return step1_artifact_dir() / PROMOTED_HANDOFF_STEP3_AUDIT_VERIFICATION_FILENAME
+
+
+def step1_promoted_step3_audit_gate_dry_run_path() -> Path:
+    """Return the report-only promoted Step 3 audit gate dry-run artifact path (R2E.5b-6e)."""
+    return step1_artifact_dir() / PROMOTED_STEP3_AUDIT_GATE_DRY_RUN_FILENAME
 
 
 def resolve_step1_prompt_template_path() -> Path:
@@ -735,6 +753,15 @@ def parse_step1_output(
         "promoted_step2_gate_dry_run_would_allow": promoted_dry_run_summary.get(
             "promoted_step2_gate_dry_run_would_allow", ""
         ),
+        "promoted_handoff_step3_audit_verification_path": promoted_dry_run_summary.get(
+            "promoted_handoff_step3_audit_verification_path", ""
+        ),
+        "promoted_step3_audit_gate_dry_run_path": promoted_dry_run_summary.get(
+            "promoted_step3_audit_gate_dry_run_path", ""
+        ),
+        "promoted_step3_audit_gate_dry_run_would_allow": promoted_dry_run_summary.get(
+            "promoted_step3_audit_gate_dry_run_would_allow", ""
+        ),
         "compiled_research_handoff_mode": compiled_handoff_summary.get("compilation_mode", ""),
         "compiled_research_handoff_valid": compiled_handoff_summary.get("compiled_candidate_valid", ""),
         "schema_version": str(payload.get("schema_version", "")),
@@ -745,8 +772,13 @@ _EMPTY_PROMOTED_STEP2_SUMMARY: dict[str, Any] = {
     "promoted_handoff_step2_verification_path": "",
     "promoted_step2_gate_dry_run_path": "",
     "promoted_step2_gate_dry_run_would_allow": "",
+    "promoted_handoff_step3_audit_verification_path": "",
+    "promoted_step3_audit_gate_dry_run_path": "",
+    "promoted_step3_audit_gate_dry_run_would_allow": "",
     "verification": None,
     "dry_run": None,
+    "step3_audit_verification": None,
+    "step3_audit_dry_run": None,
 }
 
 
@@ -830,6 +862,11 @@ def _evaluate_research_availability_report_only(
             promoted_step2_verification=promoted_step2.get("verification"),
             promoted_step2_gate_dry_run=promoted_step2.get("dry_run"),
         )
+        promoted_step3_audit = _write_promoted_step3_audit_dry_run_report_only(
+            strategy_settings=strategy_settings,
+            research_decision=research_degraded_mode_decision_to_dict(availability),
+        )
+        promoted_summary = {**promoted_step2, **promoted_step3_audit}
         write_json(
             step1_research_availability_path(),
             research_availability_result_to_dict(availability),
@@ -842,7 +879,7 @@ def _evaluate_research_availability_report_only(
             step1_research_degraded_mode_decision_path(),
             research_degraded_mode_decision_to_dict(availability),
         )
-        return availability, promoted_step2
+        return availability, promoted_summary
     except Exception as exc:  # noqa: BLE001 - report-only: never break Step 1 parse
         fallback = evaluate_research_availability(
             candidate_validation=None,
@@ -1438,6 +1475,86 @@ def _write_promoted_step2_gate_dry_run_report_only(
         }
     except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
         return dict(_EMPTY_PROMOTED_STEP2_SUMMARY)
+
+
+def _write_promoted_step3_audit_dry_run_report_only(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+    research_decision: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Write R2E.5b-6e future Step 3 audit-only diagnostics.
+
+    This is report-only instrumentation. It does not add a Step 3 state/action,
+    does not feed availability, and never changes any Step 2/3/4/final/order
+    gate. Missing Step 2 marker or decision-packet artifacts simply produce a
+    fail-closed dry-run verdict.
+    """
+    try:
+        settings_as_of = (
+            strategy_settings.get("as_of") if isinstance(strategy_settings, Mapping) else None
+        )
+        step2_marker_path = _step2_promoted_decision_only_report_path()
+        step2_packet_path = _step2_decision_packet_report_path()
+        source_artifacts = {
+            "active_research_handoff_source": str(step1_active_research_handoff_source_path()),
+            "research_handoff_candidate_effective": str(step1_effective_research_handoff_path()),
+            "research_handoff_candidate_effective_validation": str(
+                step1_effective_research_handoff_validation_path()
+            ),
+            "step2_promoted_decision_only": str(step2_marker_path),
+            "step2_decision_packet": str(step2_packet_path),
+        }
+        verification = verify_promoted_handoff_for_step3_audit(
+            active_pointer=_read_json_if_exists(step1_active_research_handoff_source_path()),
+            effective_handoff=_read_json_if_exists(step1_effective_research_handoff_path()),
+            effective_validation=_read_json_if_exists(
+                step1_effective_research_handoff_validation_path()
+            ),
+            step2_promoted_marker=_read_json_if_exists(step2_marker_path),
+            step2_decision_packet=_read_json_if_exists(step2_packet_path),
+            today=_parse_iso_date_or_none(settings_as_of),
+            source_artifacts=source_artifacts,
+        )
+        write_json(step1_promoted_handoff_step3_audit_verification_path(), verification)
+
+        dry_run = evaluate_promoted_step3_audit_gate_dry_run(
+            research_decision=research_decision,
+            promoted_step3_verification=verification,
+        )
+        write_json(step1_promoted_step3_audit_gate_dry_run_path(), dry_run)
+        return {
+            "promoted_handoff_step3_audit_verification_path": str(
+                step1_promoted_handoff_step3_audit_verification_path()
+            ),
+            "promoted_step3_audit_gate_dry_run_path": str(
+                step1_promoted_step3_audit_gate_dry_run_path()
+            ),
+            "promoted_step3_audit_gate_dry_run_would_allow": str(
+                dry_run.get("would_allow_promoted_step3_audit")
+            ),
+            "step3_audit_verification": verification,
+            "step3_audit_dry_run": dry_run,
+        }
+    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
+        return {
+            "promoted_handoff_step3_audit_verification_path": "",
+            "promoted_step3_audit_gate_dry_run_path": "",
+            "promoted_step3_audit_gate_dry_run_would_allow": "",
+            "step3_audit_verification": None,
+            "step3_audit_dry_run": None,
+        }
+
+
+def _step2_report_artifact_dir() -> Path:
+    return repo_root() / "artifacts" / "current" / "step2_decision_builder"
+
+
+def _step2_promoted_decision_only_report_path() -> Path:
+    return _step2_report_artifact_dir() / "step2_promoted_decision_only.json"
+
+
+def _step2_decision_packet_report_path() -> Path:
+    return _step2_report_artifact_dir() / "decision_packet.json"
 
 
 def _parse_iso_date_or_none(value: Any) -> date | None:
