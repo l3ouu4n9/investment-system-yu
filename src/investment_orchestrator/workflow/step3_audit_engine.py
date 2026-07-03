@@ -542,9 +542,10 @@ def parse_step3_output() -> dict[str, str]:
         write_text(step3_template3_audit_path(), audit_text.rstrip() + "\n")
         write_text(step3_template2_patch_path(), "")
         marker_path, block_path = _write_promoted_step3_audit_only_artifacts(promoted_context)
-        # R2E.5b-7b: regenerate the report-only Step 4 readiness diagnostics now
-        # that the promoted marker / downstream block / audit text exist. This
-        # grants nothing: no state change, no Step 4 permission, no orders.
+        # R2E.5b-7b/7c: regenerate the report-only Step 4 readiness diagnostics
+        # and the rowless final-safety preflight now that the promoted marker /
+        # downstream block / audit text exist. This grants nothing: no state
+        # change, no Step 4 permission, no orders, no gate change.
         step4_readiness = refresh_promoted_step4_readiness_after_step3()
         return {
             "mode": MODE_PROMOTED_STEP3_AUDIT_ONLY,
@@ -565,6 +566,12 @@ def parse_step3_output() -> dict[str, str]:
             ),
             "promoted_step4_preview_gate_dry_run_would_allow": step4_readiness.get(
                 "promoted_step4_preview_gate_dry_run_would_allow", ""
+            ),
+            "promoted_final_safety_preflight_path": step4_readiness.get(
+                "promoted_final_safety_preflight_path", ""
+            ),
+            "promoted_final_safety_preflight_passed": step4_readiness.get(
+                "promoted_final_safety_preflight_passed", ""
             ),
         }
 

@@ -1891,9 +1891,10 @@ def _write_step4_readiness_operator_inputs(tmp_path: Path) -> None:
     )
     _write_text(
         tmp_path / "inputs" / "current" / "portfolio_snapshot.txt",
+        # Empty live-structure columns (11/12) parse cleanly with no data gap so
+        # the R2E.5b-7c preflight can compute deterministic hard-cap headroom.
         "(2a) existing_buy_open_orders_summary\n"
-        "QQQ | 1000.00 | 900.00 | 100.00 | T4-E | - | - | - | - | - | - | "
-        "starter=500 | starter=1\n",
+        "QQQ | 1000.00 | 900.00 | 100.00 | T4-E | - | - | - | - | - | - |  | \n",
     )
 
 
@@ -2072,3 +2073,232 @@ def test_promoted_step4_readiness_stale_legacy_audited_packet_fails_closed(
     )
     assert verification["valid_for_promoted_step4_preview"] is False
     assert "stale_legacy_audited_packet_present" in verification["verification_blockers"]
+
+
+# --- R2E.5b-7c: rowless final-safety preflight integration --------------------
+
+
+def _load_preflight() -> dict[str, Any]:
+    return json.loads(
+        step1_research.step1_promoted_final_safety_preflight_path().read_text(encoding="utf-8")
+    )
+
+
+_FORBIDDEN_ORDER_SHAPED_KEYS = frozenset(
+    {
+        "account",
+        "quantity",
+        "shares",
+        "order_type",
+        "tif",
+        "time_in_force",
+        "limit_price",
+        "stop_price",
+        "venue",
+        "routing",
+        "broker",
+        "order_rows",
+        "preview_rows",
+        "candidate_orders",
+    }
+)
+
+
+def _iter_keys(value: Any):
+    if isinstance(value, dict):
+        for key, sub in value.items():
+            yield key
+            yield from _iter_keys(sub)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _iter_keys(item)
+
+
+def test_promoted_final_safety_preflight_happy_path_after_step3_parse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rowless preflight is written, report-only, and computes headroom."""
+    from decimal import Decimal
+
+    from investment_orchestrator.workflow import step3_audit_engine
+
+    monkeypatch.setattr(step3_audit_engine, "repo_root", lambda: tmp_path)
+    _promote_to_step3_audit_only(tmp_path, monkeypatch)
+    _write_step3_prompt_inputs(tmp_path)
+    _write_step4_readiness_operator_inputs(tmp_path)
+    step3_audit_engine.render_step3_prompt()
+    step3_audit_engine.step3_raw_output_path().write_text(
+        "Promoted Step 3 audit-only findings.\n", encoding="utf-8"
+    )
+    parsed = step3_audit_engine.parse_step3_output()
+
+    assert parsed["promoted_final_safety_preflight_path"]
+    # Real gate is closed by policy, so the preflight never "passes".
+    assert parsed["promoted_final_safety_preflight_passed"] == "False"
+
+    preflight = _load_preflight()
+    assert preflight["schema_version"] == "promoted_final_safety_preflight_v1"
+    assert preflight["is_llm_generated"] is False
+    assert preflight["report_only"] is True
+    assert preflight["dry_run_only"] is True
+    assert preflight["rowless"] is True
+    assert preflight["permission_effect"] == "none"
+    assert preflight["not_authorization"] is True
+    assert preflight["not_execution_authorization"] is True
+    assert preflight["contains_order_rows"] is False
+    assert preflight["contains_preview_rows"] is False
+    assert preflight["current_real_gate_allows"] is False
+    assert preflight["order_compilation_allowed"] is False
+    assert preflight["new_buy_permission"] is False
+    assert preflight["step4_allowed"] is False
+    assert preflight["final_execution_allowed"] is False
+    assert preflight["broker_automation_allowed"] is False
+    assert preflight["consumed_by_availability"] is False
+    assert preflight["consumed_by_step4"] is False
+    assert preflight["consumed_by_gates"] is False
+
+    # Inputs healthy -> deterministic prerequisites ready; gate stays closed.
+    assert preflight["deterministic_prerequisites_ready"] is True
+    assert preflight["preflight_passed"] is False
+    assert "final_gate_still_closed_by_policy" in preflight["preflight_blockers"]
+
+    budget = preflight["budget_cap_readiness"]
+    assert budget["rowless"] is True
+    assert budget["hard_cap_headroom_computable"] is True
+    assert Decimal(budget["hard_cap_headroom"]) == Decimal("37211.29")
+    assert Decimal(budget["net_new_notional_this_run"]) == Decimal("0")
+    assert budget["remaining_new_ticker_slots"] == 4
+
+    # The preflight summarizes the 7b dry-run but does not consume it as gate
+    # authority; the dry-run's own policy blocker is observed.
+    summary = preflight["step4_readiness_summary"]
+    assert summary["dry_run_real_gate_policy_blocker_present"] is True
+    assert summary["consumed_as_gate_authority"] is False
+
+
+def test_promoted_final_safety_preflight_has_no_order_shaped_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from investment_orchestrator.workflow import step3_audit_engine
+
+    monkeypatch.setattr(step3_audit_engine, "repo_root", lambda: tmp_path)
+    _promote_to_step3_audit_only(tmp_path, monkeypatch)
+    _write_step3_prompt_inputs(tmp_path)
+    _write_step4_readiness_operator_inputs(tmp_path)
+    step3_audit_engine.render_step3_prompt()
+    step3_audit_engine.step3_raw_output_path().write_text(
+        "Promoted Step 3 audit-only findings.\n", encoding="utf-8"
+    )
+    step3_audit_engine.parse_step3_output()
+
+    preflight = _load_preflight()
+    present = {k for k in _iter_keys(preflight) if k.lower() in _FORBIDDEN_ORDER_SHAPED_KEYS}
+    assert present == set(), f"order-shaped keys leaked into preflight: {present}"
+    # No order-shaped sidecar artifacts were produced either.
+    step1_dir = step1_research.step1_promoted_final_safety_preflight_path().parent
+    order_shaped = [
+        p.name
+        for p in step1_dir.glob("*")
+        if any(tok in p.name.lower() for tok in ("order", "preview_row", "broker"))
+    ]
+    assert order_shaped == [], f"unexpected order-shaped artifact(s): {order_shaped}"
+
+
+def test_promoted_final_safety_preflight_not_consumed_and_gate_stays_blocked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """7c non-consumption: no upgrade, final gate unchanged, Step 4 blocked."""
+    import inspect
+
+    from investment_orchestrator.state.final_execution_safety_gate import (
+        evaluate_final_execution_safety,
+    )
+    from investment_orchestrator.state.research_availability import (
+        evaluate_research_availability,
+    )
+    from investment_orchestrator.state.upstream_artifact_guard import UpstreamArtifactGuardError
+    from investment_orchestrator.workflow import step3_audit_engine, step4_order_compiler
+
+    monkeypatch.setattr(step3_audit_engine, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(step4_order_compiler, "repo_root", lambda: tmp_path)
+    _promote_to_step3_audit_only(tmp_path, monkeypatch)
+    _write_step3_prompt_inputs(tmp_path)
+    _write_step4_readiness_operator_inputs(tmp_path)
+    step3_audit_engine.render_step3_prompt()
+    step3_audit_engine.step3_raw_output_path().write_text(
+        "Promoted Step 3 audit-only findings.\n", encoding="utf-8"
+    )
+    step3_audit_engine.parse_step3_output()
+    assert step1_research.step1_promoted_final_safety_preflight_path().exists()
+
+    # Availability signature never gained a preflight input.
+    assert not any(
+        "preflight" in name
+        for name in inspect.signature(evaluate_research_availability).parameters
+    )
+
+    # On-disk permission unchanged by the preflight write.
+    decision = json.loads(
+        step1_research.step1_research_degraded_mode_decision_path().read_text(encoding="utf-8")
+    )
+    assert decision["state"] == "STRICT_FRESH_COMPILED_ACTIONABLE_STEP3_AUDIT_ONLY"
+    assert decision["allowed_actions"] == [
+        "HOLD",
+        "NO_TRADE",
+        "PROMOTED_RESEARCH_DECISION",
+        "PROMOTED_RESEARCH_AUDIT",
+    ]
+    assert decision["order_compilation_allowed"] is False
+    assert decision["new_buy_permission"] is False
+
+    # The real final gate still rejects the promoted decision (needs literal
+    # STRICT_FRESH + ORDER_COMPILATION) — the preflight changed nothing.
+    gate = evaluate_final_execution_safety(
+        step2_decision_packet=None,
+        step3_audited_packet=None,
+        step1_permission=decision,
+    )
+    assert gate.ready_for_order_compilation is False
+    assert gate.checked_conditions["step1_state_strict_fresh"] is False
+    assert gate.checked_conditions["order_compilation_allowed"] is False
+
+    # Step 4 still blocked despite the preflight sitting on disk.
+    with pytest.raises(UpstreamArtifactGuardError):
+        step4_order_compiler.render_step4_prompt()
+    assert not step4_order_compiler.step4_prompt_path().exists()
+    assert not step4_order_compiler.step4_template4_orders_path().exists()
+    assert not step4_order_compiler.step4_order_state_export_path().exists()
+
+
+def test_promoted_final_safety_preflight_fails_closed_when_7b_dry_run_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deleting the 7b dry-run before the refresh flips the preflight closed."""
+    from investment_orchestrator.workflow import step3_audit_engine
+
+    monkeypatch.setattr(step3_audit_engine, "repo_root", lambda: tmp_path)
+    _promote_to_step3_audit_only(tmp_path, monkeypatch)
+    _write_step3_prompt_inputs(tmp_path)
+    _write_step4_readiness_operator_inputs(tmp_path)
+    step3_audit_engine.render_step3_prompt()
+    step3_audit_engine.step3_raw_output_path().write_text(
+        "Promoted Step 3 audit-only findings.\n", encoding="utf-8"
+    )
+    step3_audit_engine.parse_step3_output()
+    assert _load_preflight()["deterministic_prerequisites_ready"] is True
+
+    # Simulate a missing 7b dry-run artifact, then rebuild ONLY the preflight.
+    step1_research.step1_promoted_step4_preview_gate_dry_run_path().unlink()
+    summary = step1_research._write_promoted_final_safety_preflight_report_only(
+        strategy_settings=step1_research.load_strategy_settings_for_handoff_validation(),
+        research_decision=json.loads(
+            step1_research.step1_research_degraded_mode_decision_path().read_text(
+                encoding="utf-8"
+            )
+        ),
+    )
+    assert summary["promoted_final_safety_preflight_passed"] == "False"
+    preflight = _load_preflight()
+    assert preflight["deterministic_prerequisites_ready"] is False
+    assert "step4_readiness_dry_run_missing" in preflight["preflight_blockers"]
+    assert preflight["current_real_gate_allows"] is False

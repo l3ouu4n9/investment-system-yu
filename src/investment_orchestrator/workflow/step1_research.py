@@ -65,6 +65,9 @@ from investment_orchestrator.research.promoted_step4_readiness_dry_run import (
     evaluate_promoted_step4_preview_gate_dry_run,
     verify_promoted_step3_for_step4_readiness,
 )
+from investment_orchestrator.state.final_execution_safety_preflight import (
+    evaluate_promoted_final_safety_preflight,
+)
 from investment_orchestrator.state.last_good_research_handoff import (
     LastGoodResearchHandoffWriteResult,
     last_good_research_handoff_metadata_path,
@@ -128,6 +131,7 @@ PROMOTED_HANDOFF_STEP3_AUDIT_VERIFICATION_FILENAME = (
 PROMOTED_STEP3_AUDIT_GATE_DRY_RUN_FILENAME = "promoted_step3_audit_gate_dry_run.json"
 PROMOTED_STEP4_READINESS_VERIFICATION_FILENAME = "promoted_step4_readiness_verification.json"
 PROMOTED_STEP4_PREVIEW_GATE_DRY_RUN_FILENAME = "promoted_step4_preview_gate_dry_run.json"
+PROMOTED_FINAL_SAFETY_PREFLIGHT_FILENAME = "promoted_final_safety_preflight.json"
 RESEARCH_ANCHORS_INPUT_FILENAME = "research_anchors.yaml"
 CURRENT_RUN_INPUT_NOTES_RE = re.compile(
     r"(?:\r?\n)*────────────────────────────────────────\r?\n"
@@ -339,6 +343,11 @@ def step1_promoted_step4_readiness_verification_path() -> Path:
 def step1_promoted_step4_preview_gate_dry_run_path() -> Path:
     """Return the report-only promoted Step 4 preview gate dry-run path (R2E.5b-7b)."""
     return step1_artifact_dir() / PROMOTED_STEP4_PREVIEW_GATE_DRY_RUN_FILENAME
+
+
+def step1_promoted_final_safety_preflight_path() -> Path:
+    """Return the report-only, rowless final-safety preflight path (R2E.5b-7c)."""
+    return step1_artifact_dir() / PROMOTED_FINAL_SAFETY_PREFLIGHT_FILENAME
 
 
 def resolve_step1_prompt_template_path() -> Path:
@@ -787,6 +796,12 @@ def parse_step1_output(
         "promoted_step4_preview_gate_dry_run_would_allow": promoted_dry_run_summary.get(
             "promoted_step4_preview_gate_dry_run_would_allow", ""
         ),
+        "promoted_final_safety_preflight_path": promoted_dry_run_summary.get(
+            "promoted_final_safety_preflight_path", ""
+        ),
+        "promoted_final_safety_preflight_passed": promoted_dry_run_summary.get(
+            "promoted_final_safety_preflight_passed", ""
+        ),
         "compiled_research_handoff_mode": compiled_handoff_summary.get("compilation_mode", ""),
         "compiled_research_handoff_valid": compiled_handoff_summary.get("compiled_candidate_valid", ""),
         "schema_version": str(payload.get("schema_version", "")),
@@ -803,12 +818,15 @@ _EMPTY_PROMOTED_STEP2_SUMMARY: dict[str, Any] = {
     "promoted_step4_readiness_verification_path": "",
     "promoted_step4_preview_gate_dry_run_path": "",
     "promoted_step4_preview_gate_dry_run_would_allow": "",
+    "promoted_final_safety_preflight_path": "",
+    "promoted_final_safety_preflight_passed": "",
     "verification": None,
     "dry_run": None,
     "step3_audit_verification": None,
     "step3_audit_dry_run": None,
     "step4_readiness_verification": None,
     "step4_preview_dry_run": None,
+    "final_safety_preflight": None,
 }
 
 
@@ -923,7 +941,20 @@ def _evaluate_research_availability_report_only(
             strategy_settings=strategy_settings,
             research_decision=research_degraded_mode_decision_to_dict(availability),
         )
-        promoted_summary = {**promoted_step2, **promoted_step3_audit, **promoted_step4}
+        # R2E.5b-7c: rowless final-safety preflight, also computed from the FINAL
+        # decision and reading the just-written 7b artifacts. Same posture: NOT
+        # fed back into availability, NOT added to promoted_source_artifacts,
+        # consumed by nothing (consumed_by_availability/step4/gates=false).
+        promoted_final_safety = _write_promoted_final_safety_preflight_report_only(
+            strategy_settings=strategy_settings,
+            research_decision=research_degraded_mode_decision_to_dict(availability),
+        )
+        promoted_summary = {
+            **promoted_step2,
+            **promoted_step3_audit,
+            **promoted_step4,
+            **promoted_final_safety,
+        }
         write_json(
             step1_research_availability_path(),
             research_availability_result_to_dict(availability),
@@ -1740,6 +1771,82 @@ def _write_promoted_step4_readiness_dry_run_report_only(
         }
 
 
+def _write_promoted_final_safety_preflight_report_only(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+    research_decision: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Write the R2E.5b-7c rowless final-safety preflight diagnostic.
+
+    Report-only and non-authorizing. It reads (never consumes as authority) the
+    just-written 7b readiness artifacts plus the promoted chain artifacts and
+    the deterministic budget/cap inputs, then writes a single rowless report. It
+    grants nothing: no state change, no Step 4, no ORDER_COMPILATION, no order /
+    preview rows, no broker/live path, and NOTHING consumes the output. The
+    final execution safety gate is reused only as a pure function and its
+    behavior is unchanged. Any internal error yields an empty summary.
+    """
+    try:
+        source_artifacts = {
+            "research_degraded_mode_decision": str(
+                step1_research_degraded_mode_decision_path()
+            ),
+            "promoted_step4_readiness_verification": str(
+                step1_promoted_step4_readiness_verification_path()
+            ),
+            "promoted_step4_preview_gate_dry_run": str(
+                step1_promoted_step4_preview_gate_dry_run_path()
+            ),
+            "step2_promoted_decision_only": str(_step2_promoted_decision_only_report_path()),
+            "step2_decision_packet": str(_step2_decision_packet_report_path()),
+            "step3_promoted_audit_only": str(_step3_promoted_audit_only_report_path()),
+            "step3_promoted_audit_only_downstream_block": str(
+                _step3_promoted_audit_only_downstream_block_report_path()
+            ),
+            "strategy_settings": str(current_inputs_dir() / "strategy_settings.yaml"),
+            "portfolio_snapshot": str(current_inputs_dir() / "portfolio_snapshot.txt"),
+            "promoted_final_safety_preflight": str(
+                step1_promoted_final_safety_preflight_path()
+            ),
+        }
+        preflight = evaluate_promoted_final_safety_preflight(
+            research_decision=research_decision,
+            step4_readiness_verification=_read_json_if_exists(
+                step1_promoted_step4_readiness_verification_path()
+            ),
+            step4_preview_gate_dry_run=_read_json_if_exists(
+                step1_promoted_step4_preview_gate_dry_run_path()
+            ),
+            strategy_settings=strategy_settings,
+            portfolio_snapshot_text=_read_text_if_exists(
+                current_inputs_dir() / "portfolio_snapshot.txt"
+            ),
+            step2_decision_packet=_read_json_if_exists(_step2_decision_packet_report_path()),
+            step2_promoted_marker=_read_json_if_exists(
+                _step2_promoted_decision_only_report_path()
+            ),
+            step3_promoted_marker=_read_json_if_exists(_step3_promoted_audit_only_report_path()),
+            step3_downstream_block=_read_json_if_exists(
+                _step3_promoted_audit_only_downstream_block_report_path()
+            ),
+            source_artifacts=source_artifacts,
+        )
+        write_json(step1_promoted_final_safety_preflight_path(), preflight)
+        return {
+            "promoted_final_safety_preflight_path": str(
+                step1_promoted_final_safety_preflight_path()
+            ),
+            "promoted_final_safety_preflight_passed": str(preflight.get("preflight_passed")),
+            "final_safety_preflight": preflight,
+        }
+    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
+        return {
+            "promoted_final_safety_preflight_path": "",
+            "promoted_final_safety_preflight_passed": "",
+            "final_safety_preflight": None,
+        }
+
+
 def refresh_promoted_step4_readiness_after_step3(
     *,
     strategy_settings: Mapping[str, Any] | None = None,
@@ -1751,10 +1858,11 @@ def refresh_promoted_step4_readiness_after_step3(
     parse calls this deterministic hook after it writes those artifacts.
 
     Unlike ``refresh_promoted_step3_audit_only_permission_after_step2``, this
-    hook rewrites ONLY the two report-only Step 4 readiness files. It does not
-    re-run availability, does not rewrite any permission/decision artifact,
-    does not change any state, and does not run Step 4, an order compiler,
-    broker automation, or any live execution path.
+    hook rewrites ONLY the report-only Step 4 readiness files plus the R2E.5b-7c
+    rowless final-safety preflight. It does not re-run availability, does not
+    rewrite any permission/decision artifact, does not change any state, and
+    does not run Step 4, an order compiler, broker automation, or any live
+    execution path.
     """
     settings = (
         strategy_settings
@@ -1762,9 +1870,16 @@ def refresh_promoted_step4_readiness_after_step3(
         else load_strategy_settings_for_handoff_validation()
     )
     decision = _read_json_if_exists(step1_research_degraded_mode_decision_path())
+    decision_mapping = decision if isinstance(decision, Mapping) else None
     summary = _write_promoted_step4_readiness_dry_run_report_only(
         strategy_settings=settings,
-        research_decision=decision if isinstance(decision, Mapping) else None,
+        research_decision=decision_mapping,
+    )
+    # R2E.5b-7c: regenerate the rowless final-safety preflight now that the
+    # promoted Step 3 marker / downstream block and fresh 7b artifacts exist.
+    preflight_summary = _write_promoted_final_safety_preflight_report_only(
+        strategy_settings=settings,
+        research_decision=decision_mapping,
     )
     return {
         "promoted_step4_readiness_verification_path": str(
@@ -1775,6 +1890,12 @@ def refresh_promoted_step4_readiness_after_step3(
         ),
         "promoted_step4_preview_gate_dry_run_would_allow": str(
             summary.get("promoted_step4_preview_gate_dry_run_would_allow", "")
+        ),
+        "promoted_final_safety_preflight_path": str(
+            preflight_summary.get("promoted_final_safety_preflight_path", "")
+        ),
+        "promoted_final_safety_preflight_passed": str(
+            preflight_summary.get("promoted_final_safety_preflight_passed", "")
         ),
     }
 
