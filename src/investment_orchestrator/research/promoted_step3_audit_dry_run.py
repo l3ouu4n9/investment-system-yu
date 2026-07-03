@@ -65,7 +65,9 @@ BLOCKER_MARKER_HASH_MISMATCH = "step2_promoted_marker_hash_mismatch"
 BLOCKER_DECISION_PACKET_MISSING = "step2_decision_packet_missing"
 BLOCKER_DECISION_PACKET_INVALID = "step2_decision_packet_invalid"
 BLOCKER_PROMOTED_HANDOFF_INVALID = "promoted_handoff_verification_invalid"
-BLOCKER_RAW_DEEP_RESEARCH_SOURCE = "raw_deep_research_source_not_allowed"
+BLOCKER_RAW_DEEP_RESEARCH_SOURCE = (
+    "raw_deep_research_source_not_allowed_for_promoted_step3_audit"
+)
 
 DRY_RUN_BLOCKER_DECISION_MISSING = "decision_missing"
 DRY_RUN_BLOCKER_DECISION_NOT_STEP2_DECISION_ONLY = "decision_not_step2_decision_only"
@@ -323,8 +325,7 @@ def _verify(
             validation_error=decision_packet_error,
         )
 
-    source_artifact_names = set((source_artifacts or {}).values())
-    raw_source_used = any(str(value).endswith(RAW_DEEP_RESEARCH_ARTIFACT) for value in source_artifact_names)
+    raw_source_used = _raw_deep_research_source_used(source_artifacts)
     add_check(
         "future_step3_source_is_effective_handoff_not_raw_deep_research",
         not raw_source_used,
@@ -515,7 +516,7 @@ def _verification_result(
         "future_state_required": FUTURE_STATE_REQUIRED,
         "future_action_required": FUTURE_ACTION_REQUIRED,
         "future_step3_source_artifact": FUTURE_STEP3_SOURCE_ARTIFACT,
-        "raw_deep_research_source_used": False,
+        "raw_deep_research_source_used": _raw_deep_research_source_used(source_artifacts),
         "order_compilation_allowed": False,
         "new_buy_permission": False,
         "step4_allowed": False,
@@ -580,7 +581,7 @@ def _dry_run_result(
         "dry_run_warnings": list(warnings),
         "checks": list(checks),
         "future_step3_source_artifact": FUTURE_STEP3_SOURCE_ARTIFACT,
-        "raw_deep_research_source_used": False,
+        "raw_deep_research_source_used": verification.get("raw_deep_research_source_used") is True,
         "source_artifacts": dict(verification.get("source_artifacts") or {}),
         "source_artifact_hashes": dict(verification.get("source_artifact_hashes") or {}),
         "freshness": {
@@ -628,3 +629,22 @@ def _string_items(value: Any) -> list[str]:
 
 def _str_or_none(value: Any) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def _raw_deep_research_source_used(source_artifacts: Mapping[str, str] | None) -> bool:
+    """Return true if source metadata points at raw Deep Research output."""
+    if not isinstance(source_artifacts, Mapping):
+        return False
+    for key, value in source_artifacts.items():
+        if _is_raw_deep_research_source_token(key) or _is_raw_deep_research_source_token(value):
+            return True
+    return False
+
+
+def _is_raw_deep_research_source_token(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    token = value.strip().replace("\\", "/")
+    if token == RAW_DEEP_RESEARCH_ARTIFACT or token.endswith(f"/{RAW_DEEP_RESEARCH_ARTIFACT}"):
+        return True
+    return token in {"research_output", "raw_deep_research", "raw_deep_research_output"}
