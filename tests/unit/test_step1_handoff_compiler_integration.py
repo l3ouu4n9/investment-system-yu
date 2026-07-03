@@ -1869,3 +1869,206 @@ def test_promoted_step3_audit_only_fails_closed_on_effective_hash_mismatch(
     assert "promoted_handoff_verification_invalid" in blocked["blocker_reasons"]
     assert "step2_promoted_marker_hash_mismatch" in blocked["blocker_reasons"]
     assert not step3_audit_engine.step3_prompt_path().exists()
+
+
+# --- R2E.5b-7b: report-only promoted Step 4 readiness verifier / dry-run ------
+
+
+def _write_step4_readiness_operator_inputs(tmp_path: Path) -> None:
+    """Deterministic budget/cap operator inputs the 7b verifier requires."""
+    from investment_orchestrator.common.io import write_text as _write_text
+
+    _write_text(
+        tmp_path / "inputs" / "current" / "strategy_settings.yaml",
+        "as_of: '2026-06-28'\n"
+        "core_universe: [QQQ, VOO, VTI, VT]\n"
+        "satellite_universe: [SMH, IGV]\n"
+        "hard_cap_open_orders_budget: 38211.29\n"
+        "target_new_buy_budget_this_run: 12000.00\n"
+        "max_new_tickers_per_week:\n"
+        "  base_universe_new_tickers_per_week: 2\n"
+        "  extended_etf_sleeve_new_tickers_per_week: 2\n",
+    )
+    _write_text(
+        tmp_path / "inputs" / "current" / "portfolio_snapshot.txt",
+        "(2a) existing_buy_open_orders_summary\n"
+        "QQQ | 1000.00 | 900.00 | 100.00 | T4-E | - | - | - | - | - | - | "
+        "starter=500 | starter=1\n",
+    )
+
+
+def test_promoted_step4_readiness_fails_closed_before_step3_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Step 1/2-level artifacts alone must never report Step 4 preview readiness."""
+    setup = _promote_to_step3_audit_only(tmp_path, monkeypatch)
+    result = setup["step1_result"]
+
+    assert result["promoted_step4_readiness_verification_path"]
+    assert result["promoted_step4_preview_gate_dry_run_path"]
+    verification = json.loads(
+        step1_research.step1_promoted_step4_readiness_verification_path().read_text(
+            encoding="utf-8"
+        )
+    )
+    assert verification["valid_for_promoted_step4_preview"] is False
+    assert "step3_promoted_marker_missing" in verification["verification_blockers"]
+    dry_run = json.loads(
+        step1_research.step1_promoted_step4_preview_gate_dry_run_path().read_text(
+            encoding="utf-8"
+        )
+    )
+    assert dry_run["would_allow_promoted_step4_preview"] is False
+    assert dry_run["current_real_gate_allows"] is False
+
+
+def test_promoted_step4_readiness_happy_path_after_step3_parse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from investment_orchestrator.workflow import step3_audit_engine
+
+    monkeypatch.setattr(step3_audit_engine, "repo_root", lambda: tmp_path)
+    _promote_to_step3_audit_only(tmp_path, monkeypatch)
+    _write_step3_prompt_inputs(tmp_path)
+    _write_step4_readiness_operator_inputs(tmp_path)
+
+    step3_audit_engine.render_step3_prompt()
+    step3_audit_engine.step3_raw_output_path().write_text(
+        "Promoted Step 3 audit-only findings. No order readiness asserted.\n",
+        encoding="utf-8",
+    )
+    parsed = step3_audit_engine.parse_step3_output()
+
+    assert parsed["promoted_step4_preview_gate_dry_run_would_allow"] == "True"
+    assert parsed["promoted_step4_readiness_verification_path"]
+    assert parsed["promoted_step4_preview_gate_dry_run_path"]
+
+    verification = json.loads(
+        step1_research.step1_promoted_step4_readiness_verification_path().read_text(
+            encoding="utf-8"
+        )
+    )
+    assert verification["schema_version"] == "promoted_step4_readiness_verification_v1"
+    assert verification["valid_for_promoted_step4_preview"] is True
+    assert verification["verification_blockers"] == []
+    assert verification["is_llm_generated"] is False
+    assert verification["report_only"] is True
+    assert verification["permission_effect"] == "none"
+    assert verification["not_authorization"] is True
+    assert verification["not_execution_authorization"] is True
+    assert verification["current_real_gate_allows"] is False
+    assert verification["order_compilation_allowed"] is False
+    assert verification["new_buy_permission"] is False
+    assert verification["step4_allowed"] is False
+    assert verification["final_execution_allowed"] is False
+    assert verification["broker_automation_allowed"] is False
+    assert verification["raw_deep_research_source_used"] is False
+    assert verification["consumed_by_availability"] is False
+    assert verification["consumed_by_step4"] is False
+    assert verification["consumed_by_gates"] is False
+    assert verification["source_artifact_hashes"]["step3_promoted_audit_only"]
+    assert verification["source_artifact_hashes"]["step3_template3_audit"]
+
+    dry_run = json.loads(
+        step1_research.step1_promoted_step4_preview_gate_dry_run_path().read_text(
+            encoding="utf-8"
+        )
+    )
+    assert dry_run["schema_version"] == "promoted_step4_preview_gate_dry_run_v1"
+    assert dry_run["would_allow_promoted_step4_preview"] is True
+    assert dry_run["current_real_gate_allows"] is False
+    assert "real_gate_still_closed_by_policy" in dry_run["dry_run_blockers"]
+    assert dry_run["dry_run_only"] is True
+    assert dry_run["permission_effect"] == "none"
+    assert (
+        dry_run["future_state_required"]
+        == "STRICT_FRESH_COMPILED_ACTIONABLE_STEP4_PREVIEW_ONLY"
+    )
+    assert dry_run["future_action_required"] == "PROMOTED_ORDER_PREVIEW"
+    assert dry_run["order_compilation_allowed"] is False
+    assert dry_run["new_buy_permission"] is False
+    assert dry_run["step4_allowed"] is False
+
+
+def test_promoted_step4_readiness_artifacts_are_not_consumed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """7b non-consumption: no upgrade, no Step 4, no new state/action anywhere."""
+    import inspect
+
+    from investment_orchestrator.state.research_availability import (
+        evaluate_research_availability,
+    )
+    from investment_orchestrator.state.upstream_artifact_guard import UpstreamArtifactGuardError
+    from investment_orchestrator.workflow import step3_audit_engine, step4_order_compiler
+
+    monkeypatch.setattr(step3_audit_engine, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(step4_order_compiler, "repo_root", lambda: tmp_path)
+    _promote_to_step3_audit_only(tmp_path, monkeypatch)
+    _write_step3_prompt_inputs(tmp_path)
+    _write_step4_readiness_operator_inputs(tmp_path)
+    step3_audit_engine.render_step3_prompt()
+    step3_audit_engine.step3_raw_output_path().write_text(
+        "Promoted Step 3 audit-only findings.\n", encoding="utf-8"
+    )
+    parsed = step3_audit_engine.parse_step3_output()
+    assert parsed["promoted_step4_preview_gate_dry_run_would_allow"] == "True"
+
+    # Availability has no Step 4 inputs at all and the on-disk permission is
+    # unchanged: still the Step 3 audit-only state with the exact 4-action set.
+    assert not any(
+        "step4" in name for name in inspect.signature(evaluate_research_availability).parameters
+    )
+    decision = json.loads(
+        step1_research.step1_research_degraded_mode_decision_path().read_text(encoding="utf-8")
+    )
+    assert decision["state"] == "STRICT_FRESH_COMPILED_ACTIONABLE_STEP3_AUDIT_ONLY"
+    assert decision["allowed_actions"] == [
+        "HOLD",
+        "NO_TRADE",
+        "PROMOTED_RESEARCH_DECISION",
+        "PROMOTED_RESEARCH_AUDIT",
+    ]
+    assert "PROMOTED_ORDER_PREVIEW" not in json.dumps(decision)
+    assert decision["order_compilation_allowed"] is False
+    assert decision["new_buy_permission"] is False
+
+    # Step 4 stays blocked even with a would_allow=true dry-run on disk.
+    with pytest.raises(UpstreamArtifactGuardError):
+        step4_order_compiler.render_step4_prompt()
+    assert not step4_order_compiler.step4_prompt_path().exists()
+    assert not step4_order_compiler.step4_template4_orders_path().exists()
+    assert not step4_order_compiler.step4_order_state_export_path().exists()
+    assert not step4_order_compiler.step4_exec_summary_path().exists()
+
+
+def test_promoted_step4_readiness_stale_legacy_audited_packet_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from investment_orchestrator.common.io import write_json as _write_json
+    from investment_orchestrator.workflow import step3_audit_engine
+
+    monkeypatch.setattr(step3_audit_engine, "repo_root", lambda: tmp_path)
+    _promote_to_step3_audit_only(tmp_path, monkeypatch)
+    _write_step3_prompt_inputs(tmp_path)
+    _write_step4_readiness_operator_inputs(tmp_path)
+    step3_audit_engine.render_step3_prompt()
+    step3_audit_engine.step3_raw_output_path().write_text(
+        "Promoted Step 3 audit-only findings.\n", encoding="utf-8"
+    )
+    step3_audit_engine.parse_step3_output()
+
+    # A leftover legacy audited packet must flip readiness back to fail-closed.
+    _write_json(
+        step3_audit_engine.step3_audited_decision_packet_path(),
+        {"audit_passed": True, "order_compiler_ready": True},
+    )
+    refreshed = step1_research.refresh_promoted_step4_readiness_after_step3()
+    assert refreshed["promoted_step4_preview_gate_dry_run_would_allow"] == "False"
+    verification = json.loads(
+        step1_research.step1_promoted_step4_readiness_verification_path().read_text(
+            encoding="utf-8"
+        )
+    )
+    assert verification["valid_for_promoted_step4_preview"] is False
+    assert "stale_legacy_audited_packet_present" in verification["verification_blockers"]

@@ -1452,6 +1452,11 @@ def test_order_actions_confined_to_literal_strict_fresh_and_promoted_states_stay
             assert "ORDER_COMPILATION" not in actions, state
         if state in (STEP2_DECISION_ONLY_STATE, STEP3_AUDIT_ONLY_STATE):
             assert "NEW_BUY" not in actions, state
+        # R2E.5b-7b: the Step 4 preview state/action exist ONLY as report-label
+        # strings inside the readiness dry-run artifacts, never as real grants.
+        assert "PROMOTED_ORDER_PREVIEW" not in actions, state
+        assert "PROMOTED_ORDER_READINESS_CHECK" not in actions, state
+    assert "STRICT_FRESH_COMPILED_ACTIONABLE_STEP4_PREVIEW_ONLY" not in _ALLOWED_ACTIONS_BY_STATE
 
     assert _ALLOWED_ACTIONS_BY_STATE[STEP2_DECISION_ONLY_STATE] == (
         "HOLD",

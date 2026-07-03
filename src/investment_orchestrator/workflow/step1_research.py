@@ -61,6 +61,10 @@ from investment_orchestrator.research.promoted_step3_audit_dry_run import (
     evaluate_promoted_step3_audit_gate_dry_run,
     verify_promoted_handoff_for_step3_audit,
 )
+from investment_orchestrator.research.promoted_step4_readiness_dry_run import (
+    evaluate_promoted_step4_preview_gate_dry_run,
+    verify_promoted_step3_for_step4_readiness,
+)
 from investment_orchestrator.state.last_good_research_handoff import (
     LastGoodResearchHandoffWriteResult,
     last_good_research_handoff_metadata_path,
@@ -122,6 +126,8 @@ PROMOTED_HANDOFF_STEP3_AUDIT_VERIFICATION_FILENAME = (
     "promoted_handoff_step3_audit_verification.json"
 )
 PROMOTED_STEP3_AUDIT_GATE_DRY_RUN_FILENAME = "promoted_step3_audit_gate_dry_run.json"
+PROMOTED_STEP4_READINESS_VERIFICATION_FILENAME = "promoted_step4_readiness_verification.json"
+PROMOTED_STEP4_PREVIEW_GATE_DRY_RUN_FILENAME = "promoted_step4_preview_gate_dry_run.json"
 RESEARCH_ANCHORS_INPUT_FILENAME = "research_anchors.yaml"
 CURRENT_RUN_INPUT_NOTES_RE = re.compile(
     r"(?:\r?\n)*────────────────────────────────────────\r?\n"
@@ -323,6 +329,16 @@ def step1_promoted_handoff_step3_audit_verification_path() -> Path:
 def step1_promoted_step3_audit_gate_dry_run_path() -> Path:
     """Return the report-only promoted Step 3 audit gate dry-run artifact path (R2E.5b-6e)."""
     return step1_artifact_dir() / PROMOTED_STEP3_AUDIT_GATE_DRY_RUN_FILENAME
+
+
+def step1_promoted_step4_readiness_verification_path() -> Path:
+    """Return the report-only promoted Step 4 readiness verification path (R2E.5b-7b)."""
+    return step1_artifact_dir() / PROMOTED_STEP4_READINESS_VERIFICATION_FILENAME
+
+
+def step1_promoted_step4_preview_gate_dry_run_path() -> Path:
+    """Return the report-only promoted Step 4 preview gate dry-run path (R2E.5b-7b)."""
+    return step1_artifact_dir() / PROMOTED_STEP4_PREVIEW_GATE_DRY_RUN_FILENAME
 
 
 def resolve_step1_prompt_template_path() -> Path:
@@ -762,6 +778,15 @@ def parse_step1_output(
         "promoted_step3_audit_gate_dry_run_would_allow": promoted_dry_run_summary.get(
             "promoted_step3_audit_gate_dry_run_would_allow", ""
         ),
+        "promoted_step4_readiness_verification_path": promoted_dry_run_summary.get(
+            "promoted_step4_readiness_verification_path", ""
+        ),
+        "promoted_step4_preview_gate_dry_run_path": promoted_dry_run_summary.get(
+            "promoted_step4_preview_gate_dry_run_path", ""
+        ),
+        "promoted_step4_preview_gate_dry_run_would_allow": promoted_dry_run_summary.get(
+            "promoted_step4_preview_gate_dry_run_would_allow", ""
+        ),
         "compiled_research_handoff_mode": compiled_handoff_summary.get("compilation_mode", ""),
         "compiled_research_handoff_valid": compiled_handoff_summary.get("compiled_candidate_valid", ""),
         "schema_version": str(payload.get("schema_version", "")),
@@ -775,10 +800,15 @@ _EMPTY_PROMOTED_STEP2_SUMMARY: dict[str, Any] = {
     "promoted_handoff_step3_audit_verification_path": "",
     "promoted_step3_audit_gate_dry_run_path": "",
     "promoted_step3_audit_gate_dry_run_would_allow": "",
+    "promoted_step4_readiness_verification_path": "",
+    "promoted_step4_preview_gate_dry_run_path": "",
+    "promoted_step4_preview_gate_dry_run_would_allow": "",
     "verification": None,
     "dry_run": None,
     "step3_audit_verification": None,
     "step3_audit_dry_run": None,
+    "step4_readiness_verification": None,
+    "step4_preview_dry_run": None,
 }
 
 
@@ -885,7 +915,15 @@ def _evaluate_research_availability_report_only(
                 "step3_audit_dry_run"
             ),
         )
-        promoted_summary = {**promoted_step2, **promoted_step3_audit}
+        # R2E.5b-7b: report-only Step 4 readiness diagnostics, computed from the
+        # FINAL decision. Deliberately NOT fed back into any availability
+        # evaluation and NOT added to promoted_source_artifacts: nothing
+        # consumes these artifacts in 7b (consumed_by_availability=false).
+        promoted_step4 = _write_promoted_step4_readiness_dry_run_report_only(
+            strategy_settings=strategy_settings,
+            research_decision=research_degraded_mode_decision_to_dict(availability),
+        )
+        promoted_summary = {**promoted_step2, **promoted_step3_audit, **promoted_step4}
         write_json(
             step1_research_availability_path(),
             research_availability_result_to_dict(availability),
@@ -1616,6 +1654,141 @@ def _write_promoted_step3_audit_dry_run_report_only(
         }
 
 
+def _write_promoted_step4_readiness_dry_run_report_only(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+    research_decision: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Write R2E.5b-7b Step 4 preview-only prerequisite diagnostics.
+
+    Report-only and non-authorizing: the artifacts never open Step 4,
+    ORDER_COMPILATION, final execution, or live/broker paths, and NOTHING
+    consumes them in 7b (not availability, not Step 4, not any gate). Missing
+    Step 3 marker / downstream-block artifacts simply produce a fail-closed
+    verdict. Any internal error yields an empty summary, never an exception.
+    """
+    try:
+        settings_as_of = (
+            strategy_settings.get("as_of") if isinstance(strategy_settings, Mapping) else None
+        )
+        source_artifacts = {
+            "active_research_handoff_source": str(step1_active_research_handoff_source_path()),
+            "research_handoff_candidate_effective": str(step1_effective_research_handoff_path()),
+            "research_handoff_candidate_effective_validation": str(
+                step1_effective_research_handoff_validation_path()
+            ),
+            "step2_promoted_decision_only": str(_step2_promoted_decision_only_report_path()),
+            "step2_decision_packet": str(_step2_decision_packet_report_path()),
+            "step3_promoted_audit_only": str(_step3_promoted_audit_only_report_path()),
+            "step3_promoted_audit_only_downstream_block": str(
+                _step3_promoted_audit_only_downstream_block_report_path()
+            ),
+            "step3_template3_audit": str(_step3_template3_audit_report_path()),
+            "strategy_settings": str(current_inputs_dir() / "strategy_settings.yaml"),
+            "portfolio_snapshot": str(current_inputs_dir() / "portfolio_snapshot.txt"),
+        }
+        verification = verify_promoted_step3_for_step4_readiness(
+            active_pointer=_read_json_if_exists(step1_active_research_handoff_source_path()),
+            effective_handoff=_read_json_if_exists(step1_effective_research_handoff_path()),
+            effective_validation=_read_json_if_exists(
+                step1_effective_research_handoff_validation_path()
+            ),
+            step2_promoted_marker=_read_json_if_exists(_step2_promoted_decision_only_report_path()),
+            step2_decision_packet=_read_json_if_exists(_step2_decision_packet_report_path()),
+            step3_promoted_marker=_read_json_if_exists(_step3_promoted_audit_only_report_path()),
+            step3_downstream_block=_read_json_if_exists(
+                _step3_promoted_audit_only_downstream_block_report_path()
+            ),
+            step3_audit_output_text=_read_text_if_exists(_step3_template3_audit_report_path()),
+            legacy_audited_packet_present=file_exists(
+                _step3_audited_decision_packet_report_path()
+            ),
+            strategy_settings=strategy_settings,
+            portfolio_snapshot_text=_read_text_if_exists(
+                current_inputs_dir() / "portfolio_snapshot.txt"
+            ),
+            today=_parse_iso_date_or_none(settings_as_of),
+            source_artifacts=source_artifacts,
+        )
+        write_json(step1_promoted_step4_readiness_verification_path(), verification)
+
+        dry_run = evaluate_promoted_step4_preview_gate_dry_run(
+            research_decision=research_decision,
+            promoted_step4_verification=verification,
+        )
+        write_json(step1_promoted_step4_preview_gate_dry_run_path(), dry_run)
+        return {
+            "promoted_step4_readiness_verification_path": str(
+                step1_promoted_step4_readiness_verification_path()
+            ),
+            "promoted_step4_preview_gate_dry_run_path": str(
+                step1_promoted_step4_preview_gate_dry_run_path()
+            ),
+            "promoted_step4_preview_gate_dry_run_would_allow": str(
+                dry_run.get("would_allow_promoted_step4_preview")
+            ),
+            "step4_readiness_verification": verification,
+            "step4_preview_dry_run": dry_run,
+        }
+    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
+        return {
+            "promoted_step4_readiness_verification_path": "",
+            "promoted_step4_preview_gate_dry_run_path": "",
+            "promoted_step4_preview_gate_dry_run_would_allow": "",
+            "step4_readiness_verification": None,
+            "step4_preview_dry_run": None,
+        }
+
+
+def refresh_promoted_step4_readiness_after_step3(
+    *,
+    strategy_settings: Mapping[str, Any] | None = None,
+) -> dict[str, str]:
+    """Refresh the R2E.5b-7b report-only Step 4 readiness diagnostics.
+
+    Step 1 parse runs before the promoted Step 3 marker / downstream block
+    exist, so the 7b verifier fails closed at that point. The promoted Step 3
+    parse calls this deterministic hook after it writes those artifacts.
+
+    Unlike ``refresh_promoted_step3_audit_only_permission_after_step2``, this
+    hook rewrites ONLY the two report-only Step 4 readiness files. It does not
+    re-run availability, does not rewrite any permission/decision artifact,
+    does not change any state, and does not run Step 4, an order compiler,
+    broker automation, or any live execution path.
+    """
+    settings = (
+        strategy_settings
+        if strategy_settings is not None
+        else load_strategy_settings_for_handoff_validation()
+    )
+    decision = _read_json_if_exists(step1_research_degraded_mode_decision_path())
+    summary = _write_promoted_step4_readiness_dry_run_report_only(
+        strategy_settings=settings,
+        research_decision=decision if isinstance(decision, Mapping) else None,
+    )
+    return {
+        "promoted_step4_readiness_verification_path": str(
+            summary.get("promoted_step4_readiness_verification_path", "")
+        ),
+        "promoted_step4_preview_gate_dry_run_path": str(
+            summary.get("promoted_step4_preview_gate_dry_run_path", "")
+        ),
+        "promoted_step4_preview_gate_dry_run_would_allow": str(
+            summary.get("promoted_step4_preview_gate_dry_run_would_allow", "")
+        ),
+    }
+
+
+def _read_text_if_exists(path: Path) -> str | None:
+    """Read a text artifact if present; return None when absent or unreadable."""
+    if not file_exists(path):
+        return None
+    try:
+        return read_text(path)
+    except Exception:  # noqa: BLE001 - report-only: unreadable text treated as absent
+        return None
+
+
 def _step2_report_artifact_dir() -> Path:
     return repo_root() / "artifacts" / "current" / "step2_decision_builder"
 
@@ -1626,6 +1799,29 @@ def _step2_promoted_decision_only_report_path() -> Path:
 
 def _step2_decision_packet_report_path() -> Path:
     return _step2_report_artifact_dir() / "decision_packet.json"
+
+
+# R2E.5b-7b: mirrored Step 3 artifact paths. ``step3_audit_engine`` imports from
+# this module, so importing its path helpers here would be circular; a
+# drift-guard unit test asserts these equal the Step 3 engine's real paths.
+def _step3_report_artifact_dir() -> Path:
+    return repo_root() / "artifacts" / "current" / "step3_audit_engine"
+
+
+def _step3_promoted_audit_only_report_path() -> Path:
+    return _step3_report_artifact_dir() / "step3_promoted_audit_only.json"
+
+
+def _step3_promoted_audit_only_downstream_block_report_path() -> Path:
+    return _step3_report_artifact_dir() / "step3_promoted_audit_only_downstream_block.json"
+
+
+def _step3_template3_audit_report_path() -> Path:
+    return _step3_report_artifact_dir() / "template3_audit.txt"
+
+
+def _step3_audited_decision_packet_report_path() -> Path:
+    return _step3_report_artifact_dir() / "audited_decision_packet.json"
 
 
 def _parse_iso_date_or_none(value: Any) -> date | None:

@@ -48,6 +48,7 @@ from investment_orchestrator.state.upstream_artifact_guard import (
 )
 from investment_orchestrator.validators.strategy_settings import parse_strategy_settings_text
 from investment_orchestrator.workflow.step1_research import (
+    refresh_promoted_step4_readiness_after_step3,
     step1_active_research_handoff_source_path,
     step1_effective_research_handoff_path,
     step1_effective_research_handoff_validation_path,
@@ -541,6 +542,10 @@ def parse_step3_output() -> dict[str, str]:
         write_text(step3_template3_audit_path(), audit_text.rstrip() + "\n")
         write_text(step3_template2_patch_path(), "")
         marker_path, block_path = _write_promoted_step3_audit_only_artifacts(promoted_context)
+        # R2E.5b-7b: regenerate the report-only Step 4 readiness diagnostics now
+        # that the promoted marker / downstream block / audit text exist. This
+        # grants nothing: no state change, no Step 4 permission, no orders.
+        step4_readiness = refresh_promoted_step4_readiness_after_step3()
         return {
             "mode": MODE_PROMOTED_STEP3_AUDIT_ONLY,
             "template3_audit_path": str(step3_template3_audit_path()),
@@ -552,6 +557,15 @@ def parse_step3_output() -> dict[str, str]:
             "order_compilation_allowed": "False",
             "new_buy_permission": "False",
             "step4_allowed": "False",
+            "promoted_step4_readiness_verification_path": step4_readiness.get(
+                "promoted_step4_readiness_verification_path", ""
+            ),
+            "promoted_step4_preview_gate_dry_run_path": step4_readiness.get(
+                "promoted_step4_preview_gate_dry_run_path", ""
+            ),
+            "promoted_step4_preview_gate_dry_run_would_allow": step4_readiness.get(
+                "promoted_step4_preview_gate_dry_run_would_allow", ""
+            ),
         }
 
     enforce_step3_upstream_guard()
