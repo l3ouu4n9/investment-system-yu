@@ -435,6 +435,76 @@ def test_load_effective_allowed_buy_universe_none_when_missing(
     assert step4_order_compiler.load_effective_allowed_buy_universe() is None
 
 
+def promoted_step3_audit_only_permission() -> dict[str, Any]:
+    return {
+        "state": "STRICT_FRESH_COMPILED_ACTIONABLE_STEP3_AUDIT_ONLY",
+        "research_availability": "strict_fresh_compiled_actionable_step3_audit_only",
+        "allowed_actions": [
+            "HOLD",
+            "NO_TRADE",
+            "PROMOTED_RESEARCH_DECISION",
+            "PROMOTED_RESEARCH_AUDIT",
+        ],
+        "blocked_actions": [
+            "SELL",
+            "NEW_BUY",
+            "ROTATION",
+            "REBALANCE",
+            "EXTENDED_ETF_ADMISSION",
+            "ORDER_COMPILATION",
+        ],
+        "promoted_step2_decision_only": True,
+        "promoted_step3_audit_only": True,
+        "order_compilation_allowed": False,
+        "new_buy_permission": False,
+        "step4_allowed": False,
+        "final_execution_allowed": False,
+        "broker_automation_allowed": False,
+        "manual_review_required": False,
+        "report_only": True,
+    }
+
+
+def test_promoted_step3_audit_only_on_disk_layout_blocks_final_execution_safety_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R2E.5b-6f.1: on-disk regression guard (not just an in-memory call).
+
+    Writes the real ``research_degraded_mode_decision.json`` artifact that a
+    promoted Step 3 audit-only run produces, with no Step 2/3 downstream
+    artifacts on disk (accurately reflecting that promoted audit-only never
+    writes an ``audited_decision_packet.json``), and drives the final gate's
+    own file-reading entrypoint directly -- independent of the upstream
+    artifact guard, which has its own coverage. This proves the final
+    execution safety gate itself, reading from disk, still rejects the
+    promoted Step 3 audit-only state and authorizes no order/final-execution
+    artifact.
+    """
+    prepare_tmp_repo(tmp_path, monkeypatch)
+    write_json(
+        step1_research.step1_research_degraded_mode_decision_path(),
+        promoted_step3_audit_only_permission(),
+    )
+
+    with pytest.raises(FinalExecutionSafetyGateError):
+        step4_order_compiler.enforce_step4_final_execution_safety_gate()
+
+    block_path = step4_order_compiler.step4_blocked_by_final_execution_safety_gate_path()
+    assert block_path.exists()
+    payload = json.loads(block_path.read_text(encoding="utf-8"))
+
+    assert payload["blocked"] is True
+    assert payload["ready_for_order_compilation"] is False
+    assert payload["recommended_result"] == "NO_TRADE"
+    assert payload["checked_conditions"]["step1_state_strict_fresh"] is False
+    assert payload["checked_conditions"]["order_compilation_allowed"] is False
+    assert not step4_order_compiler.step4_prompt_path().exists()
+    assert not step4_order_compiler.step4_template4_orders_path().exists()
+    assert not step4_order_compiler.step4_order_state_export_path().exists()
+    assert not step4_order_compiler.step4_exec_summary_path().exists()
+
+
 def test_promoted_step2_decision_only_state_still_blocks_final_execution_safety_gate() -> None:
     # R2E.5b-6c: the decision-only state permits Step 2 ONLY; the final gate is
     # unchanged and must reject it (state != STRICT_FRESH, ORDER_COMPILATION absent).

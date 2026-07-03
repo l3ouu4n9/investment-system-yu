@@ -656,14 +656,54 @@ def _step3_audit_only_upgrade_ok(
     )
 
 
+# R2E.5b-6f.1: token-level raw-source rejection, mirroring
+# ``promoted_step3_audit_dry_run._is_raw_deep_research_source_token``. Kept as a
+# local mirror (not an import) to avoid a circular import: that module already
+# imports state constants from this one.
+_RAW_DEEP_RESEARCH_ARTIFACT = "research_output.json"
+_RAW_DEEP_RESEARCH_BARE_TOKENS = frozenset(
+    {"research_output", "raw_deep_research", "raw_deep_research_output"}
+)
+
+
+def _is_raw_deep_research_source_token(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    token = value.strip().replace("\\", "/")
+    if token == _RAW_DEEP_RESEARCH_ARTIFACT or token.endswith(f"/{_RAW_DEEP_RESEARCH_ARTIFACT}"):
+        return True
+    return token in _RAW_DEEP_RESEARCH_BARE_TOKENS
+
+
+def _is_promoted_effective_source_token(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    token = value.strip().replace("\\", "/")
+    return token == _PROMOTED_STEP3_SOURCE_ARTIFACT or token.endswith(
+        f"/{_PROMOTED_STEP3_SOURCE_ARTIFACT}"
+    )
+
+
 def _source_artifacts_use_promoted_effective(source_artifacts: Any) -> bool:
+    """Fail-closed source check: reject any raw Deep Research token outright,
+    require the promoted effective handoff artifact to be present.
+
+    Uses per-key/value token matching rather than a serialized-JSON substring
+    scan, so a filename that merely shares a substring with either artifact
+    name (e.g. ``research_output_v2.json``) cannot slip past — and, more
+    importantly, so unrelated keys/values elsewhere in the mapping cannot
+    trigger a false "raw source used" or false "promoted effective present"
+    read by accidental substring overlap.
+    """
     if not isinstance(source_artifacts, Mapping):
         return False
-    rendered = json.dumps(dict(source_artifacts), sort_keys=True, ensure_ascii=False)
-    return (
-        _PROMOTED_STEP3_SOURCE_ARTIFACT in rendered
-        and "research_output.json" not in rendered
-    )
+    uses_promoted_effective = False
+    for key, value in source_artifacts.items():
+        if _is_raw_deep_research_source_token(key) or _is_raw_deep_research_source_token(value):
+            return False
+        if _is_promoted_effective_source_token(key) or _is_promoted_effective_source_token(value):
+            uses_promoted_effective = True
+    return uses_promoted_effective
 
 
 def _classify_current_valid(

@@ -42,6 +42,10 @@ _STATE_SEVERITY = {
     # R2E.5b-6c: Step 2 decision-only permitted; order path still blocked, so the
     # run still summarizes as blocked / NO_TRADE (benign severity).
     "STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY": 1,
+    # R2E.5b-6f: Step 3 audit-only permitted; order path still blocked (no
+    # NEW_BUY / ORDER_COMPILATION), same benign severity tier as the other
+    # promoted non-order / pending-final-gates states.
+    "STRICT_FRESH_COMPILED_ACTIONABLE_STEP3_AUDIT_ONLY": 1,
     "STRICT_STALE": 2,
     "DEGRADED_WITH_LAST_GOOD": 3,
     "DEGRADED_NO_RESEARCH": 4,

@@ -1433,3 +1433,34 @@ def test_raw_strict_fresh_unchanged_by_step2_decision_only_inputs() -> None:
     assert "PROMOTED_RESEARCH_DECISION" not in result.allowed_actions
     assert result.allowed_actions[:2] == ["HOLD", "NO_TRADE"]
     assert "NEW_BUY" in result.allowed_actions and "ORDER_COMPILATION" in result.allowed_actions
+
+
+def test_order_actions_confined_to_literal_strict_fresh_and_promoted_states_stay_exact() -> None:
+    """R2E.5b-6f.1 regression guard: no state can ever widen order authority.
+
+    Independent of any single upgrade path, this asserts the full state table
+    directly: ``ORDER_COMPILATION`` exists only under the literal ``STRICT_FRESH``
+    key, no promoted state ever carries ``NEW_BUY``, and the two promoted states'
+    allowed-action sets remain exactly what R2E.5b-6c / R2E.5b-6f defined.
+    """
+    from investment_orchestrator.state.research_availability import _ALLOWED_ACTIONS_BY_STATE
+
+    for state, actions in _ALLOWED_ACTIONS_BY_STATE.items():
+        if state == "STRICT_FRESH":
+            assert "ORDER_COMPILATION" in actions
+        else:
+            assert "ORDER_COMPILATION" not in actions, state
+        if state in (STEP2_DECISION_ONLY_STATE, STEP3_AUDIT_ONLY_STATE):
+            assert "NEW_BUY" not in actions, state
+
+    assert _ALLOWED_ACTIONS_BY_STATE[STEP2_DECISION_ONLY_STATE] == (
+        "HOLD",
+        "NO_TRADE",
+        PROMOTED_RESEARCH_DECISION,
+    )
+    assert _ALLOWED_ACTIONS_BY_STATE[STEP3_AUDIT_ONLY_STATE] == (
+        "HOLD",
+        "NO_TRADE",
+        PROMOTED_RESEARCH_DECISION,
+        PROMOTED_RESEARCH_AUDIT,
+    )
