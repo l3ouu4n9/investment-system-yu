@@ -66,6 +66,7 @@ from investment_orchestrator.research.promoted_step4_readiness_dry_run import (
     verify_promoted_step3_for_step4_readiness,
 )
 from investment_orchestrator.research.active_research_anchor_registry import (
+    compile_active_research_anchor_registry,
     write_active_research_anchor_registry,
 )
 from investment_orchestrator.research.anchor_source_equivalence import (
@@ -75,7 +76,14 @@ from investment_orchestrator.research.research_anchor_candidates import (
     write_research_anchor_candidates,
 )
 from investment_orchestrator.research.research_anchor_approval_manifest import (
+    validate_research_anchor_approvals,
     write_research_anchor_approvals_validation,
+)
+from investment_orchestrator.research.approvals_inclusive_active_registry import (
+    build_active_research_anchor_registry_with_approvals,
+)
+from investment_orchestrator.research.approval_registry_dual_read_diff import (
+    build_approval_registry_dual_read_diff,
 )
 from investment_orchestrator.state.final_execution_safety_preflight import (
     evaluate_promoted_final_safety_preflight,
@@ -148,6 +156,10 @@ ACTIVE_RESEARCH_ANCHOR_REGISTRY_FILENAME = "active_research_anchor_registry.json
 ANCHOR_SOURCE_EQUIVALENCE_FILENAME = "anchor_source_equivalence.json"
 RESEARCH_ANCHOR_CANDIDATES_FILENAME = "research_anchor_candidates.json"
 RESEARCH_ANCHOR_APPROVALS_VALIDATION_FILENAME = "research_anchor_approvals_validation.json"
+ACTIVE_RESEARCH_ANCHOR_REGISTRY_WITH_APPROVALS_FILENAME = (
+    "active_research_anchor_registry_with_approvals.json"
+)
+APPROVAL_REGISTRY_DUAL_READ_DIFF_FILENAME = "approval_registry_dual_read_diff.json"
 RESEARCH_ANCHORS_INPUT_FILENAME = "research_anchors.yaml"
 RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME = "research_anchor_approvals.yaml"
 CURRENT_RUN_INPUT_NOTES_RE = re.compile(
@@ -385,6 +397,16 @@ def step1_research_anchor_candidates_path() -> Path:
 def step1_research_anchor_approvals_validation_path() -> Path:
     """Return the report-only operator-approval manifest validation path (R2G-5a)."""
     return step1_artifact_dir() / RESEARCH_ANCHOR_APPROVALS_VALIDATION_FILENAME
+
+
+def step1_active_research_anchor_registry_with_approvals_path() -> Path:
+    """Return the report-only approvals-inclusive active registry path (R2G-5b)."""
+    return step1_artifact_dir() / ACTIVE_RESEARCH_ANCHOR_REGISTRY_WITH_APPROVALS_FILENAME
+
+
+def step1_approval_registry_dual_read_diff_path() -> Path:
+    """Return the report-only baseline-vs-approvals registry dual-read diff path (R2G-5b)."""
+    return step1_artifact_dir() / APPROVAL_REGISTRY_DUAL_READ_DIFF_FILENAME
 
 
 def resolve_step1_prompt_template_path() -> Path:
@@ -638,6 +660,16 @@ def parse_step1_output(
     _write_research_anchor_approvals_validation_report_only(
         strategy_settings=handoff_strategy_settings
     )
+
+    # Report-only layer 0c4 (R2G-5b): approvals-inclusive active registry + dual-read
+    # diff. Overlays validated operator-approved anchors (recomputed directly from
+    # research_anchor_approvals.yaml; the R2G-5a artifact / would_activate are never
+    # trusted as authority) onto the baseline registry, then diffs the two. Strictly
+    # a SEPARATE observer: NOT embedded in the evidence packet, NOT the registry
+    # support_signals consumes, consumed by NOTHING (support_signals, active registry,
+    # availability, gates, Step 2/3/4, weekly all ignore it), and cannot affect
+    # allowed_actions / add NEW_BUY / ORDER_COMPILATION. R2G-5c is the future switch.
+    _write_approval_registry_dual_read_report_only(strategy_settings=handoff_strategy_settings)
 
     # Report-only layer 0d (R2E.5b-0): a SEPARATE actionable-handoff preview built
     # from the just-written compiled_support_signals + evidence packet + memo. It
@@ -1284,6 +1316,60 @@ def _write_research_anchor_approvals_validation_report_only(
             today=settings_as_of,
             as_of_date=settings_as_of if isinstance(settings_as_of, str) else None,
         )
+    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
+        pass
+
+
+def _write_approval_registry_dual_read_report_only(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+) -> None:
+    """Compile + write the R2G-5b approvals-inclusive registry + dual-read diff (report-only).
+
+    Recomputes the baseline registry (identical to what support_signals' embedded
+    registry uses) and re-validates approvals directly from
+    ``research_anchor_approvals.yaml`` (never reading the R2G-5a artifact or its
+    would_activate flag as authority), overlays approved anchors onto a SEPARATE
+    approvals-inclusive registry, and writes the two report-only artifacts.
+    Strictly inert: neither artifact is embedded in the evidence packet, added to
+    support_signals input / promoted_source_artifacts / active handoff /
+    allowed_actions / any gate / Step 2/3/4 input; both are consumed by NOTHING and
+    add no permission / state / action. Any error is swallowed so Step 1 parse is
+    never affected.
+    """
+    try:
+        anchors_path = current_inputs_dir() / RESEARCH_ANCHORS_INPUT_FILENAME
+        approvals_path = current_inputs_dir() / RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME
+        settings_as_of = (
+            strategy_settings.get("as_of") if isinstance(strategy_settings, Mapping) else None
+        )
+        allowed_universe = _allowed_buy_universe_for_anchor_registry(strategy_settings)
+
+        # Baseline: the exact same compile support_signals' embedded registry uses.
+        baseline = compile_active_research_anchor_registry(
+            anchors_path=anchors_path,
+            allowed_universe=allowed_universe,
+            today=settings_as_of,
+        )
+        # Approvals: recomputed directly from YAML (not read from the R2G-5a artifact).
+        approvals_validation = validate_research_anchor_approvals(
+            manifest_path=approvals_path,
+            allowed_universe=allowed_universe,
+            today=settings_as_of,
+        )
+        with_approvals = build_active_research_anchor_registry_with_approvals(
+            baseline=baseline, approvals_validation=approvals_validation
+        )
+        with_approvals_path = step1_active_research_anchor_registry_with_approvals_path()
+        write_json(with_approvals_path, with_approvals)
+
+        diff = build_approval_registry_dual_read_diff(
+            baseline_registry=baseline,
+            approvals_registry=with_approvals,
+            baseline_registry_path=str(step1_active_research_anchor_registry_path()),
+            approvals_registry_path=str(with_approvals_path),
+        )
+        write_json(step1_approval_registry_dual_read_diff_path(), diff)
     except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
         pass
 
