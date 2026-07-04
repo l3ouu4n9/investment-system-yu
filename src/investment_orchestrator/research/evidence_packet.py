@@ -26,8 +26,26 @@ from investment_orchestrator.parsers.portfolio_snapshot_existing_orders import (
     parse_existing_buy_open_orders_summary,
 )
 from investment_orchestrator.research.active_research_anchor_registry import (
+    OPERATOR_SOURCE_ID as BASELINE_ANCHOR_SOURCE_ID,
+    SCHEMA_VERSION as BASELINE_ACTIVE_REGISTRY_SCHEMA_VERSION,
     active_anchor_registry_from_research_anchors_summary,
     compile_active_research_anchor_registry,
+)
+from investment_orchestrator.research.approval_registry_dual_read_diff import (
+    build_approval_registry_dual_read_diff,
+)
+from investment_orchestrator.research.approval_registry_switch_readiness import (
+    APPROVALS_SOURCE_ID,
+    SWITCH_TARGET_APPROVALS,
+    SWITCH_TARGET_BASELINE,
+    SWITCH_TARGET_FAIL_CLOSED,
+    evaluate_approval_registry_switch_readiness,
+)
+from investment_orchestrator.research.approvals_inclusive_active_registry import (
+    build_active_research_anchor_registry_with_approvals,
+)
+from investment_orchestrator.research.research_anchor_approval_manifest import (
+    validate_research_anchor_approvals,
 )
 from investment_orchestrator.research.research_anchors import (
     ANCHORS_MISSING_DATA_GAP,
@@ -41,6 +59,8 @@ from investment_orchestrator.state.last_good_research_handoff import (
 
 SCHEMA_VERSION = "evidence_packet_v1"
 SOURCE = "deterministic_inputs"
+EMBEDDED_REGISTRY_SELECTION_SCHEMA_VERSION = "embedded_active_anchor_registry_selection_v1"
+FAIL_CLOSED_EMPTY_REASON = "approval_registry_switch_fail_closed_empty"
 
 EVIDENCE_PACKET_REQUIRED_FIELDS = (
     "schema_version",
@@ -112,12 +132,12 @@ def build_evidence_packet(
     kept for backward compatibility / diagnostics only and is **no longer the
     authoritative grounding source**.
 
-    ``active_anchor_registry`` (R2G-3) is the R2G-1 active anchor registry embedded
-    as a first-class, report-only **source of truth** that ``support_signals``
-    consumes for anchor grounding. When not supplied it is derived deterministically
-    from the ``research_anchors`` summary (identical active/inactive split to the
-    standalone ``active_research_anchor_registry.json``). It never changes
-    permissions and cannot authorize a trade.
+    ``active_anchor_registry`` is the first-class, report-only **source of truth**
+    that ``support_signals`` consumes for anchor grounding. In the Step 1 writer it
+    is selected by the R2G-5c-2 readiness-gated baseline/approvals-inclusive
+    selector. When not supplied to this pure builder it is derived deterministically
+    from the ``research_anchors`` summary. It never changes permissions and cannot
+    authorize a trade.
     """
     data_gaps: list[dict[str, str]] = []
     settings = strategy_settings if isinstance(strategy_settings, Mapping) else None
@@ -356,6 +376,170 @@ def check_evidence_packet_invariants(packet: Any) -> list[str]:
     return problems
 
 
+# --- embedded active-registry selection ---------------------------------------
+
+
+def build_embedded_active_anchor_registry_selection(
+    *,
+    anchors_path: Any,
+    approvals_path: Any = None,
+    allowed_universe: Any,
+    today: Any = None,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    """Freshly compile, evaluate readiness, and select the embedded registry.
+
+    This is the R2G-5c-2 behavior switch. It does not read any on-disk registry,
+    readiness, or dry-run diff JSON as authority. The baseline registry,
+    approvals-inclusive registry, dual-read diff, readiness result, and selected
+    embedded registry are all derived from the same in-memory compile.
+    """
+    try:
+        baseline = compile_active_research_anchor_registry(
+            anchors_path=anchors_path,
+            allowed_universe=allowed_universe,
+            today=today,
+            generated_at=generated_at,
+        )
+        approvals_validation = validate_research_anchor_approvals(
+            manifest_path=approvals_path,
+            allowed_universe=allowed_universe,
+            today=today,
+            as_of_date=baseline.get("as_of_date") if isinstance(baseline, Mapping) else None,
+            generated_at=generated_at,
+        )
+        approvals = build_active_research_anchor_registry_with_approvals(
+            baseline=baseline,
+            approvals_validation=approvals_validation,
+            generated_at=generated_at,
+        )
+        diff = build_approval_registry_dual_read_diff(
+            baseline_registry=baseline,
+            approvals_registry=approvals,
+            generated_at=generated_at,
+        )
+        readiness = evaluate_approval_registry_switch_readiness(
+            baseline_registry=baseline,
+            approvals_registry=approvals,
+            dual_read_diff=diff,
+            current_research_anchors_sha256=_source_sha(baseline, BASELINE_ANCHOR_SOURCE_ID),
+            current_research_anchor_approvals_sha256=_source_sha(approvals, APPROVALS_SOURCE_ID),
+            approvals_source_present=_source_present(approvals, APPROVALS_SOURCE_ID),
+            as_of_date=baseline.get("as_of_date") if isinstance(baseline, Mapping) else None,
+            generated_at=generated_at,
+        )
+        selected, selected_source = _select_embedded_registry(
+            baseline=baseline,
+            approvals=approvals,
+            readiness=readiness,
+            generated_at=generated_at,
+        )
+        return {
+            "schema_version": EMBEDDED_REGISTRY_SELECTION_SCHEMA_VERSION,
+            "is_llm_generated": False,
+            "report_only": True,
+            "permission_effect": "none",
+            "not_authorization": True,
+            "not_execution_authorization": True,
+            "generated_at": generated_at,
+            "selected_source": selected_source,
+            "selected_registry": selected,
+            "baseline_registry": baseline,
+            "approvals_registry": approvals,
+            "dual_read_diff": diff,
+            "readiness": readiness,
+        }
+    except Exception:  # noqa: BLE001 - evidence packet must fail closed, never raise
+        selected = fail_closed_empty_active_anchor_registry(
+            reason="embedded_registry_selection_internal_error",
+            generated_at=generated_at,
+        )
+        return {
+            "schema_version": EMBEDDED_REGISTRY_SELECTION_SCHEMA_VERSION,
+            "is_llm_generated": False,
+            "report_only": True,
+            "permission_effect": "none",
+            "not_authorization": True,
+            "not_execution_authorization": True,
+            "generated_at": generated_at,
+            "selected_source": SWITCH_TARGET_FAIL_CLOSED,
+            "selected_registry": selected,
+            "baseline_registry": {},
+            "approvals_registry": {},
+            "dual_read_diff": {},
+            "readiness": {
+                "ready": False,
+                "switch_target": SWITCH_TARGET_FAIL_CLOSED,
+                "baseline_fallback_safe": False,
+                "fail_closed_empty_required": True,
+            },
+        }
+
+
+def fail_closed_empty_active_anchor_registry(
+    *,
+    reason: str = FAIL_CLOSED_EMPTY_REASON,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    """Consumable, intentionally empty registry: support_signals sees zero anchors."""
+    return {
+        "schema_version": BASELINE_ACTIVE_REGISTRY_SCHEMA_VERSION,
+        "is_llm_generated": False,
+        "report_only": True,
+        "permission_effect": "none",
+        "not_authorization": True,
+        "not_execution_authorization": True,
+        "compiler_version": "embedded_registry_selector_v1",
+        "as_of_date": None,
+        "generated_at": generated_at,
+        "source_manifest": [],
+        "active_anchors": [],
+        "inactive_anchors": [],
+        "counts": {"active": 0, "expired": 0, "revoked": 0, "invalid": 0, "superseded": 0},
+        "registry_valid": True,
+        "registry_blockers": [reason] if reason else [],
+        "audit_trail": [{"event": "fail_closed_empty_selected", "reason": reason}],
+        "notes": "Fail-closed empty embedded registry selected by R2G-5c-2 readiness gate; zero usable anchors.",
+    }
+
+
+def _select_embedded_registry(
+    *,
+    baseline: Mapping[str, Any],
+    approvals: Mapping[str, Any],
+    readiness: Mapping[str, Any],
+    generated_at: str | None,
+) -> tuple[dict[str, Any], str]:
+    target = readiness.get("switch_target")
+    if readiness.get("ready") is True and target == SWITCH_TARGET_APPROVALS:
+        return approvals if isinstance(approvals, dict) else dict(approvals), SWITCH_TARGET_APPROVALS
+    if target == SWITCH_TARGET_BASELINE and readiness.get("baseline_fallback_safe") is True:
+        return baseline if isinstance(baseline, dict) else dict(baseline), SWITCH_TARGET_BASELINE
+    return (
+        fail_closed_empty_active_anchor_registry(generated_at=generated_at),
+        SWITCH_TARGET_FAIL_CLOSED,
+    )
+
+
+def _source_sha(registry: Mapping[str, Any], source_id: str) -> str | None:
+    for entry in _as_list(registry.get("source_manifest")):
+        if isinstance(entry, Mapping) and entry.get("source_id") == source_id:
+            sha = entry.get("sha256")
+            return sha if isinstance(sha, str) else None
+    return None
+
+
+def _source_present(registry: Mapping[str, Any], source_id: str) -> bool:
+    for entry in _as_list(registry.get("source_manifest")):
+        if isinstance(entry, Mapping) and entry.get("source_id") == source_id:
+            return entry.get("present") is True
+    return False
+
+
+def _as_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
 # --- disk wrapper ------------------------------------------------------------
 
 
@@ -370,14 +554,17 @@ def write_evidence_packet(
     now_date: str | None = None,
     source_artifacts: Mapping[str, str] | None = None,
     research_anchors_path: str | Path | None = None,
+    research_anchor_approvals_path: str | Path | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Build the evidence packet and write it as JSON. Returns the packet mapping.
 
     When ``research_anchors_path`` is provided, the deterministic (report-only)
     research-anchor summary is built from it (a missing file → an unavailable
-    ``research_anchors`` section + DATA_GAP) and embedded in the packet. Anchors
-    never change permissions and are not consumed for support acceptance (R2E.5a).
+    ``research_anchors`` section + DATA_GAP). The embedded grounding registry is
+    selected from a fresh readiness-coupled baseline/approvals-inclusive compile.
+    This can affect only report-only support-signal grounding; it never changes
+    permissions, gates, or order paths.
     """
     from investment_orchestrator.common.io import write_json
 
@@ -391,15 +578,17 @@ def write_evidence_packet(
             allowed_universe=allowed_universe,
             today=now_date,
         )
-        # R2G-3: compile the active registry from the operator YAML source itself
-        # (real source_manifest / sha256) and embed it as the authoritative
-        # grounding source of truth. Identical active set to the standalone
-        # active_research_anchor_registry.json.
-        active_anchor_registry = compile_active_research_anchor_registry(
+        # R2G-5c-2: select the embedded grounding registry from the same fresh
+        # in-memory compile that readiness evaluates. No on-disk registry,
+        # readiness, or dry-run diff JSON is read as switch authority.
+        selection = build_embedded_active_anchor_registry_selection(
             anchors_path=research_anchors_path,
+            approvals_path=research_anchor_approvals_path,
             allowed_universe=allowed_universe,
             today=now_date,
+            generated_at=generated_at,
         )
+        active_anchor_registry = selection["selected_registry"]
     packet = build_evidence_packet(
         strategy_settings=strategy_settings,
         portfolio_snapshot_text=portfolio_snapshot_text,

@@ -17,6 +17,8 @@ from investment_orchestrator.research.active_research_anchor_registry import (
 )
 from investment_orchestrator.research.support_signals import (
     ANCHOR_SOURCE_NONE,
+    APPROVALS_ANCHOR_SOURCE_ID,
+    APPROVALS_REGISTRY_SCHEMA_VERSION,
     REASON_ANALYST_MEMO_ABSENT,
     REASON_ANALYST_MEMO_INVALID,
     REASON_ANCHOR_CONFIDENCE_FLOOR_NOT_MET,
@@ -470,6 +472,24 @@ def _consumable_registry(active: list[dict[str, Any]], inactive: list[dict[str, 
     }
 
 
+def _approvals_consumable_registry(
+    active: list[dict[str, Any]],
+    inactive: list[dict[str, Any]] | None = None,
+    *,
+    registry_valid: bool = True,
+) -> dict[str, Any]:
+    return {
+        "schema_version": APPROVALS_REGISTRY_SCHEMA_VERSION,
+        "is_llm_generated": False,
+        "report_only": True,
+        "permission_effect": "none",
+        "not_authorization": True,
+        "registry_valid": registry_valid,
+        "active_anchors": active,
+        "inactive_anchors": inactive or [],
+    }
+
+
 def _registry_active_anchor(**overrides: Any) -> dict[str, Any]:
     base = {
         "anchor_id": "AI_CAPEX_2026H2",
@@ -480,6 +500,21 @@ def _registry_active_anchor(**overrides: Any) -> dict[str, Any]:
         "status": "active",
         "validation": {"valid": True, "stale": False, "usable": True, "problems": []},
     }
+    base.update(overrides)
+    return base
+
+
+def _approval_registry_anchor(**overrides: Any) -> dict[str, Any]:
+    base = _registry_active_anchor(
+        source_id=APPROVALS_ANCHOR_SOURCE_ID,
+        source_category="C_operator",
+        approval_type="operator_authored",
+        operator_completed_anchor_sha256="operator-anchor-hash",
+        candidate_id=None,
+        candidate_sha256=None,
+        candidate_link_status="no_candidate_link",
+        validation={"valid": True, "stale": False, "usable": True, "hash_match": True, "problems": []},
+    )
     base.update(overrides)
     return base
 
@@ -634,3 +669,121 @@ def test_r2g3_registry_does_not_reference_permission_or_order_tokens() -> None:
     assert art["not_authorization"] is True
     for accepted in art["accepted_support_signals"]:
         assert accepted["not_authorization"] is True
+
+
+# --- R2G-5c-2: approvals-inclusive registry runtime grounding -----------------
+
+
+def test_r2g5c2_approvals_schema_grounds_valid_operator_approval() -> None:
+    packet = evidence_packet()
+    packet["active_anchor_registry"] = _approvals_consumable_registry([_approval_registry_anchor()])
+    art = _accept(packet, memo_with_refs(confidence="high"))
+
+    assert art["permission_effect"] == "none"
+    assert art["not_authorization"] is True
+    accepted = art["accepted_support_signals"][0]
+    assert accepted["anchor_id"] == "AI_CAPEX_2026H2"
+    assert accepted["operator_completed_anchor_sha256"] == "operator-anchor-hash"
+    assert accepted["approval_type"] == "operator_authored"
+
+
+def test_r2g5c2_approvals_registry_valid_false_fails_closed_even_with_active_rows() -> None:
+    packet = evidence_packet()
+    packet["active_anchor_registry"] = _approvals_consumable_registry(
+        [_approval_registry_anchor()], registry_valid=False
+    )
+    art = _accept(packet, memo_with_refs(confidence="high"))
+    assert art["accepted_support_signals"] == []
+    assert art["anchor_source_available"] is False
+
+
+def test_r2g5c2_candidate_hash_mismatch_is_audit_only_still_grounds() -> None:
+    packet = evidence_packet()
+    packet["active_anchor_registry"] = _approvals_consumable_registry(
+        [
+            _approval_registry_anchor(
+                approval_type="operator_approved_candidate",
+                candidate_id="C1",
+                candidate_sha256="wrong",
+                candidate_link_status="candidate_hash_mismatch",
+            )
+        ]
+    )
+    art = _accept(packet, memo_with_refs(confidence="high"))
+    assert {s["ticker"] for s in art["accepted_support_signals"]} == {"QQQ"}
+
+
+def test_r2g5c2_candidate_only_row_cannot_ground() -> None:
+    packet = evidence_packet()
+    packet["active_anchor_registry"] = _approvals_consumable_registry(
+        [
+            _approval_registry_anchor(
+                source_id="research_anchor_candidates",
+                source_category="B_candidate_only",
+                approval_type="operator_approved_candidate",
+                operator_completed_anchor_sha256=None,
+                candidate_id="C1",
+                candidate_sha256="candidate-only",
+            )
+        ]
+    )
+    art = _accept(packet, memo_with_refs(confidence="high"))
+    assert art["accepted_support_signals"] == []
+
+
+def test_r2g5c2_candidate_sha256_alone_cannot_ground() -> None:
+    packet = evidence_packet()
+    packet["active_anchor_registry"] = _approvals_consumable_registry(
+        [
+            _approval_registry_anchor(
+                source_id="research_anchor_candidates",
+                source_category="B_candidate_only",
+                approval_type=None,
+                operator_completed_anchor_sha256=None,
+                candidate_sha256="candidate-only",
+            )
+        ]
+    )
+    art = _accept(packet, memo_with_refs(confidence="high"))
+    assert art["accepted_support_signals"] == []
+
+
+def test_r2g5c2_per_row_approval_defenses_required() -> None:
+    cases = [
+        {"operator_completed_anchor_sha256": None},
+        {"validation": {"valid": True, "stale": False, "usable": True, "hash_match": False}},
+        {"validation": {"valid": False, "stale": False, "usable": True, "hash_match": True}},
+        {"validation": {"valid": True, "stale": False, "usable": False, "hash_match": True}},
+        {"validation": {"valid": True, "stale": True, "usable": False, "hash_match": True}},
+        {"source_id": "unexpected_anchor_source"},
+        {"source_category": "B_candidate_only"},
+        {"source_type": "deterministic_feed"},
+        {"approval_type": "not_allowed"},
+    ]
+    for overrides in cases:
+        packet = evidence_packet()
+        packet["active_anchor_registry"] = _approvals_consumable_registry(
+            [_approval_registry_anchor(**overrides)]
+        )
+        art = _accept(packet, memo_with_refs(confidence="high"))
+        assert art["accepted_support_signals"] == [], overrides
+
+
+def test_r2g5c2_approved_anchor_still_must_pass_evaluate_anchor_refs() -> None:
+    cases = [
+        (_approval_registry_anchor(applicable_tickers=["SMH"]), memo_with_refs(confidence="high")),
+        (_approval_registry_anchor(confidence_floor="high"), memo_with_refs(confidence="medium")),
+        (_approval_registry_anchor(anchor_type="hot_tip"), memo_with_refs(confidence="high")),
+        (
+            _approval_registry_anchor(
+                status="expired",
+                validation={"valid": True, "stale": True, "usable": False, "hash_match": True},
+            ),
+            memo_with_refs(confidence="high"),
+        ),
+    ]
+    for row, m in cases:
+        packet = evidence_packet()
+        packet["active_anchor_registry"] = _approvals_consumable_registry([row])
+        art = _accept(packet, m)
+        assert art["accepted_support_signals"] == []

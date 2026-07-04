@@ -620,16 +620,17 @@ def parse_step1_output(
         else load_strategy_settings_for_handoff_validation()
     )
 
-    # Report-only layer 0 (R2B): deterministic evidence packet. Built from
-    # operator inputs + last-good metadata only (no LLM, no parsed payload), so
-    # it is written regardless of whether the Deep Research output parses, and is
-    # fully independent of the degraded-mode decision below.
+    # Report-only layer 0 (R2B/R2G-5c-2): deterministic evidence packet. Built
+    # from operator inputs + last-good metadata only (no LLM, no parsed payload).
+    # Its embedded active_anchor_registry is now selected by a fresh, in-memory
+    # approvals-readiness compile; this still changes no permission, gate, or
+    # order path and remains independent of the degraded-mode decision below.
     _write_evidence_packet_report_only(strategy_settings=handoff_strategy_settings)
 
-    # Report-only layer 0a2 (R2G-1): deterministic active anchor registry compiled
-    # from the operator research_anchors.yaml source only. Additive and consumed by
-    # NOTHING yet (support_signals still reads evidence_packet.research_anchors);
-    # it never changes any behavior, gate, permission, or the degraded-mode decision.
+    # Report-only layer 0a2 (R2G-1): deterministic baseline active anchor registry
+    # compiled from the operator research_anchors.yaml source only. The standalone
+    # artifact remains an observer; support_signals consumes the embedded registry
+    # that the evidence packet selected above.
     _write_active_research_anchor_registry_report_only(
         strategy_settings=handoff_strategy_settings
     )
@@ -682,29 +683,20 @@ def parse_step1_output(
     # Report-only layer 0c4 (R2G-5b): approvals-inclusive active registry + dual-read
     # diff. Overlays validated operator-approved anchors (recomputed directly from
     # research_anchor_approvals.yaml; the R2G-5a artifact / would_activate are never
-    # trusted as authority) onto the baseline registry, then diffs the two. Strictly
-    # a SEPARATE observer: NOT embedded in the evidence packet, NOT the registry
-    # support_signals consumes, consumed by NOTHING (support_signals, active registry,
-    # availability, gates, Step 2/3/4, weekly all ignore it), and cannot affect
-    # allowed_actions / add NEW_BUY / ORDER_COMPILATION. R2G-5c is the future switch.
+    # trusted as authority) onto the baseline registry, then diffs the two. The
+    # on-disk artifact remains a SEPARATE observer; the evidence packet switch above
+    # recomputes its own fresh in-memory approvals-inclusive registry.
     _write_approval_registry_dual_read_report_only(strategy_settings=handoff_strategy_settings)
 
-    # Report-only layer 0c5 (R2G-5c-0): approval-registry switch-READINESS gate. A
-    # deterministic go/no-go artifact deciding whether a FUTURE R2G-5c-2 switch to
-    # approvals-inclusive grounding would be safe. Recomputes everything from current
-    # YAML (never reads the R2G-5a validation artifact / would_activate). Strictly
-    # inert: it switches NO consumer, does not change evidence_packet.active_anchor_registry,
-    # is consumed by NOTHING, and cannot affect allowed_actions / add NEW_BUY / ORDER_COMPILATION.
+    # Report-only layer 0c5 (R2G-5c-0): approval-registry switch-READINESS gate. The
+    # on-disk artifact is still diagnostic/write-only; the actual 5c-2 switch above
+    # recomputes readiness from fresh in-memory YAML-derived objects.
     _write_approval_registry_switch_readiness_report_only(strategy_settings=handoff_strategy_settings)
 
     # Report-only layer 0c6 (R2G-5c-1): support_signals dual-ground DRY-RUN diff.
-    # Compares support_signals grounding under the current baseline embedded registry
-    # vs the freshly-compiled approvals-inclusive registry (subject to R2G-5c-0
-    # readiness), using the REAL build_compiled_support_signals both times. DRY-RUN
-    # ONLY: it does not change support_signals runtime output, does not mutate
-    # evidence_packet.active_anchor_registry, does not switch the embedded registry,
-    # is consumed by NOTHING, and cannot affect allowed_actions / add NEW_BUY /
-    # ORDER_COMPILATION. R2G-5c-2 is the future switch.
+    # Compares support_signals grounding under the embedded registry vs a freshly
+    # compiled approvals-inclusive dry-run view. The artifact itself remains
+    # write-only and cannot affect allowed_actions / add NEW_BUY / ORDER_COMPILATION.
     _write_support_signals_dual_ground_diff_report_only(strategy_settings=handoff_strategy_settings)
 
     # Report-only layer 0d (R2E.5b-0): a SEPARATE actionable-handoff preview built
@@ -1200,6 +1192,7 @@ def _write_evidence_packet_report_only(
     try:
         snapshot_path = current_inputs_dir() / "portfolio_snapshot.txt"
         research_anchors_path = current_inputs_dir() / RESEARCH_ANCHORS_INPUT_FILENAME
+        approvals_path = current_inputs_dir() / RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME
         try:
             snapshot_text: str | None = load_portfolio_snapshot_text()
         except Exception:  # noqa: BLE001 - missing snapshot -> DATA_GAP, not crash
@@ -1221,8 +1214,10 @@ def _write_evidence_packet_report_only(
                 "portfolio_snapshot": str(snapshot_path),
                 "last_good_metadata": str(last_good_research_handoff_metadata_path(step1_state_dir())),
                 "research_anchors": str(research_anchors_path),
+                "research_anchor_approvals": str(approvals_path),
             },
             research_anchors_path=research_anchors_path,
+            research_anchor_approvals_path=approvals_path,
         )
     except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
         # Best-effort only: do not mask or alter existing Step 1 behavior.

@@ -57,6 +57,11 @@ from investment_orchestrator.research.research_anchors import (
 
 
 SCHEMA_VERSION = "compiled_support_signals_v1"
+APPROVALS_REGISTRY_SCHEMA_VERSION = "active_research_anchor_registry_with_approvals_v1"
+BASELINE_ANCHOR_SOURCE_ID = "operator_research_anchors_yaml"
+APPROVALS_ANCHOR_SOURCE_ID = "operator_research_anchor_approvals_yaml"
+OPERATOR_SOURCE_CATEGORY = "C_operator"
+ALLOWED_APPROVAL_TYPES = frozenset({"operator_authored", "operator_approved_candidate"})
 
 # Compilation-mode literals mirrored from the compiler (kept as literals to avoid
 # a circular import; the compiler passes the mode it computed).
@@ -266,15 +271,26 @@ def build_compiled_support_signals(
         candidate_ticker_signals.append(signal)
 
         if accepted:
-            accepted_support_signals.append(
-                {
-                    "ticker": ticker,
-                    "stance": stance_str,
-                    "anchor_id": matched_anchor_id,
-                    "anchor_type": matched_anchor_type,
-                    "not_authorization": True,
-                }
-            )
+            accepted_signal = {
+                "ticker": ticker,
+                "stance": stance_str,
+                "anchor_id": matched_anchor_id,
+                "anchor_type": matched_anchor_type,
+                "not_authorization": True,
+            }
+            matched_anchor = anchors_by_id.get(matched_anchor_id) if matched_anchor_id is not None else None
+            if isinstance(matched_anchor, Mapping):
+                operator_hash = matched_anchor.get("operator_completed_anchor_sha256")
+                if isinstance(operator_hash, str) and operator_hash.strip():
+                    accepted_signal["operator_completed_anchor_sha256"] = operator_hash
+                approval_type = matched_anchor.get("approval_type")
+                if (
+                    matched_anchor.get("source_id") == APPROVALS_ANCHOR_SOURCE_ID
+                    and isinstance(approval_type, str)
+                    and approval_type
+                ):
+                    accepted_signal["approval_type"] = approval_type
+            accepted_support_signals.append(accepted_signal)
         elif not non_anchor_reasons:
             # Passed every qualitative gate but lacks valid anchor grounding.
             qualitative_support_only.append(
@@ -355,7 +371,8 @@ def _registry_is_consumable(registry: Any) -> bool:
     """
     return (
         isinstance(registry, Mapping)
-        and registry.get("schema_version") == ACTIVE_REGISTRY_SCHEMA_VERSION
+        and registry.get("schema_version")
+        in {ACTIVE_REGISTRY_SCHEMA_VERSION, APPROVALS_REGISTRY_SCHEMA_VERSION}
         and registry.get("is_llm_generated") is False
         and registry.get("report_only") is True
         and registry.get("permission_effect") == "none"
@@ -373,7 +390,13 @@ def _projected_acceptance_fields(anchor: Mapping[str, Any]) -> dict[str, Any]:
     / type / applicability / confidence checks still fire.
     """
     status = anchor.get("status")
-    if status == STATUS_ACTIVE:
+    if _is_approval_like_anchor(anchor) and not _approval_row_defense_ok(anchor):
+        validation = anchor.get("validation") if isinstance(anchor.get("validation"), Mapping) else {}
+        if status == STATUS_EXPIRED or validation.get("stale") is True:
+            valid, stale, usable = True, True, False
+        else:
+            valid, stale, usable = False, False, False
+    elif status == STATUS_ACTIVE:
         valid, stale, usable = True, False, True
     elif status == STATUS_EXPIRED:
         valid, stale, usable = True, True, False
@@ -385,13 +408,49 @@ def _projected_acceptance_fields(anchor: Mapping[str, Any]) -> dict[str, Any]:
         "usable": usable,
         "anchor_type": anchor.get("anchor_type"),
         "source_type": anchor.get("source_type"),
+        "source_id": anchor.get("source_id"),
+        "approval_type": anchor.get("approval_type"),
+        "operator_completed_anchor_sha256": anchor.get("operator_completed_anchor_sha256"),
         "applicable_tickers": list(anchor.get("applicable_tickers") or []),
         "confidence_floor": anchor.get("confidence_floor"),
     }
 
 
+def _is_approval_like_anchor(anchor: Mapping[str, Any]) -> bool:
+    source_id = anchor.get("source_id")
+    if source_id == BASELINE_ANCHOR_SOURCE_ID:
+        return False
+    if source_id is not None:
+        return True
+    return anchor.get("approval_type") is not None
+
+
+def _approval_row_defense_ok(anchor: Mapping[str, Any]) -> bool:
+    validation = anchor.get("validation")
+    return (
+        anchor.get("status") == STATUS_ACTIVE
+        and (
+            anchor.get("source_id") == APPROVALS_ANCHOR_SOURCE_ID
+            or (anchor.get("source_id") is None and anchor.get("approval_type") is not None)
+        )
+        and anchor.get("source_category") == OPERATOR_SOURCE_CATEGORY
+        and anchor.get("source_type") == "operator"
+        and anchor.get("approval_type") in ALLOWED_APPROVAL_TYPES
+        and _nonempty(anchor.get("operator_completed_anchor_sha256"))
+        and isinstance(validation, Mapping)
+        and validation.get("hash_match") is True
+        and validation.get("valid") is True
+        and validation.get("usable") is True
+        and validation.get("stale") is False
+    )
+
+
 def _as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
+
+
+def _nonempty(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _evaluate_anchor_refs(

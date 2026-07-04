@@ -194,17 +194,20 @@ def test_I_diff_does_not_mutate_inputs() -> None:
     assert json.dumps(wa, sort_keys=True) == w_before
 
 
-def test_I_new_modules_not_imported_by_consumers() -> None:
-    # Import-graph proof: consumers must not import the R2G-5b modules.
+def test_I_observer_artifacts_not_imported_by_downstream_gate_consumers() -> None:
+    # R2G-5c-2 intentionally lets support_signals consume the embedded approvals
+    # schema and lets evidence_packet compile fresh readiness inputs. The on-disk
+    # observer artifacts must still not become downstream gate authority.
     import inspect
     import investment_orchestrator.research.support_signals as ss
     import investment_orchestrator.research.evidence_packet as ep
     import investment_orchestrator.state.research_availability as ra
-    for module in (ss, ep, ra):
-        src = inspect.getsource(module)
-        assert "approvals_inclusive_active_registry" not in src, module.__name__
-        assert "approval_registry_dual_read_diff" not in src, module.__name__
-        assert "active_research_anchor_registry_with_approvals" not in src, module.__name__
+    assert "support_signals_dual_ground_diff" not in inspect.getsource(ss)
+    assert "support_signals_dual_ground_diff" not in inspect.getsource(ep)
+    ra_src = inspect.getsource(ra)
+    assert "approvals_inclusive_active_registry" not in ra_src
+    assert "approval_registry_dual_read_diff" not in ra_src
+    assert "support_signals_dual_ground_diff" not in ra_src
 
 
 # --- J. safety ----------------------------------------------------------------
