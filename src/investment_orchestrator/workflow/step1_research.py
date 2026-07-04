@@ -85,6 +85,9 @@ from investment_orchestrator.research.approvals_inclusive_active_registry import
 from investment_orchestrator.research.approval_registry_dual_read_diff import (
     build_approval_registry_dual_read_diff,
 )
+from investment_orchestrator.research.approval_registry_switch_readiness import (
+    write_approval_registry_switch_readiness,
+)
 from investment_orchestrator.state.final_execution_safety_preflight import (
     evaluate_promoted_final_safety_preflight,
 )
@@ -160,6 +163,7 @@ ACTIVE_RESEARCH_ANCHOR_REGISTRY_WITH_APPROVALS_FILENAME = (
     "active_research_anchor_registry_with_approvals.json"
 )
 APPROVAL_REGISTRY_DUAL_READ_DIFF_FILENAME = "approval_registry_dual_read_diff.json"
+APPROVAL_REGISTRY_SWITCH_READINESS_FILENAME = "approval_registry_switch_readiness.json"
 RESEARCH_ANCHORS_INPUT_FILENAME = "research_anchors.yaml"
 RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME = "research_anchor_approvals.yaml"
 CURRENT_RUN_INPUT_NOTES_RE = re.compile(
@@ -407,6 +411,11 @@ def step1_active_research_anchor_registry_with_approvals_path() -> Path:
 def step1_approval_registry_dual_read_diff_path() -> Path:
     """Return the report-only baseline-vs-approvals registry dual-read diff path (R2G-5b)."""
     return step1_artifact_dir() / APPROVAL_REGISTRY_DUAL_READ_DIFF_FILENAME
+
+
+def step1_approval_registry_switch_readiness_path() -> Path:
+    """Return the report-only approval-registry switch-readiness gate path (R2G-5c-0)."""
+    return step1_artifact_dir() / APPROVAL_REGISTRY_SWITCH_READINESS_FILENAME
 
 
 def resolve_step1_prompt_template_path() -> Path:
@@ -670,6 +679,14 @@ def parse_step1_output(
     # availability, gates, Step 2/3/4, weekly all ignore it), and cannot affect
     # allowed_actions / add NEW_BUY / ORDER_COMPILATION. R2G-5c is the future switch.
     _write_approval_registry_dual_read_report_only(strategy_settings=handoff_strategy_settings)
+
+    # Report-only layer 0c5 (R2G-5c-0): approval-registry switch-READINESS gate. A
+    # deterministic go/no-go artifact deciding whether a FUTURE R2G-5c-2 switch to
+    # approvals-inclusive grounding would be safe. Recomputes everything from current
+    # YAML (never reads the R2G-5a validation artifact / would_activate). Strictly
+    # inert: it switches NO consumer, does not change evidence_packet.active_anchor_registry,
+    # is consumed by NOTHING, and cannot affect allowed_actions / add NEW_BUY / ORDER_COMPILATION.
+    _write_approval_registry_switch_readiness_report_only(strategy_settings=handoff_strategy_settings)
 
     # Report-only layer 0d (R2E.5b-0): a SEPARATE actionable-handoff preview built
     # from the just-written compiled_support_signals + evidence packet + memo. It
@@ -1370,6 +1387,41 @@ def _write_approval_registry_dual_read_report_only(
             approvals_registry_path=str(with_approvals_path),
         )
         write_json(step1_approval_registry_dual_read_diff_path(), diff)
+    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
+        pass
+
+
+def _write_approval_registry_switch_readiness_report_only(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+) -> None:
+    """Compile + write the R2G-5c-0 switch-readiness gate (report-only).
+
+    Recomputes the baseline registry, approvals-inclusive registry, and dual-read
+    diff directly from the current ``research_anchors.yaml`` /
+    ``research_anchor_approvals.yaml`` bytes (never reading the R2G-5a validation
+    artifact or trusting its would_activate flag), then evaluates whether a FUTURE
+    switch would be safe. Strictly inert: it switches NO consumer, does not change
+    ``evidence_packet.active_anchor_registry`` or the baseline registry
+    support_signals consumes, is consumed by NOTHING, is never added to
+    promoted_source_artifacts / allowed_actions / any gate / Step 2/3/4 input, and
+    adds no permission / state / action. Any error is swallowed so Step 1 parse is
+    never affected.
+    """
+    try:
+        anchors_path = current_inputs_dir() / RESEARCH_ANCHORS_INPUT_FILENAME
+        approvals_path = current_inputs_dir() / RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME
+        settings_as_of = (
+            strategy_settings.get("as_of") if isinstance(strategy_settings, Mapping) else None
+        )
+        allowed_universe = _allowed_buy_universe_for_anchor_registry(strategy_settings)
+        write_approval_registry_switch_readiness(
+            output_path=step1_approval_registry_switch_readiness_path(),
+            anchors_path=anchors_path,
+            approvals_path=approvals_path,
+            allowed_universe=allowed_universe,
+            today=settings_as_of,
+        )
     except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
         pass
 
