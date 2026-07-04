@@ -74,6 +74,9 @@ from investment_orchestrator.research.anchor_source_equivalence import (
 from investment_orchestrator.research.research_anchor_candidates import (
     write_research_anchor_candidates,
 )
+from investment_orchestrator.research.research_anchor_approval_manifest import (
+    write_research_anchor_approvals_validation,
+)
 from investment_orchestrator.state.final_execution_safety_preflight import (
     evaluate_promoted_final_safety_preflight,
 )
@@ -144,7 +147,9 @@ PROMOTED_FINAL_SAFETY_PREFLIGHT_FILENAME = "promoted_final_safety_preflight.json
 ACTIVE_RESEARCH_ANCHOR_REGISTRY_FILENAME = "active_research_anchor_registry.json"
 ANCHOR_SOURCE_EQUIVALENCE_FILENAME = "anchor_source_equivalence.json"
 RESEARCH_ANCHOR_CANDIDATES_FILENAME = "research_anchor_candidates.json"
+RESEARCH_ANCHOR_APPROVALS_VALIDATION_FILENAME = "research_anchor_approvals_validation.json"
 RESEARCH_ANCHORS_INPUT_FILENAME = "research_anchors.yaml"
+RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME = "research_anchor_approvals.yaml"
 CURRENT_RUN_INPUT_NOTES_RE = re.compile(
     r"(?:\r?\n)*────────────────────────────────────────\r?\n"
     r"【Current Run Inputs（injected by workflow; rendered prompt must contain actual values, not placeholder notes）】"
@@ -375,6 +380,11 @@ def step1_anchor_source_equivalence_path() -> Path:
 def step1_research_anchor_candidates_path() -> Path:
     """Return the report-only research-anchor candidates path (R2G-4)."""
     return step1_artifact_dir() / RESEARCH_ANCHOR_CANDIDATES_FILENAME
+
+
+def step1_research_anchor_approvals_validation_path() -> Path:
+    """Return the report-only operator-approval manifest validation path (R2G-5a)."""
+    return step1_artifact_dir() / RESEARCH_ANCHOR_APPROVALS_VALIDATION_FILENAME
 
 
 def resolve_step1_prompt_template_path() -> Path:
@@ -615,6 +625,19 @@ def parse_step1_output(
     # eligibility, availability, gates, Step 2/3/4, weekly all ignore it), never
     # active, and it cannot affect allowed_actions / add NEW_BUY / ORDER_COMPILATION.
     _write_research_anchor_candidates_report_only(strategy_settings=handoff_strategy_settings)
+
+    # Report-only layer 0c3 (R2G-5a): operator-approval MANIFEST validator. Reads
+    # inputs/current/research_anchor_approvals.yaml and writes
+    # research_anchor_approvals_validation.json — a diagnostic that answers "would
+    # this operator-completed anchor be eligible for a FUTURE R2G-5b compiler?".
+    # Strictly inert: it activates NOTHING, consumed by NOTHING (support_signals,
+    # active registry, preview, candidate, eligibility, availability, gates,
+    # Step 2/3/4, weekly all ignore it), and cannot affect allowed_actions / add
+    # NEW_BUY / ORDER_COMPILATION. operator_completed_anchor_sha256 is the
+    # activation-binding hash; candidate_sha256 is audit-only.
+    _write_research_anchor_approvals_validation_report_only(
+        strategy_settings=handoff_strategy_settings
+    )
 
     # Report-only layer 0d (R2E.5b-0): a SEPARATE actionable-handoff preview built
     # from the just-written compiled_support_signals + evidence packet + memo. It
@@ -1228,6 +1251,38 @@ def _write_research_anchor_candidates_report_only(
             compiled_support_signals=support_signals if isinstance(support_signals, Mapping) else None,
             active_registry=active_registry if isinstance(active_registry, Mapping) else None,
             as_of_date=as_of_date if isinstance(as_of_date, str) else None,
+        )
+    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
+        pass
+
+
+def _write_research_anchor_approvals_validation_report_only(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+) -> None:
+    """Validate the operator-approval manifest defensively (R2G-5a, report-only).
+
+    Reads ``inputs/current/research_anchor_approvals.yaml`` and writes
+    ``research_anchor_approvals_validation.json``. Strictly inert: it activates NO
+    anchor, is consumed by NOTHING (not support_signals, not the active registry,
+    not the compiler, not the actionable preview/candidate/eligibility, not
+    availability, not gates, not Step 2/3/4, not weekly, not broker/live), is never
+    added to promoted_source_artifacts / allowed_actions / any gate, and adds no
+    permission / state / action. A missing manifest yields a valid, empty report.
+    Any error is swallowed so Step 1 parse is never affected.
+    """
+    try:
+        approvals_path = current_inputs_dir() / RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME
+        settings_as_of = (
+            strategy_settings.get("as_of") if isinstance(strategy_settings, Mapping) else None
+        )
+        allowed_universe = _allowed_buy_universe_for_anchor_registry(strategy_settings)
+        write_research_anchor_approvals_validation(
+            output_path=step1_research_anchor_approvals_validation_path(),
+            manifest_path=approvals_path,
+            allowed_universe=allowed_universe,
+            today=settings_as_of,
+            as_of_date=settings_as_of if isinstance(settings_as_of, str) else None,
         )
     except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
         pass

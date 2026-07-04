@@ -1,0 +1,40 @@
+# Operator research-anchor approval manifest (R2G-5a).
+#
+# REPORT-ONLY in R2G-5a: this file is validated into
+# artifacts/current/step1_research/research_anchor_approvals_validation.json and
+# is consumed by NOTHING. It activates no anchor, switches no consumer, and adds
+# no NEW_BUY / ORDER_COMPILATION. A FUTURE R2G-5b registry compiler is what would
+# consume validated approvals — not this PR.
+#
+# Activation binding: `operator_completed_anchor_sha256` MUST equal the sha256 of
+# the canonical JSON of `operator_completed_anchor`
+# (json.dumps(sort_keys=True, ensure_ascii=False, separators=(",", ":"))).
+# `candidate_sha256` / `candidate_id` are AUDIT-ONLY provenance links with zero
+# activation authority.
+#
+# Leave `approvals` empty until an operator authors a real, dated approval.
+schema_version: research_anchor_approvals_v1
+is_llm_generated: false
+as_of_date: "2026-07-04"
+approvals: []
+
+# Example (commented out — remove the leading '#' and supply a real hash to use):
+#
+# approvals:
+#   - approval_id: APR-2026-07-04-001
+#     decision: approve
+#     candidate_id: CAND-QQQ-56128cc1ceb4          # optional, audit only
+#     candidate_sha256: "<candidate skeleton hash>" # optional, audit only
+#     operator_completed_anchor:
+#       anchor_id: AI_CAPEX_2026H2
+#       anchor_type: structural_theme
+#       applicable_tickers: [QQQ]
+#       anchor_date_et: "2026-06-15"
+#       valid_from: "2026-06-01"
+#       valid_until: "2026-07-31"
+#       source_type: operator
+#       confidence_floor: medium
+#       summary: "Operator-dated thesis grounding."
+#     operator_completed_anchor_sha256: "<sha256 of operator_completed_anchor>"
+#     operator_note: "Reviewed candidate; supplied dates and scope."
+#     approved_by: "operator"
