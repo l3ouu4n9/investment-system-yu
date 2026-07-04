@@ -88,6 +88,9 @@ from investment_orchestrator.research.approval_registry_dual_read_diff import (
 from investment_orchestrator.research.approval_registry_switch_readiness import (
     write_approval_registry_switch_readiness,
 )
+from investment_orchestrator.research.support_signals_dual_ground_diff import (
+    write_support_signals_dual_ground_diff,
+)
 from investment_orchestrator.state.final_execution_safety_preflight import (
     evaluate_promoted_final_safety_preflight,
 )
@@ -164,6 +167,7 @@ ACTIVE_RESEARCH_ANCHOR_REGISTRY_WITH_APPROVALS_FILENAME = (
 )
 APPROVAL_REGISTRY_DUAL_READ_DIFF_FILENAME = "approval_registry_dual_read_diff.json"
 APPROVAL_REGISTRY_SWITCH_READINESS_FILENAME = "approval_registry_switch_readiness.json"
+SUPPORT_SIGNALS_DUAL_GROUND_DIFF_FILENAME = "support_signals_dual_ground_diff.json"
 RESEARCH_ANCHORS_INPUT_FILENAME = "research_anchors.yaml"
 RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME = "research_anchor_approvals.yaml"
 CURRENT_RUN_INPUT_NOTES_RE = re.compile(
@@ -416,6 +420,11 @@ def step1_approval_registry_dual_read_diff_path() -> Path:
 def step1_approval_registry_switch_readiness_path() -> Path:
     """Return the report-only approval-registry switch-readiness gate path (R2G-5c-0)."""
     return step1_artifact_dir() / APPROVAL_REGISTRY_SWITCH_READINESS_FILENAME
+
+
+def step1_support_signals_dual_ground_diff_path() -> Path:
+    """Return the report-only support_signals dual-ground dry-run diff path (R2G-5c-1)."""
+    return step1_artifact_dir() / SUPPORT_SIGNALS_DUAL_GROUND_DIFF_FILENAME
 
 
 def resolve_step1_prompt_template_path() -> Path:
@@ -687,6 +696,16 @@ def parse_step1_output(
     # inert: it switches NO consumer, does not change evidence_packet.active_anchor_registry,
     # is consumed by NOTHING, and cannot affect allowed_actions / add NEW_BUY / ORDER_COMPILATION.
     _write_approval_registry_switch_readiness_report_only(strategy_settings=handoff_strategy_settings)
+
+    # Report-only layer 0c6 (R2G-5c-1): support_signals dual-ground DRY-RUN diff.
+    # Compares support_signals grounding under the current baseline embedded registry
+    # vs the freshly-compiled approvals-inclusive registry (subject to R2G-5c-0
+    # readiness), using the REAL build_compiled_support_signals both times. DRY-RUN
+    # ONLY: it does not change support_signals runtime output, does not mutate
+    # evidence_packet.active_anchor_registry, does not switch the embedded registry,
+    # is consumed by NOTHING, and cannot affect allowed_actions / add NEW_BUY /
+    # ORDER_COMPILATION. R2G-5c-2 is the future switch.
+    _write_support_signals_dual_ground_diff_report_only(strategy_settings=handoff_strategy_settings)
 
     # Report-only layer 0d (R2E.5b-0): a SEPARATE actionable-handoff preview built
     # from the just-written compiled_support_signals + evidence packet + memo. It
@@ -1417,6 +1436,51 @@ def _write_approval_registry_switch_readiness_report_only(
         allowed_universe = _allowed_buy_universe_for_anchor_registry(strategy_settings)
         write_approval_registry_switch_readiness(
             output_path=step1_approval_registry_switch_readiness_path(),
+            anchors_path=anchors_path,
+            approvals_path=approvals_path,
+            allowed_universe=allowed_universe,
+            today=settings_as_of,
+        )
+    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
+        pass
+
+
+def _write_support_signals_dual_ground_diff_report_only(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+) -> None:
+    """Compile + write the R2G-5c-1 support_signals dual-ground DRY-RUN diff (report-only).
+
+    Reads the already-written evidence packet, analyst memo, and compiled support
+    signals (for ``compilation_mode``), recompiles the approvals-inclusive registry
+    + dual-read diff fresh from YAML, and compares support_signals grounding under
+    the baseline embedded registry vs the approvals-inclusive registry (subject to
+    readiness). Strictly a DRY-RUN: it never changes support_signals runtime output,
+    never mutates ``evidence_packet.active_anchor_registry``, never switches the
+    embedded registry, is consumed by NOTHING, and adds no permission / state /
+    action. Only runs when compiled_support_signals.json exists. Any error is
+    swallowed so Step 1 parse is never affected.
+    """
+    try:
+        support_signals = _read_json_if_exists(step1_compiled_support_signals_path())
+        if not isinstance(support_signals, Mapping):
+            return
+        evidence_packet = _read_json_if_exists(step1_evidence_packet_path())
+        analyst_memo = _read_json_if_exists(step1_analyst_memo_path())
+        compilation_mode = support_signals.get("compilation_mode")
+        if not isinstance(compilation_mode, str):
+            return
+        anchors_path = current_inputs_dir() / RESEARCH_ANCHORS_INPUT_FILENAME
+        approvals_path = current_inputs_dir() / RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME
+        settings_as_of = (
+            strategy_settings.get("as_of") if isinstance(strategy_settings, Mapping) else None
+        )
+        allowed_universe = _allowed_buy_universe_for_anchor_registry(strategy_settings)
+        write_support_signals_dual_ground_diff(
+            output_path=step1_support_signals_dual_ground_diff_path(),
+            evidence_packet=evidence_packet if isinstance(evidence_packet, Mapping) else None,
+            analyst_memo=analyst_memo if isinstance(analyst_memo, Mapping) else None,
+            compilation_mode=compilation_mode,
             anchors_path=anchors_path,
             approvals_path=approvals_path,
             allowed_universe=allowed_universe,
