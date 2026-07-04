@@ -71,6 +71,9 @@ from investment_orchestrator.research.active_research_anchor_registry import (
 from investment_orchestrator.research.anchor_source_equivalence import (
     write_anchor_source_equivalence,
 )
+from investment_orchestrator.research.research_anchor_candidates import (
+    write_research_anchor_candidates,
+)
 from investment_orchestrator.state.final_execution_safety_preflight import (
     evaluate_promoted_final_safety_preflight,
 )
@@ -140,6 +143,7 @@ PROMOTED_STEP4_PREVIEW_GATE_DRY_RUN_FILENAME = "promoted_step4_preview_gate_dry_
 PROMOTED_FINAL_SAFETY_PREFLIGHT_FILENAME = "promoted_final_safety_preflight.json"
 ACTIVE_RESEARCH_ANCHOR_REGISTRY_FILENAME = "active_research_anchor_registry.json"
 ANCHOR_SOURCE_EQUIVALENCE_FILENAME = "anchor_source_equivalence.json"
+RESEARCH_ANCHOR_CANDIDATES_FILENAME = "research_anchor_candidates.json"
 RESEARCH_ANCHORS_INPUT_FILENAME = "research_anchors.yaml"
 CURRENT_RUN_INPUT_NOTES_RE = re.compile(
     r"(?:\r?\n)*────────────────────────────────────────\r?\n"
@@ -366,6 +370,11 @@ def step1_active_research_anchor_registry_path() -> Path:
 def step1_anchor_source_equivalence_path() -> Path:
     """Return the report-only anchor-source equivalence oracle path (R2G-2)."""
     return step1_artifact_dir() / ANCHOR_SOURCE_EQUIVALENCE_FILENAME
+
+
+def step1_research_anchor_candidates_path() -> Path:
+    """Return the report-only research-anchor candidates path (R2G-4)."""
+    return step1_artifact_dir() / RESEARCH_ANCHOR_CANDIDATES_FILENAME
 
 
 def resolve_step1_prompt_template_path() -> Path:
@@ -598,6 +607,14 @@ def parse_step1_output(
     compiled_handoff_summary = _compile_research_handoff_report_only(
         strategy_settings=handoff_strategy_settings
     )
+
+    # Report-only layer 0c2 (R2G-4): advisory research-anchor CANDIDATES. Suggests
+    # anchors an operator might author, derived from the analyst memo + the (just
+    # written) support-signal gaps + active-registry coverage. Strictly inert:
+    # consumed by NOTHING (support_signals, active registry, preview, candidate,
+    # eligibility, availability, gates, Step 2/3/4, weekly all ignore it), never
+    # active, and it cannot affect allowed_actions / add NEW_BUY / ORDER_COMPILATION.
+    _write_research_anchor_candidates_report_only(strategy_settings=handoff_strategy_settings)
 
     # Report-only layer 0d (R2E.5b-0): a SEPARATE actionable-handoff preview built
     # from the just-written compiled_support_signals + evidence packet + memo. It
@@ -1171,6 +1188,46 @@ def _write_anchor_source_equivalence_report_only(
             output_path=step1_anchor_source_equivalence_path(),
             evidence_packet=evidence_packet if isinstance(evidence_packet, Mapping) else None,
             active_registry=active_registry if isinstance(active_registry, Mapping) else None,
+        )
+    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
+        pass
+
+
+def _write_research_anchor_candidates_report_only(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+) -> None:
+    """Compile + write the R2G-4 advisory research-anchor candidates (report-only).
+
+    Reads the just-written evidence packet, analyst memo, support-signal gaps, and
+    active registry, then writes ``research_anchor_candidates.json`` — advisory
+    suggestions for human review. Strictly inert: consumed by NOTHING (not
+    support_signals, the active registry, the actionable preview/candidate/
+    eligibility, availability, gates, Step 2/3/4, weekly, broker/live), never made
+    active, never added to promoted_source_artifacts / allowed_actions / any gate,
+    and it adds no permission / state / action. Any error is swallowed so Step 1
+    parse is never affected.
+    """
+    try:
+        evidence_packet = _read_json_if_exists(step1_evidence_packet_path())
+        analyst_memo = _read_json_if_exists(step1_analyst_memo_path())
+        support_signals = _read_json_if_exists(step1_compiled_support_signals_path())
+        active_registry = _read_json_if_exists(step1_active_research_anchor_registry_path())
+        memo_valid = (
+            isinstance(support_signals, Mapping)
+            and support_signals.get("analyst_memo_valid") is True
+        )
+        as_of_date = (
+            strategy_settings.get("as_of") if isinstance(strategy_settings, Mapping) else None
+        )
+        write_research_anchor_candidates(
+            output_path=step1_research_anchor_candidates_path(),
+            evidence_packet=evidence_packet if isinstance(evidence_packet, Mapping) else None,
+            analyst_memo=analyst_memo if isinstance(analyst_memo, Mapping) else None,
+            analyst_memo_valid=memo_valid,
+            compiled_support_signals=support_signals if isinstance(support_signals, Mapping) else None,
+            active_registry=active_registry if isinstance(active_registry, Mapping) else None,
+            as_of_date=as_of_date if isinstance(as_of_date, str) else None,
         )
     except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
         pass

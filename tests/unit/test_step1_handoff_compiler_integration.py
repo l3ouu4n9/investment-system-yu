@@ -2498,3 +2498,79 @@ def test_r2g2_equivalence_does_not_change_support_signals_or_decision(
     assert decision["allowed_actions"] == ["HOLD", "NO_TRADE"]
     assert "NEW_BUY" not in decision["allowed_actions"]
     assert "ORDER_COMPILATION" not in decision["allowed_actions"]
+
+
+# --- R2G-4: research anchor candidates (report-only, non-consumed) -------------
+
+
+def test_r2g4_candidates_written_and_inert(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """parse_step1_output emits research_anchor_candidates.json with inert markers."""
+    artifact_dir = _setup_repo(tmp_path, monkeypatch)
+    (artifact_dir / "analyst_memo_raw_output.txt").write_text(
+        json.dumps(_valid_memo()), encoding="utf-8"
+    )
+    _write_research_anchors_yaml(tmp_path)
+
+    step1_research.parse_step1_output(strategy_settings=_settings())
+
+    path = step1_research.step1_research_anchor_candidates_path()
+    assert path.is_file()
+    art = json.loads(path.read_text(encoding="utf-8"))
+    assert art["schema_version"] == "research_anchor_candidates_v1"
+    assert art["report_only"] is True
+    assert art["permission_effect"] == "none"
+    assert art["not_authorization"] is True
+    assert art["cannot_affect_allowed_actions"] is True
+    assert art["consumed_by_support_signals"] is False
+    assert art["consumed_by_gates"] is False
+    assert art["consumed_by_step4"] is False
+    # No candidate is ever active.
+    for c in art["candidates"]:
+        assert c["status"] in ("candidate", "duplicate_of_active")
+        assert c["source_category"] == "B_candidate_only"
+
+
+def test_r2g4_candidates_do_not_change_support_signals_or_decision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-consumption: support_signals + degraded-mode decision byte-identical
+    whether or not the candidate artifact exists on disk."""
+    artifact_dir = _setup_repo(tmp_path, monkeypatch)
+    (artifact_dir / "analyst_memo_raw_output.txt").write_text(
+        json.dumps(_valid_memo()), encoding="utf-8"
+    )
+    _write_research_anchors_yaml(tmp_path)
+
+    def _stable(path: Path) -> Any:
+        def scrub(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {k: scrub(v) for k, v in value.items() if k != "generated_at"}
+            if isinstance(value, list):
+                return [scrub(v) for v in value]
+            return value
+
+        return scrub(json.loads(path.read_text(encoding="utf-8")))
+
+    signals_path = artifact_dir / "compiled_support_signals.json"
+    registry_path = step1_research.step1_active_research_anchor_registry_path()
+    decision_path = step1_research.step1_research_degraded_mode_decision_path()
+
+    step1_research.parse_step1_output(strategy_settings=_settings())
+    support_before = _stable(signals_path)
+    registry_before = _stable(registry_path)
+    decision_before = _stable(decision_path)
+
+    # Delete the candidate artifact and re-run: nothing consumes it.
+    step1_research.step1_research_anchor_candidates_path().unlink()
+    step1_research.parse_step1_output(strategy_settings=_settings())
+
+    assert _stable(signals_path) == support_before
+    assert _stable(registry_path) == registry_before
+    assert _stable(decision_path) == decision_before
+
+    decision = _stable(decision_path)
+    assert decision["allowed_actions"] == ["HOLD", "NO_TRADE"]
+    assert "NEW_BUY" not in decision["allowed_actions"]
+    assert "ORDER_COMPILATION" not in decision["allowed_actions"]
