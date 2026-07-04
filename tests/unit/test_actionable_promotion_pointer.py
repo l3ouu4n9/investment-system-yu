@@ -43,6 +43,9 @@ from investment_orchestrator.research.actionable_promotion_pointer import (
 from investment_orchestrator.research.actionable_promotion_pointer_preview import (
     build_actionable_promotion_pointer_preview,
 )
+from investment_orchestrator.research.active_research_anchor_registry import (
+    active_anchor_registry_from_research_anchors_summary,
+)
 from investment_orchestrator.research.research_anchors import (
     summarize_research_anchors,
     validate_research_anchors,
@@ -125,6 +128,7 @@ def chain(*, valid_until: str = "2026-07-31", grounded: bool = True) -> dict[str
             "max_new_tickers_per_week": stgs["max_new_tickers_per_week"],
         },
         "research_anchors": anchors,
+        "active_anchor_registry": active_anchor_registry_from_research_anchors_summary(anchors),
         "data_gaps": [],
         "report_only": True,
     }

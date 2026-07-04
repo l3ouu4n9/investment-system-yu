@@ -11,6 +11,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from investment_orchestrator.research.active_research_anchor_registry import (
+    SCHEMA_VERSION as ACTIVE_REGISTRY_SCHEMA_VERSION,
+    active_anchor_registry_from_research_anchors_summary,
+)
 from investment_orchestrator.research.support_signals import (
     ANCHOR_SOURCE_NONE,
     REASON_ANALYST_MEMO_ABSENT,
@@ -290,9 +294,27 @@ def anchor_row(**overrides: Any) -> dict[str, Any]:
     return base
 
 
-def packet_with_anchors(anchors: list[dict[str, Any]]) -> dict[str, Any]:
+def _summary(anchors: list[dict[str, Any]], *, errors: list[str] | None = None, valid: bool = True) -> dict[str, Any]:
+    return {
+        "available": True,
+        "valid": valid and not errors,
+        "schema_version": "research_anchors_v1",
+        "anchors": anchors,
+        "errors": errors or [],
+    }
+
+
+def packet_with_anchors(anchors: list[dict[str, Any]], *, errors: list[str] | None = None) -> dict[str, Any]:
+    """Build a packet that embeds the active_anchor_registry (R2G-3 source of truth).
+
+    ``research_anchors`` is kept for diagnostics only; support_signals grounds on the
+    embedded registry. ``errors`` simulate a file-level integrity failure (the
+    registry then reports ``registry_valid: false`` and support_signals fails closed).
+    """
     p = evidence_packet()
-    p["research_anchors"] = {"available": True, "valid": True, "anchors": anchors}
+    summary = _summary(anchors, errors=errors)
+    p["research_anchors"] = summary
+    p["active_anchor_registry"] = active_anchor_registry_from_research_anchors_summary(summary)
     return p
 
 
@@ -429,3 +451,186 @@ def test_accepted_signal_does_not_make_compiled_handoff_actionable() -> None:
     assert candidate["strategy_a_research_handoff"]["positive_delta_research_supported"] == []
     assert all(r["actionability_status"] != "actionable_this_run" for r in candidate["buy_universe_scorecard"])
     assert candidate["buy_universe_scorecard"][0]["primary_anchor_event_id"] is None
+
+
+# --- R2G-3: grounding is consumed from evidence_packet.active_anchor_registry -----
+
+
+def _consumable_registry(active: list[dict[str, Any]], inactive: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """A hand-built, consumable active-registry section (report-only markers + valid)."""
+    return {
+        "schema_version": ACTIVE_REGISTRY_SCHEMA_VERSION,
+        "is_llm_generated": False,
+        "report_only": True,
+        "permission_effect": "none",
+        "not_authorization": True,
+        "registry_valid": True,
+        "active_anchors": active,
+        "inactive_anchors": inactive or [],
+    }
+
+
+def _registry_active_anchor(**overrides: Any) -> dict[str, Any]:
+    base = {
+        "anchor_id": "AI_CAPEX_2026H2",
+        "anchor_type": "structural_theme",
+        "source_type": "operator",
+        "applicable_tickers": ["QQQ"],
+        "confidence_floor": "medium",
+        "status": "active",
+        "validation": {"valid": True, "stale": False, "usable": True, "problems": []},
+    }
+    base.update(overrides)
+    return base
+
+
+def test_r2g3_happy_path_grounds_from_registry() -> None:
+    """Valid embedded registry: grounding accepts exactly as before."""
+    art = _accept(packet_with_anchors([anchor_row()]), memo_with_refs(confidence="high"))
+    assert {s["ticker"] for s in art["accepted_support_signals"]} == {"QQQ"}
+    assert art["anchor_source_available"] is True
+    assert REASON_MISSING_VALID_ANCHOR_SOURCE not in art["global_blockers"]
+
+
+def test_r2g3_grounds_from_registry_even_when_legacy_research_anchors_absent() -> None:
+    """Registry is the source of truth: grounding works from the embedded registry
+    even when the legacy research_anchors section is missing/empty."""
+    packet = evidence_packet()  # no research_anchors key
+    packet["active_anchor_registry"] = _consumable_registry([_registry_active_anchor()])
+    art = _accept(packet, memo_with_refs(confidence="high"))
+    assert {s["ticker"] for s in art["accepted_support_signals"]} == {"QQQ"}
+    assert art["anchor_source_available"] is True
+
+
+def test_r2g3_missing_registry_fails_closed() -> None:
+    """No active_anchor_registry at all -> no usable anchors, fail closed."""
+    packet = evidence_packet()  # neither research_anchors nor active_anchor_registry
+    art = _accept(packet, memo_with_refs())
+    assert art["accepted_support_signals"] == []
+    assert art["anchor_source_available"] is False
+    assert REASON_MISSING_VALID_ANCHOR_SOURCE in art["global_blockers"]
+
+
+def test_r2g3_legacy_research_anchors_present_but_registry_missing_fails_closed() -> None:
+    """A valid legacy research_anchors section is NOT sufficient — support grounding
+    now depends on the embedded registry, which is absent here."""
+    packet = evidence_packet()
+    packet["research_anchors"] = _summary([anchor_row()])  # legacy present + valid
+    # deliberately NO active_anchor_registry
+    art = _accept(packet, memo_with_refs(confidence="high"))
+    assert art["accepted_support_signals"] == []
+    assert art["anchor_source_available"] is False
+
+
+def test_r2g3_malformed_registry_fails_closed_no_crash() -> None:
+    packet = evidence_packet()
+    packet["active_anchor_registry"] = {"active_anchors": "not-a-list", "registry_valid": True}
+    art = _accept(packet, memo_with_refs(confidence="high"))
+    assert art["accepted_support_signals"] == []
+    assert art["anchor_source_available"] is False
+
+
+def test_r2g3_registry_wrong_schema_fails_closed() -> None:
+    packet = evidence_packet()
+    reg = _consumable_registry([_registry_active_anchor()])
+    reg["schema_version"] = "some_other_schema_v9"
+    packet["active_anchor_registry"] = reg
+    art = _accept(packet, memo_with_refs(confidence="high"))
+    assert art["accepted_support_signals"] == []
+    assert art["anchor_source_available"] is False
+
+
+def test_r2g3_registry_valid_false_fails_closed() -> None:
+    """registry_valid:false (incl. every file-level integrity failure) -> fail closed,
+    even if active_anchors were somehow populated."""
+    packet = evidence_packet()
+    reg = _consumable_registry([_registry_active_anchor()])
+    reg["registry_valid"] = False
+    packet["active_anchor_registry"] = reg
+    art = _accept(packet, memo_with_refs(confidence="high"))
+    assert art["accepted_support_signals"] == []
+    assert art["anchor_source_available"] is False
+
+
+def test_r2g3_registry_missing_report_only_marker_fails_closed() -> None:
+    packet = evidence_packet()
+    reg = _consumable_registry([_registry_active_anchor()])
+    reg["report_only"] = False  # not a report-only registry -> not consumable
+    packet["active_anchor_registry"] = reg
+    art = _accept(packet, memo_with_refs(confidence="high"))
+    assert art["accepted_support_signals"] == []
+
+
+def test_r2g3_file_level_failure_tightens_rejects_where_old_accepted() -> None:
+    """Headline tightening: a structurally-valid anchor in a file with a top-level
+    integrity failure (is_llm_generated:true) flips the registry to registry_valid:false
+    -> now REJECTED, where the legacy per-anchor view would have accepted it."""
+    packet = packet_with_anchors(
+        [anchor_row()],
+        errors=["is_llm_generated must be exactly false (anchors are operator-authored)."],
+    )
+    # sanity: the embedded registry indeed failed closed
+    assert packet["active_anchor_registry"]["registry_valid"] is False
+    art = _accept(packet, memo_with_refs(confidence="high"))
+    assert art["accepted_support_signals"] == [], "file-level failure must not ground"
+    assert art["anchor_source_available"] is False
+    qqq = _by_ticker(art["candidate_ticker_signals"])["QQQ"]
+    assert REASON_REFERENCED_ANCHOR_NOT_FOUND in qqq["rejection_reasons"]
+    assert REASON_MISSING_VALID_ANCHOR_SOURCE in art["global_blockers"]
+
+
+def test_r2g3_duplicate_id_file_level_failure_tightens() -> None:
+    packet = packet_with_anchors(
+        [anchor_row(), anchor_row()],
+        errors=["duplicate anchor_id: 'AI_CAPEX_2026H2'."],
+    )
+    art = _accept(packet, memo_with_refs(confidence="high"))
+    assert art["accepted_support_signals"] == []
+    assert art["anchor_source_available"] is False
+
+
+def test_r2g3_more_permissive_registry_does_not_broaden() -> None:
+    """Defense in depth: even if a registry marks an anchor ACTIVE that should not
+    ground (e.g. a non-operator source), support_signals re-applies its acceptance
+    gates and refuses to broaden."""
+    packet = evidence_packet()
+    packet["active_anchor_registry"] = _consumable_registry(
+        [_registry_active_anchor(source_type="deterministic_feed")]
+    )
+    art = _accept(packet, memo_with_refs(confidence="high"))
+    assert art["accepted_support_signals"] == []
+    qqq = _by_ticker(art["candidate_ticker_signals"])["QQQ"]
+    assert REASON_ANCHOR_SOURCE_TYPE_NOT_ALLOWED in qqq["rejection_reasons"]
+
+
+def test_r2g3_never_broadens_across_corpus() -> None:
+    """Corpus regression: registry-backed grounding never ACCEPTS a ticker the legacy
+    per-anchor view would have rejected (happy accepts in both; everything else in
+    neither)."""
+    cases = [
+        ("happy", [anchor_row()], None, {"QQQ"}),
+        ("stale", [anchor_row(stale=True, usable=False)], None, set()),
+        ("out_of_universe_anchor", [anchor_row(applicable_tickers=["SMH"])], None, set()),
+        ("bad_source_type", [anchor_row(source_type="deterministic_feed")], None, set()),
+        ("bad_anchor_type", [anchor_row(anchor_type="hot_tip")], None, set()),
+        ("file_level_llm", [anchor_row()], ["is_llm_generated must be exactly false ..."], set()),
+        ("file_level_forbidden", [anchor_row()], ["forbidden budget/sizing key present ..."], set()),
+    ]
+    for label, anchors, errors, expected in cases:
+        art = _accept(packet_with_anchors(anchors, errors=errors), memo_with_refs(confidence="high"))
+        got = {s["ticker"] for s in art["accepted_support_signals"]}
+        assert got == expected, f"{label}: accepted {got}, expected {expected}"
+
+
+def test_r2g3_registry_does_not_reference_permission_or_order_tokens() -> None:
+    """The switch introduces no permission/order tokens into the accepted output."""
+    art = _accept(packet_with_anchors([anchor_row()]), memo_with_refs(confidence="high"))
+    import json as _json
+
+    blob = _json.dumps(art)
+    assert "NEW_BUY" not in blob
+    assert "ORDER_COMPILATION" not in blob
+    assert art["permission_effect"] == "none"
+    assert art["not_authorization"] is True
+    for accepted in art["accepted_support_signals"]:
+        assert accepted["not_authorization"] is True

@@ -231,6 +231,54 @@ def build_active_research_anchor_registry(
     }
 
 
+def active_anchor_registry_from_research_anchors_summary(
+    summary: Mapping[str, Any] | None,
+    *,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    """Compile the active registry from an evidence-packet ``research_anchors`` summary.
+
+    The summary is the serialized outcome of ``load_research_anchors`` (the same
+    per-anchor evaluations + file-level ``errors``), so rebuilding a
+    ``ResearchAnchorsResult`` from it and running the compiler yields the exact
+    same active / inactive split as ``active_research_anchor_registry.json``. This
+    is how the registry is embedded into the evidence packet as a first-class,
+    consumable source of truth (rather than reconstructed inside a consumer). A
+    missing / unavailable summary yields a valid, empty registry (fail-closed).
+    Never raises.
+    """
+    if not isinstance(summary, Mapping) or summary.get("available") is not True:
+        return build_active_research_anchor_registry(
+            anchors_result=None,
+            source_present=False,
+            source_sha256=None,
+            source_path=None,
+            as_of_date=None,
+            generated_at=generated_at,
+        )
+    anchors = summary.get("anchors")
+    errors = summary.get("errors")
+    result = ResearchAnchorsResult(
+        present=True,
+        valid=summary.get("valid") is True,
+        schema_version=summary.get("schema_version")
+        if isinstance(summary.get("schema_version"), str)
+        else None,
+        as_of_date=summary.get("as_of_date") if isinstance(summary.get("as_of_date"), str) else None,
+        anchors=[a for a in anchors if isinstance(a, Mapping)] if isinstance(anchors, list) else [],
+        errors=[e for e in errors if isinstance(e, str)] if isinstance(errors, list) else [],
+        parse_error=summary.get("parse_error") if isinstance(summary.get("parse_error"), str) else None,
+    )
+    return build_active_research_anchor_registry(
+        anchors_result=result,
+        source_present=True,
+        source_sha256=None,
+        source_path=None,
+        as_of_date=result.as_of_date,
+        generated_at=generated_at,
+    )
+
+
 def compile_active_research_anchor_registry(
     *,
     anchors_path: Any,
@@ -316,7 +364,11 @@ def _normalize_anchor_row(evaluated: Mapping[str, Any]) -> dict[str, Any]:
         "confidence_floor": evaluated.get("confidence_floor"),
         "blocks_if_stale": bool(evaluated.get("blocks_if_stale", True)),
         "summary": evaluated.get("summary"),
-        "source_type": OPERATOR_SOURCE_TYPE,
+        # Preserve the anchor's real source_type (the validator already enforces
+        # ``operator`` for any *valid* anchor, so an active row is always
+        # ``operator`` for real data; keeping the real value lets downstream
+        # consumers re-check source provenance rather than trust a hardcode).
+        "source_type": evaluated.get("source_type"),
         "source_id": OPERATOR_SOURCE_ID,
         "source_category": OPERATOR_SOURCE_CATEGORY,
         "approval_type": OPERATOR_APPROVAL_TYPE,

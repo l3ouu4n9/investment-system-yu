@@ -315,21 +315,27 @@ def test_r2g3_gate_rejects_field_mismatch() -> None:
         assert_registry_switch_readiness(result, label="field_mismatch")
 
 
-# --- 8. support-signal non-consumption invariant (source-level guard) ---------
+# --- 8. post-switch consumption invariant (source-level guard) ----------------
 
 
-def test_r2g3_support_signals_does_not_consume_registry_or_equivalence() -> None:
-    """Structural guard: support_signals must still read evidence_packet.research_anchors
-    and must NOT reference the registry or equivalence artifacts until R2G-3 lands."""
+def test_r2g3_support_signals_consumes_registry_not_equivalence() -> None:
+    """Structural guard (post-R2G-3): support_signals now grounds on the active
+    registry compiler (over the evidence packet's research_anchors summary) and must
+    NEVER consume the equivalence oracle (which is a diagnostic, not a source)."""
     import inspect
 
     from investment_orchestrator.research import support_signals
 
     src = inspect.getsource(support_signals)
-    assert "research_anchors" in src, "support_signals should still read research_anchors"
-    assert "active_research_anchor_registry" not in src, (
-        "support_signals must not consume the active registry before R2G-3"
+    # R2G-3: grounding is consumed from the embedded active_anchor_registry section...
+    assert "active_anchor_registry" in src, (
+        "R2G-3: support_signals must consume the embedded active_anchor_registry"
     )
+    # ...as an already-built source of truth — it must NOT rebuild the registry itself.
+    assert "build_active_research_anchor_registry" not in src, (
+        "R2G-3: support_signals must consume the embedded registry, not rebuild it"
+    )
+    # The equivalence oracle is a diagnostic and must never be a grounding source.
     assert "anchor_source_equivalence" not in src, (
         "support_signals must not consume the equivalence oracle"
     )

@@ -26,6 +26,9 @@ from investment_orchestrator.research.actionable_handoff_preview import (
     SCHEMA_VERSION,
     build_actionable_handoff_preview,
 )
+from investment_orchestrator.research.active_research_anchor_registry import (
+    active_anchor_registry_from_research_anchors_summary,
+)
 from investment_orchestrator.research.research_anchors import build_research_anchors_summary
 from investment_orchestrator.research.support_signals import build_compiled_support_signals
 
@@ -79,6 +82,9 @@ def anchor_row(**overrides: Any) -> dict[str, Any]:
 def packet_with_anchors(anchors: list[dict[str, Any]], *, base_cap: int | None = 2) -> dict[str, Any]:
     p = evidence_packet(base_cap=base_cap)
     p["research_anchors"] = {"available": True, "valid": True, "anchors": anchors}
+    p["active_anchor_registry"] = active_anchor_registry_from_research_anchors_summary(
+        p["research_anchors"]
+    )
     return p
 
 
@@ -377,6 +383,9 @@ def test_unquoted_yaml_anchor_dates_produce_preview_row(tmp_path: Path) -> None:
 
     packet = evidence_packet()
     packet["research_anchors"] = anchors_summary
+    packet["active_anchor_registry"] = active_anchor_registry_from_research_anchors_summary(
+        anchors_summary
+    )
     m = memo()
     preview = _preview(packet, m)
 

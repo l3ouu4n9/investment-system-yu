@@ -25,6 +25,10 @@ from typing import Any
 from investment_orchestrator.parsers.portfolio_snapshot_existing_orders import (
     parse_existing_buy_open_orders_summary,
 )
+from investment_orchestrator.research.active_research_anchor_registry import (
+    active_anchor_registry_from_research_anchors_summary,
+    compile_active_research_anchor_registry,
+)
 from investment_orchestrator.research.research_anchors import (
     ANCHORS_MISSING_DATA_GAP,
     build_research_anchors_summary,
@@ -95,6 +99,7 @@ def build_evidence_packet(
     generated_at: str | None = None,
     source_artifacts: Mapping[str, str] | None = None,
     research_anchors_summary: Mapping[str, Any] | None = None,
+    active_anchor_registry: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the deterministic evidence packet mapping (pure; never raises).
 
@@ -103,9 +108,16 @@ def build_evidence_packet(
 
     ``research_anchors_summary`` (R2E.5a, report-only) is the already-built
     deterministic anchor summary; when absent it defaults to an unavailable
-    ``research_anchors`` section + a ``research_anchors_missing`` DATA_GAP. Anchors
-    are report-only: they never change permissions and are not yet consumed for
-    support-signal acceptance.
+    ``research_anchors`` section + a ``research_anchors_missing`` DATA_GAP. It is
+    kept for backward compatibility / diagnostics only and is **no longer the
+    authoritative grounding source**.
+
+    ``active_anchor_registry`` (R2G-3) is the R2G-1 active anchor registry embedded
+    as a first-class, report-only **source of truth** that ``support_signals``
+    consumes for anchor grounding. When not supplied it is derived deterministically
+    from the ``research_anchors`` summary (identical active/inactive split to the
+    standalone ``active_research_anchor_registry.json``). It never changes
+    permissions and cannot authorize a trade.
     """
     data_gaps: list[dict[str, str]] = []
     settings = strategy_settings if isinstance(strategy_settings, Mapping) else None
@@ -162,7 +174,16 @@ def build_evidence_packet(
         ),
         "market_metrics": {"available": False, "data_gap": _NO_MARKET_FEED_REASON},
         "scheduled_events_deterministic": {"available": False, "data_gap": _NO_EVENT_FEED_REASON},
+        # R2E.5a diagnostic view (no longer authoritative for support grounding).
         "research_anchors": anchors_summary,
+        # R2G-3 authoritative grounding source-of-truth. Supplied (compiled from the
+        # operator YAML with a real source hash) by write_evidence_packet, else
+        # derived deterministically from the research_anchors summary above.
+        "active_anchor_registry": (
+            dict(active_anchor_registry)
+            if isinstance(active_anchor_registry, Mapping)
+            else active_anchor_registry_from_research_anchors_summary(anchors_summary)
+        ),
         "data_gaps": data_gaps,
         "source_artifacts": dict(source_artifacts) if isinstance(source_artifacts, Mapping) else {},
         "report_only": True,
@@ -362,10 +383,21 @@ def write_evidence_packet(
 
     generated_at = (now or datetime.now(timezone.utc)).isoformat()
     anchors_summary = None
+    active_anchor_registry = None
     if research_anchors_path is not None:
+        allowed_universe = _allowed_buy_from_settings(strategy_settings)
         anchors_summary = build_research_anchors_summary(
             research_anchors_path,
-            allowed_universe=_allowed_buy_from_settings(strategy_settings),
+            allowed_universe=allowed_universe,
+            today=now_date,
+        )
+        # R2G-3: compile the active registry from the operator YAML source itself
+        # (real source_manifest / sha256) and embed it as the authoritative
+        # grounding source of truth. Identical active set to the standalone
+        # active_research_anchor_registry.json.
+        active_anchor_registry = compile_active_research_anchor_registry(
+            anchors_path=research_anchors_path,
+            allowed_universe=allowed_universe,
             today=now_date,
         )
     packet = build_evidence_packet(
@@ -378,6 +410,7 @@ def write_evidence_packet(
         generated_at=generated_at,
         source_artifacts=source_artifacts,
         research_anchors_summary=anchors_summary,
+        active_anchor_registry=active_anchor_registry,
     )
     write_json(output_path, packet)
     return packet

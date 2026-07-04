@@ -47,6 +47,9 @@ from investment_orchestrator.research.actionable_promotion_eligibility import (
     SEVERITY_BLOCKER,
     evaluate_actionable_handoff_promotion_eligibility,
 )
+from investment_orchestrator.research.active_research_anchor_registry import (
+    active_anchor_registry_from_research_anchors_summary,
+)
 from investment_orchestrator.research.research_anchors import (
     summarize_research_anchors,
     validate_research_anchors,
@@ -123,6 +126,7 @@ def anchors_summary(payload: dict[str, Any] | None = None, *, today: str = TODAY
 
 def evidence_packet(*, stgs: dict[str, Any] | None = None, anchors: dict[str, Any] | None = None) -> dict[str, Any]:
     stgs = stgs if stgs is not None else settings()
+    _ra = anchors if anchors is not None else anchors_summary()
     return {
         "schema_version": "evidence_packet_v1",
         "is_llm_generated": False,
@@ -138,7 +142,8 @@ def evidence_packet(*, stgs: dict[str, Any] | None = None, anchors: dict[str, An
             "target_new_buy_budget_this_run": stgs.get("target_new_buy_budget_this_run"),
             "max_new_tickers_per_week": stgs.get("max_new_tickers_per_week"),
         },
-        "research_anchors": anchors if anchors is not None else anchors_summary(),
+        "research_anchors": _ra,
+        "active_anchor_registry": active_anchor_registry_from_research_anchors_summary(_ra),
         "data_gaps": [],
         "report_only": True,
     }

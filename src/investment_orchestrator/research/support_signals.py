@@ -10,11 +10,34 @@ never changes ``allowed_actions``, never feeds the availability / degraded-mode
 decision, and never makes the compiled handoff actionable.
 
 R2E.5a-2: a candidate may enter ``accepted_support_signals`` when a *valid* memo
-references a *valid, fresh, applicable* deterministic research anchor (from
-``evidence_packet.research_anchors``) and meets every qualitative gate. Acceptance
-is **still report-only and NOT authorization** (``permission_effect: "none"``,
-``not_authorization: true``). Candidates that pass every qualitative gate but lack
-valid anchor grounding are surfaced under ``qualitative_support_only``.
+references a *valid, fresh, applicable* deterministic research anchor and meets
+every qualitative gate. Acceptance is **still report-only and NOT authorization**
+(``permission_effect: "none"``, ``not_authorization: true``). Candidates that pass
+every qualitative gate but lack valid anchor grounding are surfaced under
+``qualitative_support_only``.
+
+R2G-3: the grounding-relevant anchor view is the **active anchor registry**
+consumed directly from ``evidence_packet.active_anchor_registry`` (the R2G-1
+registry embedded upstream by the evidence-packet builder — the same compiler over
+the same operator source as ``active_research_anchor_registry.json``). Grounding is
+**no longer** derived from the legacy ``evidence_packet.research_anchors`` view.
+This is a **safe tightening**, never a broadening (proven by the R2G-2 equivalence
+oracle / R2G-2.1 readiness corpus):
+
+* the embedded registry must be consumable — expected ``schema_version``,
+  ``is_llm_generated: false``, ``report_only: true``, ``permission_effect: "none"``,
+  ``not_authorization: true``, and ``registry_valid: true`` — else no usable anchors;
+* happy/valid anchors ground exactly as before;
+* a **missing / malformed / invalid** registry (incl. a file-level integrity
+  failure such as ``is_llm_generated: true``, duplicate ``anchor_id``, or a
+  forbidden budget/order/action key that flips ``registry_valid`` to false) yields
+  **zero usable anchors** → the memo ref is rejected (``missing_valid_anchor_source``)
+  where the legacy per-anchor view might have accepted a structurally-valid row;
+* only registry ``active`` anchors can ground; ``expired`` resolve to
+  ``referenced_anchor_stale`` and everything else to ``referenced_anchor_not_found``.
+
+No permission, gate, availability, Step 2/3/4, or order behavior changes: this is
+still report-only and never authorizes a trade.
 """
 
 from __future__ import annotations
@@ -22,6 +45,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from investment_orchestrator.research.active_research_anchor_registry import (
+    SCHEMA_VERSION as ACTIVE_REGISTRY_SCHEMA_VERSION,
+    STATUS_ACTIVE,
+    STATUS_EXPIRED,
+)
 from investment_orchestrator.research.research_anchors import (
     ANCHOR_TYPES,
     SOURCE_TYPES,
@@ -135,8 +163,11 @@ def build_compiled_support_signals(
     allowed_buy = _normalized_set(universe.get("allowed_buy_tickers"))
     approved_extended = _normalized_set(universe.get("approved_extended_etf"))
 
-    anchors_by_id = _usable_anchors_by_id(packet)
-    any_usable_anchor = bool(anchors_by_id)
+    anchors_by_id = _registry_backed_anchors_by_id(packet)
+    any_usable_anchor = any(
+        entry["valid"] and entry["usable"] and not entry["stale"]
+        for entry in anchors_by_id.values()
+    )
 
     analyst_memo_present = analyst_memo is not None
     analyst_memo_valid = compilation_mode == _MODE_EVIDENCE_PLUS_MEMO
@@ -279,27 +310,88 @@ def build_compiled_support_signals(
 # --- anchor grounding --------------------------------------------------------
 
 
-def _usable_anchors_by_id(packet: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
-    """Index the evidence packet's deterministic research anchors by anchor_id.
+def _registry_backed_anchors_by_id(packet: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    """Index the embedded **active anchor registry** by anchor_id (R2G-3).
 
-    Includes every anchor row the summary carries (usable / stale / invalid); the
-    per-ref evaluation decides usability so the reason can be specific. Returns an
-    empty map when no anchors are available.
+    Consumes ``evidence_packet.active_anchor_registry`` (the R2G-1 registry embedded
+    upstream) as the authoritative grounding source. Every registry anchor (active +
+    inactive) is indexed and projected onto exactly the fields
+    ``_evaluate_anchor_refs`` reads, with usability derived from the registry's
+    authoritative ``status``:
+
+    * ``active``  -> valid + usable + not stale (groundable);
+    * ``expired`` -> valid + stale (resolves to ``referenced_anchor_stale``);
+    * anything else (``invalid`` …) -> not valid (``referenced_anchor_not_found``).
+
+    Fails closed to an empty map when the registry is missing / malformed / invalid
+    (``registry_valid`` not true, wrong schema, or a missing report-only marker) —
+    including any file-level integrity failure, which flips ``registry_valid`` to
+    false. Never raises. Never broadens vs the legacy view.
     """
-    research_anchors = packet.get("research_anchors")
-    if not isinstance(research_anchors, Mapping) or research_anchors.get("available") is not True:
-        return {}
-    anchors = research_anchors.get("anchors")
-    if not isinstance(anchors, list):
+    registry = packet.get("active_anchor_registry")
+    if not _registry_is_consumable(registry):
         return {}
     by_id: dict[str, Mapping[str, Any]] = {}
-    for anchor in anchors:
+    for anchor in (
+        *_as_list(registry.get("active_anchors")),
+        *_as_list(registry.get("inactive_anchors")),
+    ):
         if not isinstance(anchor, Mapping):
             continue
         anchor_id = anchor.get("anchor_id")
-        if isinstance(anchor_id, str) and anchor_id.strip():
-            by_id[anchor_id.strip()] = anchor
+        if not (isinstance(anchor_id, str) and anchor_id.strip()):
+            continue
+        # Last occurrence wins (stable, deterministic).
+        by_id[anchor_id.strip()] = _projected_acceptance_fields(anchor)
     return by_id
+
+
+def _registry_is_consumable(registry: Any) -> bool:
+    """Fail-closed gate: the embedded registry must be a valid, report-only registry.
+
+    Anything else (absent, malformed, wrong schema, missing markers, or
+    ``registry_valid`` not true — which covers every file-level integrity failure)
+    yields no usable anchors.
+    """
+    return (
+        isinstance(registry, Mapping)
+        and registry.get("schema_version") == ACTIVE_REGISTRY_SCHEMA_VERSION
+        and registry.get("is_llm_generated") is False
+        and registry.get("report_only") is True
+        and registry.get("permission_effect") == "none"
+        and registry.get("not_authorization") is True
+        and registry.get("registry_valid") is True
+    )
+
+
+def _projected_acceptance_fields(anchor: Mapping[str, Any]) -> dict[str, Any]:
+    """Project a registry anchor onto the fields ``_evaluate_anchor_refs`` reads.
+
+    Usability (valid / stale / usable) is derived from the registry's authoritative
+    ``status`` — so grounding can never be more permissive than the registry's active
+    set. The remaining fields are the registry anchor's values so the operator-source
+    / type / applicability / confidence checks still fire.
+    """
+    status = anchor.get("status")
+    if status == STATUS_ACTIVE:
+        valid, stale, usable = True, False, True
+    elif status == STATUS_EXPIRED:
+        valid, stale, usable = True, True, False
+    else:  # invalid / revoked / superseded / unknown -> not groundable
+        valid, stale, usable = False, False, False
+    return {
+        "valid": valid,
+        "stale": stale,
+        "usable": usable,
+        "anchor_type": anchor.get("anchor_type"),
+        "source_type": anchor.get("source_type"),
+        "applicable_tickers": list(anchor.get("applicable_tickers") or []),
+        "confidence_floor": anchor.get("confidence_floor"),
+    }
+
+
+def _as_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
 
 
 def _evaluate_anchor_refs(
