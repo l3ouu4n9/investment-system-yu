@@ -109,7 +109,8 @@ def test_H_all_required_fields_present() -> None:
         "approvals_inclusive_active_anchor_ids", "added_by_approvals",
         "removed_or_deactivated", "changed_existing_anchors", "duplicate_blockers",
         "registry_valid_baseline", "registry_valid_with_approvals", "no_behavior_change",
-        "support_signals_still_consumes_baseline_registry", "consumed_by_support_signals",
+        "standalone_artifact_not_consumed_by_support_signals",
+        "embedded_registry_selection_owned_by_evidence_packet", "consumed_by_support_signals",
         "consumed_by_active_registry", "consumed_by_availability", "consumed_by_gates",
         "consumed_by_step2", "consumed_by_step4", "cannot_affect_allowed_actions",
         "blockers", "warnings", "notes",
@@ -138,7 +139,8 @@ def test_H_no_behavior_change_markers() -> None:
     wa = build_active_research_anchor_registry_with_approvals(baseline=baseline, approvals_validation=_validation([_approval()]))
     d = _diff(baseline, wa)
     assert d["no_behavior_change"] is True
-    assert d["support_signals_still_consumes_baseline_registry"] is True
+    assert d["standalone_artifact_not_consumed_by_support_signals"] is True
+    assert d["embedded_registry_selection_owned_by_evidence_packet"] is True
     for key in (
         "consumed_by_support_signals", "consumed_by_active_registry",
         "consumed_by_availability", "consumed_by_gates",

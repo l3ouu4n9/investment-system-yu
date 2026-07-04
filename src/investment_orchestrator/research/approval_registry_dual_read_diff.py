@@ -1,7 +1,7 @@
 """R2G-5b: report-only dual-read diff of baseline vs approvals-inclusive registry.
 
-Compares the two report-only registries side by side so a future R2G-5c switch
-can be reasoned about before any consumer is changed:
+Compares the two report-only registries side by side so the embedded registry
+switch can be audited without making this standalone diff an authority source:
 
 * **baseline**: the current ``research_anchors.yaml``-only active registry (the
   one support_signals' embedded registry is built from).
@@ -10,10 +10,12 @@ can be reasoned about before any consumer is changed:
 
 Because R2G-5b intentionally overlays approved anchors on the SEPARATE
 approvals-inclusive registry, ``added_by_approvals`` may be non-empty — that is
-expected and by design. It changes NOTHING at runtime: support_signals still
-consumes the baseline registry, and this diff is consumed by nothing
-(``no_behavior_change: true``, ``permission_effect: "none"``,
-``consumed_by_*: false``, ``cannot_affect_allowed_actions: true``).
+expected and by design. This standalone diff changes NOTHING at runtime:
+support_signals consumes the registry embedded in ``evidence_packet`` by the
+R2G-5c-2 readiness gate, and this diff is consumed by nothing
+(``standalone_artifact_not_consumed_by_support_signals: true``,
+``permission_effect: "none"``, ``consumed_by_*: false``,
+``cannot_affect_allowed_actions: true``).
 """
 
 from __future__ import annotations
@@ -29,12 +31,13 @@ SCHEMA_VERSION = "approval_registry_dual_read_diff_v1"
 _NOTES = (
     "Report-only dual-read diff (R2G-5b). Compares the baseline research_anchors-only active "
     "registry against the SEPARATE approvals-inclusive registry. added_by_approvals may be "
-    "non-empty by design and changes NOTHING at runtime: support_signals still consumes the "
-    "baseline registry, the evidence packet still embeds the baseline registry, and this diff "
-    "is consumed by NOTHING (support_signals, active registry, availability, gates, Step "
-    "2/3/4, final gate, weekly, broker/live all ignore it). It never authorizes a trade and "
+    "non-empty by design and changes NOTHING at runtime by itself: support_signals consumes "
+    "evidence_packet.active_anchor_registry, whose embedded selection is owned by the R2G-5c-2 "
+    "readiness-gated evidence-packet builder. This standalone diff is consumed by NOTHING "
+    "(support_signals, active registry, availability, gates, Step 2/3/4, final gate, weekly, "
+    "broker/live all ignore it). It never authorizes a trade and "
     "adds no NEW_BUY / ORDER_COMPILATION (permission_effect=none, not_authorization=true). "
-    "R2G-5c is the future behavior switch, after a post-audit and readiness proof."
+    "It is diagnostic only."
 )
 
 
@@ -119,8 +122,9 @@ def _build(
         )
     if added:
         warnings.append(
-            "added_by_approvals is non-empty: this is expected in R2G-5b and affects NOTHING at "
-            "runtime (support_signals still consumes the baseline registry)."
+            "added_by_approvals is non-empty: this is expected in R2G-5b and this standalone "
+            "diff affects NOTHING at runtime; support_signals consumes evidence_packet."
+            "active_anchor_registry selected by the R2G-5c-2 evidence-packet gate."
         )
 
     as_of_date = approvals_registry.get("as_of_date") or baseline_registry.get("as_of_date")
@@ -216,7 +220,8 @@ def _result(
         "registry_valid_baseline": registry_valid_baseline,
         "registry_valid_with_approvals": registry_valid_with_approvals,
         "no_behavior_change": True,
-        "support_signals_still_consumes_baseline_registry": True,
+        "standalone_artifact_not_consumed_by_support_signals": True,
+        "embedded_registry_selection_owned_by_evidence_packet": True,
         "consumed_by_support_signals": False,
         "consumed_by_active_registry": False,
         "consumed_by_availability": False,

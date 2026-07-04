@@ -5,13 +5,13 @@ that overlays validated operator-approved anchors (from
 ``inputs/current/research_anchor_approvals.yaml``) on top of the exact baseline
 registry compiled from ``research_anchors.yaml``. It is an OBSERVER only:
 
-* It is **not** the embedded registry consumed by ``support_signals`` (that stays
-  the baseline ``active_research_anchor_registry`` embedded in the evidence
-  packet — untouched by this module).
-* NOTHING consumes this artifact in R2G-5b: not ``support_signals``, not the
-  compiler, not the actionable preview / candidate / promotion eligibility, not
-  availability, not gates, not Step 2/3/4, not the final gate, not weekly, not
-  broker/live. R2G-5c is the future behavior switch, after a post-audit.
+* It is **not directly consumed** by ``support_signals``. Runtime grounding consumes
+  whatever registry is embedded in ``evidence_packet.active_anchor_registry`` by
+  the R2G-5c-2 readiness-gated evidence-packet selector.
+* NOTHING consumes this standalone artifact directly: not ``support_signals``, not
+  the compiler, not the actionable preview / candidate / promotion eligibility,
+  not availability, not gates, not Step 2/3/4, not the final gate, not weekly, not
+  broker/live.
 
 Activation model (recomputed here — the R2G-5a validation artifact is NEVER read
 as authority; approvals are re-validated directly from YAML via the R2G-5a
@@ -78,18 +78,20 @@ BLOCKER_DUPLICATE_ACROSS_SOURCES = "duplicate_anchor_id_across_sources"
 BLOCKER_DUPLICATE_WITHIN_APPROVALS = "duplicate_anchor_id_within_approvals"
 
 _NOTES = (
-    "Report-only approvals-inclusive active anchor registry (R2G-5b). SEPARATE from the "
-    "baseline active_research_anchor_registry that support_signals consumes (this artifact "
-    "is NOT embedded in the evidence packet and is consumed by NOTHING: not support_signals, "
-    "not the compiler, not the actionable preview / candidate / promotion eligibility, not "
-    "availability, not gates, not Step 2/3/4, not the final gate, not weekly, not "
-    "broker/live). Activation is recomputed directly from research_anchor_approvals.yaml; the "
+    "Report-only approvals-inclusive active anchor registry (R2G-5b). This is a "
+    "SEPARATE standalone observer artifact. Runtime support_signals consumes "
+    "evidence_packet.active_anchor_registry, whose embedded registry selection is "
+    "owned by the R2G-5c-2 readiness-gated evidence-packet builder; this standalone "
+    "artifact is NOT read directly by support_signals and is consumed by NOTHING: "
+    "not support_signals, not the compiler, not the actionable preview / candidate "
+    "/ promotion eligibility, not availability, not gates, not Step 2/3/4, not the "
+    "final gate, not weekly, not broker/live. Activation is recomputed directly from "
+    "research_anchor_approvals.yaml; the "
     "R2G-5a validation artifact and its would_activate flag are NEVER read as authority. "
     "operator_completed_anchor_sha256 is the only activation-binding hash; candidate_sha256 / "
     "candidate_link_status are audit-only with zero activation authority. Cross-source "
     "duplicate anchor_id fails closed (no silent precedence). It never authorizes a trade and "
-    "adds no NEW_BUY / ORDER_COMPILATION (permission_effect=none, not_authorization=true). "
-    "R2G-5c is the future behavior switch, after a post-audit and readiness proof."
+    "adds no NEW_BUY / ORDER_COMPILATION (permission_effect=none, not_authorization=true)."
 )
 
 
@@ -101,10 +103,11 @@ def build_active_research_anchor_registry_with_approvals(
 ) -> dict[str, Any]:
     """Merge a baseline registry with recomputed operator approvals (pure; never raises).
 
-    ``baseline`` is the output of ``active_research_anchor_registry`` (the exact
-    same object support_signals' embedded registry is built from). ``approvals_validation``
-    is the R2G-5a validation dict, RECOMPUTED from the approvals YAML (not read
-    from the report artifact). This function never mutates ``baseline``.
+    ``baseline`` is the output of ``active_research_anchor_registry`` (the same
+    baseline compiler used by the evidence-packet embedded registry selector).
+    ``approvals_validation`` is the R2G-5a validation dict, RECOMPUTED from the
+    approvals YAML (not read from the report artifact). This function never
+    mutates ``baseline``.
     """
     try:
         return _build(baseline=baseline, approvals_validation=approvals_validation, generated_at=generated_at)
@@ -138,7 +141,8 @@ def build_active_research_anchor_registry_with_approvals(
             "consumed_by_step2": False,
             "consumed_by_step4": False,
             "cannot_affect_allowed_actions": True,
-            "support_signals_still_consumes_baseline_registry": True,
+            "standalone_artifact_not_consumed_by_support_signals": True,
+            "embedded_registry_selection_owned_by_evidence_packet": True,
             "notes": _NOTES,
         }
 
@@ -301,7 +305,8 @@ def _build(
         "consumed_by_step2": False,
         "consumed_by_step4": False,
         "cannot_affect_allowed_actions": True,
-        "support_signals_still_consumes_baseline_registry": True,
+        "standalone_artifact_not_consumed_by_support_signals": True,
+        "embedded_registry_selection_owned_by_evidence_packet": True,
         "notes": _NOTES,
     }
 

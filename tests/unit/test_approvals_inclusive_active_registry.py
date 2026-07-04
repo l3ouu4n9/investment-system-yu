@@ -156,7 +156,8 @@ def test_report_only_markers_present() -> None:
     assert reg["cannot_affect_allowed_actions"] is True
     assert reg["is_embedded_registry"] is False
     assert reg["embedded_in_evidence_packet"] is False
-    assert reg["support_signals_still_consumes_baseline_registry"] is True
+    assert reg["standalone_artifact_not_consumed_by_support_signals"] is True
+    assert reg["embedded_registry_selection_owned_by_evidence_packet"] is True
     for key in (
         "consumed_by_support_signals", "consumed_by_active_registry",
         "consumed_by_availability", "consumed_by_gates",
