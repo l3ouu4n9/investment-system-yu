@@ -68,6 +68,9 @@ from investment_orchestrator.research.promoted_step4_readiness_dry_run import (
 from investment_orchestrator.research.active_research_anchor_registry import (
     write_active_research_anchor_registry,
 )
+from investment_orchestrator.research.anchor_source_equivalence import (
+    write_anchor_source_equivalence,
+)
 from investment_orchestrator.state.final_execution_safety_preflight import (
     evaluate_promoted_final_safety_preflight,
 )
@@ -136,6 +139,7 @@ PROMOTED_STEP4_READINESS_VERIFICATION_FILENAME = "promoted_step4_readiness_verif
 PROMOTED_STEP4_PREVIEW_GATE_DRY_RUN_FILENAME = "promoted_step4_preview_gate_dry_run.json"
 PROMOTED_FINAL_SAFETY_PREFLIGHT_FILENAME = "promoted_final_safety_preflight.json"
 ACTIVE_RESEARCH_ANCHOR_REGISTRY_FILENAME = "active_research_anchor_registry.json"
+ANCHOR_SOURCE_EQUIVALENCE_FILENAME = "anchor_source_equivalence.json"
 RESEARCH_ANCHORS_INPUT_FILENAME = "research_anchors.yaml"
 CURRENT_RUN_INPUT_NOTES_RE = re.compile(
     r"(?:\r?\n)*────────────────────────────────────────\r?\n"
@@ -359,6 +363,11 @@ def step1_active_research_anchor_registry_path() -> Path:
     return step1_artifact_dir() / ACTIVE_RESEARCH_ANCHOR_REGISTRY_FILENAME
 
 
+def step1_anchor_source_equivalence_path() -> Path:
+    """Return the report-only anchor-source equivalence oracle path (R2G-2)."""
+    return step1_artifact_dir() / ANCHOR_SOURCE_EQUIVALENCE_FILENAME
+
+
 def resolve_step1_prompt_template_path() -> Path:
     """Resolve the formal Step 1 prompt template from prompts/."""
     return require_prompt_path("research_dual_lane.txt")
@@ -565,6 +574,12 @@ def parse_step1_output(
     _write_active_research_anchor_registry_report_only(
         strategy_settings=handoff_strategy_settings
     )
+
+    # Report-only layer 0a3 (R2G-2): anchor-source equivalence oracle. Compares the
+    # usable-anchor grounding view of the authoritative evidence_packet.research_anchors
+    # (what support_signals reads today) against the R2G-1 active registry. Diagnostic
+    # only: switches no consumer, changes no behavior, consumed by nothing.
+    _write_anchor_source_equivalence_report_only(strategy_settings=handoff_strategy_settings)
 
     # Report-only layer 0b (R2C): small analyst-memo parse/validation. Only runs
     # when a raw memo output exists; it writes its own two artifacts and never
@@ -1131,6 +1146,31 @@ def _write_active_research_anchor_registry_report_only(
             anchors_path=research_anchors_path,
             allowed_universe=allowed_universe,
             today=settings_as_of,
+        )
+    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
+        pass
+
+
+def _write_anchor_source_equivalence_report_only(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+) -> None:
+    """Compile + write the R2G-2 anchor-source equivalence oracle (report-only).
+
+    Reads the just-written evidence packet (authoritative
+    ``research_anchors`` view) and the R2G-1 active registry, then writes a
+    diagnostic diff. Additive only: it switches no consumer, changes no behavior,
+    never touches ``evidence_packet.research_anchors`` or ``support_signals``,
+    never gates the pipeline, and adds no permission / state / action. Any error
+    is swallowed so Step 1 parse is never affected.
+    """
+    try:
+        evidence_packet = _read_json_if_exists(step1_evidence_packet_path())
+        active_registry = _read_json_if_exists(step1_active_research_anchor_registry_path())
+        write_anchor_source_equivalence(
+            output_path=step1_anchor_source_equivalence_path(),
+            evidence_packet=evidence_packet if isinstance(evidence_packet, Mapping) else None,
+            active_registry=active_registry if isinstance(active_registry, Mapping) else None,
         )
     except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
         pass

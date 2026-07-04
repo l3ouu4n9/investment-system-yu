@@ -2422,3 +2422,79 @@ def test_r2g1_registry_does_not_change_support_signals_or_decision(
     assert decision["allowed_actions"] == ["HOLD", "NO_TRADE"]
     assert "NEW_BUY" not in decision["allowed_actions"]
     assert "ORDER_COMPILATION" not in decision["allowed_actions"]
+
+
+# --- R2G-2: anchor-source equivalence oracle (report-only, non-consumed) -------
+
+
+def test_r2g2_equivalence_written_and_equivalent_for_valid_anchors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """parse_step1_output emits the equivalence oracle; valid anchors -> equivalent."""
+    artifact_dir = _setup_repo(tmp_path, monkeypatch)
+    (artifact_dir / "analyst_memo_raw_output.txt").write_text(
+        json.dumps(_valid_memo()), encoding="utf-8"
+    )
+    _write_research_anchors_yaml(tmp_path)
+
+    step1_research.parse_step1_output(strategy_settings=_settings())
+
+    eq_path = step1_research.step1_anchor_source_equivalence_path()
+    assert eq_path.is_file()
+    eq = json.loads(eq_path.read_text(encoding="utf-8"))
+    assert eq["schema_version"] == "anchor_source_equivalence_v1"
+    assert eq["report_only"] is True
+    assert eq["permission_effect"] == "none"
+    assert eq["not_authorization"] is True
+    assert eq["authoritative_behavior_unchanged"] is True
+    assert eq["consumed_by_support_signals"] is False
+    assert eq["consumed_by_gates"] is False
+    assert eq["consumed_by_step4"] is False
+    # Registry compiled from the same operator YAML → identical usable set.
+    assert eq["equivalent"] is True
+    assert eq["registry_no_more_permissive"] is True
+    assert eq["equivalence_blockers"] == []
+    assert eq["old_anchor_summary"]["usable_anchor_ids"] == ["AI_CAPEX_2026H2"]
+    assert eq["registry_anchor_summary"]["active_anchor_ids"] == ["AI_CAPEX_2026H2"]
+
+
+def test_r2g2_equivalence_does_not_change_support_signals_or_decision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-consumption: support_signals + degraded-mode decision byte-identical
+    whether or not the equivalence artifact exists on disk."""
+    artifact_dir = _setup_repo(tmp_path, monkeypatch)
+    (artifact_dir / "analyst_memo_raw_output.txt").write_text(
+        json.dumps(_valid_memo()), encoding="utf-8"
+    )
+    _write_research_anchors_yaml(tmp_path)
+
+    def _stable(path: Path) -> Any:
+        def scrub(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {k: scrub(v) for k, v in value.items() if k != "generated_at"}
+            if isinstance(value, list):
+                return [scrub(v) for v in value]
+            return value
+
+        return scrub(json.loads(path.read_text(encoding="utf-8")))
+
+    signals_path = artifact_dir / "compiled_support_signals.json"
+    decision_path = step1_research.step1_research_degraded_mode_decision_path()
+
+    step1_research.parse_step1_output(strategy_settings=_settings())
+    support_before = _stable(signals_path)
+    decision_before = _stable(decision_path)
+
+    # Delete the equivalence artifact and re-run: nothing consumes it, so the
+    # substantive support-signal + decision content is unchanged.
+    step1_research.step1_anchor_source_equivalence_path().unlink()
+    step1_research.parse_step1_output(strategy_settings=_settings())
+
+    assert _stable(signals_path) == support_before
+    assert _stable(decision_path) == decision_before
+
+    decision = _stable(decision_path)
+    assert decision["allowed_actions"] == ["HOLD", "NO_TRADE"]
+    assert "NEW_BUY" not in decision["allowed_actions"]
+    assert "ORDER_COMPILATION" not in decision["allowed_actions"]
