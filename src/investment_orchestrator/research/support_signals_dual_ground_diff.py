@@ -111,7 +111,7 @@ def build_support_signals_dual_ground_diff(
             as_of_date=as_of_date,
             generated_at=generated_at,
         )
-    except Exception:  # noqa: BLE001 - report-only dry-run must never raise
+    except Exception as exc:  # noqa: BLE001 - report-only dry-run must never raise
         return _result(
             readiness={},
             baseline_result={},
@@ -122,7 +122,7 @@ def build_support_signals_dual_ground_diff(
             removed_or_changed=[],
             unchanged=[],
             bounded_ok=False,
-            bounded_failures=["dual_ground_diff_internal_error"],
+            bounded_failures=[_internal_error_failure(exc)],
             explanations=[],
             approvals_registry=approvals_registry if isinstance(approvals_registry, Mapping) else None,
             as_of_date=as_of_date,
@@ -567,3 +567,14 @@ def _read_text_or_none(path: Any) -> str | None:
         return read_text(path)
     except Exception:  # noqa: BLE001 - unreadable file treated as absent
         return None
+
+
+def _internal_error_failure(exc: Exception) -> dict[str, str]:
+    message = str(exc).strip()
+    if len(message) > 200:
+        message = message[:197] + "..."
+    return {
+        "failure_id": "dual_ground_diff_internal_error",
+        "reason": "exception",
+        "message": message,
+    }

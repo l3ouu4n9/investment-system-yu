@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import investment_orchestrator.research.support_signals_dual_ground_diff as dual_module
 from investment_orchestrator.research.active_research_anchor_registry import (
     build_active_research_anchor_registry,
 )
@@ -369,6 +370,34 @@ def test_never_raises_on_garbage() -> None:
     )
     assert r["schema_version"] == SCHEMA_VERSION
     assert r["bounded_broadening_passed"] in (True, False)
+
+
+def test_error_fallback_schema_remains_report_only(monkeypatch: Any) -> None:
+    def boom(**_: Any) -> dict[str, Any]:
+        raise RuntimeError("forced fallback")
+
+    monkeypatch.setattr(dual_module, "_build", boom)
+
+    r = build_support_signals_dual_ground_diff(
+        evidence_packet={}, analyst_memo={}, compilation_mode="evidence_only",
+        approvals_registry={}, dual_read_diff={},
+        current_research_anchors_sha256=None, current_research_anchor_approvals_sha256=None,
+        approvals_source_present=False,
+    )
+
+    assert r["report_only"] is True
+    assert r["dry_run_only"] is True
+    assert r["not_authorization"] is True
+    failures = r["bounded_broadening_failures"]
+    assert isinstance(failures, list)
+    assert failures
+    assert all(isinstance(entry, dict) for entry in failures)
+    assert failures[0]["failure_id"] == "dual_ground_diff_internal_error"
+    present = {k for k in _keys(r) if k.lower() in _ORDER_SHAPED_KEYS}
+    assert present == set(), f"order-shaped keys leaked: {present}"
+    blob = json.dumps(r)
+    assert '"NEW_BUY"' not in blob
+    assert '"ORDER_COMPILATION"' not in blob
 
 
 def test_json_serializable() -> None:
