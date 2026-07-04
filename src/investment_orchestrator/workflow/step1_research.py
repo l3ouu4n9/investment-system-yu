@@ -65,6 +65,9 @@ from investment_orchestrator.research.promoted_step4_readiness_dry_run import (
     evaluate_promoted_step4_preview_gate_dry_run,
     verify_promoted_step3_for_step4_readiness,
 )
+from investment_orchestrator.research.active_research_anchor_registry import (
+    write_active_research_anchor_registry,
+)
 from investment_orchestrator.state.final_execution_safety_preflight import (
     evaluate_promoted_final_safety_preflight,
 )
@@ -132,6 +135,7 @@ PROMOTED_STEP3_AUDIT_GATE_DRY_RUN_FILENAME = "promoted_step3_audit_gate_dry_run.
 PROMOTED_STEP4_READINESS_VERIFICATION_FILENAME = "promoted_step4_readiness_verification.json"
 PROMOTED_STEP4_PREVIEW_GATE_DRY_RUN_FILENAME = "promoted_step4_preview_gate_dry_run.json"
 PROMOTED_FINAL_SAFETY_PREFLIGHT_FILENAME = "promoted_final_safety_preflight.json"
+ACTIVE_RESEARCH_ANCHOR_REGISTRY_FILENAME = "active_research_anchor_registry.json"
 RESEARCH_ANCHORS_INPUT_FILENAME = "research_anchors.yaml"
 CURRENT_RUN_INPUT_NOTES_RE = re.compile(
     r"(?:\r?\n)*────────────────────────────────────────\r?\n"
@@ -350,6 +354,11 @@ def step1_promoted_final_safety_preflight_path() -> Path:
     return step1_artifact_dir() / PROMOTED_FINAL_SAFETY_PREFLIGHT_FILENAME
 
 
+def step1_active_research_anchor_registry_path() -> Path:
+    """Return the report-only active research-anchor registry path (R2G-1)."""
+    return step1_artifact_dir() / ACTIVE_RESEARCH_ANCHOR_REGISTRY_FILENAME
+
+
 def resolve_step1_prompt_template_path() -> Path:
     """Resolve the formal Step 1 prompt template from prompts/."""
     return require_prompt_path("research_dual_lane.txt")
@@ -548,6 +557,14 @@ def parse_step1_output(
     # it is written regardless of whether the Deep Research output parses, and is
     # fully independent of the degraded-mode decision below.
     _write_evidence_packet_report_only(strategy_settings=handoff_strategy_settings)
+
+    # Report-only layer 0a2 (R2G-1): deterministic active anchor registry compiled
+    # from the operator research_anchors.yaml source only. Additive and consumed by
+    # NOTHING yet (support_signals still reads evidence_packet.research_anchors);
+    # it never changes any behavior, gate, permission, or the degraded-mode decision.
+    _write_active_research_anchor_registry_report_only(
+        strategy_settings=handoff_strategy_settings
+    )
 
     # Report-only layer 0b (R2C): small analyst-memo parse/validation. Only runs
     # when a raw memo output exists; it writes its own two artifacts and never
@@ -1087,6 +1104,61 @@ def _write_evidence_packet_report_only(
     except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
         # Best-effort only: do not mask or alter existing Step 1 behavior.
         pass
+
+
+def _write_active_research_anchor_registry_report_only(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+) -> None:
+    """Compile + write the R2G-1 active anchor registry defensively (report-only).
+
+    Wraps the existing research-anchors validator (``research_anchors.yaml``) into
+    a deterministic ``active_research_anchor_registry.json``. Additive only:
+    NOTHING consumes this artifact in R2G-1 (not support_signals, not the compiler,
+    not the actionable preview/candidate/eligibility, not availability, not gates,
+    not Step 2/3/4, not weekly). It never raises into the Step 1 parse flow,
+    never gates the pipeline, never touches ``evidence_packet.research_anchors``,
+    and adds no permission / state / action.
+    """
+    try:
+        research_anchors_path = current_inputs_dir() / RESEARCH_ANCHORS_INPUT_FILENAME
+        settings_as_of = (
+            strategy_settings.get("as_of") if isinstance(strategy_settings, Mapping) else None
+        )
+        allowed_universe = _allowed_buy_universe_for_anchor_registry(strategy_settings)
+        write_active_research_anchor_registry(
+            output_path=step1_active_research_anchor_registry_path(),
+            anchors_path=research_anchors_path,
+            allowed_universe=allowed_universe,
+            today=settings_as_of,
+        )
+    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
+        pass
+
+
+def _allowed_buy_universe_for_anchor_registry(
+    strategy_settings: Mapping[str, Any] | None,
+) -> list[str]:
+    """Deterministic base buy universe (core ∪ satellite) for anchor validation.
+
+    Mirrors the evidence packet's ``allowed_buy_tickers`` derivation so the R2G-1
+    registry validates anchors against exactly the same universe the existing
+    ``research_anchors`` summary already uses (no divergent validation).
+    """
+    settings = strategy_settings if isinstance(strategy_settings, Mapping) else {}
+    out: list[str] = []
+    seen: set[str] = set()
+    for key in ("core_universe", "satellite_universe"):
+        value = settings.get(key)
+        if not isinstance(value, list):
+            continue
+        for item in value:
+            if isinstance(item, str) and item.strip():
+                ticker = item.strip().upper()
+                if ticker not in seen:
+                    seen.add(ticker)
+                    out.append(ticker)
+    return out
 
 
 def _load_or_build_evidence_packet(

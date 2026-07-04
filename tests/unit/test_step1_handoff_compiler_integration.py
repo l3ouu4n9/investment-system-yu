@@ -2302,3 +2302,123 @@ def test_promoted_final_safety_preflight_fails_closed_when_7b_dry_run_absent(
     assert preflight["deterministic_prerequisites_ready"] is False
     assert "step4_readiness_dry_run_missing" in preflight["preflight_blockers"]
     assert preflight["current_real_gate_allows"] is False
+
+
+# --- R2G-1: active research anchor registry (report-only, non-consumed) --------
+
+
+def _write_research_anchors_yaml(tmp_path: Path) -> None:
+    inputs_dir = tmp_path / "inputs" / "current"
+    inputs_dir.mkdir(parents=True, exist_ok=True)
+    (inputs_dir / "research_anchors.yaml").write_text(
+        "schema_version: research_anchors_v1\n"
+        'as_of_date: "2026-06-28"\n'
+        "is_llm_generated: false\n"
+        "anchors:\n"
+        "  - anchor_id: AI_CAPEX_2026H2\n"
+        "    anchor_type: structural_theme\n"
+        "    applicable_tickers: [QQQ]\n"
+        '    anchor_date_et: "2026-06-15"\n'
+        '    valid_from: "2026-06-01"\n'
+        '    valid_until: "2026-07-31"\n'
+        "    source_type: operator\n"
+        "    confidence_floor: medium\n",
+        encoding="utf-8",
+    )
+
+
+def test_r2g1_registry_written_during_step1_parse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """parse_step1_output emits the report-only active anchor registry."""
+    artifact_dir = _setup_repo(tmp_path, monkeypatch)
+    (artifact_dir / "analyst_memo_raw_output.txt").write_text(
+        json.dumps(_valid_memo()), encoding="utf-8"
+    )
+    _write_research_anchors_yaml(tmp_path)
+
+    step1_research.parse_step1_output(strategy_settings=_settings())
+
+    registry_path = step1_research.step1_active_research_anchor_registry_path()
+    assert registry_path.is_file()
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    assert registry["schema_version"] == "active_research_anchor_registry_v1"
+    assert registry["is_llm_generated"] is False
+    assert registry["report_only"] is True
+    assert registry["permission_effect"] == "none"
+    assert registry["not_authorization"] is True
+    assert registry["not_execution_authorization"] is True
+    assert registry["consumed_by_availability"] is False
+    assert registry["consumed_by_step2"] is False
+    assert registry["consumed_by_gates"] is False
+    assert registry["consumed_by_step4"] is False
+    assert registry["registry_valid"] is True
+    assert registry["counts"]["active"] == 1
+    assert registry["active_anchors"][0]["anchor_id"] == "AI_CAPEX_2026H2"
+    assert registry["source_manifest"][0]["source_id"] == "operator_research_anchors_yaml"
+
+
+def test_r2g1_registry_missing_anchors_is_report_only_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No research_anchors.yaml → valid empty registry, never a crash."""
+    artifact_dir = _setup_repo(tmp_path, monkeypatch)
+    (artifact_dir / "analyst_memo_raw_output.txt").write_text(
+        json.dumps(_valid_memo()), encoding="utf-8"
+    )
+    # deliberately do NOT write research_anchors.yaml
+    step1_research.parse_step1_output(strategy_settings=_settings())
+
+    registry = json.loads(
+        step1_research.step1_active_research_anchor_registry_path().read_text(encoding="utf-8")
+    )
+    assert registry["registry_valid"] is True
+    assert registry["counts"]["active"] == 0
+    assert registry["source_manifest"][0]["present"] is False
+
+
+def test_r2g1_registry_does_not_change_support_signals_or_decision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-consumption: support_signals + degraded-mode decision are byte-identical
+    whether or not the R2G-1 registry artifact exists on disk."""
+    artifact_dir = _setup_repo(tmp_path, monkeypatch)
+    (artifact_dir / "analyst_memo_raw_output.txt").write_text(
+        json.dumps(_valid_memo()), encoding="utf-8"
+    )
+    _write_research_anchors_yaml(tmp_path)
+
+    def _stable(path: Path) -> Any:
+        # Strip volatile generated_at stamps so the comparison reflects
+        # substantive content (non-consumption), not wall-clock timestamps.
+        def scrub(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {k: scrub(v) for k, v in value.items() if k != "generated_at"}
+            if isinstance(value, list):
+                return [scrub(v) for v in value]
+            return value
+
+        return scrub(json.loads(path.read_text(encoding="utf-8")))
+
+    signals_path = artifact_dir / "compiled_support_signals.json"
+    decision_path = step1_research.step1_research_degraded_mode_decision_path()
+
+    step1_research.parse_step1_output(strategy_settings=_settings())
+    support_before = _stable(signals_path)
+    decision_before = _stable(decision_path)
+
+    # Delete the registry and re-run: support signals + decision must be identical,
+    # proving nothing consumes the registry.
+    step1_research.step1_active_research_anchor_registry_path().unlink()
+    step1_research.parse_step1_output(strategy_settings=_settings())
+
+    support_after = _stable(signals_path)
+    decision_after = _stable(decision_path)
+
+    assert support_after == support_before
+    assert decision_after == decision_before
+
+    decision = decision_after
+    assert decision["allowed_actions"] == ["HOLD", "NO_TRADE"]
+    assert "NEW_BUY" not in decision["allowed_actions"]
+    assert "ORDER_COMPILATION" not in decision["allowed_actions"]
