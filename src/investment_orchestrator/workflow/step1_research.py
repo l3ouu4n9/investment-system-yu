@@ -79,6 +79,9 @@ from investment_orchestrator.research.research_anchor_approval_manifest import (
     validate_research_anchor_approvals,
     write_research_anchor_approvals_validation,
 )
+from investment_orchestrator.research.research_anchor_revocation_manifest import (
+    write_research_anchor_revocations_validation,
+)
 from investment_orchestrator.research.approvals_inclusive_active_registry import (
     build_active_research_anchor_registry_with_approvals,
 )
@@ -162,6 +165,7 @@ ACTIVE_RESEARCH_ANCHOR_REGISTRY_FILENAME = "active_research_anchor_registry.json
 ANCHOR_SOURCE_EQUIVALENCE_FILENAME = "anchor_source_equivalence.json"
 RESEARCH_ANCHOR_CANDIDATES_FILENAME = "research_anchor_candidates.json"
 RESEARCH_ANCHOR_APPROVALS_VALIDATION_FILENAME = "research_anchor_approvals_validation.json"
+RESEARCH_ANCHOR_REVOCATIONS_VALIDATION_FILENAME = "research_anchor_revocations_validation.json"
 ACTIVE_RESEARCH_ANCHOR_REGISTRY_WITH_APPROVALS_FILENAME = (
     "active_research_anchor_registry_with_approvals.json"
 )
@@ -405,6 +409,11 @@ def step1_research_anchor_candidates_path() -> Path:
 def step1_research_anchor_approvals_validation_path() -> Path:
     """Return the report-only operator-approval manifest validation path (R2G-5a)."""
     return step1_artifact_dir() / RESEARCH_ANCHOR_APPROVALS_VALIDATION_FILENAME
+
+
+def step1_research_anchor_revocations_validation_path() -> Path:
+    """Return the report-only operator-revocation manifest validation path (R2G-5d-0)."""
+    return step1_artifact_dir() / RESEARCH_ANCHOR_REVOCATIONS_VALIDATION_FILENAME
 
 
 def step1_active_research_anchor_registry_with_approvals_path() -> Path:
@@ -677,6 +686,18 @@ def parse_step1_output(
     # NEW_BUY / ORDER_COMPILATION. operator_completed_anchor_sha256 is the
     # activation-binding hash; candidate_sha256 is audit-only.
     _write_research_anchor_approvals_validation_report_only(
+        strategy_settings=handoff_strategy_settings
+    )
+
+    # Report-only layer 0c3b (R2G-5d-0): operator-REVOCATION manifest validator.
+    # Reads the optional revocations: section of research_anchor_approvals.yaml and
+    # writes research_anchor_revocations_validation.json — a diagnostic that answers
+    # "does this revocation deterministically bind to one operator-approved anchor?".
+    # Strictly inert: it APPLIES nothing, does not change the approvals-inclusive
+    # registry compiler / support_signals / evidence_packet registry selection /
+    # readiness, is consumed by NOTHING, and cannot affect allowed_actions / add
+    # NEW_BUY / ORDER_COMPILATION. Unknown target fails closed (mandatory amendment).
+    _write_research_anchor_revocations_validation_report_only(
         strategy_settings=handoff_strategy_settings
     )
 
@@ -1342,6 +1363,41 @@ def _write_research_anchor_approvals_validation_report_only(
         allowed_universe = _allowed_buy_universe_for_anchor_registry(strategy_settings)
         write_research_anchor_approvals_validation(
             output_path=step1_research_anchor_approvals_validation_path(),
+            manifest_path=approvals_path,
+            allowed_universe=allowed_universe,
+            today=settings_as_of,
+            as_of_date=settings_as_of if isinstance(settings_as_of, str) else None,
+        )
+    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
+        pass
+
+
+def _write_research_anchor_revocations_validation_report_only(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+) -> None:
+    """Validate the operator-revocation manifest defensively (R2G-5d-0, report-only).
+
+    Reads the optional ``revocations:`` section of
+    ``inputs/current/research_anchor_approvals.yaml`` and writes
+    ``research_anchor_revocations_validation.json``. Strictly inert: it APPLIES no
+    revocation, does not change the approvals-inclusive registry compiler,
+    ``support_signals``, the embedded ``evidence_packet`` registry selection, or
+    readiness; is consumed by NOTHING (not support_signals, not any registry, not
+    availability, not gates, not Step 2/3/4, not weekly, not broker/live), is never
+    added to promoted_source_artifacts / allowed_actions / any gate, and adds no
+    permission / state / action. Unknown target fails closed (mandatory R2G-5d-0
+    amendment). A missing manifest yields a valid, empty report. Any error is
+    swallowed so Step 1 parse is never affected.
+    """
+    try:
+        approvals_path = current_inputs_dir() / RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME
+        settings_as_of = (
+            strategy_settings.get("as_of") if isinstance(strategy_settings, Mapping) else None
+        )
+        allowed_universe = _allowed_buy_universe_for_anchor_registry(strategy_settings)
+        write_research_anchor_revocations_validation(
+            output_path=step1_research_anchor_revocations_validation_path(),
             manifest_path=approvals_path,
             allowed_universe=allowed_universe,
             today=settings_as_of,
