@@ -16,13 +16,14 @@ consumed by nothing. Both results are produced by calling the REAL, unchanged
 qualitative gates, and ``_evaluate_anchor_refs`` grounding path are exercised
 verbatim.
 
-The current production ``_registry_is_consumable`` only accepts the baseline
-schema, so to model the FUTURE R2G-5c-2 acceptance of the approvals-inclusive
-schema this module builds a **dry-run-only projection**: the approvals-inclusive
-registry re-labelled to the baseline schema (preserving every consumability
-marker + ``registry_valid``), with any active approvals-derived row that fails the
-R2G-5c-2 per-row defense downgraded to a non-groundable status. This changes NO
-production code; the real schema-acceptance change belongs to R2G-5c-2.
+This observer keeps a **dry-run-only projection** for deterministic comparison:
+the approvals-inclusive registry is normalized into a baseline-shaped consumable
+view (preserving every consumability marker + ``registry_valid``), with any active
+approvals-derived row that fails the embedded-registry per-row defense downgraded
+to a non-groundable status. Runtime grounding uses the compiled
+``evidence_packet.active_anchor_registry`` selected elsewhere; this artifact never
+switches consumers and never reads revocation files or revocation validation
+artifacts directly.
 
 Bounded-broadening invariant: every signal accepted under approvals-inclusive
 grounding that was NOT accepted under baseline must be explained by a valid
@@ -72,7 +73,9 @@ _NOTES = (
     "build_compiled_support_signals. operator_completed_anchor_sha256 is the only activation-binding "
     "hash; candidate_sha256 / candidate_link_status are audit-only and ground nothing. It never "
     "authorizes a trade and adds no NEW_BUY / ORDER_COMPILATION (permission_effect=none, "
-    "not_authorization=true). R2G-5c-2 is the future switch."
+    "not_authorization=true). Runtime grounding uses the compiled "
+    "evidence_packet.active_anchor_registry; revocation-aware approvals-inclusive grounding may be "
+    "embedded only through readiness-gated selection outside this observer."
 )
 
 _ORDER_SHAPED_KEYS = frozenset(
@@ -170,7 +173,7 @@ def _build(
             evidence_packet=appr_packet, analyst_memo=analyst_memo, compilation_mode=compilation_mode
         )
     elif target == SWITCH_TARGET_BASELINE:
-        # The future switch would fall back to baseline grounding.
+        # Readiness-gated embedded selection would fall back to baseline grounding.
         approvals_result = baseline_result
     else:  # fail_closed_empty -> zero usable anchors (baseline is not a safe fallback).
         appr_packet = {**packet, "active_anchor_registry": _fail_closed_empty_registry()}
@@ -235,19 +238,20 @@ def _build(
     )
 
 
-# --- dry-run projection (models the FUTURE R2G-5c-2 consumer contract) --------
+# --- dry-run projection (observer-only embedded-registry comparison) -----------
 
 
 def _dry_run_projection(approvals_registry: Any) -> dict[str, Any]:
-    """Re-label the approvals-inclusive registry so the CURRENT builder consumes it.
+    """Normalize the approvals-inclusive registry for observer comparison.
 
-    Models R2G-5c-2's consumer changes WITHOUT touching production code:
+    This is internal to the dual-ground observer. Runtime support_signals consumes
+    the compiled ``evidence_packet.active_anchor_registry`` and does not read this
+    projection, revocation files, or revocation validation artifacts directly.
 
-    * schema re-labelled to the baseline schema so the current
-      ``_registry_is_consumable`` accepts it (R2G-5c-2 will accept the new schema);
+    * schema re-labelled to the baseline shape for a stable comparison view;
     * every consumability marker + ``registry_valid`` preserved from the real
       registry (so ``registry_valid:false`` still fails closed to zero anchors);
-    * any active approvals-derived row that fails the R2G-5c-2 per-row defense is
+    * any active approvals-derived row that fails the embedded-registry per-row defense is
       downgraded to a non-groundable ``invalid`` status.
     """
     if not _switch_consumable(approvals_registry):
