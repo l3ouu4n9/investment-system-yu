@@ -96,6 +96,17 @@ set it explicitly each run. A stale value can over-allow or over-block deploymen
 if it is missing while net-new BUY orders exist, primary-path Step 4 validation
 **fails closed**.
 
+## Operator-Approved Anchor Grounding
+
+R2G-5c can ground report-only support signals on valid operator-approved
+research anchors. Runtime grounding consumes `evidence_packet.active_anchor_registry`,
+selected by a readiness-gated fresh compile. Standalone approval artifacts remain
+observer artifacts and do not grant `NEW_BUY` or `ORDER_COMPILATION`.
+
+See the
+[Operator-Approved Anchor Grounding Runbook](docs/operator_approved_anchor_grounding_runbook.md)
+for source roles, approval workflow, fail-closed outcomes, and safety boundaries.
+
 ## Run Status / Blocked-Run Summary
 
 When Step 1 / Deep Research produces no output, invalid research, or a
