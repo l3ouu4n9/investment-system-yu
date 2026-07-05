@@ -462,19 +462,14 @@ def test_R_revocation_overlay_is_not_enabled_for_default_runtime_builder_call() 
     assert reg["revocations_applied"] == []
 
 
-def test_R_support_signals_and_evidence_packet_do_not_read_revocation_artifacts() -> None:
+def test_R_support_signals_still_does_not_read_revocation_artifacts() -> None:
     import inspect
 
-    import investment_orchestrator.research.evidence_packet as ep
     import investment_orchestrator.research.support_signals as ss
-    import investment_orchestrator.research.approval_registry_switch_readiness as readiness
 
     assert "research_anchor_revocation_manifest" not in inspect.getsource(ss)
+    assert "validate_research_anchor_revocations" not in inspect.getsource(ss)
     assert "research_anchor_revocations_validation" not in inspect.getsource(ss)
-    assert "research_anchor_revocation_manifest" not in inspect.getsource(ep)
-    assert "research_anchor_revocations_validation" not in inspect.getsource(ep)
-    assert "research_anchor_revocation_manifest" not in inspect.getsource(readiness)
-    assert "research_anchor_revocations_validation" not in inspect.getsource(readiness)
 
 
 # --- D. hash failures ---------------------------------------------------------

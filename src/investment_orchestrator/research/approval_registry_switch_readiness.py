@@ -359,7 +359,10 @@ def build_approval_registry_switch_readiness(
     """Recompute baseline + approvals-inclusive + diff fresh from YAML, then evaluate.
 
     Recomputes everything directly from the current input bytes (never reads the
-    R2G-5a validation artifact). Never raises.
+    R2G-5a approval validation artifact or the R2G-5d revocation validation
+    artifact). Revocations are derived from the same approvals YAML bytes as the
+    approvals overlay, so readiness evaluates the same revocation-aware registry
+    that the embedded evidence-packet selector can safely consume. Never raises.
     """
     from investment_orchestrator.research.active_research_anchor_registry import (
         compile_active_research_anchor_registry,
@@ -380,6 +383,7 @@ def build_approval_registry_switch_readiness(
             approvals_path=approvals_path,
             allowed_universe=allowed_universe,
             today=today,
+            apply_revocations=True,
         )
         diff = build_approval_registry_dual_read_diff(
             baseline_registry=baseline, approvals_registry=approvals

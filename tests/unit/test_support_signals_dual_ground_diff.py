@@ -30,6 +30,7 @@ from investment_orchestrator.research.approval_registry_dual_read_diff import (
 from investment_orchestrator.research.support_signals_dual_ground_diff import (
     SCHEMA_VERSION,
     build_support_signals_dual_ground_diff,
+    write_support_signals_dual_ground_diff,
 )
 
 UNIVERSE = ["QQQ", "VOO", "SMH"]
@@ -93,6 +94,21 @@ def _approval(anchor: dict[str, Any], *, approval_id: str = "APR-1", hash_overri
     if candidate_sha256 is not None:
         entry["candidate_sha256"] = candidate_sha256
     return entry
+
+
+def _revocation(anchor: dict[str, Any], **overrides: Any) -> dict[str, Any]:
+    base = {
+        "revocation_id": "REV-1",
+        "target_type": "approval_anchor",
+        "approval_id": "APR-1",
+        "anchor_id": anchor["anchor_id"],
+        "operator_completed_anchor_sha256": sha(anchor),
+        "effective_as_of": AS_OF,
+        "reason": "Thesis invalidated.",
+        "revoked_by": "operator",
+    }
+    base.update(overrides)
+    return base
 
 
 def _packet(registry: dict[str, Any]) -> dict[str, Any]:
@@ -398,6 +414,53 @@ def test_error_fallback_schema_remains_report_only(monkeypatch: Any) -> None:
     blob = json.dumps(r)
     assert '"NEW_BUY"' not in blob
     assert '"ORDER_COMPILATION"' not in blob
+
+
+def test_disk_writer_uses_revocation_aware_approvals_registry(tmp_path: Any) -> None:
+    anchors_path = tmp_path / "research_anchors.yaml"
+    approvals_path = tmp_path / "research_anchor_approvals.yaml"
+    output_path = tmp_path / "support_signals_dual_ground_diff.json"
+    baseline = _baseline_registry([_anchor("VOO_B", "VOO")])
+    approved_anchor = _anchor("QQQ_A")
+    anchors_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "research_anchors_v1",
+                "is_llm_generated": False,
+                "as_of_date": AS_OF,
+                "anchors": [_anchor("VOO_B", "VOO")],
+            }
+        ),
+        encoding="utf-8",
+    )
+    approvals_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "research_anchor_approvals_v1",
+                "is_llm_generated": False,
+                "as_of_date": AS_OF,
+                "approvals": [_approval(approved_anchor)],
+                "revocations": [_revocation(approved_anchor)],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = write_support_signals_dual_ground_diff(
+        output_path=output_path,
+        evidence_packet=_packet(baseline),
+        analyst_memo=_memo([_row("QQQ", "QQQ_A")]),
+        compilation_mode="evidence_plus_memo",
+        anchors_path=anchors_path,
+        approvals_path=approvals_path,
+        allowed_universe=UNIVERSE,
+        today=AS_OF,
+    )
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert summary["added_by_approvals_count"] == "0"
+    assert payload["added_by_approvals"] == []
+    assert payload["approvals_inclusive_accepted_signal_ids"] == []
 
 
 def test_json_serializable() -> None:

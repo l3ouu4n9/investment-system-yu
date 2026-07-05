@@ -47,6 +47,9 @@ from investment_orchestrator.research.approvals_inclusive_active_registry import
 from investment_orchestrator.research.research_anchor_approval_manifest import (
     validate_research_anchor_approvals,
 )
+from investment_orchestrator.research.research_anchor_revocation_manifest import (
+    validate_research_anchor_revocations,
+)
 from investment_orchestrator.research.research_anchors import (
     ANCHORS_MISSING_DATA_GAP,
     build_research_anchors_summary,
@@ -389,10 +392,12 @@ def build_embedded_active_anchor_registry_selection(
 ) -> dict[str, Any]:
     """Freshly compile, evaluate readiness, and select the embedded registry.
 
-    This is the R2G-5c-2 behavior switch. It does not read any on-disk registry,
-    readiness, or dry-run diff JSON as authority. The baseline registry,
-    approvals-inclusive registry, dual-read diff, readiness result, and selected
-    embedded registry are all derived from the same in-memory compile.
+    This is the R2G-5c-2 behavior switch, updated in R2G-5d-2 so the approvals
+    branch is revocation-aware. It does not read any on-disk registry, readiness,
+    revocation-validation, or dry-run diff JSON as authority. The baseline
+    registry, approvals-inclusive registry, revocation validation, dual-read diff,
+    readiness result, and selected embedded registry are all derived from the same
+    in-memory input bytes.
     """
     try:
         baseline = compile_active_research_anchor_registry(
@@ -408,9 +413,17 @@ def build_embedded_active_anchor_registry_selection(
             as_of_date=baseline.get("as_of_date") if isinstance(baseline, Mapping) else None,
             generated_at=generated_at,
         )
+        revocations_validation = validate_research_anchor_revocations(
+            manifest_path=approvals_path,
+            allowed_universe=allowed_universe,
+            today=today,
+            as_of_date=baseline.get("as_of_date") if isinstance(baseline, Mapping) else None,
+            generated_at=generated_at,
+        )
         approvals = build_active_research_anchor_registry_with_approvals(
             baseline=baseline,
             approvals_validation=approvals_validation,
+            revocations_validation=revocations_validation,
             generated_at=generated_at,
         )
         diff = build_approval_registry_dual_read_diff(

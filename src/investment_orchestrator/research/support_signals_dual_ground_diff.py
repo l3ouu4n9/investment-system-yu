@@ -463,7 +463,13 @@ def write_support_signals_dual_ground_diff(
     today: Any = None,
     generated_at: str | None = None,
 ) -> dict[str, Any]:
-    """Recompute the approvals-inclusive registry + diff fresh, then build + write."""
+    """Recompute the revocation-aware approvals-inclusive registry + diff fresh.
+
+    This report-only observer derives revocations from the approvals YAML through
+    the registry compiler. ``support_signals`` itself still consumes only the
+    already-embedded ``evidence_packet.active_anchor_registry`` and never reads
+    revocation files or artifacts directly.
+    """
     from investment_orchestrator.common.io import write_json
     from investment_orchestrator.research.approvals_inclusive_active_registry import (
         compile_active_research_anchor_registry_with_approvals,
@@ -477,6 +483,7 @@ def write_support_signals_dual_ground_diff(
         approvals_path=approvals_path,
         allowed_universe=allowed_universe,
         today=today,
+        apply_revocations=True,
     )
     packet = evidence_packet if isinstance(evidence_packet, Mapping) else {}
     baseline_registry = packet.get("active_anchor_registry")

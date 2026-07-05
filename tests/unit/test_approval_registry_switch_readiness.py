@@ -31,6 +31,7 @@ from investment_orchestrator.research.approval_registry_switch_readiness import 
     SWITCH_TARGET_APPROVALS,
     SWITCH_TARGET_BASELINE,
     SWITCH_TARGET_FAIL_CLOSED,
+    build_approval_registry_switch_readiness,
     evaluate_approval_registry_switch_readiness,
 )
 
@@ -133,6 +134,21 @@ def _cond(r: dict[str, Any], cid: str) -> bool:
     return all(c["passed"] for c in r["conditions"] if c["id"] == cid)
 
 
+def _revocation(anchor: dict[str, Any], **overrides: Any) -> dict[str, Any]:
+    base = {
+        "revocation_id": "REV-1",
+        "target_type": "approval_anchor",
+        "approval_id": "APR-1",
+        "anchor_id": anchor["anchor_id"],
+        "operator_completed_anchor_sha256": sha(anchor),
+        "effective_as_of": AS_OF,
+        "reason": "Thesis invalidated.",
+        "revoked_by": "operator",
+    }
+    base.update(overrides)
+    return base
+
+
 # --- 1. happy path ------------------------------------------------------------
 
 
@@ -221,6 +237,47 @@ def test_approvals_registry_invalid_baseline_fallback() -> None:
     assert r["ready"] is False
     assert _cond(r, "registry_valid_with_approvals_true") is False
     assert r["switch_target"] == SWITCH_TARGET_BASELINE
+
+
+def test_disk_readiness_builder_is_revocation_aware_and_falls_back(tmp_path: Any) -> None:
+    anchors_path = tmp_path / "research_anchors.yaml"
+    approvals_path = tmp_path / "research_anchor_approvals.yaml"
+    approved_anchor = _anchor("AI_CAPEX")
+    anchors_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "research_anchors_v1",
+                "is_llm_generated": False,
+                "as_of_date": AS_OF,
+                "anchors": [_anchor("VOO_T", applicable_tickers=["VOO"])],
+            }
+        ),
+        encoding="utf-8",
+    )
+    approvals_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "research_anchor_approvals_v1",
+                "is_llm_generated": False,
+                "as_of_date": AS_OF,
+                "approvals": [_approval(approved_anchor)],
+                "revocations": [_revocation(approved_anchor, approval_id="APR-DOES-NOT-EXIST")],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    r = build_approval_registry_switch_readiness(
+        anchors_path=anchors_path,
+        approvals_path=approvals_path,
+        allowed_universe=UNIVERSE,
+        today=AS_OF,
+    )
+
+    assert r["ready"] is False
+    assert r["switch_target"] == SWITCH_TARGET_BASELINE
+    assert r["registry_valid_with_approvals"] is False
+    assert "revocations_manifest_invalid" in r["registry_blockers"]
 
 
 # --- 5. cross-source duplicate -----------------------------------------------
