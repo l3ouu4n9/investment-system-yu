@@ -44,7 +44,7 @@ It grants nothing: ``permission_effect: "none"``, ``not_authorization: true``, n
 from __future__ import annotations
 
 from collections.abc import Mapping
-from collections import Counter
+from collections import Counter, defaultdict
 import hashlib
 import json
 from typing import Any
@@ -59,6 +59,12 @@ from investment_orchestrator.research.active_research_anchor_registry import (
 from investment_orchestrator.research.research_anchor_approval_manifest import (
     validate_research_anchor_approvals,
 )
+from investment_orchestrator.research.research_anchor_revocation_manifest import (
+    BIND_RESOLVED,
+    STATUS_VALID_ACTIVE as REVOCATION_STATUS_VALID_ACTIVE,
+    STATUS_VALID_PENDING_FUTURE as REVOCATION_STATUS_VALID_PENDING_FUTURE,
+    validate_research_anchor_revocations,
+)
 
 
 SCHEMA_VERSION = "active_research_anchor_registry_with_approvals_v1"
@@ -66,6 +72,7 @@ COMPILER_VERSION = "active_registry_with_approvals_compiler_v1"
 
 APPROVALS_SOURCE_ID = "operator_research_anchor_approvals_yaml"
 BASELINE_SOURCE_ID = "operator_research_anchors_yaml"
+REVOCATIONS_SOURCE_ID = "operator_research_anchor_revocations_yaml"
 
 APPROVAL_TYPE_AUTHORED = "operator_authored"
 APPROVAL_TYPE_APPROVED_CANDIDATE = "operator_approved_candidate"
@@ -76,6 +83,10 @@ DECISION_APPROVE = "approve"
 BLOCKER_APPROVALS_MANIFEST_INVALID = "approvals_manifest_invalid"
 BLOCKER_DUPLICATE_ACROSS_SOURCES = "duplicate_anchor_id_across_sources"
 BLOCKER_DUPLICATE_WITHIN_APPROVALS = "duplicate_anchor_id_within_approvals"
+BLOCKER_REVOCATIONS_INVALID = "revocations_manifest_invalid"
+BLOCKER_DUPLICATE_TARGET_REVOCATION = "duplicate_target_revocation"
+
+STATUS_REVOKED = "revoked"
 
 _NOTES = (
     "Report-only approvals-inclusive active anchor registry (R2G-5b). This is a "
@@ -89,9 +100,13 @@ _NOTES = (
     "research_anchor_approvals.yaml; the "
     "R2G-5a validation artifact and its would_activate flag are NEVER read as authority. "
     "operator_completed_anchor_sha256 is the only activation-binding hash; candidate_sha256 / "
-    "candidate_link_status are audit-only with zero activation authority. Cross-source "
-    "duplicate anchor_id fails closed (no silent precedence). It never authorizes a trade and "
-    "adds no NEW_BUY / ORDER_COMPILATION (permission_effect=none, not_authorization=true)."
+    "candidate_link_status are audit-only with zero activation authority. When the standalone "
+    "report writer supplies freshly validated revocations, valid active approval_anchor "
+    "revocations move only approval-derived anchors to inactive status=revoked in this "
+    "standalone artifact; invalid revocation state fails the approvals overlay closed. "
+    "Cross-source duplicate anchor_id fails closed (no silent precedence). It never authorizes "
+    "a trade and adds no NEW_BUY / ORDER_COMPILATION (permission_effect=none, "
+    "not_authorization=true)."
 )
 
 
@@ -99,6 +114,7 @@ def build_active_research_anchor_registry_with_approvals(
     *,
     baseline: Mapping[str, Any],
     approvals_validation: Mapping[str, Any],
+    revocations_validation: Mapping[str, Any] | None = None,
     generated_at: str | None = None,
 ) -> dict[str, Any]:
     """Merge a baseline registry with recomputed operator approvals (pure; never raises).
@@ -106,11 +122,18 @@ def build_active_research_anchor_registry_with_approvals(
     ``baseline`` is the output of ``active_research_anchor_registry`` (the same
     baseline compiler used by the evidence-packet embedded registry selector).
     ``approvals_validation`` is the R2G-5a validation dict, RECOMPUTED from the
-    approvals YAML (not read from the report artifact). This function never
-    mutates ``baseline``.
+    approvals YAML (not read from the report artifact). ``revocations_validation``
+    is optional and must likewise be freshly derived in-memory from the approvals
+    YAML; on-disk revocation artifacts are never read as authority. This function
+    never mutates ``baseline``.
     """
     try:
-        return _build(baseline=baseline, approvals_validation=approvals_validation, generated_at=generated_at)
+        return _build(
+            baseline=baseline,
+            approvals_validation=approvals_validation,
+            revocations_validation=revocations_validation,
+            generated_at=generated_at,
+        )
     except Exception:  # noqa: BLE001 - report-only builder must never raise
         # Fail closed: surface the baseline registry unchanged, with zero approvals merged.
         base = baseline if isinstance(baseline, Mapping) else {}
@@ -131,6 +154,9 @@ def build_active_research_anchor_registry_with_approvals(
             "registry_valid": False,
             "registry_blockers": ["with_approvals_builder_internal_error"],
             "duplicate_blockers": [],
+            "revocations_applied": [],
+            "revocations_pending": [],
+            "revocation_problems": [],
             "audit_trail": [],
             "is_embedded_registry": False,
             "embedded_in_evidence_packet": False,
@@ -151,6 +177,7 @@ def _build(
     *,
     baseline: Mapping[str, Any],
     approvals_validation: Mapping[str, Any],
+    revocations_validation: Mapping[str, Any] | None,
     generated_at: str | None,
 ) -> dict[str, Any]:
     baseline_active = [dict(r) for r in _as_list(baseline.get("active_anchors")) if isinstance(r, Mapping)]
@@ -190,8 +217,14 @@ def _build(
     cross_source_dupes = {aid for aid in approval_anchor_ids if aid in baseline_all_ids}
     conflicting = within_approvals_dupes | cross_source_dupes
     approvals_manifest_invalid = approvals_present and not approvals_source_valid
+    revocation_state = _revocation_overlay_state(revocations_validation)
+    revocations_overlay_invalid = revocation_state["overlay_invalid"]
+    active_revocations_by_target = revocation_state["active_by_target"]
+    pending_revocations_by_target = revocation_state["pending_by_target"]
 
     audit_trail: list[dict[str, Any]] = []
+    revocations_applied: list[dict[str, Any]] = []
+    revocations_pending: list[dict[str, Any]] = []
 
     # Baseline actives carry over unless the anchor_id conflicts across sources.
     final_active: list[dict[str, Any]] = []
@@ -217,18 +250,54 @@ def _build(
     approved_active_count = 0
     for identity, validation, eligible, ar in pending:
         aid = identity["anchor_id"]
-        activate = eligible and baseline_valid and (aid not in conflicting)
+        target_key = _revocation_target_key(identity)
+        active_revocation = active_revocations_by_target.get(target_key)
+        pending_revocations = pending_revocations_by_target.get(target_key, [])
+        activate = (
+            eligible
+            and baseline_valid
+            and (aid not in conflicting)
+            and not revocations_overlay_invalid
+        )
         if activate:
-            final_active.append({**identity, "status": STATUS_ACTIVE, "validation": validation})
-            approved_active_count += 1
-            audit_trail.append(
-                {
-                    "event": "approval_anchor_activated",
-                    "anchor_id": aid,
-                    "source_id": APPROVALS_SOURCE_ID,
-                    "approval_id": identity.get("approval_id"),
-                }
-            )
+            if active_revocation is not None:
+                revoked_row = _revoked_anchor_row(identity, validation, active_revocation)
+                final_inactive.append(revoked_row)
+                applied = _revocation_audit_row(active_revocation)
+                revocations_applied.append(applied)
+                audit_trail.append(
+                    {
+                        "event": "anchor_revoked",
+                        "anchor_id": aid,
+                        "source_id": APPROVALS_SOURCE_ID,
+                        "approval_id": identity.get("approval_id"),
+                        "revocation_id": active_revocation.get("revocation_id"),
+                        "effective_as_of": active_revocation.get("effective_as_of"),
+                    }
+                )
+            else:
+                final_active.append({**identity, "status": STATUS_ACTIVE, "validation": validation})
+                approved_active_count += 1
+                audit_trail.append(
+                    {
+                        "event": "approval_anchor_activated",
+                        "anchor_id": aid,
+                        "source_id": APPROVALS_SOURCE_ID,
+                        "approval_id": identity.get("approval_id"),
+                    }
+                )
+                for revocation in pending_revocations:
+                    pending = _revocation_audit_row(revocation)
+                    revocations_pending.append(pending)
+                    audit_trail.append(
+                        {
+                            "event": "revocation_pending_future",
+                            "anchor_id": aid,
+                            "approval_id": identity.get("approval_id"),
+                            "revocation_id": revocation.get("revocation_id"),
+                            "effective_as_of": revocation.get("effective_as_of"),
+                        }
+                    )
         else:
             status, reason = _inactive_status_reason(
                 validation=validation,
@@ -237,11 +306,23 @@ def _build(
                 within_approvals_dupes=within_approvals_dupes,
                 approvals_manifest_invalid=approvals_manifest_invalid,
                 baseline_valid=baseline_valid,
+                revocations_overlay_invalid=revocations_overlay_invalid,
             )
             final_inactive.append({**identity, "status": status, "reason": reason, "validation": validation})
             audit_trail.append(
                 {"event": "approval_anchor_rejected", "anchor_id": aid, "reason": reason}
             )
+            for revocation in ([active_revocation] if active_revocation is not None else []) + list(pending_revocations):
+                audit_trail.append(
+                    {
+                        "event": "revocation_target_not_active",
+                        "anchor_id": aid,
+                        "approval_id": identity.get("approval_id"),
+                        "revocation_id": revocation.get("revocation_id"),
+                        "effective_as_of": revocation.get("effective_as_of"),
+                        "target_status": status,
+                    }
+                )
     final_inactive.extend(inactive_no_anchor)
 
     # Registry-level blockers + validity.
@@ -259,18 +340,21 @@ def _build(
         )
     if approvals_manifest_invalid:
         registry_blockers.append(BLOCKER_APPROVALS_MANIFEST_INVALID)
+    if revocations_overlay_invalid:
+        _extend_unique(registry_blockers, revocation_state["blockers"])
 
     registry_valid = (
         baseline_valid
         and not approvals_manifest_invalid
         and not cross_source_dupes
         and not within_approvals_dupes
+        and not revocations_overlay_invalid
     )
 
     counts = {
         "active": len(final_active),
         "expired": sum(1 for r in final_inactive if r.get("status") == STATUS_EXPIRED),
-        "revoked": 0,
+        "revoked": sum(1 for r in final_inactive if r.get("status") == STATUS_REVOKED),
         "invalid": sum(1 for r in final_inactive if r.get("status") == STATUS_INVALID),
         "superseded": 0,
         "baseline_active": len(baseline_active),
@@ -287,13 +371,20 @@ def _build(
         "compiler_version": COMPILER_VERSION,
         "as_of_date": baseline.get("as_of_date"),
         "generated_at": generated_at,
-        "source_manifest": [_baseline_source_entry(baseline), _approvals_source_entry(approvals_validation)],
+        "source_manifest": _source_manifest(
+            baseline=baseline,
+            approvals_validation=approvals_validation,
+            revocations_validation=revocations_validation,
+        ),
         "active_anchors": final_active,
         "inactive_anchors": final_inactive,
         "counts": counts,
         "registry_valid": registry_valid,
         "registry_blockers": registry_blockers,
         "duplicate_blockers": duplicate_blockers,
+        "revocations_applied": revocations_applied,
+        "revocations_pending": revocations_pending,
+        "revocation_problems": revocation_state["problems"],
         "audit_trail": audit_trail,
         # Explicit boundary markers: this is NOT the embedded registry.
         "is_embedded_registry": False,
@@ -319,6 +410,7 @@ def compile_active_research_anchor_registry_with_approvals(
     today: Any = None,
     generated_at: str | None = None,
     candidate_index: Mapping[str, Any] | None = None,
+    apply_revocations: bool = False,
 ) -> dict[str, Any]:
     """Compile the baseline registry and merge recomputed approvals (never raises).
 
@@ -340,8 +432,22 @@ def compile_active_research_anchor_registry_with_approvals(
             today=today,
             candidate_index=candidate_index,
         )
+        revocations_validation = (
+            validate_research_anchor_revocations(
+                manifest_path=approvals_path,
+                allowed_universe=allowed_universe,
+                today=today,
+                as_of_date=baseline.get("as_of_date") if isinstance(baseline, Mapping) else None,
+                generated_at=generated_at,
+            )
+            if apply_revocations
+            else None
+        )
         return build_active_research_anchor_registry_with_approvals(
-            baseline=baseline, approvals_validation=approvals_validation, generated_at=generated_at
+            baseline=baseline,
+            approvals_validation=approvals_validation,
+            revocations_validation=revocations_validation,
+            generated_at=generated_at,
         )
     except Exception:  # noqa: BLE001 - report-only: never break the reporting flow
         return build_active_research_anchor_registry_with_approvals(
@@ -371,6 +477,7 @@ def write_active_research_anchor_registry_with_approvals(
         today=today,
         generated_at=generated_at,
         candidate_index=candidate_index,
+        apply_revocations=True,
     )
     write_json(output_path, registry)
     return {
@@ -465,6 +572,168 @@ def _approval_inactive_no_anchor(ar: Mapping[str, Any], validation: Mapping[str,
     }
 
 
+def _revocation_overlay_state(
+    revocations_validation: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Convert freshly derived revocation validation into overlay decisions.
+
+    The on-disk validation artifact remains report-only. This function only accepts
+    the in-memory validation dict supplied by the standalone registry report path.
+    """
+    empty = {
+        "overlay_invalid": False,
+        "blockers": [],
+        "problems": [],
+        "active_by_target": {},
+        "pending_by_target": {},
+    }
+    if not isinstance(revocations_validation, Mapping):
+        return empty
+
+    revocation_results = [
+        r for r in _as_list(revocations_validation.get("revocation_results")) if isinstance(r, Mapping)
+    ]
+    validation_blockers = [
+        b for b in _as_list(revocations_validation.get("blockers")) if isinstance(b, str)
+    ]
+    problems = _revocation_validation_problems(revocations_validation, revocation_results)
+    blockers: list[str] = []
+
+    source_present = revocations_validation.get("source_present") is True
+    source_valid = revocations_validation.get("source_valid") is True
+    revocations_valid = revocations_validation.get("revocations_valid") is True
+    overlay_invalid = bool(source_present and (not source_valid or not revocations_valid))
+    if overlay_invalid:
+        blockers.append(BLOCKER_REVOCATIONS_INVALID)
+        _extend_unique(blockers, validation_blockers)
+
+    target_results: dict[tuple[str | None, str | None, str | None], list[Mapping[str, Any]]] = defaultdict(list)
+    for result in revocation_results:
+        if (
+            result.get("target_binding_status") == BIND_RESOLVED
+            and result.get("status") in (REVOCATION_STATUS_VALID_ACTIVE, REVOCATION_STATUS_VALID_PENDING_FUTURE)
+        ):
+            target_results[_revocation_target_key(result)].append(result)
+
+    duplicate_targets = {
+        key: rows for key, rows in target_results.items() if len(rows) > 1
+    }
+    if duplicate_targets:
+        overlay_invalid = True
+        _extend_unique(blockers, [BLOCKER_REVOCATIONS_INVALID, BLOCKER_DUPLICATE_TARGET_REVOCATION])
+        for key, rows in sorted(duplicate_targets.items(), key=lambda item: _target_sort_key(item[0])):
+            problems.append(
+                {
+                    "reason": BLOCKER_DUPLICATE_TARGET_REVOCATION,
+                    "approval_id": key[0],
+                    "anchor_id": key[1],
+                    "operator_completed_anchor_sha256": key[2],
+                    "revocation_ids": sorted(
+                        str(r.get("revocation_id")) for r in rows if isinstance(r.get("revocation_id"), str)
+                    ),
+                }
+            )
+
+    if overlay_invalid:
+        return {
+            "overlay_invalid": True,
+            "blockers": blockers or [BLOCKER_REVOCATIONS_INVALID],
+            "problems": problems,
+            "active_by_target": {},
+            "pending_by_target": {},
+        }
+
+    active_by_target: dict[tuple[str | None, str | None, str | None], Mapping[str, Any]] = {}
+    pending_by_target: dict[tuple[str | None, str | None, str | None], list[Mapping[str, Any]]] = defaultdict(list)
+    for result in revocation_results:
+        key = _revocation_target_key(result)
+        if result.get("status") == REVOCATION_STATUS_VALID_ACTIVE:
+            active_by_target[key] = result
+        elif result.get("status") == REVOCATION_STATUS_VALID_PENDING_FUTURE:
+            pending_by_target[key].append(result)
+
+    return {
+        "overlay_invalid": False,
+        "blockers": [],
+        "problems": problems,
+        "active_by_target": active_by_target,
+        "pending_by_target": dict(pending_by_target),
+    }
+
+
+def _revocation_validation_problems(
+    revocations_validation: Mapping[str, Any],
+    revocation_results: list[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    problems: list[dict[str, Any]] = []
+    blockers = [b for b in _as_list(revocations_validation.get("blockers")) if isinstance(b, str)]
+    if blockers:
+        problems.append(
+            {
+                "reason": "revocation_validation_blockers",
+                "blockers": blockers,
+                "source_valid": revocations_validation.get("source_valid") is True,
+                "revocations_valid": revocations_validation.get("revocations_valid") is True,
+            }
+        )
+    for result in revocation_results:
+        errors = [e for e in _as_list(result.get("errors")) if isinstance(e, str)]
+        if result.get("status") == REVOCATION_STATUS_VALID_PENDING_FUTURE:
+            continue
+        if not errors:
+            continue
+        problems.append(
+            {
+                "reason": "revocation_rejected",
+                "revocation_id": result.get("revocation_id"),
+                "approval_id": result.get("approval_id"),
+                "anchor_id": result.get("anchor_id"),
+                "target_binding_status": result.get("target_binding_status"),
+                "errors": errors,
+            }
+        )
+    return problems
+
+
+def _revoked_anchor_row(
+    identity: Mapping[str, Any],
+    validation: Mapping[str, Any],
+    revocation: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        **identity,
+        "status": STATUS_REVOKED,
+        "reason": _string_of(revocation.get("reason")) or "approval-derived anchor revoked.",
+        "revocation_id": _string_of(revocation.get("revocation_id")),
+        "effective_as_of": _string_of(revocation.get("effective_as_of")),
+        "revoked_by": _string_of(revocation.get("revoked_by")),
+        "validation": dict(validation),
+        "revocation": _revocation_audit_row(revocation),
+    }
+
+
+def _revocation_audit_row(revocation: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "revocation_id": _string_of(revocation.get("revocation_id")),
+        "approval_id": _string_of(revocation.get("approval_id")),
+        "anchor_id": _string_of(revocation.get("anchor_id")),
+        "operator_completed_anchor_sha256": _string_of(
+            revocation.get("operator_completed_anchor_sha256")
+        ),
+        "effective_as_of": _string_of(revocation.get("effective_as_of")),
+        "reason": _string_of(revocation.get("reason")),
+        "target_type": _string_of(revocation.get("target_type")),
+    }
+
+
+def _revocation_target_key(value: Mapping[str, Any]) -> tuple[str | None, str | None, str | None]:
+    return (
+        _string_of(value.get("approval_id")),
+        _string_of(value.get("anchor_id")),
+        _string_of(value.get("operator_completed_anchor_sha256")),
+    )
+
+
 def _inactive_status_reason(
     *,
     validation: Mapping[str, Any],
@@ -473,6 +742,7 @@ def _inactive_status_reason(
     within_approvals_dupes: set[str],
     approvals_manifest_invalid: bool,
     baseline_valid: bool,
+    revocations_overlay_invalid: bool,
 ) -> tuple[str, str]:
     if aid in cross_source_dupes:
         return STATUS_INVALID, "duplicate_anchor_id_across_sources; excluded (no silent precedence)."
@@ -480,6 +750,8 @@ def _inactive_status_reason(
         return STATUS_INVALID, "duplicate_anchor_id_within_approvals; excluded (fail closed)."
     if approvals_manifest_invalid:
         return STATUS_INVALID, "approvals manifest invalid; approval not trusted (fail closed)."
+    if revocations_overlay_invalid:
+        return STATUS_INVALID, "revocation manifest invalid; approvals overlay not trusted (fail closed)."
     if not baseline_valid:
         return STATUS_INVALID, "baseline registry invalid; approvals not merged (fail closed)."
     if validation.get("valid") and validation.get("stale"):
@@ -489,6 +761,18 @@ def _inactive_status_reason(
 
 
 # --- source manifest ---------------------------------------------------------
+
+
+def _source_manifest(
+    *,
+    baseline: Mapping[str, Any],
+    approvals_validation: Mapping[str, Any],
+    revocations_validation: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    manifest = [_baseline_source_entry(baseline), _approvals_source_entry(approvals_validation)]
+    if isinstance(revocations_validation, Mapping):
+        manifest.append(_revocations_source_entry(revocations_validation))
+    return manifest
 
 
 def _baseline_source_entry(baseline: Mapping[str, Any]) -> dict[str, Any]:
@@ -523,6 +807,24 @@ def _approvals_source_entry(approvals_validation: Mapping[str, Any]) -> dict[str
     }
 
 
+def _revocations_source_entry(revocations_validation: Mapping[str, Any]) -> dict[str, Any]:
+    problems = [p for p in _as_list(revocations_validation.get("blockers")) if isinstance(p, str)]
+    problems += [w for w in _as_list(revocations_validation.get("warnings")) if isinstance(w, str)]
+    return {
+        "source_id": REVOCATIONS_SOURCE_ID,
+        "source_category": OPERATOR_SOURCE_CATEGORY,
+        "source_type": "operator",
+        "path": revocations_validation.get("source_path"),
+        "sha256": revocations_validation.get("source_sha256"),
+        "present": revocations_validation.get("source_present") is True,
+        "valid": (
+            revocations_validation.get("source_valid") is True
+            and revocations_validation.get("revocations_valid") is True
+        ),
+        "problems": problems,
+    }
+
+
 # --- helpers -----------------------------------------------------------------
 
 
@@ -533,6 +835,16 @@ def _as_list(value: Any) -> list[Any]:
 def _duplicate_strings(values: Any) -> set[str]:
     counts = Counter(v for v in values if isinstance(v, str) and v)
     return {value for value, count in counts.items() if count > 1}
+
+
+def _extend_unique(target: list[str], values: list[str]) -> None:
+    for value in values:
+        if value not in target:
+            target.append(value)
+
+
+def _target_sort_key(key: tuple[str | None, str | None, str | None]) -> tuple[str, str, str]:
+    return tuple(part or "" for part in key)
 
 
 def _string_of(value: Any) -> str | None:

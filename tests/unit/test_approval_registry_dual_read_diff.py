@@ -19,6 +19,9 @@ from investment_orchestrator.research.research_anchor_approval_manifest import (
     build_research_anchor_approvals_validation,
     compute_operator_completed_anchor_sha256 as sha,
 )
+from investment_orchestrator.research.research_anchor_revocation_manifest import (
+    build_research_anchor_revocations_validation,
+)
 from investment_orchestrator.research.approvals_inclusive_active_registry import (
     build_active_research_anchor_registry_with_approvals,
     compile_active_research_anchor_registry_with_approvals,
@@ -75,6 +78,39 @@ def _approval(anchor: dict[str, Any] | None = None, *, approval_id: str = "APR-1
     a = anchor or _anchor()
     return {"approval_id": approval_id, "decision": "approve",
             "operator_completed_anchor": a, "operator_completed_anchor_sha256": sha(a)}
+
+
+def _revocation(anchor: dict[str, Any] | None = None, *, revocation_id: str = "REV-1") -> dict[str, Any]:
+    a = anchor or _anchor()
+    return {
+        "revocation_id": revocation_id,
+        "target_type": "approval_anchor",
+        "approval_id": "APR-1",
+        "anchor_id": a["anchor_id"],
+        "operator_completed_anchor_sha256": sha(a),
+        "effective_as_of": AS_OF,
+        "reason": "Thesis invalidated.",
+        "revoked_by": "operator",
+    }
+
+
+def _revocations_validation(revocations: Any, approvals: list[dict[str, Any]]) -> dict[str, Any]:
+    manifest = {
+        "schema_version": "research_anchor_approvals_v1",
+        "is_llm_generated": False,
+        "as_of_date": AS_OF,
+        "approvals": approvals,
+        "revocations": revocations,
+    }
+    return build_research_anchor_revocations_validation(
+        manifest=manifest,
+        approvals_validation=_validation(approvals),
+        source_present=True,
+        source_sha256="a",
+        source_path="inputs/current/research_anchor_approvals.yaml",
+        today=AS_OF,
+        as_of_date=AS_OF,
+    )
 
 
 def _diff(baseline: dict[str, Any], approvals_reg: dict[str, Any]) -> dict[str, Any]:
@@ -184,6 +220,21 @@ def test_H_changed_existing_anchor_detected() -> None:
     assert any(c["anchor_id"] == "VOO_T" for c in d["changed_existing_anchors"])
 
 
+def test_H_revoked_approval_anchor_is_not_projected_as_added_or_active() -> None:
+    baseline = _baseline([_anchor("VOO_T", applicable_tickers=["VOO"])])
+    approval = _approval()
+    wa = build_active_research_anchor_registry_with_approvals(
+        baseline=baseline,
+        approvals_validation=_validation([approval]),
+        revocations_validation=_revocations_validation([_revocation()], [approval]),
+    )
+    d = _diff(baseline, wa)
+    assert "AI_CAPEX_2026H2" not in d["approvals_inclusive_active_anchor_ids"]
+    assert d["added_by_approvals"] == []
+    assert d["baseline_active_anchor_ids"] == ["VOO_T"]
+    assert d["registry_valid_with_approvals"] is True
+
+
 # --- I. non-consumption -------------------------------------------------------
 
 
@@ -269,3 +320,50 @@ def test_compile_from_disk(tmp_path: Any) -> None:
     # baseline recompiled independently is unchanged (no approvals merged into it)
     baseline = compile_active_research_anchor_registry(anchors_path=anchors, allowed_universe=UNIVERSE, today=AS_OF)
     assert sorted(x["anchor_id"] for x in baseline["active_anchors"]) == ["VOO_T"]
+
+
+def test_compile_from_disk_can_apply_revocations_for_standalone_report(tmp_path: Any) -> None:
+    anchors = tmp_path / "research_anchors.yaml"
+    anchors.write_text(
+        "schema_version: research_anchors_v1\nis_llm_generated: false\nas_of_date: \"2026-07-04\"\n"
+        "anchors:\n  - anchor_id: VOO_T\n    anchor_type: structural_theme\n"
+        "    applicable_tickers: [VOO]\n    anchor_date_et: \"2026-06-10\"\n"
+        "    valid_from: \"2026-06-01\"\n    valid_until: \"2026-08-31\"\n"
+        "    source_type: operator\n    confidence_floor: high\n"
+    )
+    a = _anchor()
+    approvals = tmp_path / "research_anchor_approvals.yaml"
+    approvals.write_text(
+        "schema_version: research_anchor_approvals_v1\nis_llm_generated: false\n"
+        "as_of_date: \"2026-07-04\"\napprovals:\n  - approval_id: APR-1\n    decision: approve\n"
+        "    operator_completed_anchor:\n      anchor_id: AI_CAPEX_2026H2\n"
+        "      anchor_type: structural_theme\n      applicable_tickers: [QQQ]\n"
+        "      anchor_date_et: \"2026-06-15\"\n      valid_from: \"2026-06-01\"\n"
+        "      valid_until: \"2026-07-31\"\n      source_type: operator\n"
+        "      confidence_floor: medium\n      summary: \"x\"\n"
+        f"    operator_completed_anchor_sha256: \"{sha(a)}\"\n"
+        "revocations:\n  - revocation_id: REV-1\n    target_type: approval_anchor\n"
+        "    approval_id: APR-1\n    anchor_id: AI_CAPEX_2026H2\n"
+        f"    operator_completed_anchor_sha256: \"{sha(a)}\"\n"
+        "    effective_as_of: \"2026-07-04\"\n    reason: \"Thesis invalidated.\"\n"
+        "    revoked_by: \"operator\"\n"
+    )
+
+    default_reg = compile_active_research_anchor_registry_with_approvals(
+        anchors_path=anchors, approvals_path=approvals, allowed_universe=UNIVERSE, today=AS_OF
+    )
+    assert sorted(x["anchor_id"] for x in default_reg["active_anchors"]) == [
+        "AI_CAPEX_2026H2",
+        "VOO_T",
+    ]
+
+    standalone_reg = compile_active_research_anchor_registry_with_approvals(
+        anchors_path=anchors,
+        approvals_path=approvals,
+        allowed_universe=UNIVERSE,
+        today=AS_OF,
+        apply_revocations=True,
+    )
+    assert sorted(x["anchor_id"] for x in standalone_reg["active_anchors"]) == ["VOO_T"]
+    assert standalone_reg["counts"]["revoked"] == 1
+    assert standalone_reg["revocations_applied"][0]["revocation_id"] == "REV-1"

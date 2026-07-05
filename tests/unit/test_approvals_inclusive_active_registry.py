@@ -20,6 +20,9 @@ from investment_orchestrator.research.research_anchor_approval_manifest import (
     build_research_anchor_approvals_validation,
     compute_operator_completed_anchor_sha256 as sha,
 )
+from investment_orchestrator.research.research_anchor_revocation_manifest import (
+    build_research_anchor_revocations_validation,
+)
 from investment_orchestrator.research.approvals_inclusive_active_registry import (
     APPROVALS_SOURCE_ID,
     APPROVAL_TYPE_APPROVED_CANDIDATE,
@@ -27,6 +30,9 @@ from investment_orchestrator.research.approvals_inclusive_active_registry import
     BLOCKER_APPROVALS_MANIFEST_INVALID,
     BLOCKER_DUPLICATE_ACROSS_SOURCES,
     BLOCKER_DUPLICATE_WITHIN_APPROVALS,
+    BLOCKER_DUPLICATE_TARGET_REVOCATION,
+    BLOCKER_REVOCATIONS_INVALID,
+    STATUS_REVOKED,
     SCHEMA_VERSION,
     build_active_research_anchor_registry_with_approvals,
 )
@@ -122,9 +128,60 @@ def _validation(
     )
 
 
-def _merge(baseline: dict[str, Any], validation: dict[str, Any]) -> dict[str, Any]:
+def _revocation(**overrides: Any) -> dict[str, Any]:
+    anchor = _anchor()
+    base: dict[str, Any] = {
+        "revocation_id": "REV-2026-07-04-001",
+        "target_type": "approval_anchor",
+        "approval_id": "APR-1",
+        "anchor_id": "AI_CAPEX_2026H2",
+        "operator_completed_anchor_sha256": sha(anchor),
+        "effective_as_of": AS_OF,
+        "reason": "Thesis invalidated.",
+        "revoked_by": "operator",
+    }
+    base.update(overrides)
+    return base
+
+
+def _revocations_validation(
+    revocations: Any,
+    *,
+    approvals: list[dict[str, Any]] | None = None,
+    present: bool = True,
+    today: str = AS_OF,
+    **manifest_overrides: Any,
+) -> dict[str, Any]:
+    approvals = approvals if approvals is not None else [_approval()]
+    manifest = {
+        "schema_version": "research_anchor_approvals_v1",
+        "is_llm_generated": False,
+        "as_of_date": today,
+        "approvals": approvals,
+        "revocations": revocations,
+    }
+    manifest.update(manifest_overrides)
+    return build_research_anchor_revocations_validation(
+        manifest=manifest if present else None,
+        approvals_validation=_validation(approvals, present=present, today=today),
+        source_present=present,
+        source_sha256="approvalssha" if present else None,
+        source_path="inputs/current/research_anchor_approvals.yaml",
+        today=today,
+        as_of_date=today,
+    )
+
+
+def _merge(
+    baseline: dict[str, Any],
+    validation: dict[str, Any],
+    *,
+    revocations_validation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     return build_active_research_anchor_registry_with_approvals(
-        baseline=baseline, approvals_validation=validation
+        baseline=baseline,
+        approvals_validation=validation,
+        revocations_validation=revocations_validation,
     )
 
 
@@ -140,6 +197,14 @@ def _keys(value: Any):
     elif isinstance(value, list):
         for item in value:
             yield from _keys(item)
+
+
+def _assert_revocation_fail_closed(reg: dict[str, Any]) -> None:
+    assert reg["registry_valid"] is False
+    assert BLOCKER_REVOCATIONS_INVALID in reg["registry_blockers"]
+    assert "AI_CAPEX_2026H2" not in _active_ids(reg)
+    assert reg["counts"]["approved_active"] == 0
+    assert reg["revocation_problems"]
 
 
 # --- markers ------------------------------------------------------------------
@@ -251,6 +316,165 @@ def test_C_candidate_reference_audit_only_mismatch_does_not_block() -> None:
     assert row["approval_type"] == APPROVAL_TYPE_APPROVED_CANDIDATE
     assert row["candidate_link_status"] == "candidate_hash_mismatch"
     assert row["validation"]["hash_match"] is True  # operator anchor hash still matches
+
+
+# --- R2G-5d-1 revocation overlay (standalone artifact only) -------------------
+
+
+def test_R_valid_active_revocation_moves_approval_anchor_to_revoked_inactive() -> None:
+    approval = _approval(candidate_id="CAND-1", candidate_sha256="candidate-audit-only")
+    reg = _merge(
+        _baseline([_anchor("VOO_T", applicable_tickers=["VOO"])]),
+        _validation([approval]),
+        revocations_validation=_revocations_validation([_revocation()], approvals=[approval]),
+    )
+
+    assert reg["registry_valid"] is True
+    assert "AI_CAPEX_2026H2" not in _active_ids(reg)
+    assert _active_ids(reg) == ["VOO_T"]
+    assert reg["counts"]["revoked"] == 1
+    assert reg["counts"]["approved_active"] == 0
+
+    revoked = [r for r in reg["inactive_anchors"] if r.get("anchor_id") == "AI_CAPEX_2026H2"][0]
+    assert revoked["status"] == STATUS_REVOKED
+    assert revoked["revocation_id"] == "REV-2026-07-04-001"
+    assert revoked["approval_id"] == "APR-1"
+    assert revoked["effective_as_of"] == AS_OF
+    assert revoked["reason"] == "Thesis invalidated."
+    assert revoked["candidate_sha256"] == "candidate-audit-only"
+    assert revoked["operator_completed_anchor_sha256"] == sha(_anchor())
+    assert revoked["revocation"]["reason"] == "Thesis invalidated."
+
+    assert reg["revocations_applied"] == [
+        {
+            "revocation_id": "REV-2026-07-04-001",
+            "approval_id": "APR-1",
+            "anchor_id": "AI_CAPEX_2026H2",
+            "operator_completed_anchor_sha256": sha(_anchor()),
+            "effective_as_of": AS_OF,
+            "reason": "Thesis invalidated.",
+            "target_type": "approval_anchor",
+        }
+    ]
+    assert any(e["event"] == "anchor_revoked" for e in reg["audit_trail"])
+    assert reg["permission_effect"] == "none"
+    assert reg["not_authorization"] is True
+
+
+def test_R_future_revocation_is_pending_and_anchor_remains_active() -> None:
+    approval = _approval()
+    reg = _merge(
+        _baseline(),
+        _validation([approval]),
+        revocations_validation=_revocations_validation(
+            [_revocation(effective_as_of="2026-12-31")], approvals=[approval]
+        ),
+    )
+
+    assert reg["registry_valid"] is True
+    assert "AI_CAPEX_2026H2" in _active_ids(reg)
+    assert reg["counts"]["revoked"] == 0
+    assert reg["revocations_applied"] == []
+    assert reg["revocations_pending"][0]["revocation_id"] == "REV-2026-07-04-001"
+    assert any(e["event"] == "revocation_pending_future" for e in reg["audit_trail"])
+
+
+def test_R_revocation_validator_failure_modes_fail_overlay_closed() -> None:
+    invalid_cases = [
+        [_revocation(approval_id="APR-DOES-NOT-EXIST")],
+        [_revocation(operator_completed_anchor_sha256="0" * 64)],
+        [_revocation(anchor_id="WRONG_ANCHOR")],
+        [_revocation(revocation_id="REV-DUP"), _revocation(revocation_id="REV-DUP")],
+        [_revocation(target_type="baseline_anchor")],
+        [{**_revocation(), "order_intent": "buy"}],
+        [{**_revocation(), "candidate_sha256": "candidate-cannot-bind"}],
+        [_revocation(reason="NEW_BUY")],
+    ]
+
+    for revocations in invalid_cases:
+        approval = _approval()
+        reg = _merge(
+            _baseline(),
+            _validation([approval]),
+            revocations_validation=_revocations_validation(revocations, approvals=[approval]),
+        )
+        _assert_revocation_fail_closed(reg)
+        assert reg["revocations_applied"] == []
+
+
+def test_R_is_llm_generated_true_fails_overlay_closed() -> None:
+    approval = _approval()
+    reg = _merge(
+        _baseline(),
+        _validation([approval]),
+        revocations_validation=_revocations_validation(
+            [_revocation()], approvals=[approval], is_llm_generated=True
+        ),
+    )
+    _assert_revocation_fail_closed(reg)
+
+
+def test_R_duplicate_target_revocations_fail_overlay_closed_explicitly() -> None:
+    approval = _approval()
+    reg = _merge(
+        _baseline(),
+        _validation([approval]),
+        revocations_validation=_revocations_validation(
+            [_revocation(revocation_id="REV-1"), _revocation(revocation_id="REV-2")],
+            approvals=[approval],
+        ),
+    )
+
+    _assert_revocation_fail_closed(reg)
+    assert BLOCKER_DUPLICATE_TARGET_REVOCATION in reg["registry_blockers"]
+    assert any(p["reason"] == BLOCKER_DUPLICATE_TARGET_REVOCATION for p in reg["revocation_problems"])
+
+
+def test_R_expired_target_revocation_does_not_resurrect_or_mark_revoked() -> None:
+    stale_anchor = _anchor(valid_from="2026-01-01", valid_until="2026-02-01")
+    approval = _approval(completed=stale_anchor)
+    reg = _merge(
+        _baseline(),
+        _validation([approval]),
+        revocations_validation=_revocations_validation(
+            [_revocation(operator_completed_anchor_sha256=sha(stale_anchor))],
+            approvals=[approval],
+        ),
+    )
+
+    assert "AI_CAPEX_2026H2" not in _active_ids(reg)
+    inactive = [r for r in reg["inactive_anchors"] if r.get("anchor_id") == "AI_CAPEX_2026H2"][0]
+    assert inactive["status"] == "expired"
+    assert reg["counts"]["revoked"] == 0
+    assert reg["revocations_applied"] == []
+    assert any(e["event"] == "revocation_target_not_active" for e in reg["audit_trail"])
+
+
+def test_R_revocation_overlay_is_not_enabled_for_default_runtime_builder_call() -> None:
+    approval = _approval()
+    baseline = _baseline()
+    reg = build_active_research_anchor_registry_with_approvals(
+        baseline=baseline,
+        approvals_validation=_validation([approval]),
+    )
+    assert "AI_CAPEX_2026H2" in _active_ids(reg)
+    assert reg["counts"]["revoked"] == 0
+    assert reg["revocations_applied"] == []
+
+
+def test_R_support_signals_and_evidence_packet_do_not_read_revocation_artifacts() -> None:
+    import inspect
+
+    import investment_orchestrator.research.evidence_packet as ep
+    import investment_orchestrator.research.support_signals as ss
+    import investment_orchestrator.research.approval_registry_switch_readiness as readiness
+
+    assert "research_anchor_revocation_manifest" not in inspect.getsource(ss)
+    assert "research_anchor_revocations_validation" not in inspect.getsource(ss)
+    assert "research_anchor_revocation_manifest" not in inspect.getsource(ep)
+    assert "research_anchor_revocations_validation" not in inspect.getsource(ep)
+    assert "research_anchor_revocation_manifest" not in inspect.getsource(readiness)
+    assert "research_anchor_revocations_validation" not in inspect.getsource(readiness)
 
 
 # --- D. hash failures ---------------------------------------------------------

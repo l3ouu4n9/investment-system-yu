@@ -151,6 +151,8 @@ def test_valid_revocation_validates_but_applies_nothing() -> None:
     assert rr["applied"] is False  # R2G-5d-0 applies nothing
     assert rr["errors"] == []
     assert rr["binding_hash_field"] == "operator_completed_anchor_sha256"
+    assert rr["reason"] == "Thesis invalidated."
+    assert rr["revoked_by"] == "operator"
     assert r["counts"] == {"checked": 1, "valid": 1, "valid_active": 1, "pending_future": 0, "invalid": 0}
 
 

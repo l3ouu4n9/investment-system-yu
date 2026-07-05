@@ -6,11 +6,13 @@ report-only ``research_anchor_revocations_validation.json`` artifact. It answers
 one question per revocation: *does this revocation deterministically bind to
 exactly one operator-approved anchor?* — as a **diagnostic only**.
 
-R2G-5d-0 scope (validation only):
+R2G-5d-0/R2G-5d-1 scope (validation artifact remains report-only):
 
-* It **does not apply** any revocation. It does not change the approvals-inclusive
-  registry compiler, ``support_signals``, the embedded ``evidence_packet``
-  registry selection, or readiness. It is consumed by NOTHING.
+* The on-disk validation artifact **does not apply** any revocation. R2G-5d-1's
+  standalone approvals-inclusive registry report can derive this validation
+  in-memory from the same YAML, but it still never reads this JSON artifact as
+  authority. The artifact does not change ``support_signals``, the embedded
+  ``evidence_packet`` registry selection, or readiness. It is consumed by NOTHING.
 * Only ``target_type: "approval_anchor"`` is supported. Baseline
   ``research_anchors.yaml`` revocation, revoke-by-``anchor_id``-alone,
   source_id-only, and candidate-based revocation are all rejected.
@@ -142,9 +144,11 @@ SOURCE_MISSING_WARNING = (
 
 _NOTES = (
     "Report-only R2G-5d-0 revocation validation. Validates the optional revocations: section of "
-    "research_anchor_approvals.yaml. It DOES NOT apply revocations, does not change the "
-    "approvals-inclusive registry compiler, support_signals, the embedded evidence_packet registry "
-    "selection, or readiness, and is consumed by NOTHING. Only target_type='approval_anchor' is "
+    "research_anchor_approvals.yaml. The on-disk JSON artifact DOES NOT apply revocations and is "
+    "consumed by NOTHING; R2G-5d-1's standalone approvals-inclusive registry report may derive this "
+    "same validation in-memory from YAML, but it never reads the JSON artifact as authority. The "
+    "artifact does not change support_signals, the embedded evidence_packet registry selection, or "
+    "readiness. Only target_type='approval_anchor' is "
     "supported; binding requires approval_id + anchor_id + operator_completed_anchor_sha256 all "
     "resolving to one approval. operator_completed_anchor_sha256 is the only binding hash; "
     "candidate_sha256 is audit-only and cannot bind a revocation. Per the R2G-5d-0 amendment, an "
@@ -336,7 +340,7 @@ def _evaluate_revocation(
             revocation_id=None, target_type=None, approval_id=None, anchor_id=None,
             declared_hash=None, effective_as_of=None, effective_classification=EFFECTIVE_UNKNOWN_DATE,
             binding_status=BIND_UNRESOLVED, errors=[f"revocations[{index}] must be an object."],
-            status=STATUS_REJECTED, audit={},
+            status=STATUS_REJECTED, reason=None, revoked_by=None, audit={},
         )
 
     # Allow-list: any key outside the allowed set is a hard error (anchor-defining /
@@ -371,6 +375,8 @@ def _evaluate_revocation(
     approval_id = _string_of(revocation.get("approval_id"))
     anchor_id = _string_of(revocation.get("anchor_id"))
     declared_hash = _string_of(revocation.get("operator_completed_anchor_sha256"))
+    reason = _string_of(revocation.get("reason"))
+    revoked_by = _string_of(revocation.get("revoked_by"))
 
     if target_type is not None and target_type not in SUPPORTED_TARGET_TYPES:
         errors.append(
@@ -393,7 +399,7 @@ def _evaluate_revocation(
         "target_approval_declared_sha256": None,
         "target_approval_hash_match": None,
         "reason_present": _present(revocation.get("reason")),
-        "revoked_by": _string_of(revocation.get("revoked_by")),
+        "revoked_by": revoked_by,
         "candidate_fields_ignored": True,
     }
 
@@ -451,6 +457,8 @@ def _evaluate_revocation(
         binding_status=binding_status,
         errors=errors,
         status=status,
+        reason=reason,
+        revoked_by=revoked_by,
         audit=audit,
     )
 
@@ -544,6 +552,8 @@ def _revocation_result(
     binding_status: str,
     errors: list[str],
     status: str,
+    reason: str | None,
+    revoked_by: str | None,
     audit: dict[str, Any],
 ) -> dict[str, Any]:
     return {
@@ -558,6 +568,8 @@ def _revocation_result(
         "effective_as_of": effective_as_of,
         "effective_classification": effective_classification,
         "status": status,
+        "reason": reason,
+        "revoked_by": revoked_by,
         # R2G-5d-0 is validation-only: NOTHING is applied.
         "applied": False,
         "would_fail_overlay_closed": status == STATUS_REJECTED,

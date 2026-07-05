@@ -80,6 +80,7 @@ from investment_orchestrator.research.research_anchor_approval_manifest import (
     write_research_anchor_approvals_validation,
 )
 from investment_orchestrator.research.research_anchor_revocation_manifest import (
+    validate_research_anchor_revocations,
     write_research_anchor_revocations_validation,
 )
 from investment_orchestrator.research.approvals_inclusive_active_registry import (
@@ -1380,15 +1381,14 @@ def _write_research_anchor_revocations_validation_report_only(
 
     Reads the optional ``revocations:`` section of
     ``inputs/current/research_anchor_approvals.yaml`` and writes
-    ``research_anchor_revocations_validation.json``. Strictly inert: it APPLIES no
-    revocation, does not change the approvals-inclusive registry compiler,
+    ``research_anchor_revocations_validation.json``. The on-disk validation
+    artifact remains strictly inert: it APPLIES no revocation, does not change
     ``support_signals``, the embedded ``evidence_packet`` registry selection, or
-    readiness; is consumed by NOTHING (not support_signals, not any registry, not
-    availability, not gates, not Step 2/3/4, not weekly, not broker/live), is never
-    added to promoted_source_artifacts / allowed_actions / any gate, and adds no
-    permission / state / action. Unknown target fails closed (mandatory R2G-5d-0
-    amendment). A missing manifest yields a valid, empty report. Any error is
-    swallowed so Step 1 parse is never affected.
+    readiness; is consumed by NOTHING as an artifact, is never added to
+    promoted_source_artifacts / allowed_actions / any gate, and adds no permission
+    / state / action. Unknown target fails closed (mandatory R2G-5d-0 amendment).
+    A missing manifest yields a valid, empty report. Any error is swallowed so
+    Step 1 parse is never affected.
     """
     try:
         approvals_path = current_inputs_dir() / RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME
@@ -1416,13 +1416,14 @@ def _write_approval_registry_dual_read_report_only(
     Recomputes the baseline registry (identical to what support_signals' embedded
     registry uses) and re-validates approvals directly from
     ``research_anchor_approvals.yaml`` (never reading the R2G-5a artifact or its
-    would_activate flag as authority), overlays approved anchors onto a SEPARATE
+    would_activate flag as authority), re-validates revocations from the same YAML
+    bytes, applies valid active revocations only to the SEPARATE standalone
     approvals-inclusive registry, and writes the two report-only artifacts.
     Strictly inert: neither artifact is embedded in the evidence packet, added to
     support_signals input / promoted_source_artifacts / active handoff /
-    allowed_actions / any gate / Step 2/3/4 input; both are consumed by NOTHING and
-    add no permission / state / action. Any error is swallowed so Step 1 parse is
-    never affected.
+    allowed_actions / any gate / Step 2/3/4 input; both are consumed by NOTHING
+    directly and add no permission / state / action. Any error is swallowed so
+    Step 1 parse is never affected.
     """
     try:
         anchors_path = current_inputs_dir() / RESEARCH_ANCHORS_INPUT_FILENAME
@@ -1444,8 +1445,16 @@ def _write_approval_registry_dual_read_report_only(
             allowed_universe=allowed_universe,
             today=settings_as_of,
         )
+        revocations_validation = validate_research_anchor_revocations(
+            manifest_path=approvals_path,
+            allowed_universe=allowed_universe,
+            today=settings_as_of,
+            as_of_date=baseline.get("as_of_date") if isinstance(baseline, Mapping) else None,
+        )
         with_approvals = build_active_research_anchor_registry_with_approvals(
-            baseline=baseline, approvals_validation=approvals_validation
+            baseline=baseline,
+            approvals_validation=approvals_validation,
+            revocations_validation=revocations_validation,
         )
         with_approvals_path = step1_active_research_anchor_registry_with_approvals_path()
         write_json(with_approvals_path, with_approvals)
