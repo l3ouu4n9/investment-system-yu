@@ -1672,7 +1672,12 @@ def _write_step1a_grounding_compile_shadow_diff_report_only(
             current_artifacts=current_artifacts,
             current_artifact_paths=current_paths,
         )
-        _annotate_step1a_shadow_diff_io(diff, current_paths=current_paths, output_path=output_path)
+        _annotate_step1a_shadow_diff_io(
+            diff,
+            current_paths=current_paths,
+            current_artifacts=current_artifacts,
+            output_path=output_path,
+        )
         write_json(output_path, diff)
         return {"path": str(output_path), "comparison_status": str(diff.get("comparison_status", ""))}
     except Exception as exc:  # noqa: BLE001 - report-only: never break Step 1 parse
@@ -1682,7 +1687,13 @@ def _write_step1a_grounding_compile_shadow_diff_report_only(
             current_artifact_paths=current_paths,
             shadow_run_error=str(exc),
         )
-        _annotate_step1a_shadow_diff_io(failure, current_paths=current_paths, output_path=output_path)
+        # The exception may have interrupted artifact reads, so no read is claimed.
+        _annotate_step1a_shadow_diff_io(
+            failure,
+            current_paths=current_paths,
+            current_artifacts={},
+            output_path=output_path,
+        )
         try:
             write_json(output_path, failure)
         except Exception:  # noqa: BLE001 - even failure reporting must be best-effort
@@ -1722,16 +1733,46 @@ def _annotate_step1a_shadow_diff_io(
     diff: dict[str, Any],
     *,
     current_paths: Mapping[str, Path | None],
+    current_artifacts: Mapping[str, Any],
     output_path: Path,
 ) -> None:
+    """Record diagnostic-only path info on the shadow diff.
+
+    ``comparison_input_paths`` lists the intended comparison inputs;
+    ``files_read`` lists only artifacts actually loaded this run and stays empty
+    on a failed shadow run rather than guessing. Nothing consumes these fields.
+    """
     diagnostics = diff.get("diagnostics")
     if not isinstance(diagnostics, dict):
         return
-    diagnostics["files_read"] = [
+    comparisons = diff.get("comparisons")
+    comparison_keys = set(comparisons) if isinstance(comparisons, Mapping) else set()
+    diagnostics["comparison_input_paths"] = sorted(
         str(path)
-        for key, path in sorted(current_paths.items())
-        if key in diff.get("comparisons", {}) and isinstance(path, Path)
-    ]
+        for key, path in current_paths.items()
+        if key in comparison_keys and isinstance(path, Path)
+    )
+    optional_keys = [key for key in current_paths if key not in comparison_keys]
+    if diagnostics.get("shadow_run_failed") is True:
+        diagnostics["files_read"] = []
+        diagnostics["optional_inputs_read"] = []
+        diagnostics["optional_inputs_missing"] = []
+    else:
+        diagnostics["files_read"] = sorted(
+            str(path)
+            for key, path in current_paths.items()
+            if isinstance(path, Path) and current_artifacts.get(key) is not None
+        )
+        diagnostics["optional_inputs_read"] = sorted(
+            str(current_paths[key])
+            for key in optional_keys
+            if isinstance(current_paths.get(key), Path) and current_artifacts.get(key) is not None
+        )
+        diagnostics["optional_inputs_missing"] = sorted(
+            str(current_paths[key])
+            for key in optional_keys
+            if isinstance(current_paths.get(key), Path) and current_artifacts.get(key) is None
+        )
     diagnostics["files_written"] = [str(output_path)]
 
 

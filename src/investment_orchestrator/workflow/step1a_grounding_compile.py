@@ -143,6 +143,9 @@ def build_step1a_grounding_compile_shadow_diff(
                 current_payload=current_payload,
                 step1a_payload=step1a_payload,
                 current_artifact_path=paths.get(artifact_key),
+                # A key explicitly mapped to None means current Step 1 keeps the
+                # object in memory only and persists no artifact to compare.
+                current_artifact_not_persisted=artifact_key in paths and paths.get(artifact_key) is None,
             )
 
         return _shadow_result(
@@ -337,8 +340,20 @@ def _compare_artifact(
     current_payload: Any,
     step1a_payload: Any,
     current_artifact_path: Any,
+    current_artifact_not_persisted: bool = False,
 ) -> dict[str, Any]:
     if not isinstance(current_payload, Mapping):
+        if current_artifact_not_persisted:
+            return _skipped_comparison(
+                artifact_key=artifact_key,
+                reason="not_persisted_by_current_step1",
+                note=(
+                    "Current Step 1 holds this object in memory only and persists "
+                    "no exact artifact to compare. Skipped by design; the skip does "
+                    "not indicate a missing or malformed artifact."
+                ),
+                current_artifact_path=current_artifact_path,
+            )
         return _skipped_comparison(
             artifact_key=artifact_key,
             reason="current_step1_artifact_unavailable_or_malformed",
@@ -373,11 +388,13 @@ def _skipped_comparison(
     artifact_key: str,
     reason: str,
     current_artifact_path: Any,
+    note: str = "",
 ) -> dict[str, Any]:
     return {
         "artifact_key": artifact_key,
         "comparison_skipped": True,
         "skip_reason": reason,
+        "skip_note": note,
         "semantic_match": False,
         "status": "skipped",
         "current_artifact_path": _path_str(current_artifact_path),
@@ -410,8 +427,13 @@ def _shadow_result(
         status = "failed"
     elif mismatches:
         status = "mismatch"
+    elif skipped:
+        # Skips never count as mismatches, but they must not read as full parity
+        # either: "pass" is reserved for a complete comparison set.
+        status = "pass_with_skips"
     else:
         status = "pass"
+    comparison_complete = not failed and not skipped and len(comparison_values) == len(_ARTIFACT_KEYS)
 
     return {
         "schema_version": SHADOW_DIFF_SCHEMA_VERSION,
@@ -443,8 +465,12 @@ def _shadow_result(
         "production_uses_step1a_outputs": False,
         "safe_to_ignore": True,
         "comparison_status": status,
+        # parity_passed is strict: only a complete, skip-free comparison set that
+        # fully matches counts as parity. available_comparisons_passed reports the
+        # weaker "everything we could compare matched" signal.
         "parity_passed": status == "pass",
-        "comparison_complete": not skipped,
+        "available_comparisons_passed": status in ("pass", "pass_with_skips"),
+        "comparison_complete": comparison_complete,
         "mismatch_artifacts": [m for m in mismatches if isinstance(m, str)],
         "skipped_artifacts": [s for s in skipped if isinstance(s, str)],
         "comparisons": dict(comparisons),
@@ -453,10 +479,16 @@ def _shadow_result(
             "shadow_run_failed": failed,
             "shadow_run_error": shadow_run_error or "",
             "internal_error": internal_error or "",
-            "diagnostics_incomplete": failed or bool(skipped),
+            "diagnostics_incomplete": not comparison_complete,
             "mismatch_count": len(mismatches),
             "skipped_count": len(skipped),
+            # Populated by the shadow writer: comparison_input_paths are the
+            # intended comparison inputs; files_read lists only artifacts actually
+            # loaded (empty on failure rather than guessing).
+            "comparison_input_paths": [],
             "files_read": [],
+            "optional_inputs_read": [],
+            "optional_inputs_missing": [],
             "files_written": [],
             "bundle_diagnostics": dict(bundle_diagnostics),
             "mismatch_is_diagnostic_only": True,

@@ -137,8 +137,9 @@ def test_shadow_diff_artifact_written_with_required_markers_and_parity(
     assert diff["production_uses_step1a_outputs"] is False
     assert diff["safe_to_ignore"] is True
 
-    assert diff["comparison_status"] == "pass"
-    assert diff["parity_passed"] is True
+    assert diff["comparison_status"] == "pass_with_skips"
+    assert diff["parity_passed"] is False
+    assert diff["available_comparisons_passed"] is True
     assert diff["comparisons"]["active_research_anchor_registry"]["semantic_match"] is True
     assert diff["comparisons"]["research_anchor_approvals_validation"]["semantic_match"] is True
     assert diff["comparisons"]["research_anchor_revocations_validation"]["semantic_match"] is True
@@ -149,11 +150,35 @@ def test_shadow_diff_artifact_written_with_required_markers_and_parity(
 
     embedded = diff["comparisons"]["embedded_active_anchor_registry_selection"]
     assert embedded["comparison_skipped"] is True
-    assert embedded["skip_reason"] == "current_step1_artifact_unavailable_or_malformed"
+    assert embedded["skip_reason"] == "not_persisted_by_current_step1"
+    assert "in memory only" in embedded["skip_note"]
+    assert "not indicate a missing or malformed artifact" in embedded["skip_note"]
     assert diff["comparison_complete"] is False
+    assert diff["skipped_artifacts"] == ["embedded_active_anchor_registry_selection"]
+    assert diff["mismatch_artifacts"] == []
     assert diff["diagnostics"]["diagnostics_incomplete"] is True
     assert diff["diagnostics"]["mismatch_count"] == 0
-    assert diff["diagnostics"]["files_written"] == [str(path)]
+    assert diff["diagnostics"]["skipped_count"] == 1
+
+    diagnostics = diff["diagnostics"]
+    assert diagnostics["files_written"] == [str(path)]
+    evidence_path = str(step1_research.step1_evidence_packet_path())
+    assert evidence_path in diagnostics["comparison_input_paths"]
+    assert evidence_path in diagnostics["files_read"]
+    assert str(path) not in diagnostics["files_read"]
+    for entry in diagnostics["files_read"]:
+        assert Path(entry).is_file()
+    optional_paths = {
+        str(step1_research.step1_research_anchor_candidates_path()),
+        str(step1_research.step1_compiled_support_signals_path()),
+    }
+    optional_read = set(diagnostics["optional_inputs_read"])
+    optional_missing = set(diagnostics["optional_inputs_missing"])
+    assert optional_read.isdisjoint(optional_missing)
+    assert optional_read | optional_missing == optional_paths
+    assert optional_read <= set(diagnostics["files_read"])
+    for entry in optional_missing:
+        assert not Path(entry).is_file()
 
 
 def test_shadow_mismatch_is_diagnostic_only(
@@ -176,6 +201,7 @@ def test_shadow_mismatch_is_diagnostic_only(
     diff = _read(step1_research.step1a_grounding_compile_shadow_diff_path())
     assert diff["comparison_status"] == "mismatch"
     assert diff["parity_passed"] is False
+    assert diff["available_comparisons_passed"] is False
     assert diff["production_artifacts_unchanged"] is True
     assert diff["production_uses_step1a_outputs"] is False
     assert diff["diagnostics"]["mismatch_is_diagnostic_only"] is True
@@ -202,8 +228,17 @@ def test_shadow_run_exception_is_swallowed_and_recorded(
 
     diff = _read(step1_research.step1a_grounding_compile_shadow_diff_path())
     assert diff["comparison_status"] == "failed"
+    assert diff["parity_passed"] is False
+    assert diff["available_comparisons_passed"] is False
+    assert diff["comparison_complete"] is False
     assert diff["diagnostics"]["shadow_run_failed"] is True
+    assert diff["diagnostics"]["diagnostics_incomplete"] is True
     assert "shadow bundle failed" in diff["diagnostics"]["shadow_run_error"]
+    # A failed shadow run claims no reads instead of guessing what was loaded.
+    assert diff["diagnostics"]["files_read"] == []
+    assert diff["diagnostics"]["optional_inputs_read"] == []
+    assert diff["diagnostics"]["optional_inputs_missing"] == []
+    assert diff["diagnostics"]["comparison_input_paths"]
     assert diff["production_artifacts_unchanged"] is True
     assert diff["production_uses_step1a_outputs"] is False
     assert Path(result["research_output_path"]).is_file()
@@ -230,4 +265,3 @@ def test_shadow_diff_has_no_downstream_consumer_or_artifact_path_switch() -> Non
         assert "step1a_grounding_compile_shadow_diff" not in source
         assert "build_step1a_grounding_compile_bundle" not in source
         assert "step1a_grounding_compile" not in source
-
