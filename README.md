@@ -98,10 +98,27 @@ if it is missing while net-new BUY orders exist, primary-path Step 4 validation
 
 ## Operator-Approved Anchor Grounding
 
-R2G-5c can ground report-only support signals on valid operator-approved
-research anchors. Runtime grounding consumes `evidence_packet.active_anchor_registry`,
-selected by a readiness-gated fresh compile. Standalone approval artifacts remain
-observer artifacts and do not grant `NEW_BUY` or `ORDER_COMPILATION`.
+Operator-approved research anchors and optional approval-anchor revocations are
+authored in `inputs/current/research_anchor_approvals.yaml`. Revocations support
+approval-derived anchors only; baseline `research_anchors.yaml` anchors must be
+edited directly or allowed to expire via `valid_until`.
+
+`operator_completed_anchor_sha256` is the binding hash for both approval
+activation and revocation binding. `candidate_sha256` and
+`research_anchor_candidates.json` remain audit-only suggestions and cannot
+approve or revoke anchors.
+
+The runtime grounding source for `support_signals` is only
+`evidence_packet.active_anchor_registry`. `support_signals` does not read
+approval files, revocation files, revocation validation artifacts, or candidate
+artifacts directly. Revocation validation output is report-only; invalid
+revocation state makes the approvals-inclusive registry unsafe, causing baseline
+fallback when baseline is safe or fail-closed empty selection when it is not.
+
+This remains report-only grounding with `permission_effect: "none"` and
+`not_authorization: true`; it grants no `NEW_BUY`, `ORDER_COMPILATION`, Step 4,
+final execution, broker/live execution, automatic order placement, executable
+order authority, or permission/gate/order-path change.
 
 See the
 [Operator-Approved Anchor Grounding Runbook](docs/operator_approved_anchor_grounding_runbook.md)
