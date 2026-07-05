@@ -360,8 +360,11 @@ def test_no_production_consumer_imports_step1a_bundle() -> None:
     import investment_orchestrator.workflow.step4_order_compiler as step4
     import investment_orchestrator.workflow.weekly_orchestrator as weekly
 
+    step1_source = inspect.getsource(step1)
+    assert "_write_step1a_grounding_compile_shadow_diff_report_only" in step1_source
+    assert "step1a_grounding_compile_shadow_diff.json" in step1_source
+
     for module in (
-        step1,
         readiness,
         evidence_packet,
         support_signals,

@@ -114,6 +114,10 @@ from investment_orchestrator.state.research_availability import (
     research_degraded_mode_decision_to_dict,
     research_freshness_report_to_dict,
 )
+from investment_orchestrator.workflow.step1a_grounding_compile import (
+    build_step1a_grounding_compile_bundle,
+    build_step1a_grounding_compile_shadow_diff,
+)
 from investment_orchestrator.validators.strategy_settings import parse_strategy_settings_text
 from investment_orchestrator.validators.validate_research_handoff import (
     research_handoff_validation_result_to_dict,
@@ -177,6 +181,7 @@ APPROVAL_REGISTRY_DUAL_READ_DIFF_FILENAME = "approval_registry_dual_read_diff.js
 APPROVAL_REGISTRY_SWITCH_READINESS_FILENAME = "approval_registry_switch_readiness.json"
 SUPPORT_SIGNALS_DUAL_GROUND_DIFF_FILENAME = "support_signals_dual_ground_diff.json"
 GROUNDING_STATUS_OBSERVATORY_FILENAME = "grounding_status_observatory.json"
+STEP1A_GROUNDING_COMPILE_SHADOW_DIFF_FILENAME = "step1a_grounding_compile_shadow_diff.json"
 RESEARCH_ANCHORS_INPUT_FILENAME = "research_anchors.yaml"
 RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME = "research_anchor_approvals.yaml"
 CURRENT_RUN_INPUT_NOTES_RE = re.compile(
@@ -444,6 +449,11 @@ def step1_support_signals_dual_ground_diff_path() -> Path:
 def step1_grounding_status_observatory_path() -> Path:
     """Return the report-only grounding status observatory path (R2G-6b)."""
     return step1_artifact_dir() / GROUNDING_STATUS_OBSERVATORY_FILENAME
+
+
+def step1a_grounding_compile_shadow_diff_path() -> Path:
+    """Return the report-only Step 1A grounding compile shadow diff path (S1A-1)."""
+    return step1_artifact_dir() / STEP1A_GROUNDING_COMPILE_SHADOW_DIFF_FILENAME
 
 
 def resolve_step1_prompt_template_path() -> Path:
@@ -737,6 +747,16 @@ def parse_step1_output(
     # never allowed_actions / order readiness / order path.
     _write_grounding_status_observatory_report_only()
 
+    # Report-only layer 0c8 (S1A-1): Step 1A shadow-run diff. Calls the pure
+    # extraction bundle and compares it against the already-written Step 1
+    # deterministic/R2G artifacts. It writes only a diagnostic diff and switches
+    # no production artifact path; downstream, gates, permissions, and order paths
+    # consume NOTHING from this layer. Any failure is recorded best-effort and
+    # swallowed.
+    step1a_shadow_summary = _write_step1a_grounding_compile_shadow_diff_report_only(
+        strategy_settings=handoff_strategy_settings
+    )
+
     # Report-only layer 0d (R2E.5b-0): a SEPARATE actionable-handoff preview built
     # from the just-written compiled_support_signals + evidence packet + memo. It
     # previews which tickers WOULD become actionable rows IF a future PR opened an
@@ -975,6 +995,8 @@ def parse_step1_output(
         "compiled_research_handoff_mode": compiled_handoff_summary.get("compilation_mode", ""),
         "compiled_research_handoff_valid": compiled_handoff_summary.get("compiled_candidate_valid", ""),
         "grounding_status_observatory_path": str(step1_grounding_status_observatory_path()),
+        "step1a_grounding_compile_shadow_diff_path": step1a_shadow_summary.get("path", ""),
+        "step1a_grounding_compile_shadow_diff_status": step1a_shadow_summary.get("comparison_status", ""),
         "schema_version": str(payload.get("schema_version", "")),
     }
 
@@ -1600,6 +1622,117 @@ def _write_grounding_status_observatory_report_only() -> None:
         write_json(step1_grounding_status_observatory_path(), result)
     except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
         pass
+
+
+def _write_step1a_grounding_compile_shadow_diff_report_only(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Build + write the S1A-1 Step 1A shadow diff (report-only).
+
+    Calls the pure Step 1A extraction bundle after existing deterministic/R2G
+    Step 1 artifacts are already present, compares semantic summaries, and writes
+    ``step1a_grounding_compile_shadow_diff.json``. The diff is consumed by
+    NOTHING: not readiness, not evidence_packet, not support_signals, not
+    availability, not gates, not Step 2/3/4, not weekly, not broker/live, and not
+    any allowed_actions / order path. Any failure is swallowed.
+    """
+    output_path = step1a_grounding_compile_shadow_diff_path()
+    current_paths = _step1a_shadow_current_artifact_paths()
+    try:
+        snapshot_path = current_inputs_dir() / "portfolio_snapshot.txt"
+        try:
+            snapshot_text: str | None = load_portfolio_snapshot_text()
+        except Exception:  # noqa: BLE001 - mirror evidence-packet DATA_GAP behavior
+            snapshot_text = None
+
+        last_good = read_last_good_research_handoff(step1_state_dir())
+        current_artifacts = _read_step1a_shadow_current_artifacts(current_paths)
+        bundle = build_step1a_grounding_compile_bundle(
+            strategy_settings=strategy_settings,
+            research_anchors_path=current_inputs_dir() / RESEARCH_ANCHORS_INPUT_FILENAME,
+            research_anchor_approvals_path=current_inputs_dir() / RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME,
+            portfolio_snapshot_text=snapshot_text,
+            portfolio_snapshot_path=snapshot_path,
+            last_good_available=last_good.available,
+            last_good_metadata=last_good.metadata,
+            strategy_settings_path=current_inputs_dir() / "strategy_settings.yaml",
+            last_good_metadata_path=last_good_research_handoff_metadata_path(step1_state_dir()),
+            active_registry_artifact_path=step1_active_research_anchor_registry_path(),
+            approvals_registry_artifact_path=step1_active_research_anchor_registry_with_approvals_path(),
+            optional_research_anchor_candidates=current_artifacts.get("research_anchor_candidates")
+            if isinstance(current_artifacts.get("research_anchor_candidates"), Mapping)
+            else None,
+            optional_compiled_support_signals=current_artifacts.get("compiled_support_signals")
+            if isinstance(current_artifacts.get("compiled_support_signals"), Mapping)
+            else None,
+        )
+        diff = build_step1a_grounding_compile_shadow_diff(
+            step1a_bundle=bundle,
+            current_artifacts=current_artifacts,
+            current_artifact_paths=current_paths,
+        )
+        _annotate_step1a_shadow_diff_io(diff, current_paths=current_paths, output_path=output_path)
+        write_json(output_path, diff)
+        return {"path": str(output_path), "comparison_status": str(diff.get("comparison_status", ""))}
+    except Exception as exc:  # noqa: BLE001 - report-only: never break Step 1 parse
+        failure = build_step1a_grounding_compile_shadow_diff(
+            step1a_bundle=None,
+            current_artifacts={},
+            current_artifact_paths=current_paths,
+            shadow_run_error=str(exc),
+        )
+        _annotate_step1a_shadow_diff_io(failure, current_paths=current_paths, output_path=output_path)
+        try:
+            write_json(output_path, failure)
+        except Exception:  # noqa: BLE001 - even failure reporting must be best-effort
+            pass
+        return {"path": str(output_path), "comparison_status": "failed"}
+
+
+def _step1a_shadow_current_artifact_paths() -> dict[str, Path | None]:
+    return {
+        "active_research_anchor_registry": step1_active_research_anchor_registry_path(),
+        "research_anchor_approvals_validation": step1_research_anchor_approvals_validation_path(),
+        "research_anchor_revocations_validation": step1_research_anchor_revocations_validation_path(),
+        "active_research_anchor_registry_with_approvals": step1_active_research_anchor_registry_with_approvals_path(),
+        "approval_registry_dual_read_diff": step1_approval_registry_dual_read_diff_path(),
+        "approval_registry_switch_readiness": step1_approval_registry_switch_readiness_path(),
+        # Current Step 1 selects this in memory and embeds only the selected registry
+        # in evidence_packet.json, so there is no exact production artifact to compare.
+        "embedded_active_anchor_registry_selection": None,
+        "evidence_packet": step1_evidence_packet_path(),
+        "grounding_status_observatory": step1_grounding_status_observatory_path(),
+        # Optional diagnostic inputs for the Step 1A bundle's observatory summary.
+        "research_anchor_candidates": step1_research_anchor_candidates_path(),
+        "compiled_support_signals": step1_compiled_support_signals_path(),
+    }
+
+
+def _read_step1a_shadow_current_artifacts(
+    paths: Mapping[str, Path | None],
+) -> dict[str, Any]:
+    artifacts: dict[str, Any] = {}
+    for key, path in paths.items():
+        artifacts[key] = _read_json_if_exists(path) if isinstance(path, Path) else None
+    return artifacts
+
+
+def _annotate_step1a_shadow_diff_io(
+    diff: dict[str, Any],
+    *,
+    current_paths: Mapping[str, Path | None],
+    output_path: Path,
+) -> None:
+    diagnostics = diff.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return
+    diagnostics["files_read"] = [
+        str(path)
+        for key, path in sorted(current_paths.items())
+        if key in diff.get("comparisons", {}) and isinstance(path, Path)
+    ]
+    diagnostics["files_written"] = [str(output_path)]
 
 
 def _allowed_buy_universe_for_anchor_registry(
