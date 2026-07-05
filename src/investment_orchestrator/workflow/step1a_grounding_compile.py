@@ -115,6 +115,31 @@ def build_step1a_grounding_compile_bundle(
         )
 
 
+def build_step1a_active_research_anchor_registry(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+    research_anchors_path: Any,
+    generated_at: str | None = None,
+    now_date: str | None = None,
+) -> dict[str, Any]:
+    """Build the Step 1A baseline active anchor registry payload (S1A-3).
+
+    Narrow accessor for the first artifact switch. It is the SAME derivation the
+    full Step 1A bundle uses (``_build`` calls this function), and it calls the
+    same deterministic compiler with the same settings/universe/as-of inputs as
+    the legacy Step 1 writer — so the payload is byte-identical to the legacy
+    compile by construction. Pure: reads only the anchors file via the compiler,
+    writes nothing, and carries no selection/permission/order authority.
+    """
+    settings = strategy_settings if isinstance(strategy_settings, Mapping) else None
+    return compile_active_research_anchor_registry(
+        anchors_path=research_anchors_path,
+        allowed_universe=_allowed_buy_universe(settings),
+        today=_first_str(now_date, _get(settings, "as_of")),
+        generated_at=generated_at,
+    )
+
+
 def build_step1a_grounding_compile_shadow_diff(
     *,
     step1a_bundle: Mapping[str, Any] | None,
@@ -189,11 +214,13 @@ def _build(
     settings_as_of = _first_str(now_date, _get(settings, "as_of"))
     allowed_universe = _allowed_buy_universe(settings)
 
-    active_registry = compile_active_research_anchor_registry(
-        anchors_path=research_anchors_path,
-        allowed_universe=allowed_universe,
-        today=settings_as_of,
+    # S1A-3: the bundle and the switched production writer share this single
+    # accessor so the two can never drift.
+    active_registry = build_step1a_active_research_anchor_registry(
+        strategy_settings=settings,
+        research_anchors_path=research_anchors_path,
         generated_at=generated_at,
+        now_date=settings_as_of,
     )
     approvals_validation = validate_research_anchor_approvals(
         manifest_path=research_anchor_approvals_path,

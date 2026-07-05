@@ -346,3 +346,7 @@ def test_shadow_diff_has_no_downstream_consumer_or_artifact_path_switch() -> Non
         # comparison — no production module references the artifact or its helper.
         assert "embedded_active_registry_selection.json" not in source
         assert "step1_embedded_active_registry_selection_path" not in source
+        # S1A-3: the switch status artifact and the narrow registry accessor are
+        # likewise invisible to every downstream module.
+        assert "step1a_artifact_switch_status" not in source
+        assert "build_step1a_active_research_anchor_registry" not in source

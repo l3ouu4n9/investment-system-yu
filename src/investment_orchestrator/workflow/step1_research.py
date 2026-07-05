@@ -115,6 +115,7 @@ from investment_orchestrator.state.research_availability import (
     research_freshness_report_to_dict,
 )
 from investment_orchestrator.workflow.step1a_grounding_compile import (
+    build_step1a_active_research_anchor_registry,
     build_step1a_grounding_compile_bundle,
     build_step1a_grounding_compile_shadow_diff,
 )
@@ -183,6 +184,7 @@ SUPPORT_SIGNALS_DUAL_GROUND_DIFF_FILENAME = "support_signals_dual_ground_diff.js
 GROUNDING_STATUS_OBSERVATORY_FILENAME = "grounding_status_observatory.json"
 EMBEDDED_ACTIVE_REGISTRY_SELECTION_FILENAME = "embedded_active_registry_selection.json"
 STEP1A_GROUNDING_COMPILE_SHADOW_DIFF_FILENAME = "step1a_grounding_compile_shadow_diff.json"
+STEP1A_ARTIFACT_SWITCH_STATUS_FILENAME = "step1a_artifact_switch_status.json"
 RESEARCH_ANCHORS_INPUT_FILENAME = "research_anchors.yaml"
 RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME = "research_anchor_approvals.yaml"
 CURRENT_RUN_INPUT_NOTES_RE = re.compile(
@@ -466,6 +468,15 @@ def step1a_grounding_compile_shadow_diff_path() -> Path:
     return step1_artifact_dir() / STEP1A_GROUNDING_COMPILE_SHADOW_DIFF_FILENAME
 
 
+def step1a_artifact_switch_status_path() -> Path:
+    """Return the report-only Step 1A artifact switch status path (S1A-3).
+
+    Provenance diagnostics only: records which writer source produced each
+    switched artifact this run. Not an authority and consumed by nothing.
+    """
+    return step1_artifact_dir() / STEP1A_ARTIFACT_SWITCH_STATUS_FILENAME
+
+
 def resolve_step1_prompt_template_path() -> Path:
     """Resolve the formal Step 1 prompt template from prompts/."""
     return require_prompt_path("research_dual_lane.txt")
@@ -666,13 +677,18 @@ def parse_step1_output(
     # order path and remains independent of the degraded-mode decision below.
     _write_evidence_packet_report_only(strategy_settings=handoff_strategy_settings)
 
-    # Report-only layer 0a2 (R2G-1): deterministic baseline active anchor registry
-    # compiled from the operator research_anchors.yaml source only. The standalone
-    # artifact remains an observer; support_signals consumes the embedded registry
-    # that the evidence packet selected above.
-    _write_active_research_anchor_registry_report_only(
+    # Report-only layer 0a2 (R2G-1, switched by S1A-3): deterministic baseline
+    # active anchor registry, now sourced from the Step 1A accessor with the
+    # legacy writer retained as fallback (payload byte-identical either way). The
+    # standalone artifact remains an observer; support_signals consumes the
+    # embedded registry that the evidence packet selected above.
+    active_registry_switch_status = _write_active_research_anchor_registry_report_only(
         strategy_settings=handoff_strategy_settings
     )
+
+    # Report-only layer 0a2b (S1A-3): per-artifact switch provenance. Diagnostic
+    # only, consumed by nothing; never gates, never grants actions.
+    _write_step1a_artifact_switch_status_report_only([active_registry_switch_status])
 
     # Report-only layer 0a3 (R2G-2): anchor-source equivalence oracle. Compares the
     # usable-anchor grounding view of the authoritative evidence_packet.research_anchors
@@ -1007,6 +1023,10 @@ def parse_step1_output(
         "grounding_status_observatory_path": str(step1_grounding_status_observatory_path()),
         "step1a_grounding_compile_shadow_diff_path": step1a_shadow_summary.get("path", ""),
         "step1a_grounding_compile_shadow_diff_status": step1a_shadow_summary.get("comparison_status", ""),
+        "active_research_anchor_registry_writer_source": str(
+            active_registry_switch_status.get("writer_source", "")
+        ),
+        "step1a_artifact_switch_status_path": str(step1a_artifact_switch_status_path()),
         "schema_version": str(payload.get("schema_version", "")),
     }
 
@@ -1340,17 +1360,41 @@ def _write_embedded_active_registry_selection_report_only(
 def _write_active_research_anchor_registry_report_only(
     *,
     strategy_settings: Mapping[str, Any] | None,
-) -> None:
-    """Compile + write the R2G-1 active anchor registry defensively (report-only).
+) -> dict[str, Any]:
+    """Write the R2G-1 active anchor registry from the Step 1A source (S1A-3).
 
-    Wraps the existing research-anchors validator (``research_anchors.yaml``) into
-    a deterministic ``active_research_anchor_registry.json``. Additive only:
-    NOTHING consumes this artifact in R2G-1 (not support_signals, not the compiler,
-    not the actionable preview/candidate/eligibility, not availability, not gates,
-    not Step 2/3/4, not weekly). It never raises into the Step 1 parse flow,
-    never gates the pipeline, never touches ``evidence_packet.research_anchors``,
-    and adds no permission / state / action.
+    First artifact switch of the Step 1 split: the payload now comes from the
+    narrow Step 1A accessor, which is byte-identical to the legacy compile by
+    construction (same deterministic compiler, same universe/as-of derivation,
+    ``generated_at=None``). The legacy writer is retained as the runtime
+    fallback; a double failure preserves the pre-switch swallowed behavior
+    (absent artifact, tolerant readers degrade). Output path, layer position,
+    schema, markers, and payload bytes are unchanged. The artifact stays an
+    observer: NOTHING authoritative consumes it (not support_signals, not the
+    compiler, not availability, not gates, not Step 2/3/4, not weekly), and it
+    never raises into the Step 1 parse flow. Returns report-only provenance for
+    ``step1a_artifact_switch_status.json``.
     """
+    status: dict[str, Any] = {
+        "artifact": "active_research_anchor_registry",
+        "output_path": "",
+        "writer_source": "unwritten",
+        "fallback_used": False,
+        "error_summary": "",
+    }
+    try:
+        output_path = step1_active_research_anchor_registry_path()
+        status["output_path"] = str(output_path)
+        registry = build_step1a_active_research_anchor_registry(
+            strategy_settings=strategy_settings,
+            research_anchors_path=current_inputs_dir() / RESEARCH_ANCHORS_INPUT_FILENAME,
+        )
+        write_json(output_path, registry)
+        status["writer_source"] = "step1a"
+        return status
+    except Exception as exc:  # noqa: BLE001 - fall back to the retained legacy writer
+        status["fallback_used"] = True
+        status["error_summary"] = f"step1a_accessor_failed: {exc}"
     try:
         research_anchors_path = current_inputs_dir() / RESEARCH_ANCHORS_INPUT_FILENAME
         settings_as_of = (
@@ -1363,6 +1407,62 @@ def _write_active_research_anchor_registry_report_only(
             allowed_universe=allowed_universe,
             today=settings_as_of,
         )
+        status["writer_source"] = "legacy_fallback"
+    except Exception as exc:  # noqa: BLE001 - report-only: never break Step 1 parse
+        status["writer_source"] = "unwritten"
+        status["error_summary"] = f"{status['error_summary']}; legacy_writer_failed: {exc}"
+    return status
+
+
+def _write_step1a_artifact_switch_status_report_only(
+    switched: list[Mapping[str, Any]],
+) -> None:
+    """Write ``step1a_artifact_switch_status.json`` (S1A-3, report-only).
+
+    Per-artifact provenance for the Step 1A writer switches: which source wrote
+    each switched artifact this run (``step1a`` | ``legacy_fallback`` |
+    ``unwritten``). Consumed by NOTHING: not readiness, not evidence_packet, not
+    support_signals, not gates, not Step 2/3/4, not final gate, not weekly, not
+    broker/live, not any order path. Any failure is swallowed.
+    """
+    try:
+        artifact = {
+            "schema_version": "step1a_artifact_switch_status_v1",
+            "is_llm_generated": False,
+            "generated_at": None,
+            "report_only": True,
+            "permission_effect": "none",
+            "not_authorization": True,
+            "not_execution_authorization": True,
+            "consumed_by_gates": False,
+            "consumed_by_order_path": False,
+            "consumed_by_downstream": False,
+            "cannot_affect_allowed_actions": True,
+            "cannot_affect_registry_selection": True,
+            "not_registry_selection_input": True,
+            "not_order_input": True,
+            "not_permission_input": True,
+            "not_budget_input": True,
+            "not_allocation_input": True,
+            "no_execution_authority": True,
+            "safe_to_ignore": True,
+            "shadow_comparison_note": (
+                "For a switched artifact the Step 1A shadow diff compares the "
+                "Step 1A bundle against the on-disk Step 1A write (an integrity/"
+                "staleness check), no longer legacy-vs-Step1A parity."
+            ),
+            "switched_artifacts": {
+                str(entry.get("artifact", "")): {
+                    "writer_source": str(entry.get("writer_source", "unwritten")),
+                    "output_path": str(entry.get("output_path", "")),
+                    "fallback_used": entry.get("fallback_used") is True,
+                    "error_summary": str(entry.get("error_summary", "")),
+                }
+                for entry in switched
+                if isinstance(entry, Mapping)
+            },
+        }
+        write_json(step1a_artifact_switch_status_path(), artifact)
     except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
         pass
 
