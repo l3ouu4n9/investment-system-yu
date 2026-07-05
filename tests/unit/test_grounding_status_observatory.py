@@ -338,13 +338,12 @@ def test_no_authority_markers_and_no_consumers() -> None:
     assert result["not_candidate_source"] is True
 
 
-def test_pure_builder_only_not_imported_by_workflow_or_consumers() -> None:
+def test_builder_not_imported_by_runtime_consumers() -> None:
     import investment_orchestrator.research.evidence_packet as ep
     import investment_orchestrator.research.support_signals as ss
     import investment_orchestrator.state.research_availability as ra
-    import investment_orchestrator.workflow.step1_research as step1
 
-    for module in (ep, ss, ra, step1):
+    for module in (ep, ss, ra):
         assert "grounding_status_observatory" not in inspect.getsource(module)
 
 

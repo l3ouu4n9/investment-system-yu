@@ -50,6 +50,9 @@ from investment_orchestrator.research.actionable_promotion_pointer_preview impor
     write_actionable_promotion_pointer_preview,
 )
 from investment_orchestrator.research.evidence_packet import write_evidence_packet
+from investment_orchestrator.research.grounding_status_observatory import (
+    build_grounding_status_observatory,
+)
 from investment_orchestrator.research.handoff_compiler import write_compiled_research_handoff
 from investment_orchestrator.research.promoted_handoff_verifier import (
     verify_promoted_handoff_for_step2_decision,
@@ -173,6 +176,7 @@ ACTIVE_RESEARCH_ANCHOR_REGISTRY_WITH_APPROVALS_FILENAME = (
 APPROVAL_REGISTRY_DUAL_READ_DIFF_FILENAME = "approval_registry_dual_read_diff.json"
 APPROVAL_REGISTRY_SWITCH_READINESS_FILENAME = "approval_registry_switch_readiness.json"
 SUPPORT_SIGNALS_DUAL_GROUND_DIFF_FILENAME = "support_signals_dual_ground_diff.json"
+GROUNDING_STATUS_OBSERVATORY_FILENAME = "grounding_status_observatory.json"
 RESEARCH_ANCHORS_INPUT_FILENAME = "research_anchors.yaml"
 RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME = "research_anchor_approvals.yaml"
 CURRENT_RUN_INPUT_NOTES_RE = re.compile(
@@ -435,6 +439,11 @@ def step1_approval_registry_switch_readiness_path() -> Path:
 def step1_support_signals_dual_ground_diff_path() -> Path:
     """Return the report-only support_signals dual-ground dry-run diff path (R2G-5c-1)."""
     return step1_artifact_dir() / SUPPORT_SIGNALS_DUAL_GROUND_DIFF_FILENAME
+
+
+def step1_grounding_status_observatory_path() -> Path:
+    """Return the report-only grounding status observatory path (R2G-6b)."""
+    return step1_artifact_dir() / GROUNDING_STATUS_OBSERVATORY_FILENAME
 
 
 def resolve_step1_prompt_template_path() -> Path:
@@ -721,6 +730,13 @@ def parse_step1_output(
     # write-only and cannot affect allowed_actions / add NEW_BUY / ORDER_COMPILATION.
     _write_support_signals_dual_ground_diff_report_only(strategy_settings=handoff_strategy_settings)
 
+    # Report-only layer 0c7 (R2G-6b): grounding-status observatory. Reads only the
+    # already-written Step 1 diagnostic artifacts and writes a single inert summary.
+    # Consumed by NOTHING: not readiness, not evidence_packet, not support_signals,
+    # not availability, not Step 2/3/4, not gates, not weekly, not broker/live, and
+    # never allowed_actions / order readiness / order path.
+    _write_grounding_status_observatory_report_only()
+
     # Report-only layer 0d (R2E.5b-0): a SEPARATE actionable-handoff preview built
     # from the just-written compiled_support_signals + evidence packet + memo. It
     # previews which tickers WOULD become actionable rows IF a future PR opened an
@@ -958,6 +974,7 @@ def parse_step1_output(
         ),
         "compiled_research_handoff_mode": compiled_handoff_summary.get("compilation_mode", ""),
         "compiled_research_handoff_valid": compiled_handoff_summary.get("compiled_candidate_valid", ""),
+        "grounding_status_observatory_path": str(step1_grounding_status_observatory_path()),
         "schema_version": str(payload.get("schema_version", "")),
     }
 
@@ -1546,6 +1563,41 @@ def _write_support_signals_dual_ground_diff_report_only(
             allowed_universe=allowed_universe,
             today=settings_as_of,
         )
+    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
+        pass
+
+
+def _write_grounding_status_observatory_report_only() -> None:
+    """Build + write the R2G-6b grounding-status observatory (report-only).
+
+    Uses only already-written Step 1 mappings as diagnostics inputs. It does not
+    recompute readiness or registry selection, and the written artifact is
+    consumed by NOTHING (not evidence_packet, readiness, support_signals,
+    availability, gates, Step 2/3/4, weekly, broker/live, allowed_actions, or any
+    order path). Any error is swallowed so Step 1 parse is never affected.
+    """
+    try:
+        evidence_packet = _read_json_if_exists(step1_evidence_packet_path())
+        readiness = _read_json_if_exists(step1_approval_registry_switch_readiness_path())
+        baseline_registry = _read_json_if_exists(step1_active_research_anchor_registry_path())
+        approvals_registry = _read_json_if_exists(step1_active_research_anchor_registry_with_approvals_path())
+        approvals_validation = _read_json_if_exists(step1_research_anchor_approvals_validation_path())
+        revocations_validation = _read_json_if_exists(step1_research_anchor_revocations_validation_path())
+        candidates = _read_json_if_exists(step1_research_anchor_candidates_path())
+        support_signals = _read_json_if_exists(step1_compiled_support_signals_path())
+
+        result = build_grounding_status_observatory(
+            evidence_packet=evidence_packet if isinstance(evidence_packet, Mapping) else None,
+            embedded_registry_selection=None,
+            readiness=readiness if isinstance(readiness, Mapping) else None,
+            baseline_registry=baseline_registry if isinstance(baseline_registry, Mapping) else None,
+            approvals_registry=approvals_registry if isinstance(approvals_registry, Mapping) else None,
+            approvals_validation=approvals_validation if isinstance(approvals_validation, Mapping) else None,
+            revocations_validation=revocations_validation if isinstance(revocations_validation, Mapping) else None,
+            candidates=candidates if isinstance(candidates, Mapping) else None,
+            support_signals=support_signals if isinstance(support_signals, Mapping) else None,
+        )
+        write_json(step1_grounding_status_observatory_path(), result)
     except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
         pass
 
