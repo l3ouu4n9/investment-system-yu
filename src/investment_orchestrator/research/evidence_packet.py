@@ -569,6 +569,7 @@ def write_evidence_packet(
     research_anchors_path: str | Path | None = None,
     research_anchor_approvals_path: str | Path | None = None,
     now: datetime | None = None,
+    embedded_selection_out: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the evidence packet and write it as JSON. Returns the packet mapping.
 
@@ -578,6 +579,11 @@ def write_evidence_packet(
     selected from a fresh readiness-coupled baseline/approvals-inclusive compile.
     This can affect only report-only support-signal grounding; it never changes
     permissions, gates, or order paths.
+
+    ``embedded_selection_out`` is a diagnostic-only capture: when provided, the
+    in-memory embedded registry selection is copied into it so the caller can
+    persist it for report-only parity comparison. It changes no selection,
+    packet, permission, gate, or order-path behavior.
     """
     from investment_orchestrator.common.io import write_json
 
@@ -602,6 +608,8 @@ def write_evidence_packet(
             generated_at=generated_at,
         )
         active_anchor_registry = selection["selected_registry"]
+        if embedded_selection_out is not None:
+            embedded_selection_out.update(selection)
     packet = build_evidence_packet(
         strategy_settings=strategy_settings,
         portfolio_snapshot_text=portfolio_snapshot_text,

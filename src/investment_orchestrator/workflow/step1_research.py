@@ -181,6 +181,7 @@ APPROVAL_REGISTRY_DUAL_READ_DIFF_FILENAME = "approval_registry_dual_read_diff.js
 APPROVAL_REGISTRY_SWITCH_READINESS_FILENAME = "approval_registry_switch_readiness.json"
 SUPPORT_SIGNALS_DUAL_GROUND_DIFF_FILENAME = "support_signals_dual_ground_diff.json"
 GROUNDING_STATUS_OBSERVATORY_FILENAME = "grounding_status_observatory.json"
+EMBEDDED_ACTIVE_REGISTRY_SELECTION_FILENAME = "embedded_active_registry_selection.json"
 STEP1A_GROUNDING_COMPILE_SHADOW_DIFF_FILENAME = "step1a_grounding_compile_shadow_diff.json"
 RESEARCH_ANCHORS_INPUT_FILENAME = "research_anchors.yaml"
 RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME = "research_anchor_approvals.yaml"
@@ -449,6 +450,15 @@ def step1_support_signals_dual_ground_diff_path() -> Path:
 def step1_grounding_status_observatory_path() -> Path:
     """Return the report-only grounding status observatory path (R2G-6b)."""
     return step1_artifact_dir() / GROUNDING_STATUS_OBSERVATORY_FILENAME
+
+
+def step1_embedded_active_registry_selection_path() -> Path:
+    """Return the report-only persisted embedded registry selection path (S1A-2).
+
+    This records the CURRENT production evidence-packet selection for shadow
+    parity diagnostics only; it is not an authority or selection input.
+    """
+    return step1_artifact_dir() / EMBEDDED_ACTIVE_REGISTRY_SELECTION_FILENAME
 
 
 def step1a_grounding_compile_shadow_diff_path() -> Path:
@@ -1262,6 +1272,7 @@ def _write_evidence_packet_report_only(
         settings_as_of = (
             strategy_settings.get("as_of") if isinstance(strategy_settings, Mapping) else None
         )
+        embedded_selection_capture: dict[str, Any] = {}
         write_evidence_packet(
             output_path=step1_evidence_packet_path(),
             strategy_settings=strategy_settings,
@@ -1279,9 +1290,50 @@ def _write_evidence_packet_report_only(
             },
             research_anchors_path=research_anchors_path,
             research_anchor_approvals_path=approvals_path,
+            embedded_selection_out=embedded_selection_capture,
         )
+        # Report-only S1A-2: persist the exact in-memory selection the packet just
+        # embedded so the Step 1A shadow diff can compare it. Consumed by nothing
+        # else; a write failure is swallowed and only makes the shadow comparison
+        # report that input as unavailable.
+        _write_embedded_active_registry_selection_report_only(embedded_selection_capture)
     except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
         # Best-effort only: do not mask or alter existing Step 1 behavior.
+        pass
+
+
+def _write_embedded_active_registry_selection_report_only(
+    selection: Mapping[str, Any],
+) -> None:
+    """Persist the production embedded registry selection for shadow parity (S1A-2).
+
+    Writes ``embedded_active_registry_selection.json``: the selection object the
+    evidence packet ALREADY produced in memory, annotated with non-authority
+    markers. It records the selection after the fact and is read only by the
+    report-only Step 1A shadow comparison — never by support_signals, readiness,
+    gates, Step 2/3/4, final gate, weekly, broker/live, or any order path. Any
+    failure is swallowed; the selection itself is unaffected either way.
+    """
+    try:
+        if not selection:
+            return
+        artifact = dict(selection)
+        artifact.update(
+            {
+                "consumed_by_gates": False,
+                "consumed_by_order_path": False,
+                "consumed_by_downstream": False,
+                "cannot_affect_allowed_actions": True,
+                "cannot_affect_registry_selection": True,
+                "not_registry_selection_input": True,
+                "not_order_input": True,
+                "production_source": True,
+                "step1a_output": False,
+                "safe_to_ignore": True,
+            }
+        )
+        write_json(step1_embedded_active_registry_selection_path(), artifact)
+    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
         pass
 
 
@@ -1709,9 +1761,9 @@ def _step1a_shadow_current_artifact_paths() -> dict[str, Path | None]:
         "active_research_anchor_registry_with_approvals": step1_active_research_anchor_registry_with_approvals_path(),
         "approval_registry_dual_read_diff": step1_approval_registry_dual_read_diff_path(),
         "approval_registry_switch_readiness": step1_approval_registry_switch_readiness_path(),
-        # Current Step 1 selects this in memory and embeds only the selected registry
-        # in evidence_packet.json, so there is no exact production artifact to compare.
-        "embedded_active_anchor_registry_selection": None,
+        # S1A-2: the in-memory selection is now also persisted (report-only) by the
+        # evidence-packet layer, so the shadow diff can compare it directly.
+        "embedded_active_anchor_registry_selection": step1_embedded_active_registry_selection_path(),
         "evidence_packet": step1_evidence_packet_path(),
         "grounding_status_observatory": step1_grounding_status_observatory_path(),
         # Optional diagnostic inputs for the Step 1A bundle's observatory summary.

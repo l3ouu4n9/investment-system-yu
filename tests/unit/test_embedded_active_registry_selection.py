@@ -9,6 +9,7 @@ registry objects.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -185,6 +186,44 @@ def test_write_evidence_packet_embeds_ready_approvals_and_support_signals_ground
     assert accepted["operator_completed_anchor_sha256"] == sha(approved_anchor)
     assert art["permission_effect"] == "none"
     assert art["not_authorization"] is True
+
+
+def test_write_evidence_packet_embedded_selection_out_captures_selection(tmp_path: Path) -> None:
+    """S1A-2 diagnostic capture: the sink receives the exact embedded selection."""
+    anchors_path, approvals_path = _paths(tmp_path)
+    approved_anchor = _anchor("APPROVED_QQQ")
+    _write_anchors(anchors_path, [_anchor("VOO_BASE", "VOO")])
+    _write_approvals(approvals_path, [_approval(approved_anchor)])
+
+    fixed_now = datetime(2026, 7, 4, 12, 0, 0, tzinfo=timezone.utc)
+    sink: dict[str, Any] = {}
+    packet = write_evidence_packet(
+        output_path=tmp_path / "evidence_packet.json",
+        strategy_settings=SETTINGS,
+        portfolio_snapshot_text=None,
+        now_date=AS_OF,
+        research_anchors_path=anchors_path,
+        research_anchor_approvals_path=approvals_path,
+        now=fixed_now,
+        embedded_selection_out=sink,
+    )
+
+    assert sink["schema_version"] == "embedded_active_anchor_registry_selection_v1"
+    assert sink["report_only"] is True
+    assert sink["permission_effect"] == "none"
+    assert sink["selected_registry"] == packet["active_anchor_registry"]
+
+    # Omitting the sink changes nothing about the packet itself.
+    packet_without_sink = write_evidence_packet(
+        output_path=tmp_path / "evidence_packet_no_sink.json",
+        strategy_settings=SETTINGS,
+        portfolio_snapshot_text=None,
+        now_date=AS_OF,
+        research_anchors_path=anchors_path,
+        research_anchor_approvals_path=approvals_path,
+        now=fixed_now,
+    )
+    assert packet_without_sink == packet
 
 
 def test_valid_active_revocation_is_embedded_and_not_groundable(tmp_path: Path) -> None:
