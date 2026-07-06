@@ -30,6 +30,8 @@ from investment_orchestrator.research.research_anchor_revocation_manifest import
 )
 from investment_orchestrator.workflow import step1_research
 from investment_orchestrator.workflow.step1a_grounding_compile import (
+    _ARTIFACT_KEYS,
+    STEP1A_WRITER_SOURCE_ARTIFACTS,
     build_step1a_active_research_anchor_registry,
     build_step1a_grounding_compile_bundle,
     build_step1a_research_anchor_approvals_validation,
@@ -155,6 +157,18 @@ def test_parse_writes_registry_from_step1a_source_and_switch_status(
     assert status["safe_to_ignore"] is True
     assert "integrity" in status["shadow_comparison_note"]
 
+    # S1A-5.1 boundary-scope markers: the switches change WHO compiles three
+    # report-only payloads — not artifact paths, not the evidence packet or its
+    # embedded selection, not support_signals grounding, not readiness, and not
+    # any order path or runtime authority.
+    assert status["production_artifact_paths_switched"] is False
+    assert status["evidence_packet_uses_step1a_output"] is False
+    assert status["embedded_selection_uses_step1a_output"] is False
+    assert status["support_signals_uses_step1a_output"] is False
+    assert status["readiness_uses_step1a_output"] is False
+    assert status["order_path_uses_step1a_output"] is False
+    assert status["runtime_authority_uses_step1a_output"] is False
+
     entry = status["switched_artifacts"]["active_research_anchor_registry"]
     assert entry["writer_source"] == "step1a"
     assert entry["fallback_used"] is False
@@ -167,6 +181,12 @@ def test_parse_writes_registry_from_step1a_source_and_switch_status(
         "research_anchor_approvals_validation",
         "research_anchor_revocations_validation",
     ]
+    # S1A-5.1 drift guard: the code-level design-state constant the shadow diff
+    # reports must match the per-run switch-status truth, and every switched
+    # artifact must keep a shadow comparison entry. A fourth switch that skips
+    # updating the constant fails here.
+    assert sorted(STEP1A_WRITER_SOURCE_ARTIFACTS) == sorted(status["switched_artifacts"])
+    assert set(STEP1A_WRITER_SOURCE_ARTIFACTS) <= set(_ARTIFACT_KEYS)
 
 
 def test_step1a_accessor_failure_falls_back_to_legacy_writer(

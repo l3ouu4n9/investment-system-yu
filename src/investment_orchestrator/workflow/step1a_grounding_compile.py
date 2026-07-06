@@ -55,6 +55,18 @@ _ARTIFACT_KEYS = (
     "grounding_status_observatory",
 )
 
+# S1A-3/4/5: the report-only production artifacts whose WRITERS source their
+# payload from the narrow Step 1A accessors. This is code-level design state
+# (artifact paths, schemas, and payload bytes are unchanged); per-run writer
+# provenance — including any legacy fallback — is recorded in
+# step1a_artifact_switch_status.json, not here. Every entry must stay a member
+# of _ARTIFACT_KEYS so each switched artifact keeps a shadow comparison.
+STEP1A_WRITER_SOURCE_ARTIFACTS = (
+    "active_research_anchor_registry",
+    "research_anchor_approvals_validation",
+    "research_anchor_revocations_validation",
+)
+
 
 def build_step1a_grounding_compile_bundle(
     *,
@@ -560,7 +572,31 @@ def _shadow_result(
         "not_allocation_input": True,
         "shadow_run": True,
         "production_artifacts_unchanged": True,
-        "production_uses_step1a_outputs": False,
+        # S1A-5.1: precise migration-scope markers. The single ambiguous
+        # production_uses_step1a_outputs boolean became stale once S1A-3/4/5
+        # switched three report-only artifact WRITERS to the Step 1A source;
+        # these fields state exactly what is and is not switched.
+        "production_artifact_paths_switched": False,
+        "step1a_writer_source_artifacts": list(STEP1A_WRITER_SOURCE_ARTIFACTS),
+        "step1a_writer_source_artifact_count": len(STEP1A_WRITER_SOURCE_ARTIFACTS),
+        "evidence_packet_uses_step1a_output": False,
+        "embedded_selection_uses_step1a_output": False,
+        "support_signals_uses_step1a_output": False,
+        "readiness_uses_step1a_output": False,
+        "order_path_uses_step1a_output": False,
+        "runtime_authority_uses_step1a_output": False,
+        "step1a_writer_source_note": (
+            "S1A-3/4/5 switched three report-only artifact writers to the Step 1A "
+            "source; artifact paths, schemas, and payload bytes are unchanged. "
+            "The writer-source list is code-level design state — per-run "
+            "provenance, including any legacy fallback, is recorded in "
+            "step1a_artifact_switch_status.json. The evidence packet and its "
+            "embedded registry selection remain production-sourced, "
+            "support_signals still grounds via "
+            "evidence_packet.active_anchor_registry, readiness is unswitched, "
+            "and Step 2/3/4/final/weekly and all order paths consume no Step 1A "
+            "output; no execution authority changed."
+        ),
         "safe_to_ignore": True,
         "comparison_status": status,
         # parity_passed is strict: only a complete, skip-free comparison set that
@@ -592,7 +628,10 @@ def _shadow_result(
             "mismatch_is_diagnostic_only": True,
             "failure_is_diagnostic_only": True,
             "production_artifacts_unchanged": True,
-            "production_uses_step1a_outputs": False,
+            # Mirrors the top-level S1A-5.1 scope markers (kept minimal here).
+            "production_artifact_paths_switched": False,
+            "step1a_writer_source_artifacts": list(STEP1A_WRITER_SOURCE_ARTIFACTS),
+            "runtime_authority_uses_step1a_output": False,
         },
         "safety_invariants": {
             "no_artifact_path_switch": True,

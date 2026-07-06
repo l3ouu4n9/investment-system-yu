@@ -1462,6 +1462,15 @@ def _write_step1a_artifact_switch_status_report_only(
             "not_allocation_input": True,
             "no_execution_authority": True,
             "safe_to_ignore": True,
+            # S1A-5.1: boundary-scope markers — the writer-source switches below
+            # change WHO compiles three report-only payloads, nothing else.
+            "production_artifact_paths_switched": False,
+            "evidence_packet_uses_step1a_output": False,
+            "embedded_selection_uses_step1a_output": False,
+            "support_signals_uses_step1a_output": False,
+            "readiness_uses_step1a_output": False,
+            "order_path_uses_step1a_output": False,
+            "runtime_authority_uses_step1a_output": False,
             "shadow_comparison_note": (
                 "For a switched artifact the Step 1A shadow diff compares the "
                 "Step 1A bundle against the on-disk Step 1A write (an integrity/"

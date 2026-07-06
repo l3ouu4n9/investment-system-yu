@@ -134,8 +134,38 @@ def test_shadow_diff_artifact_written_with_required_markers_and_parity(
     assert diff["not_order_input"] is True
     assert diff["shadow_run"] is True
     assert diff["production_artifacts_unchanged"] is True
-    assert diff["production_uses_step1a_outputs"] is False
     assert diff["safe_to_ignore"] is True
+
+    # S1A-5.1: the ambiguous production_uses_step1a_outputs flag (stale after
+    # the S1A-3/4/5 writer switches) is gone, replaced by precise
+    # migration-scope markers that distinguish writer-source switches from
+    # artifact-path/evidence/selection/support/readiness/order switches.
+    assert "production_uses_step1a_outputs" not in diff
+    assert "production_uses_step1a_outputs" not in diff["diagnostics"]
+    assert diff["production_artifact_paths_switched"] is False
+    assert diff["step1a_writer_source_artifacts"] == [
+        "active_research_anchor_registry",
+        "research_anchor_approvals_validation",
+        "research_anchor_revocations_validation",
+    ]
+    assert diff["step1a_writer_source_artifact_count"] == 3
+    assert diff["evidence_packet_uses_step1a_output"] is False
+    assert diff["embedded_selection_uses_step1a_output"] is False
+    assert diff["support_signals_uses_step1a_output"] is False
+    assert diff["readiness_uses_step1a_output"] is False
+    assert diff["order_path_uses_step1a_output"] is False
+    assert diff["runtime_authority_uses_step1a_output"] is False
+    assert "step1a_artifact_switch_status.json" in diff["step1a_writer_source_note"]
+    assert "evidence_packet.active_anchor_registry" in diff["step1a_writer_source_note"]
+    # Every switched-writer artifact keeps a shadow comparison entry.
+    for key in diff["step1a_writer_source_artifacts"]:
+        assert key in diff["comparisons"]
+    assert diff["diagnostics"]["production_artifact_paths_switched"] is False
+    assert (
+        diff["diagnostics"]["step1a_writer_source_artifacts"]
+        == diff["step1a_writer_source_artifacts"]
+    )
+    assert diff["diagnostics"]["runtime_authority_uses_step1a_output"] is False
 
     assert diff["comparison_status"] == "pass"
     assert diff["parity_passed"] is True
@@ -250,7 +280,9 @@ def test_embedded_selection_write_failure_is_swallowed_and_shadow_reports_skip(
     assert embedded["comparison_skipped"] is True
     assert embedded["skip_reason"] == "current_step1_artifact_unavailable_or_malformed"
     assert diff["production_artifacts_unchanged"] is True
-    assert diff["production_uses_step1a_outputs"] is False
+    assert diff["production_artifact_paths_switched"] is False
+    assert diff["runtime_authority_uses_step1a_output"] is False
+    assert "production_uses_step1a_outputs" not in diff
 
     decision = _read(Path(result["research_degraded_mode_decision_path"]))
     assert "NEW_BUY" not in decision["allowed_actions"]
@@ -279,7 +311,9 @@ def test_shadow_mismatch_is_diagnostic_only(
     assert diff["parity_passed"] is False
     assert diff["available_comparisons_passed"] is False
     assert diff["production_artifacts_unchanged"] is True
-    assert diff["production_uses_step1a_outputs"] is False
+    assert diff["production_artifact_paths_switched"] is False
+    assert diff["runtime_authority_uses_step1a_output"] is False
+    assert "production_uses_step1a_outputs" not in diff
     assert diff["diagnostics"]["mismatch_is_diagnostic_only"] is True
     assert "active_research_anchor_registry" in diff["mismatch_artifacts"]
 
@@ -316,7 +350,9 @@ def test_shadow_run_exception_is_swallowed_and_recorded(
     assert diff["diagnostics"]["optional_inputs_missing"] == []
     assert diff["diagnostics"]["comparison_input_paths"]
     assert diff["production_artifacts_unchanged"] is True
-    assert diff["production_uses_step1a_outputs"] is False
+    assert diff["production_artifact_paths_switched"] is False
+    assert diff["runtime_authority_uses_step1a_output"] is False
+    assert "production_uses_step1a_outputs" not in diff
     assert Path(result["research_output_path"]).is_file()
 
 
