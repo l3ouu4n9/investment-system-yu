@@ -55,7 +55,7 @@ _ARTIFACT_KEYS = (
     "grounding_status_observatory",
 )
 
-# S1A-3/4/5: the report-only production artifacts whose WRITERS source their
+# S1A-3/4/5/6: the report-only production artifacts whose WRITERS source their
 # payload from the narrow Step 1A accessors. This is code-level design state
 # (artifact paths, schemas, and payload bytes are unchanged); per-run writer
 # provenance — including any legacy fallback — is recorded in
@@ -65,6 +65,7 @@ STEP1A_WRITER_SOURCE_ARTIFACTS = (
     "active_research_anchor_registry",
     "research_anchor_approvals_validation",
     "research_anchor_revocations_validation",
+    "active_research_anchor_registry_with_approvals",
 )
 
 
@@ -218,6 +219,67 @@ def build_step1a_research_anchor_revocations_validation(
     )
 
 
+def build_step1a_active_research_anchor_registry_with_approvals(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+    research_anchors_path: Any,
+    research_anchor_approvals_path: Any,
+    generated_at: str | None = None,
+    now_date: str | None = None,
+) -> dict[str, Any]:
+    """Build the Step 1A approvals-inclusive registry payload (S1A-6).
+
+    Narrow accessor for the fourth artifact switch — the first OVERLAY-lineage
+    switch. It is the SAME derivation the full Step 1A bundle uses (``_build``
+    calls this function) and replicates the Step 1 dual-read writer's overlay
+    flavor exactly: the baseline comes from the S1A-3 accessor, the overlay
+    approvals validation passes NO ``as_of_date`` (the settings-anchored S1A-4
+    REPORT accessor must not be reused here), and the overlay revocations
+    validation keeps the baseline-coupled ``as_of_date`` (the settings-anchored
+    S1A-5 REPORT accessor must not be reused either). It deliberately does NOT
+    delegate to ``compile_active_research_anchor_registry_with_approvals``:
+    that helper's never-raise/fail-closed shell would turn accessor bugs into
+    degraded payloads recorded as a "step1a" success instead of raising so the
+    switched writer can fall back to legacy. It is also NOT the evidence
+    packet's embedded-selection derivation (which passes ``as_of_date`` to the
+    approvals validation and stays untouched). Byte-identical to the legacy
+    inline derivation for string-or-absent ``as_of``; a non-string ``as_of``
+    normalizes to None via ``_first_str`` (the established Step 1A convention)
+    and is absorbed by the switched writer's run-time parity guard. Pure: reads
+    only the two operator YAML files via the shared compilers/validators,
+    writes nothing, applies revocations only inside the returned report-only
+    payload, and carries no selection/permission/order authority.
+    """
+    settings = strategy_settings if isinstance(strategy_settings, Mapping) else None
+    as_of = _first_str(now_date, _get(settings, "as_of"))
+    allowed_universe = _allowed_buy_universe(settings)
+    baseline = build_step1a_active_research_anchor_registry(
+        strategy_settings=settings,
+        research_anchors_path=research_anchors_path,
+        generated_at=generated_at,
+        now_date=as_of,
+    )
+    overlay_approvals_validation = validate_research_anchor_approvals(
+        manifest_path=research_anchor_approvals_path,
+        allowed_universe=allowed_universe,
+        today=as_of,
+        generated_at=generated_at,
+    )
+    overlay_revocations_validation = validate_research_anchor_revocations(
+        manifest_path=research_anchor_approvals_path,
+        allowed_universe=allowed_universe,
+        today=as_of,
+        as_of_date=baseline.get("as_of_date") if isinstance(baseline, Mapping) else None,
+        generated_at=generated_at,
+    )
+    return build_active_research_anchor_registry_with_approvals(
+        baseline=baseline,
+        approvals_validation=overlay_approvals_validation,
+        revocations_validation=overlay_revocations_validation,
+        generated_at=generated_at,
+    )
+
+
 def build_step1a_grounding_compile_shadow_diff(
     *,
     step1a_bundle: Mapping[str, Any] | None,
@@ -301,8 +363,8 @@ def _build(
         now_date=settings_as_of,
     )
     # S1A-4: the REPORT variant is shared with the switched production writer via
-    # this single accessor. The overlay variant below stays separate on purpose —
-    # it feeds the with-approvals registry and is NOT switched.
+    # this single accessor. The overlay variant stays separate on purpose — it
+    # feeds the with-approvals registry inside the S1A-6 accessor below.
     approvals_validation = build_step1a_research_anchor_approvals_validation(
         strategy_settings=settings,
         research_anchor_approvals_path=research_anchor_approvals_path,
@@ -310,9 +372,9 @@ def _build(
         now_date=settings_as_of,
     )
     # S1A-5: the settings-anchored REPORT variant is shared with the switched
-    # production writer via this single accessor. The overlay variant below stays
+    # production writer via this single accessor. The overlay variant stays
     # separate on purpose — it is baseline-coupled and feeds the with-approvals
-    # registry, and is NOT switched.
+    # registry inside the S1A-6 accessor below.
     revocations_validation = build_step1a_research_anchor_revocations_validation(
         strategy_settings=settings,
         research_anchor_approvals_path=research_anchor_approvals_path,
@@ -320,26 +382,17 @@ def _build(
         now_date=settings_as_of,
     )
 
-    # Match the current Step 1 standalone approvals-inclusive registry writer:
-    # recompute approvals/revocations directly from YAML, not from report artifacts.
-    overlay_approvals_validation = validate_research_anchor_approvals(
-        manifest_path=research_anchor_approvals_path,
-        allowed_universe=allowed_universe,
-        today=settings_as_of,
+    # S1A-6: the approvals-inclusive registry payload is shared with the switched
+    # production writer via this single accessor so the two can never drift. The
+    # accessor derives its own baseline via the S1A-3 accessor (byte-identical to
+    # active_registry above) and preserves the Step 1 dual-read writer's overlay
+    # flavor: approvals validated WITHOUT as_of_date, revocations baseline-coupled.
+    approvals_registry = build_step1a_active_research_anchor_registry_with_approvals(
+        strategy_settings=settings,
+        research_anchors_path=research_anchors_path,
+        research_anchor_approvals_path=research_anchor_approvals_path,
         generated_at=generated_at,
-    )
-    overlay_revocations_validation = validate_research_anchor_revocations(
-        manifest_path=research_anchor_approvals_path,
-        allowed_universe=allowed_universe,
-        today=settings_as_of,
-        as_of_date=active_registry.get("as_of_date") if isinstance(active_registry, Mapping) else None,
-        generated_at=generated_at,
-    )
-    approvals_registry = build_active_research_anchor_registry_with_approvals(
-        baseline=active_registry,
-        approvals_validation=overlay_approvals_validation,
-        revocations_validation=overlay_revocations_validation,
-        generated_at=generated_at,
+        now_date=settings_as_of,
     )
     dual_read_diff = build_approval_registry_dual_read_diff(
         baseline_registry=active_registry,
@@ -586,13 +639,13 @@ def _shadow_result(
         "order_path_uses_step1a_output": False,
         "runtime_authority_uses_step1a_output": False,
         "step1a_writer_source_note": (
-            "S1A-3/4/5 switched three report-only artifact writers to the Step 1A "
-            "source; artifact paths, schemas, and payload bytes are unchanged. "
-            "The writer-source list is code-level design state — per-run "
-            "provenance, including any legacy fallback, is recorded in "
-            "step1a_artifact_switch_status.json. The evidence packet and its "
-            "embedded registry selection remain production-sourced, "
-            "support_signals still grounds via "
+            "The S1A writer switches route the report-only artifacts listed in "
+            "step1a_writer_source_artifacts to the Step 1A source; artifact "
+            "paths, schemas, and payload bytes are unchanged. The list is "
+            "code-level design state — per-run provenance, including any legacy "
+            "fallback, is recorded in step1a_artifact_switch_status.json. The "
+            "evidence packet and its embedded registry selection remain "
+            "production-sourced, support_signals still grounds via "
             "evidence_packet.active_anchor_registry, readiness is unswitched, "
             "and Step 2/3/4/final/weekly and all order paths consume no Step 1A "
             "output; no execution authority changed."

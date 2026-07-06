@@ -147,8 +147,9 @@ def test_shadow_diff_artifact_written_with_required_markers_and_parity(
         "active_research_anchor_registry",
         "research_anchor_approvals_validation",
         "research_anchor_revocations_validation",
+        "active_research_anchor_registry_with_approvals",
     ]
-    assert diff["step1a_writer_source_artifact_count"] == 3
+    assert diff["step1a_writer_source_artifact_count"] == 4
     assert diff["evidence_packet_uses_step1a_output"] is False
     assert diff["embedded_selection_uses_step1a_output"] is False
     assert diff["support_signals_uses_step1a_output"] is False
@@ -382,8 +383,9 @@ def test_shadow_diff_has_no_downstream_consumer_or_artifact_path_switch() -> Non
         # comparison — no production module references the artifact or its helper.
         assert "embedded_active_registry_selection.json" not in source
         assert "step1_embedded_active_registry_selection_path" not in source
-        # S1A-3/4/5: the switch status artifact and the narrow per-artifact
-        # accessors are likewise invisible to every downstream module.
+        # S1A-3/4/5/6: the switch status artifact and the narrow per-artifact
+        # accessors (the with-approvals accessor is covered by its S1A-3 prefix)
+        # are likewise invisible to every downstream module.
         assert "step1a_artifact_switch_status" not in source
         assert "build_step1a_active_research_anchor_registry" not in source
         assert "build_step1a_research_anchor_approvals_validation" not in source
