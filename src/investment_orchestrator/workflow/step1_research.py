@@ -118,6 +118,7 @@ from investment_orchestrator.workflow.step1a_grounding_compile import (
     build_step1a_active_research_anchor_registry,
     build_step1a_grounding_compile_bundle,
     build_step1a_grounding_compile_shadow_diff,
+    build_step1a_research_anchor_approvals_validation,
 )
 from investment_orchestrator.validators.strategy_settings import parse_strategy_settings_text
 from investment_orchestrator.validators.validate_research_handoff import (
@@ -686,10 +687,6 @@ def parse_step1_output(
         strategy_settings=handoff_strategy_settings
     )
 
-    # Report-only layer 0a2b (S1A-3): per-artifact switch provenance. Diagnostic
-    # only, consumed by nothing; never gates, never grants actions.
-    _write_step1a_artifact_switch_status_report_only([active_registry_switch_status])
-
     # Report-only layer 0a3 (R2G-2): anchor-source equivalence oracle. Compares the
     # usable-anchor grounding view of the authoritative evidence_packet.research_anchors
     # (what support_signals reads today) against the R2G-1 active registry. Diagnostic
@@ -731,8 +728,15 @@ def parse_step1_output(
     # Step 2/3/4, weekly all ignore it), and cannot affect allowed_actions / add
     # NEW_BUY / ORDER_COMPILATION. operator_completed_anchor_sha256 is the
     # activation-binding hash; candidate_sha256 is audit-only.
-    _write_research_anchor_approvals_validation_report_only(
+    approvals_validation_switch_status = _write_research_anchor_approvals_validation_report_only(
         strategy_settings=handoff_strategy_settings
+    )
+
+    # Report-only layer 0c3a (S1A-3/S1A-4): per-artifact switch provenance for the
+    # two switched writers above. Written once, after the last switched writer.
+    # Diagnostic only, consumed by nothing; never gates, never grants actions.
+    _write_step1a_artifact_switch_status_report_only(
+        [active_registry_switch_status, approvals_validation_switch_status]
     )
 
     # Report-only layer 0c3b (R2G-5d-0): operator-REVOCATION manifest validator.
@@ -1025,6 +1029,9 @@ def parse_step1_output(
         "step1a_grounding_compile_shadow_diff_status": step1a_shadow_summary.get("comparison_status", ""),
         "active_research_anchor_registry_writer_source": str(
             active_registry_switch_status.get("writer_source", "")
+        ),
+        "research_anchor_approvals_validation_writer_source": str(
+            approvals_validation_switch_status.get("writer_source", "")
         ),
         "step1a_artifact_switch_status_path": str(step1a_artifact_switch_status_path()),
         "schema_version": str(payload.get("schema_version", "")),
@@ -1535,18 +1542,44 @@ def _write_research_anchor_candidates_report_only(
 def _write_research_anchor_approvals_validation_report_only(
     *,
     strategy_settings: Mapping[str, Any] | None,
-) -> None:
-    """Validate the operator-approval manifest defensively (R2G-5a, report-only).
+) -> dict[str, Any]:
+    """Write the R2G-5a approvals-validation report from the Step 1A source (S1A-4).
 
-    Reads ``inputs/current/research_anchor_approvals.yaml`` and writes
-    ``research_anchor_approvals_validation.json``. Strictly inert: it activates NO
-    anchor, is consumed by NOTHING (not support_signals, not the active registry,
-    not the compiler, not the actionable preview/candidate/eligibility, not
-    availability, not gates, not Step 2/3/4, not weekly, not broker/live), is never
-    added to promoted_source_artifacts / allowed_actions / any gate, and adds no
-    permission / state / action. A missing manifest yields a valid, empty report.
-    Any error is swallowed so Step 1 parse is never affected.
+    Second artifact switch of the Step 1 split: the payload now comes from the
+    narrow Step 1A accessor for the standalone REPORT variant (byte-identical to
+    the legacy compile for string-or-absent ``as_of``; the overlay variant that
+    feeds the with-approvals registry is separate and unchanged). The legacy
+    writer is retained as the runtime fallback; a double failure preserves the
+    pre-switch swallowed behavior. Output path, layer position, schema, markers,
+    and payload bytes are unchanged. The artifact stays strictly inert: it
+    activates NO anchor, is consumed by NOTHING authoritative (not
+    support_signals, not the active registry, not the compiler, not availability,
+    not gates, not Step 2/3/4, not weekly, not broker/live), ``would_activate``
+    is never trusted, and it never raises into the Step 1 parse flow. A missing
+    manifest yields a valid, empty report. Returns report-only provenance for
+    ``step1a_artifact_switch_status.json``.
     """
+    status: dict[str, Any] = {
+        "artifact": "research_anchor_approvals_validation",
+        "output_path": "",
+        "writer_source": "unwritten",
+        "fallback_used": False,
+        "error_summary": "",
+    }
+    try:
+        output_path = step1_research_anchor_approvals_validation_path()
+        status["output_path"] = str(output_path)
+        payload = build_step1a_research_anchor_approvals_validation(
+            strategy_settings=strategy_settings,
+            research_anchor_approvals_path=current_inputs_dir()
+            / RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME,
+        )
+        write_json(output_path, payload)
+        status["writer_source"] = "step1a"
+        return status
+    except Exception as exc:  # noqa: BLE001 - fall back to the retained legacy writer
+        status["fallback_used"] = True
+        status["error_summary"] = f"step1a_accessor_failed: {exc}"
     try:
         approvals_path = current_inputs_dir() / RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME
         settings_as_of = (
@@ -1560,8 +1593,11 @@ def _write_research_anchor_approvals_validation_report_only(
             today=settings_as_of,
             as_of_date=settings_as_of if isinstance(settings_as_of, str) else None,
         )
-    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
-        pass
+        status["writer_source"] = "legacy_fallback"
+    except Exception as exc:  # noqa: BLE001 - report-only: never break Step 1 parse
+        status["writer_source"] = "unwritten"
+        status["error_summary"] = f"{status['error_summary']}; legacy_writer_failed: {exc}"
+    return status
 
 
 def _write_research_anchor_revocations_validation_report_only(

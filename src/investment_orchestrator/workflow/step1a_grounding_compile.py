@@ -140,6 +140,37 @@ def build_step1a_active_research_anchor_registry(
     )
 
 
+def build_step1a_research_anchor_approvals_validation(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+    research_anchor_approvals_path: Any,
+    generated_at: str | None = None,
+    now_date: str | None = None,
+) -> dict[str, Any]:
+    """Build the Step 1A standalone approvals-validation report payload (S1A-4).
+
+    Narrow accessor for the second artifact switch: the SAME derivation the full
+    Step 1A bundle uses for its REPORT variant (``_build`` calls this function),
+    calling the same deterministic validator with the same manifest/universe/
+    as-of inputs as the legacy Step 1 writer — byte-identical to the legacy
+    compile for string-or-absent ``as_of``. A non-string ``as_of`` normalizes to
+    None via ``_first_str`` (the established Step 1A convention). This is NOT the
+    overlay variant that feeds the with-approvals registry; that path is
+    separate and unchanged. Pure: reads only the manifest via the validator,
+    writes nothing, and carries no activation/selection/permission/order
+    authority (``would_activate`` stays report-only).
+    """
+    settings = strategy_settings if isinstance(strategy_settings, Mapping) else None
+    as_of = _first_str(now_date, _get(settings, "as_of"))
+    return validate_research_anchor_approvals(
+        manifest_path=research_anchor_approvals_path,
+        allowed_universe=_allowed_buy_universe(settings),
+        today=as_of,
+        as_of_date=as_of,
+        generated_at=generated_at,
+    )
+
+
 def build_step1a_grounding_compile_shadow_diff(
     *,
     step1a_bundle: Mapping[str, Any] | None,
@@ -222,12 +253,14 @@ def _build(
         generated_at=generated_at,
         now_date=settings_as_of,
     )
-    approvals_validation = validate_research_anchor_approvals(
-        manifest_path=research_anchor_approvals_path,
-        allowed_universe=allowed_universe,
-        today=settings_as_of,
-        as_of_date=settings_as_of,
+    # S1A-4: the REPORT variant is shared with the switched production writer via
+    # this single accessor. The overlay variant below stays separate on purpose —
+    # it feeds the with-approvals registry and is NOT switched.
+    approvals_validation = build_step1a_research_anchor_approvals_validation(
+        strategy_settings=settings,
+        research_anchor_approvals_path=research_anchor_approvals_path,
         generated_at=generated_at,
+        now_date=settings_as_of,
     )
     revocations_validation = validate_research_anchor_revocations(
         manifest_path=research_anchor_approvals_path,
