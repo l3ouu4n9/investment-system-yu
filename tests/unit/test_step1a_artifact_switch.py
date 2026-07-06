@@ -25,11 +25,15 @@ from investment_orchestrator.research.research_anchor_approval_manifest import (
     compute_operator_completed_anchor_sha256 as sha,
     write_research_anchor_approvals_validation,
 )
+from investment_orchestrator.research.research_anchor_revocation_manifest import (
+    write_research_anchor_revocations_validation,
+)
 from investment_orchestrator.workflow import step1_research
 from investment_orchestrator.workflow.step1a_grounding_compile import (
     build_step1a_active_research_anchor_registry,
     build_step1a_grounding_compile_bundle,
     build_step1a_research_anchor_approvals_validation,
+    build_step1a_research_anchor_revocations_validation,
 )
 
 from test_step1a_shadow_run import _anchor, _approval, _read, _settings, _setup_repo
@@ -157,10 +161,11 @@ def test_parse_writes_registry_from_step1a_source_and_switch_status(
     assert entry["error_summary"] == ""
     assert entry["output_path"] == str(step1_research.step1_active_research_anchor_registry_path())
 
-    # Exactly the two S1A-3/S1A-4 switched artifacts — no third switch.
+    # Exactly the three S1A-3/4/5 switched artifacts — no fourth switch.
     assert sorted(status["switched_artifacts"]) == [
         "active_research_anchor_registry",
         "research_anchor_approvals_validation",
+        "research_anchor_revocations_validation",
     ]
 
 
@@ -403,8 +408,13 @@ def test_bundle_report_variant_uses_accessor_and_overlay_untouched() -> None:
     # variant feeding the with-approvals registry, deliberately NOT switched.
     assert src.count("validate_research_anchor_approvals(") == 1
     assert "overlay_approvals_validation = validate_research_anchor_approvals(" in src
-    # Revocations validation (report + overlay variants) is untouched by S1A-4.
-    assert src.count("validate_research_anchor_revocations(") == 2
+    # S1A-5: the revocations REPORT variant moved into its accessor, so exactly
+    # one raw revocations-validator call remains — the baseline-coupled OVERLAY
+    # variant, which must keep its active_registry as-of coupling.
+    assert "build_step1a_research_anchor_revocations_validation(" in src
+    assert src.count("validate_research_anchor_revocations(") == 1
+    assert "overlay_revocations_validation = validate_research_anchor_revocations(" in src
+    assert 'as_of_date=active_registry.get("as_of_date")' in src
 
 
 def test_parse_writes_approvals_validation_from_step1a_source(
@@ -526,6 +536,312 @@ def test_approvals_double_failure_preserves_swallowed_behavior(
     assert "ORDER_COMPILATION" not in decision["allowed_actions"]
 
 
+def _revocation(anchor: dict[str, Any], **overrides: Any) -> dict[str, Any]:
+    base = {
+        "revocation_id": "REV-1",
+        "target_type": "approval_anchor",
+        "approval_id": "APR-1",
+        "anchor_id": anchor["anchor_id"],
+        "operator_completed_anchor_sha256": sha(anchor),
+        "effective_as_of": "2026-06-20",
+        "reason": "Thesis invalidated.",
+        "revoked_by": "operator",
+    }
+    base.update(overrides)
+    return base
+
+
+def _revocations_doc(
+    revocations: list[dict[str, Any]] | None,
+    *,
+    include_approval: bool = True,
+    **overrides: Any,
+) -> dict[str, Any]:
+    doc: dict[str, Any] = {
+        "schema_version": "research_anchor_approvals_v1",
+        "is_llm_generated": False,
+        "as_of_date": "2026-06-28",
+        "approvals": [_approval(_base_anchor())] if include_approval else [],
+    }
+    if revocations is not None:
+        doc["revocations"] = revocations
+    doc.update(overrides)
+    return doc
+
+
+def _no_as_of_doc() -> dict[str, Any]:
+    doc = _revocations_doc([_revocation(_base_anchor(), effective_as_of="2026-12-01")])
+    del doc["as_of_date"]
+    return doc
+
+
+# scenario -> (manifest document | "missing" | raw text, strategy_settings)
+_REVOCATIONS_BYTE_IDENTITY_MATRIX: dict[str, tuple[Any, Any]] = {
+    "valid_effective_revocation": (
+        _revocations_doc([_revocation(_base_anchor())]),
+        _MATRIX_SETTINGS,
+    ),
+    "future_effective_pending": (
+        _revocations_doc([_revocation(_base_anchor(), effective_as_of="2026-12-01")]),
+        _MATRIX_SETTINGS,
+    ),
+    "no_revocations_section": (_revocations_doc(None), _MATRIX_SETTINGS),
+    "empty_revocations_list": (_revocations_doc([]), _MATRIX_SETTINGS),
+    "missing_manifest": ("missing", _MATRIX_SETTINGS),
+    "malformed_yaml": ("::: not yaml {{{", _MATRIX_SETTINGS),
+    "unknown_target_fails_closed": (
+        _revocations_doc(
+            [_revocation(_base_anchor(), approval_id="APR-MISSING", anchor_id="NO_SUCH_ANCHOR")]
+        ),
+        _MATRIX_SETTINGS,
+    ),
+    "sha256_mismatch": (
+        _revocations_doc([_revocation(_base_anchor(), operator_completed_anchor_sha256="0" * 64)]),
+        _MATRIX_SETTINGS,
+    ),
+    "inconsistent_triple": (
+        # approval_id matches an approval whose anchor differs from anchor_id+sha.
+        _revocations_doc([_revocation(_base_anchor(anchor_id="OTHER_ANCHOR"))]),
+        _MATRIX_SETTINGS,
+    ),
+    "duplicate_revocation_ids": (
+        _revocations_doc(
+            [_revocation(_base_anchor()), _revocation(_base_anchor(), reason="duplicate copy")]
+        ),
+        _MATRIX_SETTINGS,
+    ),
+    "unsupported_target_type": (
+        _revocations_doc([_revocation(_base_anchor(), target_type="portfolio_wide")]),
+        _MATRIX_SETTINGS,
+    ),
+    "forbidden_anchor_defining_fields": (
+        _revocations_doc(
+            [_revocation(_base_anchor(), valid_until="2027-12-31", applicable_tickers=["QQQ"])]
+        ),
+        _MATRIX_SETTINGS,
+    ),
+    "llm_generated_true_fails_closed": (
+        _revocations_doc([_revocation(_base_anchor())], is_llm_generated=True),
+        _MATRIX_SETTINGS,
+    ),
+    "missing_reason": (
+        _revocations_doc([{k: v for k, v in _revocation(_base_anchor()).items() if k != "reason"}]),
+        _MATRIX_SETTINGS,
+    ),
+    # A manifest WITHOUT its own as_of_date makes the today/as_of_date parameters
+    # matter for effective-date evaluation — the highest-value byte case.
+    "manifest_without_as_of_date": (_no_as_of_doc(), _MATRIX_SETTINGS),
+    "settings_none": (_revocations_doc([_revocation(_base_anchor())]), None),
+    "settings_missing_universes": (
+        _revocations_doc([_revocation(_base_anchor())]),
+        {"as_of": "2026-06-28"},
+    ),
+    "missing_as_of": (
+        _revocations_doc([_revocation(_base_anchor())]),
+        {"core_universe": ["QQQ", "VOO"], "satellite_universe": ["SMH"]},
+    ),
+}
+
+
+@pytest.mark.parametrize("scenario", sorted(_REVOCATIONS_BYTE_IDENTITY_MATRIX))
+def test_revocations_accessor_output_byte_identical_to_legacy_writer(
+    scenario: str, tmp_path: Path
+) -> None:
+    source, settings = _REVOCATIONS_BYTE_IDENTITY_MATRIX[scenario]
+    manifest_path = tmp_path / "research_anchor_approvals.yaml"
+    if source == "missing":
+        pass
+    elif isinstance(source, str):
+        manifest_path.write_text(source, encoding="utf-8")
+    else:
+        manifest_path.write_text(json.dumps(source), encoding="utf-8")
+
+    settings_as_of = settings.get("as_of") if isinstance(settings, dict) else None
+    legacy_path = tmp_path / "legacy_research_anchor_revocations_validation.json"
+    write_research_anchor_revocations_validation(
+        output_path=legacy_path,
+        manifest_path=manifest_path,
+        allowed_universe=step1_research._allowed_buy_universe_for_anchor_registry(settings),
+        today=settings_as_of,
+        as_of_date=settings_as_of if isinstance(settings_as_of, str) else None,
+    )
+    legacy_payload = json.loads(legacy_path.read_text(encoding="utf-8"))
+
+    step1a_payload = build_step1a_research_anchor_revocations_validation(
+        strategy_settings=settings,
+        research_anchor_approvals_path=manifest_path,
+    )
+
+    assert json.loads(json.dumps(step1a_payload)) == legacy_payload
+
+
+def test_revocations_non_string_as_of_normalizes_to_none_and_matches_bundle(
+    tmp_path: Path,
+) -> None:
+    """Pin the documented S1A-5 normalization edge.
+
+    Legacy passes a raw non-string ``as_of`` (e.g. an unquoted YAML date) through
+    as ``today`` while Step 1A's ``_first_str`` normalizes it to None — so byte
+    identity vs legacy is deliberately NOT asserted for this input class. The
+    accessor must behave exactly as if ``as_of`` were absent and must equal the
+    Step 1A bundle's report variant. The manifest here deliberately omits its own
+    ``as_of_date``: a dated manifest anchors effective-date evaluation itself and
+    would mask the parameter divergence entirely.
+    """
+    universes = {"core_universe": ["QQQ", "VOO"], "satellite_universe": ["SMH"]}
+    date_settings = {"as_of": datetime.date(2026, 6, 28), **universes}
+    no_asof_settings = dict(universes)
+    anchors_path = tmp_path / "research_anchors.yaml"
+    anchors_path.write_text(json.dumps(_anchors_doc([_base_anchor()])), encoding="utf-8")
+    manifest_path = tmp_path / "research_anchor_approvals.yaml"
+    manifest_path.write_text(json.dumps(_no_as_of_doc()), encoding="utf-8")
+
+    accessor_with_date = build_step1a_research_anchor_revocations_validation(
+        strategy_settings=date_settings,
+        research_anchor_approvals_path=manifest_path,
+    )
+    accessor_without_asof = build_step1a_research_anchor_revocations_validation(
+        strategy_settings=no_asof_settings,
+        research_anchor_approvals_path=manifest_path,
+    )
+    assert accessor_with_date == accessor_without_asof
+
+    bundle = build_step1a_grounding_compile_bundle(
+        strategy_settings=date_settings,
+        research_anchors_path=anchors_path,
+        research_anchor_approvals_path=manifest_path,
+    )
+    assert accessor_with_date == bundle["artifacts"]["research_anchor_revocations_validation"]
+
+
+def test_parse_writes_revocations_validation_from_step1a_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _setup_repo(tmp_path, monkeypatch)
+
+    result = step1_research.parse_step1_output(strategy_settings=_settings())
+
+    artifact_path = step1_research.step1_research_anchor_revocations_validation_path()
+    legacy_path = tmp_path / "independent_legacy_revocations_validation.json"
+    write_research_anchor_revocations_validation(
+        output_path=legacy_path,
+        manifest_path=tmp_path / "inputs" / "current" / "research_anchor_approvals.yaml",
+        allowed_universe=step1_research._allowed_buy_universe_for_anchor_registry(_settings()),
+        today=_settings()["as_of"],
+        as_of_date=_settings()["as_of"],
+    )
+    assert artifact_path.read_bytes() == legacy_path.read_bytes()
+
+    assert result["research_anchor_revocations_validation_writer_source"] == "step1a"
+    status = _read(step1_research.step1a_artifact_switch_status_path())
+    entry = status["switched_artifacts"]["research_anchor_revocations_validation"]
+    assert entry["writer_source"] == "step1a"
+    assert entry["fallback_used"] is False
+    assert entry["error_summary"] == ""
+    assert entry["output_path"] == str(artifact_path)
+
+
+def test_revocations_accessor_failure_falls_back_independently(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _setup_repo(tmp_path, monkeypatch)
+
+    def broken_accessor(**_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("revocations accessor exploded")
+
+    monkeypatch.setattr(
+        step1_research, "build_step1a_research_anchor_revocations_validation", broken_accessor
+    )
+
+    result = step1_research.parse_step1_output(strategy_settings=_settings())
+
+    # Per-artifact independence: the other two switches are unaffected.
+    assert result["active_research_anchor_registry_writer_source"] == "step1a"
+    assert result["research_anchor_approvals_validation_writer_source"] == "step1a"
+    assert result["research_anchor_revocations_validation_writer_source"] == "legacy_fallback"
+    status = _read(step1_research.step1a_artifact_switch_status_path())
+    assert status["switched_artifacts"]["active_research_anchor_registry"]["writer_source"] == "step1a"
+    assert (
+        status["switched_artifacts"]["research_anchor_approvals_validation"]["writer_source"]
+        == "step1a"
+    )
+    entry = status["switched_artifacts"]["research_anchor_revocations_validation"]
+    assert entry["writer_source"] == "legacy_fallback"
+    assert entry["fallback_used"] is True
+    assert "step1a_accessor_failed" in entry["error_summary"]
+
+    # The legacy fallback wrote the byte-identical payload; shadow stays green.
+    legacy_path = tmp_path / "independent_legacy_revocations_validation.json"
+    write_research_anchor_revocations_validation(
+        output_path=legacy_path,
+        manifest_path=tmp_path / "inputs" / "current" / "research_anchor_approvals.yaml",
+        allowed_universe=step1_research._allowed_buy_universe_for_anchor_registry(_settings()),
+        today=_settings()["as_of"],
+        as_of_date=_settings()["as_of"],
+    )
+    artifact_path = step1_research.step1_research_anchor_revocations_validation_path()
+    assert artifact_path.read_bytes() == legacy_path.read_bytes()
+    diff = _read(step1_research.step1a_grounding_compile_shadow_diff_path())
+    assert diff["comparison_status"] == "pass"
+    assert diff["comparisons"]["research_anchor_revocations_validation"]["semantic_match"] is True
+
+
+def test_revocations_double_failure_preserves_swallowed_behavior(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _setup_repo(tmp_path, monkeypatch)
+
+    def broken_accessor(**_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("revocations accessor exploded")
+
+    def broken_legacy(**_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("legacy revocations writer exploded")
+
+    monkeypatch.setattr(
+        step1_research, "build_step1a_research_anchor_revocations_validation", broken_accessor
+    )
+    monkeypatch.setattr(
+        step1_research, "write_research_anchor_revocations_validation", broken_legacy
+    )
+
+    result = step1_research.parse_step1_output(strategy_settings=_settings())
+
+    # Pre-switch behavior preserved: artifact absent, parse continues.
+    assert Path(result["research_output_path"]).is_file()
+    assert not step1_research.step1_research_anchor_revocations_validation_path().is_file()
+    assert result["research_anchor_revocations_validation_writer_source"] == "unwritten"
+
+    status = _read(step1_research.step1a_artifact_switch_status_path())
+    assert status["switched_artifacts"]["active_research_anchor_registry"]["writer_source"] == "step1a"
+    assert (
+        status["switched_artifacts"]["research_anchor_approvals_validation"]["writer_source"]
+        == "step1a"
+    )
+    entry = status["switched_artifacts"]["research_anchor_revocations_validation"]
+    assert entry["writer_source"] == "unwritten"
+    assert entry["fallback_used"] is True
+    assert "step1a_accessor_failed" in entry["error_summary"]
+    assert "legacy_writer_failed" in entry["error_summary"]
+
+    # Explicit skip in the shadow diff — never a false complete pass.
+    diff = _read(step1_research.step1a_grounding_compile_shadow_diff_path())
+    revocations_cmp = diff["comparisons"]["research_anchor_revocations_validation"]
+    assert revocations_cmp["comparison_skipped"] is True
+    assert revocations_cmp["skip_reason"] == "current_step1_artifact_unavailable_or_malformed"
+    assert diff["comparison_status"] in ("mismatch", "pass_with_skips")
+    assert diff["comparison_complete"] is False
+    assert diff["parity_passed"] is False
+    assert diff["production_artifacts_unchanged"] is True
+
+    decision = _read(Path(result["research_degraded_mode_decision_path"]))
+    assert decision["allowed_actions"] == ["HOLD", "NO_TRADE"]
+    assert "NEW_BUY" not in decision["allowed_actions"]
+    assert "ORDER_COMPILATION" not in decision["allowed_actions"]
+
+
 # evidence_packet_registry_sha256 hashes the packet's embedded registry INCLUDING
 # its wall-clock generated_at, so it differs between any two runs regardless of
 # which writer produced the baseline registry artifact.
@@ -574,6 +890,11 @@ def test_reader_invariance_between_step1a_and_legacy_fallback_runs(
                 mp.setattr(
                     step1_research,
                     "build_step1a_research_anchor_approvals_validation",
+                    broken_accessor,
+                )
+                mp.setattr(
+                    step1_research,
+                    "build_step1a_research_anchor_revocations_validation",
                     broken_accessor,
                 )
             step1_research.parse_step1_output(strategy_settings=_settings())
@@ -628,6 +949,7 @@ def test_switch_boundaries_no_new_consumer_and_embedded_selection_untouched(
         assert "step1a_artifact_switch_status" not in source
         assert "build_step1a_active_research_anchor_registry" not in source
         assert "build_step1a_research_anchor_approvals_validation" not in source
+        assert "build_step1a_research_anchor_revocations_validation" not in source
 
     _setup_repo(tmp_path, monkeypatch)
     step1_research.parse_step1_output(strategy_settings=_settings())

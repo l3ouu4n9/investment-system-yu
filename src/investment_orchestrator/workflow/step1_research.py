@@ -119,6 +119,7 @@ from investment_orchestrator.workflow.step1a_grounding_compile import (
     build_step1a_grounding_compile_bundle,
     build_step1a_grounding_compile_shadow_diff,
     build_step1a_research_anchor_approvals_validation,
+    build_step1a_research_anchor_revocations_validation,
 )
 from investment_orchestrator.validators.strategy_settings import parse_strategy_settings_text
 from investment_orchestrator.validators.validate_research_handoff import (
@@ -732,23 +733,28 @@ def parse_step1_output(
         strategy_settings=handoff_strategy_settings
     )
 
-    # Report-only layer 0c3a (S1A-3/S1A-4): per-artifact switch provenance for the
-    # two switched writers above. Written once, after the last switched writer.
-    # Diagnostic only, consumed by nothing; never gates, never grants actions.
-    _write_step1a_artifact_switch_status_report_only(
-        [active_registry_switch_status, approvals_validation_switch_status]
-    )
-
-    # Report-only layer 0c3b (R2G-5d-0): operator-REVOCATION manifest validator.
-    # Reads the optional revocations: section of research_anchor_approvals.yaml and
-    # writes research_anchor_revocations_validation.json — a diagnostic that answers
+    # Report-only layer 0c3b (R2G-5d-0, switched by S1A-5): operator-REVOCATION
+    # manifest validator. Reads the optional revocations: section of
+    # research_anchor_approvals.yaml and writes
+    # research_anchor_revocations_validation.json — a diagnostic that answers
     # "does this revocation deterministically bind to one operator-approved anchor?".
     # Strictly inert: it APPLIES nothing, does not change the approvals-inclusive
     # registry compiler / support_signals / evidence_packet registry selection /
     # readiness, is consumed by NOTHING, and cannot affect allowed_actions / add
     # NEW_BUY / ORDER_COMPILATION. Unknown target fails closed (mandatory amendment).
-    _write_research_anchor_revocations_validation_report_only(
+    revocations_validation_switch_status = _write_research_anchor_revocations_validation_report_only(
         strategy_settings=handoff_strategy_settings
+    )
+
+    # Report-only layer 0c3c (S1A-3/4/5): per-artifact switch provenance for the
+    # three switched writers above. Written once, after the last switched writer.
+    # Diagnostic only, consumed by nothing; never gates, never grants actions.
+    _write_step1a_artifact_switch_status_report_only(
+        [
+            active_registry_switch_status,
+            approvals_validation_switch_status,
+            revocations_validation_switch_status,
+        ]
     )
 
     # Report-only layer 0c4 (R2G-5b): approvals-inclusive active registry + dual-read
@@ -1032,6 +1038,9 @@ def parse_step1_output(
         ),
         "research_anchor_approvals_validation_writer_source": str(
             approvals_validation_switch_status.get("writer_source", "")
+        ),
+        "research_anchor_revocations_validation_writer_source": str(
+            revocations_validation_switch_status.get("writer_source", "")
         ),
         "step1a_artifact_switch_status_path": str(step1a_artifact_switch_status_path()),
         "schema_version": str(payload.get("schema_version", "")),
@@ -1603,20 +1612,45 @@ def _write_research_anchor_approvals_validation_report_only(
 def _write_research_anchor_revocations_validation_report_only(
     *,
     strategy_settings: Mapping[str, Any] | None,
-) -> None:
-    """Validate the operator-revocation manifest defensively (R2G-5d-0, report-only).
+) -> dict[str, Any]:
+    """Write the R2G-5d-0 revocations-validation report from the Step 1A source (S1A-5).
 
-    Reads the optional ``revocations:`` section of
-    ``inputs/current/research_anchor_approvals.yaml`` and writes
-    ``research_anchor_revocations_validation.json``. The on-disk validation
-    artifact remains strictly inert: it APPLIES no revocation, does not change
-    ``support_signals``, the embedded ``evidence_packet`` registry selection, or
-    readiness; is consumed by NOTHING as an artifact, is never added to
-    promoted_source_artifacts / allowed_actions / any gate, and adds no permission
-    / state / action. Unknown target fails closed (mandatory R2G-5d-0 amendment).
-    A missing manifest yields a valid, empty report. Any error is swallowed so
-    Step 1 parse is never affected.
+    Third artifact switch of the Step 1 split: the payload now comes from the
+    narrow Step 1A accessor for the settings-anchored standalone REPORT variant
+    (byte-identical to the legacy compile for string-or-absent ``as_of``; the
+    baseline-coupled overlay variant that feeds the with-approvals registry is
+    separate and unchanged). The legacy writer is retained as the runtime
+    fallback; a double failure preserves the pre-switch swallowed behavior.
+    Output path, layer position, schema, markers, and payload bytes are
+    unchanged. The artifact stays strictly inert: it APPLIES no revocation, does
+    not change ``support_signals``, the embedded ``evidence_packet`` registry
+    selection, or readiness; is consumed by NOTHING as an artifact; unknown
+    target still fails closed and ``reason`` stays non-authoritative. A missing
+    manifest yields a valid, empty report; it never raises into the Step 1 parse
+    flow. Returns report-only provenance for
+    ``step1a_artifact_switch_status.json``.
     """
+    status: dict[str, Any] = {
+        "artifact": "research_anchor_revocations_validation",
+        "output_path": "",
+        "writer_source": "unwritten",
+        "fallback_used": False,
+        "error_summary": "",
+    }
+    try:
+        output_path = step1_research_anchor_revocations_validation_path()
+        status["output_path"] = str(output_path)
+        payload = build_step1a_research_anchor_revocations_validation(
+            strategy_settings=strategy_settings,
+            research_anchor_approvals_path=current_inputs_dir()
+            / RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME,
+        )
+        write_json(output_path, payload)
+        status["writer_source"] = "step1a"
+        return status
+    except Exception as exc:  # noqa: BLE001 - fall back to the retained legacy writer
+        status["fallback_used"] = True
+        status["error_summary"] = f"step1a_accessor_failed: {exc}"
     try:
         approvals_path = current_inputs_dir() / RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME
         settings_as_of = (
@@ -1630,8 +1664,11 @@ def _write_research_anchor_revocations_validation_report_only(
             today=settings_as_of,
             as_of_date=settings_as_of if isinstance(settings_as_of, str) else None,
         )
-    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
-        pass
+        status["writer_source"] = "legacy_fallback"
+    except Exception as exc:  # noqa: BLE001 - report-only: never break Step 1 parse
+        status["writer_source"] = "unwritten"
+        status["error_summary"] = f"{status['error_summary']}; legacy_writer_failed: {exc}"
+    return status
 
 
 def _write_approval_registry_dual_read_report_only(

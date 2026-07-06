@@ -171,6 +171,41 @@ def build_step1a_research_anchor_approvals_validation(
     )
 
 
+def build_step1a_research_anchor_revocations_validation(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+    research_anchor_approvals_path: Any,
+    generated_at: str | None = None,
+    now_date: str | None = None,
+) -> dict[str, Any]:
+    """Build the Step 1A standalone revocations-validation report payload (S1A-5).
+
+    Narrow accessor for the third artifact switch: the SAME derivation the full
+    Step 1A bundle uses for its settings-anchored REPORT variant (``_build``
+    calls this function), calling the same deterministic validator with the same
+    manifest/universe/as-of inputs as the legacy Step 1 writer — byte-identical
+    to the legacy compile for string-or-absent ``as_of``. A non-string ``as_of``
+    normalizes to None via ``_first_str`` (the established Step 1A convention);
+    note a manifest carrying its own ``as_of_date`` anchors effective-date
+    evaluation regardless. This is NOT the overlay variant that feeds the
+    with-approvals registry — that path keeps its baseline-coupled
+    ``as_of_date=active_registry.get("as_of_date")`` and is unchanged. Pure:
+    reads only the manifest via the validator, writes nothing, APPLIES no
+    revocation, and carries no selection/permission/order authority (the
+    validator has no candidate-binding surface; ``reason`` stays
+    non-authoritative).
+    """
+    settings = strategy_settings if isinstance(strategy_settings, Mapping) else None
+    as_of = _first_str(now_date, _get(settings, "as_of"))
+    return validate_research_anchor_revocations(
+        manifest_path=research_anchor_approvals_path,
+        allowed_universe=_allowed_buy_universe(settings),
+        today=as_of,
+        as_of_date=as_of,
+        generated_at=generated_at,
+    )
+
+
 def build_step1a_grounding_compile_shadow_diff(
     *,
     step1a_bundle: Mapping[str, Any] | None,
@@ -262,12 +297,15 @@ def _build(
         generated_at=generated_at,
         now_date=settings_as_of,
     )
-    revocations_validation = validate_research_anchor_revocations(
-        manifest_path=research_anchor_approvals_path,
-        allowed_universe=allowed_universe,
-        today=settings_as_of,
-        as_of_date=settings_as_of,
+    # S1A-5: the settings-anchored REPORT variant is shared with the switched
+    # production writer via this single accessor. The overlay variant below stays
+    # separate on purpose — it is baseline-coupled and feeds the with-approvals
+    # registry, and is NOT switched.
+    revocations_validation = build_step1a_research_anchor_revocations_validation(
+        strategy_settings=settings,
+        research_anchor_approvals_path=research_anchor_approvals_path,
         generated_at=generated_at,
+        now_date=settings_as_of,
     )
 
     # Match the current Step 1 standalone approvals-inclusive registry writer:
