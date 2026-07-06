@@ -55,17 +55,21 @@ _ARTIFACT_KEYS = (
     "grounding_status_observatory",
 )
 
-# S1A-3/4/5/6: the report-only production artifacts whose WRITERS source their
+# S1A-3/4/5/6/7: the report-only production artifacts whose WRITERS source their
 # payload from the narrow Step 1A accessors. This is code-level design state
 # (artifact paths, schemas, and payload bytes are unchanged); per-run writer
 # provenance — including any legacy fallback — is recorded in
 # step1a_artifact_switch_status.json, not here. Every entry must stay a member
-# of _ARTIFACT_KEYS so each switched artifact keeps a shadow comparison.
+# of _ARTIFACT_KEYS so each switched artifact keeps a shadow comparison. Note
+# the switch-readiness entry covers the DISK OBSERVER artifact only: runtime
+# readiness is recomputed in memory by the evidence packet's embedded selector,
+# so the readiness_uses_step1a_output:false runtime marker stays accurate.
 STEP1A_WRITER_SOURCE_ARTIFACTS = (
     "active_research_anchor_registry",
     "research_anchor_approvals_validation",
     "research_anchor_revocations_validation",
     "active_research_anchor_registry_with_approvals",
+    "approval_registry_switch_readiness",
 )
 
 
@@ -280,6 +284,42 @@ def build_step1a_active_research_anchor_registry_with_approvals(
     )
 
 
+def build_step1a_approval_registry_switch_readiness(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+    research_anchors_path: Any,
+    research_anchor_approvals_path: Any,
+    generated_at: str | None = None,
+    now_date: str | None = None,
+) -> dict[str, Any]:
+    """Build the Step 1A switch-readiness DISK OBSERVER payload (S1A-7).
+
+    Narrow accessor for the fifth artifact switch. It is the SAME derivation the
+    full Step 1A bundle uses (``_build`` calls this function): a thin wrapper
+    over the shared deterministic ``build_approval_registry_switch_readiness``
+    — the exact builder the legacy write wrapper already delegates to — so the
+    payload is byte-identical to the legacy write by construction for
+    string-or-absent ``as_of``; a non-string ``as_of`` normalizes to None via
+    ``_first_str`` (the established Step 1A convention). This payload is the
+    disk OBSERVER artifact only: runtime readiness is recomputed in memory by
+    the evidence packet's embedded selector (and the support-signals dual-ground
+    dry run) and never reads this JSON as authority. ``ready`` and
+    ``switch_target`` are report fields, not permissions. The accessor changes
+    no registry selection, no evidence_packet behavior, no support_signals
+    grounding, no gate, and no order path. Pure: reads only the two operator
+    YAML files via the shared builder, writes nothing, and carries no
+    selection/permission/order authority.
+    """
+    settings = strategy_settings if isinstance(strategy_settings, Mapping) else None
+    return build_approval_registry_switch_readiness(
+        anchors_path=research_anchors_path,
+        approvals_path=research_anchor_approvals_path,
+        allowed_universe=_allowed_buy_universe(settings),
+        today=_first_str(now_date, _get(settings, "as_of")),
+        generated_at=generated_at,
+    )
+
+
 def build_step1a_grounding_compile_shadow_diff(
     *,
     step1a_bundle: Mapping[str, Any] | None,
@@ -401,12 +441,15 @@ def _build(
         approvals_registry_path=_path_str(approvals_registry_artifact_path),
         generated_at=generated_at,
     )
-    readiness = build_approval_registry_switch_readiness(
-        anchors_path=research_anchors_path,
-        approvals_path=research_anchor_approvals_path,
-        allowed_universe=allowed_universe,
-        today=settings_as_of,
+    # S1A-7: the switch-readiness disk-observer payload is shared with the
+    # switched production writer via this single accessor so the two can never
+    # drift. Runtime readiness stays an in-memory recompute elsewhere.
+    readiness = build_step1a_approval_registry_switch_readiness(
+        strategy_settings=settings,
+        research_anchors_path=research_anchors_path,
+        research_anchor_approvals_path=research_anchor_approvals_path,
         generated_at=generated_at,
+        now_date=settings_as_of,
     )
 
     embedded_selection = build_embedded_active_anchor_registry_selection(

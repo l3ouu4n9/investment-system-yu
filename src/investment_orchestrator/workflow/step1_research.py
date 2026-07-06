@@ -117,6 +117,7 @@ from investment_orchestrator.state.research_availability import (
 from investment_orchestrator.workflow.step1a_grounding_compile import (
     build_step1a_active_research_anchor_registry,
     build_step1a_active_research_anchor_registry_with_approvals,
+    build_step1a_approval_registry_switch_readiness,
     build_step1a_grounding_compile_bundle,
     build_step1a_grounding_compile_shadow_diff,
     build_step1a_research_anchor_approvals_validation,
@@ -760,22 +761,29 @@ def parse_step1_output(
         strategy_settings=handoff_strategy_settings
     )
 
-    # Report-only layer 0c4b (S1A-3/4/5/6): per-artifact switch provenance for the
-    # four switched writers above. Written once, after the last switched writer.
-    # Diagnostic only, consumed by nothing; never gates, never grants actions.
+    # Report-only layer 0c5 (R2G-5c-0, switched by S1A-7): approval-registry
+    # switch-READINESS disk observer. The on-disk artifact is still diagnostic/
+    # write-only — its payload now comes from the Step 1A accessor (legacy write
+    # wrapper retained as fallback; both share one deterministic builder) — while
+    # the actual 5c-2 switch above recomputes readiness from fresh in-memory
+    # YAML-derived objects and never reads this JSON.
+    readiness_switch_status = _write_approval_registry_switch_readiness_report_only(
+        strategy_settings=handoff_strategy_settings
+    )
+
+    # Report-only layer 0c5b (S1A-3/4/5/6/7): per-artifact switch provenance for
+    # the five switched writers above. Written once, after the last switched
+    # writer. Diagnostic only, consumed by nothing; never gates, never grants
+    # actions.
     _write_step1a_artifact_switch_status_report_only(
         [
             active_registry_switch_status,
             approvals_validation_switch_status,
             revocations_validation_switch_status,
             with_approvals_switch_status,
+            readiness_switch_status,
         ]
     )
-
-    # Report-only layer 0c5 (R2G-5c-0): approval-registry switch-READINESS gate. The
-    # on-disk artifact is still diagnostic/write-only; the actual 5c-2 switch above
-    # recomputes readiness from fresh in-memory YAML-derived objects.
-    _write_approval_registry_switch_readiness_report_only(strategy_settings=handoff_strategy_settings)
 
     # Report-only layer 0c6 (R2G-5c-1): support_signals dual-ground DRY-RUN diff.
     # Compares support_signals grounding under the embedded registry vs a freshly
@@ -1051,6 +1059,9 @@ def parse_step1_output(
         ),
         "active_research_anchor_registry_with_approvals_writer_source": str(
             with_approvals_switch_status.get("writer_source", "")
+        ),
+        "approval_registry_switch_readiness_writer_source": str(
+            readiness_switch_status.get("writer_source", "")
         ),
         "step1a_artifact_switch_status_path": str(step1a_artifact_switch_status_path()),
         "schema_version": str(payload.get("schema_version", "")),
@@ -1816,20 +1827,58 @@ def _write_approval_registry_dual_read_report_only(
 def _write_approval_registry_switch_readiness_report_only(
     *,
     strategy_settings: Mapping[str, Any] | None,
-) -> None:
-    """Compile + write the R2G-5c-0 switch-readiness gate (report-only).
+) -> dict[str, Any]:
+    """Write the R2G-5c-0 switch-readiness DISK OBSERVER from the Step 1A source (S1A-7).
 
-    Recomputes the baseline registry, approvals-inclusive registry, and dual-read
-    diff directly from the current ``research_anchors.yaml`` /
-    ``research_anchor_approvals.yaml`` bytes (never reading the R2G-5a validation
-    artifact or trusting its would_activate flag), then evaluates whether a FUTURE
-    switch would be safe. Strictly inert: it switches NO consumer, does not change
+    Fifth artifact switch of the Step 1 split. The payload now comes from the
+    narrow Step 1A accessor, which wraps the SAME shared deterministic
+    ``build_approval_registry_switch_readiness`` the retained legacy write
+    wrapper delegates to — byte-identical by construction for string-or-absent
+    ``as_of``. No run-time parity guard is needed here (unlike S1A-6): both
+    sides share one builder, there is no paired sibling artifact whose
+    consistency a divergence could break, and legacy is not otherwise computed
+    each run. The legacy writer is retained as the runtime fallback; a double
+    failure preserves the pre-switch swallowed behavior (absent artifact,
+    tolerant readers degrade). Output path, layer position, schema, markers,
+    and payload bytes are unchanged. The artifact stays a DISK OBSERVER only:
+    runtime readiness is recomputed in memory by the evidence packet's embedded
+    selector (and the support-signals dual-ground dry run) and never reads this
+    JSON as authority — ``ready``/``switch_target`` are report fields, not
+    permissions, so the runtime-scoped ``readiness_uses_step1a_output:false``
+    diagnostics marker remains accurate after this switch. The readiness
+    evaluation itself recomputes everything from the current YAML bytes (never
+    reading the R2G-5a validation artifact or trusting its would_activate
+    flag). Strictly inert: it switches NO consumer, does not change
     ``evidence_packet.active_anchor_registry`` or the baseline registry
-    support_signals consumes, is consumed by NOTHING, is never added to
-    promoted_source_artifacts / allowed_actions / any gate / Step 2/3/4 input, and
-    adds no permission / state / action. Any error is swallowed so Step 1 parse is
-    never affected.
+    support_signals consumes, is consumed by NOTHING authoritative, is never
+    added to promoted_source_artifacts / allowed_actions / any gate /
+    Step 2/3/4 input, adds no permission / state / action, and never raises
+    into the Step 1 parse flow. Returns report-only provenance for
+    ``step1a_artifact_switch_status.json``.
     """
+    status: dict[str, Any] = {
+        "artifact": "approval_registry_switch_readiness",
+        "output_path": "",
+        "writer_source": "unwritten",
+        "fallback_used": False,
+        "error_summary": "",
+    }
+    try:
+        anchors_path = current_inputs_dir() / RESEARCH_ANCHORS_INPUT_FILENAME
+        approvals_path = current_inputs_dir() / RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME
+        output_path = step1_approval_registry_switch_readiness_path()
+        status["output_path"] = str(output_path)
+        payload = build_step1a_approval_registry_switch_readiness(
+            strategy_settings=strategy_settings,
+            research_anchors_path=anchors_path,
+            research_anchor_approvals_path=approvals_path,
+        )
+        write_json(output_path, payload)
+        status["writer_source"] = "step1a"
+        return status
+    except Exception as exc:  # noqa: BLE001 - fall back to the retained legacy writer
+        status["fallback_used"] = True
+        status["error_summary"] = f"step1a_accessor_failed: {exc}"
     try:
         anchors_path = current_inputs_dir() / RESEARCH_ANCHORS_INPUT_FILENAME
         approvals_path = current_inputs_dir() / RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME
@@ -1844,8 +1893,11 @@ def _write_approval_registry_switch_readiness_report_only(
             allowed_universe=allowed_universe,
             today=settings_as_of,
         )
-    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
-        pass
+        status["writer_source"] = "legacy_fallback"
+    except Exception as exc:  # noqa: BLE001 - report-only: never break Step 1 parse
+        status["writer_source"] = "unwritten"
+        status["error_summary"] = f"{status['error_summary']}; legacy_writer_failed: {exc}"
+    return status
 
 
 def _write_support_signals_dual_ground_diff_report_only(

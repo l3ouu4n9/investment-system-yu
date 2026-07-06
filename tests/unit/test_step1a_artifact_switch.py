@@ -25,6 +25,9 @@ from investment_orchestrator.research.active_research_anchor_registry import (
 from investment_orchestrator.research.approval_registry_dual_read_diff import (
     build_approval_registry_dual_read_diff,
 )
+from investment_orchestrator.research.approval_registry_switch_readiness import (
+    write_approval_registry_switch_readiness,
+)
 from investment_orchestrator.research.approvals_inclusive_active_registry import (
     build_active_research_anchor_registry_with_approvals,
 )
@@ -43,6 +46,7 @@ from investment_orchestrator.workflow.step1a_grounding_compile import (
     STEP1A_WRITER_SOURCE_ARTIFACTS,
     build_step1a_active_research_anchor_registry,
     build_step1a_active_research_anchor_registry_with_approvals,
+    build_step1a_approval_registry_switch_readiness,
     build_step1a_grounding_compile_bundle,
     build_step1a_research_anchor_approvals_validation,
     build_step1a_research_anchor_revocations_validation,
@@ -185,16 +189,17 @@ def test_parse_writes_registry_from_step1a_source_and_switch_status(
     assert entry["error_summary"] == ""
     assert entry["output_path"] == str(step1_research.step1_active_research_anchor_registry_path())
 
-    # Exactly the four S1A-3/4/5/6 switched artifacts — no fifth switch.
+    # Exactly the five S1A-3/4/5/6/7 switched artifacts — no sixth switch.
     assert sorted(status["switched_artifacts"]) == [
         "active_research_anchor_registry",
         "active_research_anchor_registry_with_approvals",
+        "approval_registry_switch_readiness",
         "research_anchor_approvals_validation",
         "research_anchor_revocations_validation",
     ]
     # S1A-5.1 drift guard: the code-level design-state constant the shadow diff
     # reports must match the per-run switch-status truth, and every switched
-    # artifact must keep a shadow comparison entry. A fifth switch that skips
+    # artifact must keep a shadow comparison entry. A sixth switch that skips
     # updating the constant fails here.
     assert sorted(STEP1A_WRITER_SOURCE_ARTIFACTS) == sorted(status["switched_artifacts"])
     assert set(STEP1A_WRITER_SOURCE_ARTIFACTS) <= set(_ARTIFACT_KEYS)
@@ -1164,12 +1169,13 @@ def test_parse_writes_with_approvals_from_step1a_source_and_dual_read_unchanged(
     assert entry["fallback_used"] is False
     assert entry["error_summary"] == ""
     assert entry["output_path"] == str(artifact_path)
-    # All four switched writers report step1a in a normal run.
+    # All five switched writers report step1a in a normal run.
     assert {k: v["writer_source"] for k, v in status["switched_artifacts"].items()} == {
         "active_research_anchor_registry": "step1a",
         "research_anchor_approvals_validation": "step1a",
         "research_anchor_revocations_validation": "step1a",
         "active_research_anchor_registry_with_approvals": "step1a",
+        "approval_registry_switch_readiness": "step1a",
     }
 
     # The dual-read diff is NOT switched: byte-identical to the pure legacy
@@ -1366,6 +1372,244 @@ def test_with_approvals_double_failure_preserves_swallowed_behavior(
     assert "ORDER_COMPILATION" not in decision["allowed_actions"]
 
 
+# S1A-7 reuses the S1A-6 scenario matrix verbatim: the readiness evaluation
+# recomputes the same baseline/approvals/revocations lineage internally, so the
+# same anchors/approvals/settings variants exercise its full behavior surface
+# (valid/expired/out-of-universe/sha-mismatch/duplicate approvals, effective/
+# future/unknown-target/triple-binding revocations, malformed/missing inputs,
+# baseline empty/invalid, settings variants).
+@pytest.mark.parametrize("scenario", sorted(_WITH_APPROVALS_BYTE_IDENTITY_MATRIX))
+def test_readiness_accessor_output_byte_identical_to_legacy_writer(
+    scenario: str, tmp_path: Path
+) -> None:
+    anchors_source, approvals_source, settings = _WITH_APPROVALS_BYTE_IDENTITY_MATRIX[scenario]
+    anchors_path = tmp_path / "research_anchors.yaml"
+    approvals_path = tmp_path / "research_anchor_approvals.yaml"
+    for path, source in ((anchors_path, anchors_source), (approvals_path, approvals_source)):
+        if source == "missing":
+            continue
+        path.write_text(
+            source if isinstance(source, str) else json.dumps(source), encoding="utf-8"
+        )
+
+    settings_as_of = settings.get("as_of") if isinstance(settings, dict) else None
+    legacy_path = tmp_path / "legacy_approval_registry_switch_readiness.json"
+    write_approval_registry_switch_readiness(
+        output_path=legacy_path,
+        anchors_path=anchors_path,
+        approvals_path=approvals_path,
+        allowed_universe=step1_research._allowed_buy_universe_for_anchor_registry(settings),
+        today=settings_as_of,
+    )
+    legacy_payload = json.loads(legacy_path.read_text(encoding="utf-8"))
+
+    step1a_payload = build_step1a_approval_registry_switch_readiness(
+        strategy_settings=settings,
+        research_anchors_path=anchors_path,
+        research_anchor_approvals_path=approvals_path,
+    )
+
+    assert json.loads(json.dumps(step1a_payload)) == legacy_payload
+
+
+def test_readiness_non_string_as_of_normalizes_to_none_and_matches_bundle(
+    tmp_path: Path,
+) -> None:
+    """Pin the documented S1A-7 normalization edge.
+
+    Legacy passes a raw non-string ``as_of`` (e.g. an unquoted YAML date)
+    through as ``today`` while the Step 1A accessor's ``_first_str`` normalizes
+    it to None — the established S1A-3/4/5/6 convention — so byte identity vs
+    legacy is deliberately NOT asserted for this input class. The accessor must
+    behave exactly as if ``as_of`` were absent and must equal the Step 1A
+    bundle's readiness payload. The anchors doc is deliberately UNDATED so
+    ``today`` matters for the internally recomputed baseline. Unlike S1A-6
+    there is no run-time parity guard: readiness has no paired sibling artifact
+    whose consistency a divergence could break, and both sides share one
+    deterministic builder.
+    """
+    universes = {"core_universe": ["QQQ", "VOO"], "satellite_universe": ["SMH"]}
+    date_settings: dict[str, Any] = {"as_of": datetime.date(2026, 6, 28), **universes}
+    no_asof_settings = dict(universes)
+    anchors_path = tmp_path / "research_anchors.yaml"
+    undated = _anchors_doc([_base_anchor()])
+    del undated["as_of_date"]
+    anchors_path.write_text(json.dumps(undated), encoding="utf-8")
+    manifest_path = tmp_path / "research_anchor_approvals.yaml"
+    manifest_path.write_text(json.dumps(_no_as_of_doc()), encoding="utf-8")
+
+    accessor_with_date = build_step1a_approval_registry_switch_readiness(
+        strategy_settings=date_settings,
+        research_anchors_path=anchors_path,
+        research_anchor_approvals_path=manifest_path,
+    )
+    accessor_without_asof = build_step1a_approval_registry_switch_readiness(
+        strategy_settings=no_asof_settings,
+        research_anchors_path=anchors_path,
+        research_anchor_approvals_path=manifest_path,
+    )
+    assert accessor_with_date == accessor_without_asof
+
+    bundle = build_step1a_grounding_compile_bundle(
+        strategy_settings=date_settings,
+        research_anchors_path=anchors_path,
+        research_anchor_approvals_path=manifest_path,
+    )
+    assert accessor_with_date == bundle["artifacts"]["approval_registry_switch_readiness"]
+
+
+def test_bundle_readiness_uses_accessor() -> None:
+    import investment_orchestrator.workflow.step1a_grounding_compile as step1a
+
+    src = inspect.getsource(step1a._build)
+    # S1A-7: the readiness payload moved behind the shared accessor, so _build
+    # contains no raw readiness-builder call at all.
+    assert "build_step1a_approval_registry_switch_readiness(" in src
+    assert src.count("build_approval_registry_switch_readiness(") == 0
+
+    accessor_src = inspect.getsource(step1a.build_step1a_approval_registry_switch_readiness)
+    assert accessor_src.count("build_approval_registry_switch_readiness(") == 1
+
+
+def test_parse_writes_readiness_from_step1a_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _setup_repo(tmp_path, monkeypatch)
+
+    result = step1_research.parse_step1_output(strategy_settings=_settings())
+
+    inputs = tmp_path / "inputs" / "current"
+    artifact_path = step1_research.step1_approval_registry_switch_readiness_path()
+    legacy_path = tmp_path / "independent_legacy_switch_readiness.json"
+    write_approval_registry_switch_readiness(
+        output_path=legacy_path,
+        anchors_path=inputs / "research_anchors.yaml",
+        approvals_path=inputs / "research_anchor_approvals.yaml",
+        allowed_universe=step1_research._allowed_buy_universe_for_anchor_registry(_settings()),
+        today=_settings()["as_of"],
+    )
+    assert artifact_path.read_bytes() == legacy_path.read_bytes()
+
+    assert result["approval_registry_switch_readiness_writer_source"] == "step1a"
+    status = _read(step1_research.step1a_artifact_switch_status_path())
+    entry = status["switched_artifacts"]["approval_registry_switch_readiness"]
+    assert entry["writer_source"] == "step1a"
+    assert entry["fallback_used"] is False
+    assert entry["error_summary"] == ""
+    assert entry["output_path"] == str(artifact_path)
+
+    diff = _read(step1_research.step1a_grounding_compile_shadow_diff_path())
+    assert diff["comparison_status"] == "pass"
+    assert diff["parity_passed"] is True
+    assert diff["comparison_complete"] is True
+    assert diff["diagnostics"]["diagnostics_incomplete"] is False
+    assert diff["skipped_artifacts"] == []
+    assert diff["mismatch_artifacts"] == []
+    assert diff["comparisons"]["approval_registry_switch_readiness"]["semantic_match"] is True
+
+
+def test_readiness_accessor_failure_falls_back_independently(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _setup_repo(tmp_path, monkeypatch)
+
+    def broken_accessor(**_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("readiness accessor exploded")
+
+    monkeypatch.setattr(
+        step1_research, "build_step1a_approval_registry_switch_readiness", broken_accessor
+    )
+
+    result = step1_research.parse_step1_output(strategy_settings=_settings())
+
+    # Per-artifact independence: the other four switches are unaffected.
+    assert result["active_research_anchor_registry_writer_source"] == "step1a"
+    assert result["research_anchor_approvals_validation_writer_source"] == "step1a"
+    assert result["research_anchor_revocations_validation_writer_source"] == "step1a"
+    assert result["active_research_anchor_registry_with_approvals_writer_source"] == "step1a"
+    assert result["approval_registry_switch_readiness_writer_source"] == "legacy_fallback"
+
+    status = _read(step1_research.step1a_artifact_switch_status_path())
+    entry = status["switched_artifacts"]["approval_registry_switch_readiness"]
+    assert entry["writer_source"] == "legacy_fallback"
+    assert entry["fallback_used"] is True
+    assert "step1a_accessor_failed" in entry["error_summary"]
+
+    # The legacy write wrapper produced the byte-identical payload (same shared
+    # builder); shadow stays green.
+    inputs = tmp_path / "inputs" / "current"
+    legacy_path = tmp_path / "independent_legacy_switch_readiness.json"
+    write_approval_registry_switch_readiness(
+        output_path=legacy_path,
+        anchors_path=inputs / "research_anchors.yaml",
+        approvals_path=inputs / "research_anchor_approvals.yaml",
+        allowed_universe=step1_research._allowed_buy_universe_for_anchor_registry(_settings()),
+        today=_settings()["as_of"],
+    )
+    artifact_path = step1_research.step1_approval_registry_switch_readiness_path()
+    assert artifact_path.read_bytes() == legacy_path.read_bytes()
+    diff = _read(step1_research.step1a_grounding_compile_shadow_diff_path())
+    assert diff["comparison_status"] == "pass"
+    assert diff["comparisons"]["approval_registry_switch_readiness"]["semantic_match"] is True
+
+
+def test_readiness_double_failure_preserves_swallowed_behavior(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _setup_repo(tmp_path, monkeypatch)
+
+    def broken_accessor(**_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("readiness accessor exploded")
+
+    def broken_legacy(**_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("legacy readiness writer exploded")
+
+    monkeypatch.setattr(
+        step1_research, "build_step1a_approval_registry_switch_readiness", broken_accessor
+    )
+    monkeypatch.setattr(
+        step1_research, "write_approval_registry_switch_readiness", broken_legacy
+    )
+
+    result = step1_research.parse_step1_output(strategy_settings=_settings())
+
+    # Pre-switch behavior preserved: artifact absent, parse continues.
+    assert Path(result["research_output_path"]).is_file()
+    assert not step1_research.step1_approval_registry_switch_readiness_path().is_file()
+    assert result["approval_registry_switch_readiness_writer_source"] == "unwritten"
+
+    status = _read(step1_research.step1a_artifact_switch_status_path())
+    entry = status["switched_artifacts"]["approval_registry_switch_readiness"]
+    assert entry["writer_source"] == "unwritten"
+    assert entry["fallback_used"] is True
+    assert "step1a_accessor_failed" in entry["error_summary"]
+    assert "legacy_writer_failed" in entry["error_summary"]
+    # The other four switches are unaffected.
+    assert status["switched_artifacts"]["active_research_anchor_registry"]["writer_source"] == "step1a"
+    assert (
+        status["switched_artifacts"]["active_research_anchor_registry_with_approvals"]["writer_source"]
+        == "step1a"
+    )
+
+    # Explicit skip in the shadow diff — never a false complete pass.
+    diff = _read(step1_research.step1a_grounding_compile_shadow_diff_path())
+    readiness_cmp = diff["comparisons"]["approval_registry_switch_readiness"]
+    assert readiness_cmp["comparison_skipped"] is True
+    assert readiness_cmp["skip_reason"] == "current_step1_artifact_unavailable_or_malformed"
+    assert diff["comparison_status"] in ("mismatch", "pass_with_skips")
+    assert diff["comparison_complete"] is False
+    assert diff["parity_passed"] is False
+    assert diff["production_artifacts_unchanged"] is True
+
+    decision = _read(Path(result["research_degraded_mode_decision_path"]))
+    assert decision["allowed_actions"] == ["HOLD", "NO_TRADE"]
+    assert "NEW_BUY" not in decision["allowed_actions"]
+    assert "ORDER_COMPILATION" not in decision["allowed_actions"]
+
+
 # evidence_packet_registry_sha256 hashes the packet's embedded registry INCLUDING
 # its wall-clock generated_at, so it differs between any two runs regardless of
 # which writer produced the baseline registry artifact.
@@ -1426,6 +1670,11 @@ def test_reader_invariance_between_step1a_and_legacy_fallback_runs(
                     "build_step1a_active_research_anchor_registry_with_approvals",
                     broken_accessor,
                 )
+                mp.setattr(
+                    step1_research,
+                    "build_step1a_approval_registry_switch_readiness",
+                    broken_accessor,
+                )
             step1_research.parse_step1_output(strategy_settings=_settings())
             return {
                 "registry": _read(step1_research.step1_active_research_anchor_registry_path()),
@@ -1439,6 +1688,7 @@ def test_reader_invariance_between_step1a_and_legacy_fallback_runs(
                     step1_research.step1_active_research_anchor_registry_with_approvals_path()
                 ),
                 "dual_read_diff": _read(step1_research.step1_approval_registry_dual_read_diff_path()),
+                "readiness": _read(step1_research.step1_approval_registry_switch_readiness_path()),
                 "equivalence": _read(step1_research.step1_anchor_source_equivalence_path()),
                 "candidates": _read(step1_research.step1_research_anchor_candidates_path()),
                 "observatory": _read(step1_research.step1_grounding_status_observatory_path()),
@@ -1453,6 +1703,7 @@ def test_reader_invariance_between_step1a_and_legacy_fallback_runs(
         "revocations_validation",
         "with_approvals",
         "dual_read_diff",
+        "readiness",
         "equivalence",
         "candidates",
         "observatory",
@@ -1482,6 +1733,11 @@ def test_switch_boundaries_no_new_consumer_and_embedded_selection_untouched(
         # S1A-6: covered by the prefix assert above, but kept explicit — no
         # downstream module may reference the with-approvals accessor either.
         assert "build_step1a_active_research_anchor_registry_with_approvals" not in source
+        # S1A-7: NOT covered by any prefix above — must be asserted explicitly.
+        # The readiness DISK artifact and its accessor are invisible to every
+        # runtime module; runtime readiness recomputes in memory.
+        assert "build_step1a_approval_registry_switch_readiness" not in source
+        assert "step1_approval_registry_switch_readiness_path" not in source
 
     _setup_repo(tmp_path, monkeypatch)
     step1_research.parse_step1_output(strategy_settings=_settings())
