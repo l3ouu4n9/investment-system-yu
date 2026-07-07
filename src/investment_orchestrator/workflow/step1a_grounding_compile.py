@@ -55,7 +55,7 @@ _ARTIFACT_KEYS = (
     "grounding_status_observatory",
 )
 
-# S1A-3/4/5/6/7: the report-only production artifacts whose WRITERS source their
+# S1A-3/4/5/6/7/8: the report-only production artifacts whose WRITERS source their
 # payload from the narrow Step 1A accessors. This is code-level design state
 # (artifact paths, schemas, and payload bytes are unchanged); per-run writer
 # provenance — including any legacy fallback — is recorded in
@@ -63,13 +63,17 @@ _ARTIFACT_KEYS = (
 # of _ARTIFACT_KEYS so each switched artifact keeps a shadow comparison. Note
 # the switch-readiness entry covers the DISK OBSERVER artifact only: runtime
 # readiness is recomputed in memory by the evidence packet's embedded selector,
-# so the readiness_uses_step1a_output:false runtime marker stays accurate.
+# so the readiness_uses_step1a_output:false runtime marker stays accurate. The
+# with-approvals and dual-read-diff writers each carry a run-time parity guard
+# (S1A-6/S1A-8): the Step 1A payload reaches disk only when it equals the legacy
+# derivation, so the overlay cross-lineage check is always-on in switch status.
 STEP1A_WRITER_SOURCE_ARTIFACTS = (
     "active_research_anchor_registry",
     "research_anchor_approvals_validation",
     "research_anchor_revocations_validation",
     "active_research_anchor_registry_with_approvals",
     "approval_registry_switch_readiness",
+    "approval_registry_dual_read_diff",
 )
 
 
@@ -320,6 +324,62 @@ def build_step1a_approval_registry_switch_readiness(
     )
 
 
+def build_step1a_approval_registry_dual_read_diff(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+    research_anchors_path: Any,
+    research_anchor_approvals_path: Any,
+    baseline_registry_artifact_path: Any = None,
+    approvals_registry_artifact_path: Any = None,
+    generated_at: str | None = None,
+    now_date: str | None = None,
+) -> dict[str, Any]:
+    """Build the Step 1A dual-read diff DISK OBSERVER payload (S1A-8).
+
+    Narrow accessor for the sixth artifact switch. It is the SAME derivation the
+    full Step 1A bundle uses (``_build`` calls this function): it composes the
+    already-proven S1A-3 baseline accessor and S1A-6 with-approvals accessor and
+    diffs them with the shared deterministic ``build_approval_registry_dual_read_diff``.
+    It deliberately does NOT delegate to
+    ``compile_active_research_anchor_registry_with_approvals``: that helper's
+    never-raise/fail-closed shell would mask divergence instead of raising so the
+    switched writer can fall back to legacy. Byte-identical to the legacy diff by
+    construction — the diff is a pure function of the baseline and with-approvals
+    registries (both independently byte-proven) plus the two artifact path strings
+    and ``generated_at`` — for string-or-absent ``as_of``; a non-string ``as_of``
+    normalizes to None via ``_first_str`` (the established Step 1A convention) and
+    is absorbed by the switched writer's run-time parity guard. The disk dual-read
+    diff artifact is consumed by NOTHING except the report-only shadow comparison;
+    it never authorizes a trade and changes no registry selection, evidence_packet,
+    support_signals, readiness, gate, or order path, and no approval/revocation
+    semantics. Pure: reads only the two operator YAML files via the shared
+    accessors/builder, writes nothing, and carries no selection/permission/order
+    authority.
+    """
+    settings = strategy_settings if isinstance(strategy_settings, Mapping) else None
+    as_of = _first_str(now_date, _get(settings, "as_of"))
+    baseline = build_step1a_active_research_anchor_registry(
+        strategy_settings=settings,
+        research_anchors_path=research_anchors_path,
+        generated_at=generated_at,
+        now_date=as_of,
+    )
+    approvals_registry = build_step1a_active_research_anchor_registry_with_approvals(
+        strategy_settings=settings,
+        research_anchors_path=research_anchors_path,
+        research_anchor_approvals_path=research_anchor_approvals_path,
+        generated_at=generated_at,
+        now_date=as_of,
+    )
+    return build_approval_registry_dual_read_diff(
+        baseline_registry=baseline,
+        approvals_registry=approvals_registry,
+        baseline_registry_path=_path_str(baseline_registry_artifact_path),
+        approvals_registry_path=_path_str(approvals_registry_artifact_path),
+        generated_at=generated_at,
+    )
+
+
 def build_step1a_grounding_compile_shadow_diff(
     *,
     step1a_bundle: Mapping[str, Any] | None,
@@ -434,12 +494,18 @@ def _build(
         generated_at=generated_at,
         now_date=settings_as_of,
     )
-    dual_read_diff = build_approval_registry_dual_read_diff(
-        baseline_registry=active_registry,
-        approvals_registry=approvals_registry,
-        baseline_registry_path=_path_str(active_registry_artifact_path),
-        approvals_registry_path=_path_str(approvals_registry_artifact_path),
+    # S1A-8: the dual-read diff payload is shared with the switched production
+    # writer via this single accessor so the two can never drift. The accessor
+    # re-derives its own S1A-3 baseline and S1A-6 with-approvals (byte-identical
+    # to active_registry / approvals_registry above) and diffs them.
+    dual_read_diff = build_step1a_approval_registry_dual_read_diff(
+        strategy_settings=settings,
+        research_anchors_path=research_anchors_path,
+        research_anchor_approvals_path=research_anchor_approvals_path,
+        baseline_registry_artifact_path=active_registry_artifact_path,
+        approvals_registry_artifact_path=approvals_registry_artifact_path,
         generated_at=generated_at,
+        now_date=settings_as_of,
     )
     # S1A-7: the switch-readiness disk-observer payload is shared with the
     # switched production writer via this single accessor so the two can never

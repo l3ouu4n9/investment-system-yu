@@ -149,8 +149,9 @@ def test_shadow_diff_artifact_written_with_required_markers_and_parity(
         "research_anchor_revocations_validation",
         "active_research_anchor_registry_with_approvals",
         "approval_registry_switch_readiness",
+        "approval_registry_dual_read_diff",
     ]
-    assert diff["step1a_writer_source_artifact_count"] == 5
+    assert diff["step1a_writer_source_artifact_count"] == 6
     assert diff["evidence_packet_uses_step1a_output"] is False
     assert diff["embedded_selection_uses_step1a_output"] is False
     assert diff["support_signals_uses_step1a_output"] is False
@@ -384,12 +385,14 @@ def test_shadow_diff_has_no_downstream_consumer_or_artifact_path_switch() -> Non
         # comparison — no production module references the artifact or its helper.
         assert "embedded_active_registry_selection.json" not in source
         assert "step1_embedded_active_registry_selection_path" not in source
-        # S1A-3/4/5/6/7: the switch status artifact and the narrow per-artifact
+        # S1A-3/4/5/6/7/8: the switch status artifact and the narrow per-artifact
         # accessors (the with-approvals accessor is covered by its S1A-3 prefix;
-        # the S1A-7 readiness accessor is NOT prefix-covered, so it is asserted
-        # explicitly) are likewise invisible to every downstream module.
+        # the S1A-7 readiness and S1A-8 dual-read-diff accessors are NOT
+        # prefix-covered, so they are asserted explicitly) are likewise invisible
+        # to every downstream module.
         assert "step1a_artifact_switch_status" not in source
         assert "build_step1a_active_research_anchor_registry" not in source
         assert "build_step1a_research_anchor_approvals_validation" not in source
         assert "build_step1a_research_anchor_revocations_validation" not in source
         assert "build_step1a_approval_registry_switch_readiness" not in source
+        assert "build_step1a_approval_registry_dual_read_diff" not in source

@@ -117,6 +117,7 @@ from investment_orchestrator.state.research_availability import (
 from investment_orchestrator.workflow.step1a_grounding_compile import (
     build_step1a_active_research_anchor_registry,
     build_step1a_active_research_anchor_registry_with_approvals,
+    build_step1a_approval_registry_dual_read_diff,
     build_step1a_approval_registry_switch_readiness,
     build_step1a_grounding_compile_bundle,
     build_step1a_grounding_compile_shadow_diff,
@@ -757,8 +758,10 @@ def parse_step1_output(
     # diff keeps its legacy in-memory lineage and is NOT switched. The on-disk
     # artifact remains a SEPARATE observer; the evidence packet switch above
     # recomputes its own fresh in-memory approvals-inclusive registry.
-    with_approvals_switch_status = _write_approval_registry_dual_read_report_only(
-        strategy_settings=handoff_strategy_settings
+    with_approvals_switch_status, dual_read_diff_switch_status = (
+        _write_approval_registry_dual_read_report_only(
+            strategy_settings=handoff_strategy_settings
+        )
     )
 
     # Report-only layer 0c5 (R2G-5c-0, switched by S1A-7): approval-registry
@@ -771,8 +774,8 @@ def parse_step1_output(
         strategy_settings=handoff_strategy_settings
     )
 
-    # Report-only layer 0c5b (S1A-3/4/5/6/7): per-artifact switch provenance for
-    # the five switched writers above. Written once, after the last switched
+    # Report-only layer 0c5b (S1A-3/4/5/6/7/8): per-artifact switch provenance for
+    # the six switched writers above. Written once, after the last switched
     # writer. Diagnostic only, consumed by nothing; never gates, never grants
     # actions.
     _write_step1a_artifact_switch_status_report_only(
@@ -781,6 +784,7 @@ def parse_step1_output(
             approvals_validation_switch_status,
             revocations_validation_switch_status,
             with_approvals_switch_status,
+            dual_read_diff_switch_status,
             readiness_switch_status,
         ]
     )
@@ -1059,6 +1063,9 @@ def parse_step1_output(
         ),
         "active_research_anchor_registry_with_approvals_writer_source": str(
             with_approvals_switch_status.get("writer_source", "")
+        ),
+        "approval_registry_dual_read_diff_writer_source": str(
+            dual_read_diff_switch_status.get("writer_source", "")
         ),
         "approval_registry_switch_readiness_writer_source": str(
             readiness_switch_status.get("writer_source", "")
@@ -1704,54 +1711,72 @@ def _write_research_anchor_revocations_validation_report_only(
 def _write_approval_registry_dual_read_report_only(
     *,
     strategy_settings: Mapping[str, Any] | None,
-) -> dict[str, Any]:
-    """Write the R2G-5b approvals-inclusive registry (S1A-6) + dual-read diff (report-only).
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Write the R2G-5b approvals-inclusive registry (S1A-6) + dual-read diff (S1A-8, report-only).
 
-    Fourth artifact switch of the Step 1 split — the first OVERLAY-lineage
-    switch. The with-approvals payload now comes from the narrow Step 1A
-    accessor behind a run-time parity guard against the legacy overlay
-    derivation, which is retained VERBATIM below: it still feeds the dual-read
-    diff every run and doubles as the fallback payload. The dual-read diff is
-    ALWAYS built from the legacy in-memory baseline/with_approvals objects —
-    its lineage is NOT switched, keeping it a live legacy-vs-Step1A parity
-    signal over the overlay lineage. The guard writes the Step 1A candidate
-    only when it equals the legacy payload, so any divergence — including the
-    non-string ``as_of`` normalization edge — keeps the legacy bytes on disk
-    and records ``legacy_fallback``, preserving artifact/diff pair consistency.
-    Output path, layer position, schema, markers, and payload bytes are
-    unchanged. Semantics of the derivation are unchanged: approvals recomputed
-    directly from ``research_anchor_approvals.yaml`` (never reading the R2G-5a
-    artifact or its would_activate flag as authority), revocations re-validated
-    from the same YAML bytes, valid active revocations applied only to this
-    SEPARATE standalone registry. Strictly inert: neither artifact is embedded
-    in the evidence packet, added to support_signals input /
-    promoted_source_artifacts / active handoff / allowed_actions / any gate /
-    Step 2/3/4 input; both are consumed by NOTHING directly and add no
-    permission / state / action. A legacy-derivation or write failure preserves
-    the pre-switch swallowed behavior (artifacts absent, ``"unwritten"``);
-    Step 1 parse is never affected. Returns report-only provenance for
-    ``step1a_artifact_switch_status.json``.
+    Two OVERLAY-lineage artifact switches live in this paired writer, each
+    behind its own run-time parity guard against the legacy overlay derivation,
+    which is retained VERBATIM below and computed every run:
+
+    * ``active_research_anchor_registry_with_approvals.json`` (S1A-6): the
+      Step 1A with-approvals candidate is written only when it equals the legacy
+      overlay compile; otherwise the legacy bytes are written and
+      ``legacy_fallback`` recorded.
+    * ``approval_registry_dual_read_diff.json`` (S1A-8): the Step 1A diff
+      (composed from the S1A-3 baseline + S1A-6 with-approvals accessors) is
+      written only when it equals the legacy diff built from the legacy
+      in-memory baseline/with_approvals objects; otherwise the legacy diff is
+      written and ``legacy_fallback`` recorded. This upgrades the overlay
+      cross-lineage parity signal from a shadow-only diagnostic to an always-on
+      guard surfaced in switch status.
+
+    The two guards are independent: a dual-read-diff fallback or failure never
+    changes the with-approvals status, and vice versa. Neither Step 1A payload
+    reaches disk unless it byte-matches its legacy counterpart, including the
+    non-string ``as_of`` normalization edge. Output paths, layer position,
+    schema, markers, and payload bytes are unchanged. Semantics of the
+    derivation are unchanged: approvals recomputed directly from
+    ``research_anchor_approvals.yaml`` (never reading the R2G-5a artifact or its
+    would_activate flag as authority), revocations re-validated from the same
+    YAML bytes, valid active revocations applied only to this SEPARATE standalone
+    registry. Strictly inert: neither artifact is embedded in the evidence
+    packet, added to support_signals input / promoted_source_artifacts / active
+    handoff / allowed_actions / any gate / Step 2/3/4 input; both are consumed by
+    NOTHING directly and add no permission / state / action. A legacy-derivation
+    or write failure preserves the pre-switch swallowed behavior (artifacts
+    absent, ``"unwritten"``); Step 1 parse is never affected. Returns report-only
+    provenance for both artifacts for ``step1a_artifact_switch_status.json``.
     """
-    status: dict[str, Any] = {
+    with_approvals_status: dict[str, Any] = {
         "artifact": "active_research_anchor_registry_with_approvals",
         "output_path": "",
         "writer_source": "unwritten",
         "fallback_used": False,
         "error_summary": "",
     }
-    artifact_written = False
+    dual_read_diff_status: dict[str, Any] = {
+        "artifact": "approval_registry_dual_read_diff",
+        "output_path": "",
+        "writer_source": "unwritten",
+        "fallback_used": False,
+        "error_summary": "",
+    }
+    with_approvals_written = False
+    diff_written = False
     try:
         anchors_path = current_inputs_dir() / RESEARCH_ANCHORS_INPUT_FILENAME
         approvals_path = current_inputs_dir() / RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME
         with_approvals_path = step1_active_research_anchor_registry_with_approvals_path()
-        status["output_path"] = str(with_approvals_path)
+        diff_path = step1_approval_registry_dual_read_diff_path()
+        with_approvals_status["output_path"] = str(with_approvals_path)
+        dual_read_diff_status["output_path"] = str(diff_path)
         settings_as_of = (
             strategy_settings.get("as_of") if isinstance(strategy_settings, Mapping) else None
         )
         allowed_universe = _allowed_buy_universe_for_anchor_registry(strategy_settings)
 
-        # Legacy overlay derivation, retained verbatim: it feeds the dual-read
-        # diff below every run and doubles as the switched write's fallback.
+        # Legacy overlay derivation, retained verbatim: it feeds both parity
+        # guards below every run and doubles as the switched writes' fallback.
         # Baseline: the exact same compile support_signals' embedded registry uses.
         baseline = compile_active_research_anchor_registry(
             anchors_path=anchors_path,
@@ -1775,11 +1800,20 @@ def _write_approval_registry_dual_read_report_only(
             approvals_validation=approvals_validation,
             revocations_validation=revocations_validation,
         )
+        # Legacy dual-read diff: always built from the legacy in-memory objects,
+        # never from a Step 1A candidate. It is the S1A-8 parity-guard reference
+        # and the switched write's fallback payload.
+        legacy_diff = build_approval_registry_dual_read_diff(
+            baseline_registry=baseline,
+            approvals_registry=with_approvals,
+            baseline_registry_path=str(step1_active_research_anchor_registry_path()),
+            approvals_registry_path=str(with_approvals_path),
+        )
 
-        # S1A-6 switched payload selection with run-time parity guard: the legacy
-        # object is computed every run anyway, so an unverified Step 1A byte can
-        # never reach disk (a divergence would otherwise be invisible here — the
-        # shadow comparison for a switched artifact is step1a-vs-step1a).
+        # --- S1A-6 with-approvals switched payload selection (parity guard) -----
+        # The legacy object is computed every run anyway, so an unverified Step 1A
+        # byte can never reach disk (a divergence would otherwise be invisible —
+        # the shadow comparison for a switched artifact is step1a-vs-step1a).
         payload = with_approvals
         try:
             candidate = build_step1a_active_research_anchor_registry_with_approvals(
@@ -1789,39 +1823,70 @@ def _write_approval_registry_dual_read_report_only(
             )
             if candidate == with_approvals:
                 payload = candidate
-                status["writer_source"] = "step1a"
+                with_approvals_status["writer_source"] = "step1a"
             else:
-                status["writer_source"] = "legacy_fallback"
-                status["fallback_used"] = True
-                status["error_summary"] = (
+                with_approvals_status["writer_source"] = "legacy_fallback"
+                with_approvals_status["fallback_used"] = True
+                with_approvals_status["error_summary"] = (
                     "step1a_overlay_parity_mismatch: Step 1A candidate differs from "
                     "the legacy overlay compile; legacy payload written to keep the "
                     "artifact consistent with the dual-read diff lineage"
                 )
         except Exception as exc:  # noqa: BLE001 - fall back to the retained legacy payload
-            status["writer_source"] = "legacy_fallback"
-            status["fallback_used"] = True
-            status["error_summary"] = f"step1a_accessor_failed: {exc}"
+            with_approvals_status["writer_source"] = "legacy_fallback"
+            with_approvals_status["fallback_used"] = True
+            with_approvals_status["error_summary"] = f"step1a_accessor_failed: {exc}"
         write_json(with_approvals_path, payload)
-        artifact_written = True
+        with_approvals_written = True
 
-        # NOT switched: the dual-read diff is always built from the legacy
-        # in-memory objects, never from the Step 1A candidate.
-        diff = build_approval_registry_dual_read_diff(
-            baseline_registry=baseline,
-            approvals_registry=with_approvals,
-            baseline_registry_path=str(step1_active_research_anchor_registry_path()),
-            approvals_registry_path=str(with_approvals_path),
-        )
-        write_json(step1_approval_registry_dual_read_diff_path(), diff)
-    except Exception as exc:  # noqa: BLE001 - report-only: never break Step 1 parse
-        if not artifact_written:
-            status["writer_source"] = "unwritten"
-            failure = f"legacy_derivation_or_write_failed: {exc}"
-            status["error_summary"] = (
-                f"{status['error_summary']}; {failure}" if status["error_summary"] else failure
+        # --- S1A-8 dual-read diff switched payload selection (parity guard) -----
+        # Independent of the with-approvals guard above. The legacy diff is
+        # computed every run, so an unverified Step 1A diff byte can never reach
+        # disk. By construction the Step 1A diff equals the legacy diff whenever
+        # the S1A-3 baseline and S1A-6 with-approvals accessors match legacy
+        # (they are byte-proven), so this guard essentially always passes.
+        diff_payload = legacy_diff
+        try:
+            diff_candidate = build_step1a_approval_registry_dual_read_diff(
+                strategy_settings=strategy_settings,
+                research_anchors_path=anchors_path,
+                research_anchor_approvals_path=approvals_path,
+                baseline_registry_artifact_path=step1_active_research_anchor_registry_path(),
+                approvals_registry_artifact_path=with_approvals_path,
             )
-    return status
+            if diff_candidate == legacy_diff:
+                diff_payload = diff_candidate
+                dual_read_diff_status["writer_source"] = "step1a"
+            else:
+                dual_read_diff_status["writer_source"] = "legacy_fallback"
+                dual_read_diff_status["fallback_used"] = True
+                dual_read_diff_status["error_summary"] = (
+                    "step1a_dual_read_diff_parity_mismatch: Step 1A dual-read diff "
+                    "differs from the legacy-lineage diff; legacy diff written"
+                )
+        except Exception as exc:  # noqa: BLE001 - fall back to the retained legacy diff
+            dual_read_diff_status["writer_source"] = "legacy_fallback"
+            dual_read_diff_status["fallback_used"] = True
+            dual_read_diff_status["error_summary"] = f"step1a_accessor_failed: {exc}"
+        write_json(diff_path, diff_payload)
+        diff_written = True
+    except Exception as exc:  # noqa: BLE001 - report-only: never break Step 1 parse
+        failure = f"legacy_derivation_or_write_failed: {exc}"
+        if not with_approvals_written:
+            with_approvals_status["writer_source"] = "unwritten"
+            with_approvals_status["error_summary"] = (
+                f"{with_approvals_status['error_summary']}; {failure}"
+                if with_approvals_status["error_summary"]
+                else failure
+            )
+        if not diff_written:
+            dual_read_diff_status["writer_source"] = "unwritten"
+            dual_read_diff_status["error_summary"] = (
+                f"{dual_read_diff_status['error_summary']}; {failure}"
+                if dual_read_diff_status["error_summary"]
+                else failure
+            )
+    return with_approvals_status, dual_read_diff_status
 
 
 def _write_approval_registry_switch_readiness_report_only(
