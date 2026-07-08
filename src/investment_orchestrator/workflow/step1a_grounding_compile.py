@@ -27,6 +27,7 @@ from investment_orchestrator.research.approvals_inclusive_active_registry import
 from investment_orchestrator.research.evidence_packet import (
     build_embedded_active_anchor_registry_selection,
     build_evidence_packet,
+    normalize_evidence_packet_for_parity,
 )
 from investment_orchestrator.research.grounding_status_observatory import (
     build_grounding_status_observatory,
@@ -55,18 +56,23 @@ _ARTIFACT_KEYS = (
     "grounding_status_observatory",
 )
 
-# S1A-3/4/5/6/7/8: the report-only production artifacts whose WRITERS source their
-# payload from the narrow Step 1A accessors. This is code-level design state
-# (artifact paths, schemas, and payload bytes are unchanged); per-run writer
-# provenance — including any legacy fallback — is recorded in
-# step1a_artifact_switch_status.json, not here. Every entry must stay a member
-# of _ARTIFACT_KEYS so each switched artifact keeps a shadow comparison. Note
-# the switch-readiness entry covers the DISK OBSERVER artifact only: runtime
-# readiness is recomputed in memory by the evidence packet's embedded selector,
-# so the readiness_uses_step1a_output:false runtime marker stays accurate. The
-# with-approvals and dual-read-diff writers each carry a run-time parity guard
-# (S1A-6/S1A-8): the Step 1A payload reaches disk only when it equals the legacy
-# derivation, so the overlay cross-lineage check is always-on in switch status.
+# S1A-3/4/5/6/7/8/11: the production artifacts whose WRITERS source their payload
+# from the narrow Step 1A accessors. This is code-level design state (artifact
+# paths, schemas, and payload bytes are unchanged); per-run writer provenance —
+# including any legacy fallback — is recorded in step1a_artifact_switch_status.json,
+# not here. Every entry must stay a member of _ARTIFACT_KEYS so each switched
+# artifact keeps a shadow comparison. Note the switch-readiness entry covers the
+# DISK OBSERVER artifact only: runtime readiness is recomputed in memory by the
+# evidence packet's embedded selector, so the readiness_uses_step1a_output:false
+# runtime marker stays accurate. The with-approvals and dual-read-diff writers each
+# carry a run-time parity guard (S1A-6/S1A-8): the Step 1A payload reaches disk only
+# when it equals the legacy derivation. The evidence_packet writer (S1A-11) is the
+# FIRST grounding-input switch and carries the strictest guard: the Step 1A payload
+# reaches disk only when compare_evidence_packet_runtime_parity confirms the
+# runtime-relevant subtree is byte-identical (only generated_at normalized), with
+# NO report-only differences either — so support_signals, which grounds off the
+# disk read-back, sees an identical registry. The embedded-selection artifact stays
+# production-sourced (S1A-12 defers that switch); runtime authority is unchanged.
 STEP1A_WRITER_SOURCE_ARTIFACTS = (
     "active_research_anchor_registry",
     "research_anchor_approvals_validation",
@@ -74,6 +80,7 @@ STEP1A_WRITER_SOURCE_ARTIFACTS = (
     "active_research_anchor_registry_with_approvals",
     "approval_registry_switch_readiness",
     "approval_registry_dual_read_diff",
+    "evidence_packet",
 )
 
 
@@ -380,6 +387,79 @@ def build_step1a_approval_registry_dual_read_diff(
     )
 
 
+def build_step1a_evidence_packet(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+    portfolio_snapshot_text: str | None = None,
+    portfolio_snapshot_path: Any = None,
+    last_good_available: bool = False,
+    last_good_metadata: Mapping[str, Any] | None = None,
+    research_anchors_path: Any,
+    research_anchor_approvals_path: Any,
+    source_artifacts: Mapping[str, str] | None = None,
+    generated_at: str | None = None,
+    now_date: str | None = None,
+    embedded_selection_out: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the Step 1A deterministic evidence packet payload (S1A-11).
+
+    Narrow accessor for the seventh artifact switch — the FIRST grounding-input
+    switch. It is the SAME derivation the full Step 1A bundle uses (``_build``
+    calls this function) and mirrors the Step 1 ``build_evidence_packet_and_selection``
+    core: it recompiles its own embedded active-registry selection in memory (via
+    the shared ``build_embedded_active_anchor_registry_selection``), builds the
+    deterministic research-anchor summary, and calls the same deterministic
+    ``build_evidence_packet`` with the selected registry embedded. It carries the
+    established Step 1A ``as_of`` convention (``_first_str(now_date, settings.as_of)``)
+    and the same core∪satellite allowed universe as the legacy writer, so the
+    payload is byte-identical to the legacy build for string-or-absent ``as_of``
+    (a non-string ``as_of`` normalizes to None via ``_first_str`` and is absorbed
+    by the switched writer's run-time parity guard).
+
+    ``embedded_selection_out``: when provided, the in-memory embedded selection is
+    copied into it so ``_build`` keeps producing the Step 1A embedded-selection
+    bundle artifact from the exact selection this packet embedded (no drift). The
+    switched Step 1 disk writer does NOT use this out-param — it persists the
+    production embedded-selection witness from its own legacy capture.
+
+    Pure: reads only the two operator YAML files (via the shared compilers /
+    validators / summary builder), writes nothing, calls no LLM, reads no on-disk
+    artifact as authority, and reads neither support_signals nor candidates. It
+    carries no selection/permission/order authority and cannot authorize a trade.
+    """
+    settings = strategy_settings if isinstance(strategy_settings, Mapping) else None
+    as_of = _first_str(now_date, _get(settings, "as_of"))
+    allowed_universe = _allowed_buy_universe(settings)
+    embedded_selection = build_embedded_active_anchor_registry_selection(
+        anchors_path=research_anchors_path,
+        approvals_path=research_anchor_approvals_path,
+        allowed_universe=allowed_universe,
+        today=as_of,
+        generated_at=generated_at,
+    )
+    if embedded_selection_out is not None and isinstance(embedded_selection, Mapping):
+        embedded_selection_out.update(embedded_selection)
+    research_anchors_summary = build_research_anchors_summary(
+        research_anchors_path,
+        allowed_universe=allowed_universe,
+        today=as_of,
+    )
+    return build_evidence_packet(
+        strategy_settings=settings,
+        portfolio_snapshot_text=portfolio_snapshot_text,
+        portfolio_snapshot_path=portfolio_snapshot_path,
+        last_good_available=last_good_available,
+        last_good_metadata=last_good_metadata,
+        now_date=as_of,
+        generated_at=generated_at,
+        source_artifacts=source_artifacts,
+        research_anchors_summary=research_anchors_summary,
+        active_anchor_registry=embedded_selection.get("selected_registry")
+        if isinstance(embedded_selection, Mapping)
+        else None,
+    )
+
+
 def build_step1a_grounding_compile_shadow_diff(
     *,
     step1a_bundle: Mapping[str, Any] | None,
@@ -518,26 +598,20 @@ def _build(
         now_date=settings_as_of,
     )
 
-    embedded_selection = build_embedded_active_anchor_registry_selection(
-        anchors_path=research_anchors_path,
-        approvals_path=research_anchor_approvals_path,
-        allowed_universe=allowed_universe,
-        today=settings_as_of,
-        generated_at=generated_at,
-    )
-    research_anchors_summary = build_research_anchors_summary(
-        research_anchors_path,
-        allowed_universe=allowed_universe,
-        today=settings_as_of,
-    )
-    evidence_packet = build_evidence_packet(
+    # S1A-11: the evidence_packet payload is shared with the switched production
+    # writer via this single accessor so the two can never drift. The accessor
+    # recompiles its own embedded selection (byte-identical to a fresh compile
+    # here) and embeds the selected registry; the out-param lets the bundle keep
+    # producing the embedded-selection artifact from that exact selection.
+    step1a_embedded_selection: dict[str, Any] = {}
+    evidence_packet = build_step1a_evidence_packet(
         strategy_settings=settings,
         portfolio_snapshot_text=portfolio_snapshot_text,
         portfolio_snapshot_path=portfolio_snapshot_path,
         last_good_available=last_good_available,
         last_good_metadata=last_good_metadata,
-        now_date=settings_as_of,
-        generated_at=generated_at,
+        research_anchors_path=research_anchors_path,
+        research_anchor_approvals_path=research_anchor_approvals_path,
         source_artifacts=_source_artifacts(
             strategy_settings_path=strategy_settings_path,
             portfolio_snapshot_path=portfolio_snapshot_path,
@@ -545,10 +619,16 @@ def _build(
             research_anchors_path=research_anchors_path,
             research_anchor_approvals_path=research_anchor_approvals_path,
         ),
-        research_anchors_summary=research_anchors_summary,
-        active_anchor_registry=embedded_selection.get("selected_registry")
-        if isinstance(embedded_selection, Mapping)
-        else None,
+        generated_at=generated_at,
+        now_date=settings_as_of,
+        embedded_selection_out=step1a_embedded_selection,
+    )
+    embedded_selection = step1a_embedded_selection or build_embedded_active_anchor_registry_selection(
+        anchors_path=research_anchors_path,
+        approvals_path=research_anchor_approvals_path,
+        allowed_universe=allowed_universe,
+        today=settings_as_of,
+        generated_at=generated_at,
     )
 
     observatory = build_grounding_status_observatory(
@@ -741,23 +821,33 @@ def _shadow_result(
         "production_artifact_paths_switched": False,
         "step1a_writer_source_artifacts": list(STEP1A_WRITER_SOURCE_ARTIFACTS),
         "step1a_writer_source_artifact_count": len(STEP1A_WRITER_SOURCE_ARTIFACTS),
-        "evidence_packet_uses_step1a_output": False,
+        # S1A-11 flips evidence_packet_uses_step1a_output to True (the writer now
+        # sources the disk payload from the Step 1A accessor behind a strict
+        # run-time parity guard). The runtime-authority markers stay False: the
+        # guard proves the runtime subtree is byte-identical, so support_signals'
+        # disk read-back grounds off an equivalent registry, and the embedded
+        # selection artifact stays production-sourced.
+        "evidence_packet_uses_step1a_output": True,
         "embedded_selection_uses_step1a_output": False,
         "support_signals_uses_step1a_output": False,
         "readiness_uses_step1a_output": False,
         "order_path_uses_step1a_output": False,
         "runtime_authority_uses_step1a_output": False,
         "step1a_writer_source_note": (
-            "The S1A writer switches route the report-only artifacts listed in "
+            "The S1A writer switches route the artifacts listed in "
             "step1a_writer_source_artifacts to the Step 1A source; artifact "
             "paths, schemas, and payload bytes are unchanged. The list is "
             "code-level design state — per-run provenance, including any legacy "
             "fallback, is recorded in step1a_artifact_switch_status.json. The "
-            "evidence packet and its embedded registry selection remain "
-            "production-sourced, support_signals still grounds via "
-            "evidence_packet.active_anchor_registry, readiness is unswitched, "
-            "and Step 2/3/4/final/weekly and all order paths consume no Step 1A "
-            "output; no execution authority changed."
+            "evidence_packet writer (S1A-11) is now Step 1A-sourced behind a "
+            "strict runtime-parity guard: the Step 1A payload reaches disk only "
+            "when the runtime subtree is byte-identical (only generated_at "
+            "normalized) with no report-only differences, so support_signals — "
+            "which grounds off the disk read-back — still consumes the same "
+            "evidence_packet.active_anchor_registry it does today. The embedded "
+            "registry selection remains production-sourced, readiness is "
+            "unswitched, and Step 2/3/4/final/weekly and all order paths consume "
+            "no Step 1A output; no execution authority changed."
         ),
         "safe_to_ignore": True,
         "comparison_status": status,
@@ -956,19 +1046,35 @@ def _embedded_selection_summary(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _evidence_packet_summary(payload: Mapping[str, Any]) -> dict[str, Any]:
-    registry = _get_mapping(payload, "active_anchor_registry")
-    source_manifest = _source_manifest_summary(registry)
+    # S1A-10: compare the runtime-relevant subtree EXACTLY after normalizing only
+    # generated_at (production stamps a wall-clock timestamp threaded into the
+    # embedded registry; a Step 1A recompute uses generated_at=None). The old
+    # summary captured only counts/selected_source and could false-pass on a
+    # differing anchor set / content_sha256 / source hash; embedding the exact
+    # normalized active_anchor_registry closes that class. This is the guard
+    # reference the future S1A-11 evidence_packet disk-writer switch will reuse.
+    normalized, normalized_paths, diagnostics = normalize_evidence_packet_for_parity(payload)
+    registry = _get_mapping(normalized, "active_anchor_registry")
     return {
-        "schema_version": payload.get("schema_version"),
-        "source": payload.get("source"),
-        "strategy_settings_hash": payload.get("strategy_settings_hash"),
+        "schema_version": normalized.get("schema_version"),
+        "source": normalized.get("source"),
+        "report_only": normalized.get("report_only"),
+        "is_llm_generated": normalized.get("is_llm_generated"),
+        "strategy_settings_hash": normalized.get("strategy_settings_hash"),
+        "universe": normalized.get("universe"),
+        "budget_settings": normalized.get("budget_settings"),
+        "data_gaps": normalized.get("data_gaps"),
+        # Exact, generated_at-normalized embedded registry — the runtime-relevant
+        # grounding source support_signals consumes in memory.
+        "active_anchor_registry": registry,
+        # Coarse fields retained for quick human reading of the shadow diff.
         "active_anchor_registry_selected_source": _selected_registry_source(registry),
         "active_anchor_registry_valid": registry.get("registry_valid") is True if registry else False,
         "active_anchor_count": _registry_active_count(registry),
-        "source_manifest": source_manifest,
-        "source_manifest_sha256": _sha256_of(source_manifest),
-        "data_gap_count": len(_as_list(payload.get("data_gaps"))),
-        "allowed_buy_count": len(_as_list((_get_mapping(payload, "universe") or {}).get("allowed_buy_tickers"))),
+        # Parity diagnostics: prove ONLY generated_at was normalized and no
+        # unknown run-varying timestamp leaked into the runtime subtree.
+        "parity_normalized_paths": normalized_paths,
+        "parity_unknown_runtime_timestamp_fields": diagnostics["unknown_runtime_timestamp_fields"],
     }
 
 

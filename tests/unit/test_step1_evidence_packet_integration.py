@@ -85,13 +85,16 @@ def test_evidence_packet_does_not_change_degraded_mode_decision(
 def test_evidence_packet_failure_does_not_break_parse(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Force the evidence-packet writer to raise; parse must still succeed and the
-    # degraded-mode decision must still be produced (report-only isolation).
+    # Force the legacy/current evidence-packet build (the S1A-11 comparison
+    # reference AND fallback payload) to raise; parse must still succeed, the
+    # degraded-mode decision must still be produced (report-only isolation), and
+    # the writer must record ``unwritten`` provenance.
     def boom(*args: Any, **kwargs: Any) -> None:
         raise RuntimeError("simulated evidence packet failure")
 
-    monkeypatch.setattr(step1_research, "write_evidence_packet", boom)
+    monkeypatch.setattr(step1_research, "build_evidence_packet_and_selection", boom)
     result = _run(tmp_path, monkeypatch)
 
     assert Path(result["research_output_path"]).exists()
     assert Path(result["research_degraded_mode_decision_path"]).exists()
+    assert result["evidence_packet_writer_source"] == "unwritten"

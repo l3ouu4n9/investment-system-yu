@@ -556,6 +556,74 @@ def _as_list(value: Any) -> list[Any]:
 # --- disk wrapper ------------------------------------------------------------
 
 
+def build_evidence_packet_and_selection(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+    portfolio_snapshot_text: str | None,
+    portfolio_snapshot_path: str | Path | None = None,
+    last_good_available: bool = False,
+    last_good_metadata: Mapping[str, Any] | None = None,
+    now_date: str | None = None,
+    generated_at: str | None = None,
+    source_artifacts: Mapping[str, str] | None = None,
+    research_anchors_path: str | Path | None = None,
+    research_anchor_approvals_path: str | Path | None = None,
+    embedded_selection_out: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the evidence packet (and capture the embedded selection) in memory.
+
+    Pure build-only core of :func:`write_evidence_packet`: it never writes a file
+    and never calls an LLM. Behavior is byte-identical to the pre-extraction
+    inline build for the same ``generated_at`` — ``write_evidence_packet`` now
+    delegates here and only adds the ``write_json``.
+
+    It is extracted so the guarded S1A-11 evidence_packet disk writer can obtain
+    the legacy/current packet in memory (to compare against the Step 1A candidate
+    via ``compare_evidence_packet_runtime_parity``) without writing it first. The
+    caller controls ``generated_at`` so the two lineages can share one wall-clock
+    stamp and differ only where the comparator would flag it.
+
+    ``embedded_selection_out``: when provided, the in-memory embedded registry
+    selection is copied into it so the caller can persist the report-only
+    selection witness. It changes no selection/packet/permission/gate/order-path
+    behavior.
+    """
+    anchors_summary = None
+    active_anchor_registry = None
+    if research_anchors_path is not None:
+        allowed_universe = _allowed_buy_from_settings(strategy_settings)
+        anchors_summary = build_research_anchors_summary(
+            research_anchors_path,
+            allowed_universe=allowed_universe,
+            today=now_date,
+        )
+        # R2G-5c-2: select the embedded grounding registry from the same fresh
+        # in-memory compile that readiness evaluates. No on-disk registry,
+        # readiness, or dry-run diff JSON is read as switch authority.
+        selection = build_embedded_active_anchor_registry_selection(
+            anchors_path=research_anchors_path,
+            approvals_path=research_anchor_approvals_path,
+            allowed_universe=allowed_universe,
+            today=now_date,
+            generated_at=generated_at,
+        )
+        active_anchor_registry = selection["selected_registry"]
+        if embedded_selection_out is not None:
+            embedded_selection_out.update(selection)
+    return build_evidence_packet(
+        strategy_settings=strategy_settings,
+        portfolio_snapshot_text=portfolio_snapshot_text,
+        portfolio_snapshot_path=portfolio_snapshot_path,
+        last_good_available=last_good_available,
+        last_good_metadata=last_good_metadata,
+        now_date=now_date,
+        generated_at=generated_at,
+        source_artifacts=source_artifacts,
+        research_anchors_summary=anchors_summary,
+        active_anchor_registry=active_anchor_registry,
+    )
+
+
 def write_evidence_packet(
     *,
     output_path: str | Path,
@@ -588,29 +656,7 @@ def write_evidence_packet(
     from investment_orchestrator.common.io import write_json
 
     generated_at = (now or datetime.now(timezone.utc)).isoformat()
-    anchors_summary = None
-    active_anchor_registry = None
-    if research_anchors_path is not None:
-        allowed_universe = _allowed_buy_from_settings(strategy_settings)
-        anchors_summary = build_research_anchors_summary(
-            research_anchors_path,
-            allowed_universe=allowed_universe,
-            today=now_date,
-        )
-        # R2G-5c-2: select the embedded grounding registry from the same fresh
-        # in-memory compile that readiness evaluates. No on-disk registry,
-        # readiness, or dry-run diff JSON is read as switch authority.
-        selection = build_embedded_active_anchor_registry_selection(
-            anchors_path=research_anchors_path,
-            approvals_path=research_anchor_approvals_path,
-            allowed_universe=allowed_universe,
-            today=now_date,
-            generated_at=generated_at,
-        )
-        active_anchor_registry = selection["selected_registry"]
-        if embedded_selection_out is not None:
-            embedded_selection_out.update(selection)
-    packet = build_evidence_packet(
+    packet = build_evidence_packet_and_selection(
         strategy_settings=strategy_settings,
         portfolio_snapshot_text=portfolio_snapshot_text,
         portfolio_snapshot_path=portfolio_snapshot_path,
@@ -619,8 +665,9 @@ def write_evidence_packet(
         now_date=now_date,
         generated_at=generated_at,
         source_artifacts=source_artifacts,
-        research_anchors_summary=anchors_summary,
-        active_anchor_registry=active_anchor_registry,
+        research_anchors_path=research_anchors_path,
+        research_anchor_approvals_path=research_anchor_approvals_path,
+        embedded_selection_out=embedded_selection_out,
     )
     write_json(output_path, packet)
     return packet
@@ -703,3 +750,211 @@ def _parse_date(value: Any) -> date | None:
         return date.fromisoformat(value.strip())
     except ValueError:
         return None
+
+
+# --- S1A-10 evidence_packet shadow-parity hardening --------------------------
+#
+# Pure, deterministic, fail-closed helpers that compare a PRODUCTION evidence
+# packet against a Step 1A-sourced evidence packet before the future S1A-11
+# guarded disk-writer switch. They read no disk, call no LLM, write no files,
+# touch no switch status / shadow diff, and change no runtime behavior. The
+# in-memory packet handed to support_signals is never mutated (the normalizer
+# deep-copies).
+#
+# Only ``generated_at`` is run-varying between the two lineages: the production
+# writer stamps a wall-clock timestamp (threaded into the packet top level and
+# the embedded active_anchor_registry), while a Step 1A recompute uses
+# generated_at=None. Everything else in the runtime-relevant subtree must match
+# exactly; an unknown ISO-8601 *datetime* string surfacing inside that subtree
+# fails closed rather than being silently normalized.
+
+# The ONLY field key whose value may be normalized for parity.
+_PARITY_GENERATED_AT_KEY = "generated_at"
+# Sentinel written in place of a normalized generated_at value.
+_PARITY_NORMALIZED_SENTINEL = "<normalized_generated_at>"
+
+# Top-level packet keys whose (generated_at-normalized) content must match
+# EXACTLY for the two lineages to be runtime-equivalent. A mismatch here blocks
+# the S1A-11 guard.
+_RUNTIME_RELEVANT_PACKET_KEYS = (
+    "schema_version",
+    "source",
+    "report_only",
+    "is_llm_generated",
+    "strategy_settings_hash",
+    "universe",
+    "budget_settings",
+    "data_gaps",
+    "active_anchor_registry",
+)
+
+# Recognizes an ISO-8601 *datetime* (date + "T" + at least HH:MM). Deliberately
+# does NOT match bare dates (e.g. as_of_date "2026-06-28", valid_until,
+# anchor_date_et) — those are operator/content date fields, never run-varying
+# wall-clock timestamps, and must never be normalized or flagged.
+def _looks_like_iso_datetime(value: Any) -> bool:
+    if not isinstance(value, str) or len(value) < 16:
+        return False
+    v = value.strip()
+    if v[4:5] != "-" or v[7:8] != "-" or v[10:11] != "T" or v[13:14] != ":":
+        return False
+    return v[:4].isdigit() and v[5:7].isdigit() and v[8:10].isdigit() and v[11:13].isdigit()
+
+
+def _deep_copy_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {k: _deep_copy_json(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_deep_copy_json(v) for v in value]
+    return value
+
+
+def _normalize_generated_at_in_place(node: Any, path: str, normalized_paths: list[str]) -> None:
+    """Recursively replace every ``generated_at`` value with the sentinel."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            child_path = f"{path}.{key}" if path else str(key)
+            if key == _PARITY_GENERATED_AT_KEY:
+                node[key] = _PARITY_NORMALIZED_SENTINEL
+                normalized_paths.append(child_path)
+            else:
+                _normalize_generated_at_in_place(value, child_path, normalized_paths)
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            _normalize_generated_at_in_place(value, f"{path}[{index}]", normalized_paths)
+
+
+def _collect_unknown_runtime_timestamps(node: Any, path: str, hits: list[str]) -> None:
+    """Flag ISO-datetime strings inside an ALREADY-normalized runtime subtree.
+
+    generated_at has already been replaced by the sentinel, so any remaining
+    ISO-datetime string here is an unknown run-varying field -> fail closed.
+    """
+    if isinstance(node, dict):
+        for key, value in node.items():
+            _collect_unknown_runtime_timestamps(value, f"{path}.{key}" if path else str(key), hits)
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            _collect_unknown_runtime_timestamps(value, f"{path}[{index}]", hits)
+    elif _looks_like_iso_datetime(node):
+        hits.append(path)
+
+
+def normalize_evidence_packet_for_parity(
+    packet: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], list[str], dict[str, Any]]:
+    """Return a generated_at-normalized deep copy of ``packet`` plus diagnostics.
+
+    Pure and non-mutating: the input packet (including the runtime object handed
+    to support_signals) is deep-copied before any normalization. ONLY
+    ``generated_at`` values are replaced (recursively, wherever they appear) with
+    a fixed sentinel; every other value — anchor content, per-anchor
+    content_sha256, source_manifest hashes, as_of_date, registry_valid,
+    fail-closed markers, blockers, revocations, universe, budget, data_gaps,
+    schema_version — is left byte-for-byte intact. Diagnostics record the exact
+    normalized paths and any unknown ISO-datetime field found inside the
+    runtime-relevant subtree (which the comparator treats as fail-closed).
+    """
+    normalized: dict[str, Any] = _deep_copy_json(packet) if isinstance(packet, Mapping) else {}
+    normalized_paths: list[str] = []
+    _normalize_generated_at_in_place(normalized, "", normalized_paths)
+
+    unknown_runtime_timestamp_fields: list[str] = []
+    for key in _RUNTIME_RELEVANT_PACKET_KEYS:
+        if key in normalized:
+            _collect_unknown_runtime_timestamps(
+                normalized[key], key, unknown_runtime_timestamp_fields
+            )
+
+    diagnostics = {
+        "normalized_paths": sorted(normalized_paths),
+        "normalization_allowlist": [_PARITY_GENERATED_AT_KEY],
+        "unknown_runtime_timestamp_fields": sorted(unknown_runtime_timestamp_fields),
+    }
+    return normalized, sorted(normalized_paths), diagnostics
+
+
+def _diff_paths(prod: Any, step1a: Any, path: str, out: list[dict[str, Any]]) -> None:
+    """Record the first-level dotted paths where two JSON values differ."""
+    if isinstance(prod, Mapping) and isinstance(step1a, Mapping):
+        for key in sorted(set(prod) | set(step1a)):
+            child = f"{path}.{key}" if path else str(key)
+            if key not in prod:
+                out.append({"path": child, "reason": "absent_in_production"})
+            elif key not in step1a:
+                out.append({"path": child, "reason": "absent_in_step1a"})
+            else:
+                _diff_paths(prod[key], step1a[key], child, out)
+    elif isinstance(prod, list) and isinstance(step1a, list):
+        if len(prod) != len(step1a):
+            out.append(
+                {"path": path, "reason": f"list_length_differs({len(prod)}!={len(step1a)})"}
+            )
+        else:
+            for index, (a, b) in enumerate(zip(prod, step1a)):
+                _diff_paths(a, b, f"{path}[{index}]", out)
+    elif prod != step1a:
+        out.append({"path": path, "reason": "value_differs"})
+
+
+def compare_evidence_packet_runtime_parity(
+    production_packet: Mapping[str, Any] | None,
+    step1a_packet: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Compare a production vs Step 1A evidence packet for runtime parity.
+
+    Deterministic, fail-closed, side-effect-free. Both packets are
+    generated_at-normalized (deep copies), then:
+
+    * the runtime-relevant subtree (``active_anchor_registry`` recursively,
+      ``strategy_settings_hash``, ``universe``, ``budget_settings``,
+      ``data_gaps``, ``schema_version``, ``source``, ``report_only``,
+      ``is_llm_generated``) must match EXACTLY -> ``subtree_match``;
+    * any unknown ISO-datetime field inside that subtree forces
+      ``subtree_match=False`` (fail-closed, never silently normalized);
+    * every other top-level key (source_artifacts, last_good_research_summary,
+      portfolio_snapshot_summary, research_anchors, strategy_settings_summary,
+      market/event stubs, top-level generated_at) is compared exactly and any
+      delta is recorded in ``report_only_differences`` — reported, non-blocking.
+
+    Returns a diagnostics dict only; nothing consumes it as authority.
+    """
+    prod_norm, prod_paths, prod_diag = normalize_evidence_packet_for_parity(production_packet)
+    step_norm, step_paths, step_diag = normalize_evidence_packet_for_parity(step1a_packet)
+
+    unknown_runtime_timestamp_fields = sorted(
+        set(prod_diag["unknown_runtime_timestamp_fields"])
+        | set(step_diag["unknown_runtime_timestamp_fields"])
+    )
+
+    differences: list[dict[str, Any]] = []
+    for key in _RUNTIME_RELEVANT_PACKET_KEYS:
+        _diff_paths(prod_norm.get(key), step_norm.get(key), key, differences)
+
+    report_only_keys = sorted(
+        (set(prod_norm) | set(step_norm)) - set(_RUNTIME_RELEVANT_PACKET_KEYS)
+    )
+    report_only_differences: list[dict[str, Any]] = []
+    for key in report_only_keys:
+        _diff_paths(prod_norm.get(key), step_norm.get(key), key, report_only_differences)
+
+    subtree_match = not differences and not unknown_runtime_timestamp_fields
+
+    return {
+        "schema_version": "evidence_packet_runtime_parity_v1",
+        "is_llm_generated": False,
+        "report_only": True,
+        "permission_effect": "none",
+        "not_authorization": True,
+        "not_order_input": True,
+        "consumed_by_gates": False,
+        "consumed_by_order_path": False,
+        "safe_to_ignore": True,
+        "subtree_match": subtree_match,
+        "runtime_relevant_keys": list(_RUNTIME_RELEVANT_PACKET_KEYS),
+        "normalization_allowlist": [_PARITY_GENERATED_AT_KEY],
+        "normalized_paths": sorted(set(prod_paths) | set(step_paths)),
+        "differences": differences,
+        "report_only_differences": report_only_differences,
+        "unknown_runtime_timestamp_fields": unknown_runtime_timestamp_fields,
+    }

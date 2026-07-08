@@ -150,9 +150,12 @@ def test_shadow_diff_artifact_written_with_required_markers_and_parity(
         "active_research_anchor_registry_with_approvals",
         "approval_registry_switch_readiness",
         "approval_registry_dual_read_diff",
+        "evidence_packet",
     ]
-    assert diff["step1a_writer_source_artifact_count"] == 6
-    assert diff["evidence_packet_uses_step1a_output"] is False
+    assert diff["step1a_writer_source_artifact_count"] == 7
+    # S1A-11: the evidence_packet disk writer is now Step 1A-sourced behind the
+    # strict parity guard; runtime-authority markers stay False.
+    assert diff["evidence_packet_uses_step1a_output"] is True
     assert diff["embedded_selection_uses_step1a_output"] is False
     assert diff["support_signals_uses_step1a_output"] is False
     assert diff["readiness_uses_step1a_output"] is False
@@ -290,6 +293,85 @@ def test_embedded_selection_write_failure_is_swallowed_and_shadow_reports_skip(
     decision = _read(Path(result["research_degraded_mode_decision_path"]))
     assert "NEW_BUY" not in decision["allowed_actions"]
     assert "ORDER_COMPILATION" not in decision["allowed_actions"]
+
+
+def test_evidence_packet_comparison_strengthened_catches_embedded_registry_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S1A-10: the strengthened evidence_packet comparison catches an embedded
+    active_anchor_registry content mismatch that the old count-only summary
+    would have false-passed (same anchor count, different content_sha256).
+    """
+    _setup_repo(tmp_path, monkeypatch)
+    original = step1_research.build_step1a_grounding_compile_bundle
+
+    def mismatched_bundle(**kwargs: Any) -> dict[str, Any]:
+        bundle = original(**kwargs)
+        packet = bundle["artifacts"]["evidence_packet"]
+        registry = packet.get("active_anchor_registry")
+        if isinstance(registry, dict):
+            anchors = registry.get("active_anchors")
+            if isinstance(anchors, list) and anchors:
+                # Mutate content WITHOUT changing the anchor count or source —
+                # exactly the class the old count/selected_source summary missed.
+                anchors[0] = {**anchors[0], "content_sha256": "f" * 64}
+            else:
+                # Empty-manifest inputs: perturb a runtime-relevant field the old
+                # summary also ignored (validity), still count-preserving.
+                registry["registry_valid"] = not registry.get("registry_valid", True)
+        return bundle
+
+    monkeypatch.setattr(step1_research, "build_step1a_grounding_compile_bundle", mismatched_bundle)
+
+    result = step1_research.parse_step1_output(strategy_settings=_settings())
+
+    diff = _read(step1_research.step1a_grounding_compile_shadow_diff_path())
+    assert diff["comparison_status"] == "mismatch"
+    assert diff["parity_passed"] is False
+    assert "evidence_packet" in diff["mismatch_artifacts"]
+    assert diff["comparisons"]["evidence_packet"]["semantic_match"] is False
+    # The strengthened summary embeds the normalized registry and proves only
+    # generated_at was normalized (no over-normalization hiding the mismatch).
+    current_summary = diff["comparisons"]["evidence_packet"]["current_summary"]
+    assert current_summary["parity_normalized_paths"] == [
+        "active_anchor_registry.generated_at",
+        "generated_at",
+    ]
+    assert current_summary["parity_unknown_runtime_timestamp_fields"] == []
+
+    # Diagnostic only — never opens an order path.
+    decision = _read(Path(result["research_degraded_mode_decision_path"]))
+    assert "NEW_BUY" not in decision["allowed_actions"]
+    assert "ORDER_COMPILATION" not in decision["allowed_actions"]
+
+
+def test_evidence_packet_comparison_normalizes_only_generated_at_on_clean_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S1A-10: a clean run keeps evidence_packet matching, with the embedded
+    registry compared exactly and only generated_at normalized."""
+    _setup_repo(tmp_path, monkeypatch)
+    step1_research.parse_step1_output(strategy_settings=_settings())
+
+    diff = _read(step1_research.step1a_grounding_compile_shadow_diff_path())
+    assert diff["comparison_status"] == "pass"
+    assert diff["comparison_complete"] is True
+    ep = diff["comparisons"]["evidence_packet"]
+    assert ep["semantic_match"] is True
+    summary = ep["current_summary"]
+    # Strengthened: the full normalized embedded registry is present and its
+    # generated_at is the sentinel (not a wall-clock timestamp).
+    assert summary["active_anchor_registry"]["generated_at"] == "<normalized_generated_at>"
+    assert summary["parity_normalized_paths"] == [
+        "active_anchor_registry.generated_at",
+        "generated_at",
+    ]
+    assert summary["parity_unknown_runtime_timestamp_fields"] == []
+    # Runtime-relevant fields are carried in the summary (not just counts).
+    for key in ("strategy_settings_hash", "universe", "budget_settings", "data_gaps"):
+        assert key in summary
 
 
 def test_shadow_mismatch_is_diagnostic_only(

@@ -172,12 +172,14 @@ def test_parse_writes_registry_from_step1a_source_and_switch_status(
     assert status["safe_to_ignore"] is True
     assert "integrity" in status["shadow_comparison_note"]
 
-    # S1A-5.1 boundary-scope markers: the switches change WHO compiles three
-    # report-only payloads — not artifact paths, not the evidence packet or its
-    # embedded selection, not support_signals grounding, not readiness, and not
-    # any order path or runtime authority.
+    # S1A-5.1/S1A-11 boundary-scope markers: the switches change WHO compiles the
+    # payloads — not artifact paths, not the embedded selection, not support_signals
+    # grounding, not readiness, and not any order path or runtime authority. S1A-11
+    # flips evidence_packet_uses_step1a_output to True (its disk writer is now
+    # Step 1A-sourced behind the strict parity guard); the runtime-authority markers
+    # stay False.
     assert status["production_artifact_paths_switched"] is False
-    assert status["evidence_packet_uses_step1a_output"] is False
+    assert status["evidence_packet_uses_step1a_output"] is True
     assert status["embedded_selection_uses_step1a_output"] is False
     assert status["support_signals_uses_step1a_output"] is False
     assert status["readiness_uses_step1a_output"] is False
@@ -190,12 +192,14 @@ def test_parse_writes_registry_from_step1a_source_and_switch_status(
     assert entry["error_summary"] == ""
     assert entry["output_path"] == str(step1_research.step1_active_research_anchor_registry_path())
 
-    # Exactly the six S1A-3/4/5/6/7/8 switched artifacts — no seventh switch.
+    # Exactly the seven S1A-3/4/5/6/7/8/11 switched artifacts (S1A-11 adds
+    # evidence_packet) — no eighth switch.
     assert sorted(status["switched_artifacts"]) == [
         "active_research_anchor_registry",
         "active_research_anchor_registry_with_approvals",
         "approval_registry_dual_read_diff",
         "approval_registry_switch_readiness",
+        "evidence_packet",
         "research_anchor_approvals_validation",
         "research_anchor_revocations_validation",
     ]
@@ -1177,7 +1181,8 @@ def test_parse_writes_with_approvals_from_step1a_source_and_dual_read_unchanged(
     assert entry["fallback_used"] is False
     assert entry["error_summary"] == ""
     assert entry["output_path"] == str(artifact_path)
-    # All six switched writers report step1a in a normal run.
+    # All seven switched writers report step1a in a normal run (S1A-11 adds
+    # evidence_packet: on a clean run its strict parity guard passes).
     assert {k: v["writer_source"] for k, v in status["switched_artifacts"].items()} == {
         "active_research_anchor_registry": "step1a",
         "research_anchor_approvals_validation": "step1a",
@@ -1185,6 +1190,7 @@ def test_parse_writes_with_approvals_from_step1a_source_and_dual_read_unchanged(
         "active_research_anchor_registry_with_approvals": "step1a",
         "approval_registry_switch_readiness": "step1a",
         "approval_registry_dual_read_diff": "step1a",
+        "evidence_packet": "step1a",
     }
 
     # S1A-8: the dual-read diff is now switched but its guard writes the Step 1A
@@ -1871,11 +1877,14 @@ def test_dual_read_diff_double_failure_preserves_swallowed_behavior(
         entry = status["switched_artifacts"][key]
         assert entry["writer_source"] == "unwritten"
         assert "legacy_derivation_or_write_failed" in entry["error_summary"]
-    # The other four switches are unaffected.
+    # The other five switches are unaffected (this monkeypatch replaces only
+    # step1_research.compile_active_research_anchor_registry, which the evidence_packet
+    # writer does not use — it compiles via the evidence_packet module).
     assert status["switched_artifacts"]["active_research_anchor_registry"]["writer_source"] == "step1a"
     assert (
         status["switched_artifacts"]["approval_registry_switch_readiness"]["writer_source"] == "step1a"
     )
+    assert status["switched_artifacts"]["evidence_packet"]["writer_source"] == "step1a"
 
     diff = _read(step1_research.step1a_grounding_compile_shadow_diff_path())
     for key in ("active_research_anchor_registry_with_approvals", "approval_registry_dual_read_diff"):
