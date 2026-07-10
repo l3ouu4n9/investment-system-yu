@@ -79,6 +79,13 @@ _ARTIFACT_KEYS = (
 # key below is the bundle key (anchor-spelled); the on-disk filename stays
 # embedded_active_registry_selection.json (no path switch). Runtime authority is
 # unchanged.
+#
+# S1A-13: this eight-entry migration is COMPLETE. grounding_status_observatory
+# (the ninth _ARTIFACT_KEYS member) is deliberately NOT added here — it is a
+# single shared summarizer with no separate legacy algorithm, and its remaining
+# independent value (production disk-read-back vs Step 1A in-memory bundle) would
+# be destroyed by switching its writer. Do not add a ninth entry without a new
+# design decision superseding this one. See docs/step1a_writer_migration_status.md.
 STEP1A_WRITER_SOURCE_ARTIFACTS = (
     "active_research_anchor_registry",
     "research_anchor_approvals_validation",
