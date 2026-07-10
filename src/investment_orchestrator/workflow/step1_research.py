@@ -51,6 +51,7 @@ from investment_orchestrator.research.actionable_promotion_pointer_preview impor
 )
 from investment_orchestrator.research.evidence_packet import (
     build_evidence_packet_and_selection,
+    compare_embedded_selection_parity,
     compare_evidence_packet_runtime_parity,
 )
 from investment_orchestrator.research.grounding_status_observatory import (
@@ -679,17 +680,26 @@ def parse_step1_output(
         else load_strategy_settings_for_handoff_validation()
     )
 
-    # Report-only layer 0 (R2B/R2G-5c-2, writer switched by S1A-11): deterministic
-    # evidence packet. Built from operator inputs + last-good metadata only (no
-    # LLM, no parsed payload). Its embedded active_anchor_registry is selected by a
-    # fresh, in-memory approvals-readiness compile. The disk payload now comes from
-    # the Step 1A accessor behind a strict run-time parity guard (legacy bytes on
-    # any divergence, including report-only differences); support_signals, which
-    # grounds off the disk read-back, therefore consumes an identical registry.
-    # This still changes no permission, gate, or order path and remains independent
-    # of the degraded-mode decision below. Returns report-only writer provenance.
-    evidence_packet_switch_status = _write_evidence_packet_report_only(
-        strategy_settings=handoff_strategy_settings
+    # Report-only layer 0 (R2B/R2G-5c-2, writer switched by S1A-11; embedded
+    # selection switched by S1A-12): deterministic evidence packet + guarded
+    # embedded-selection artifact. Built from operator inputs + last-good
+    # metadata only (no LLM, no parsed payload). Its embedded
+    # active_anchor_registry is selected by a fresh, in-memory
+    # approvals-readiness compile. Both disk payloads now come from the Step 1A
+    # source behind strict run-time parity guards (legacy bytes on any
+    # divergence); support_signals, which grounds off the disk read-back,
+    # therefore consumes an identical registry. This still changes no
+    # permission, gate, or order path and remains independent of the
+    # degraded-mode decision below. The writer runs AGAIN later in this parse
+    # (handoff/compiler read-back preparation, rarely the memo layer), so every
+    # invocation's statuses are collected here and the switch status reports the
+    # invocation that produced the FINAL disk bytes.
+    evidence_packet_write_log: list[dict[str, Any]] = []
+    evidence_packet_switch_status, embedded_selection_switch_status = (
+        _write_evidence_packet_report_only(
+            strategy_settings=handoff_strategy_settings,
+            evidence_packet_write_log=evidence_packet_write_log,
+        )
     )
 
     # Report-only layer 0a2 (R2G-1, switched by S1A-3): deterministic baseline
@@ -712,7 +722,8 @@ def parse_step1_output(
     # gates the pipeline, never feeds the degraded-mode decision, and can never
     # permit NEW_BUY.
     analyst_memo_summary = _parse_analyst_memo_report_only(
-        strategy_settings=handoff_strategy_settings
+        strategy_settings=handoff_strategy_settings,
+        evidence_packet_write_log=evidence_packet_write_log,
     )
 
     # Report-only layer 0c (R2D): deterministic strict-handoff compiler. Compiles
@@ -722,7 +733,8 @@ def parse_step1_output(
     # never changes allowed_actions; evidence-only / invalid-memo never support
     # NEW_BUY. The raw Deep Research candidate below remains the active source.
     compiled_handoff_summary = _compile_research_handoff_report_only(
-        strategy_settings=handoff_strategy_settings
+        strategy_settings=handoff_strategy_settings,
+        evidence_packet_write_log=evidence_packet_write_log,
     )
 
     # Report-only layer 0c2 (R2G-4): advisory research-anchor CANDIDATES. Suggests
@@ -784,10 +796,19 @@ def parse_step1_output(
         strategy_settings=handoff_strategy_settings
     )
 
-    # Report-only layer 0c5b (S1A-3/4/5/6/7/8/11): per-artifact switch provenance
-    # for the seven switched writers (the six above plus the S1A-11 evidence_packet
-    # writer from layer 0). Written once, after the last switched writer.
-    # Diagnostic only, consumed by nothing; never gates, never grants actions.
+    # Report-only layer 0c5b (S1A-3/4/5/6/7/8/11/12): per-artifact switch
+    # provenance for the eight switched writers (the six above plus the S1A-11
+    # evidence_packet writer and the S1A-12 embedded-selection writer from
+    # layer 0). Written once, AFTER the last possible evidence-packet/selection
+    # write invocation (the layer-0c compiler read-back preparation above), so
+    # the packet/selection entries describe the invocation that produced the
+    # FINAL on-disk bytes — never stale first-write provenance. Diagnostic only,
+    # consumed by nothing; never gates, never grants actions.
+    (
+        evidence_packet_switch_status,
+        embedded_selection_switch_status,
+        evidence_packet_write_invocations,
+    ) = _resolve_final_evidence_packet_write_statuses(evidence_packet_write_log)
     _write_step1a_artifact_switch_status_report_only(
         [
             active_registry_switch_status,
@@ -797,7 +818,9 @@ def parse_step1_output(
             dual_read_diff_switch_status,
             readiness_switch_status,
             evidence_packet_switch_status,
-        ]
+            embedded_selection_switch_status,
+        ],
+        evidence_packet_write_invocations=evidence_packet_write_invocations,
     )
 
     # Report-only layer 0c6 (R2G-5c-1): support_signals dual-ground DRY-RUN diff.
@@ -1084,6 +1107,9 @@ def parse_step1_output(
         "evidence_packet_writer_source": str(
             evidence_packet_switch_status.get("writer_source", "")
         ),
+        "embedded_active_anchor_registry_selection_writer_source": str(
+            embedded_selection_switch_status.get("writer_source", "")
+        ),
         "step1a_artifact_switch_status_path": str(step1a_artifact_switch_status_path()),
         "schema_version": str(payload.get("schema_version", "")),
     }
@@ -1336,6 +1362,21 @@ _APPROVED_EVIDENCE_PACKET_NORMALIZED_PATHS = frozenset(
     {"generated_at", "active_anchor_registry.generated_at"}
 )
 
+# S1A-12: the ONLY generated_at paths the embedded-selection parity guard may see
+# normalized. Both lineages receive one shared wall-clock stamp, threaded by the
+# canonical selection builder into exactly these six structural sites; a
+# normalized path outside this set means the payload shape changed -> fail closed.
+_APPROVED_EMBEDDED_SELECTION_NORMALIZED_PATHS = frozenset(
+    {
+        "generated_at",
+        "selected_registry.generated_at",
+        "baseline_registry.generated_at",
+        "approvals_registry.generated_at",
+        "dual_read_diff.generated_at",
+        "readiness.generated_at",
+    }
+)
+
 
 def _compact_str_list(values: Any, limit: int = 5) -> str:
     items = [str(v) for v in values if isinstance(v, str)] if isinstance(values, list) else []
@@ -1413,10 +1454,107 @@ def _evaluate_step1a_evidence_packet_guard(parity: Mapping[str, Any]) -> dict[st
     return {"ok": True, "error_summary": ""}
 
 
+def _evaluate_step1a_embedded_selection_guard(parity: Mapping[str, Any]) -> dict[str, Any]:
+    """Conservative S1A-12 guard over ``compare_embedded_selection_parity``.
+
+    Returns ``{"ok": bool, "error_summary": str}``. ``ok`` is True only when the
+    FULL canonical selection payload is byte-identical (``payload_match``), no
+    unknown ISO-datetime leaked anywhere in either payload, and ONLY the six
+    approved generated_at paths were normalized. One tier: every difference
+    blocks — the selection artifact has no report-only/non-blocking category.
+    Any failure returns a compact, content-free diagnostic token (paths / field
+    names only, never raw anchor content). Lineage coupling to the S1A-11
+    evidence-packet guard is enforced by the caller, not here.
+    """
+    if not isinstance(parity, Mapping):
+        return {"ok": False, "error_summary": "step1a_embedded_selection_parity_result_unavailable"}
+    unknown_ts = parity.get("unknown_runtime_timestamp_fields") or []
+    normalized_paths = parity.get("normalized_paths") or []
+    differences = parity.get("differences") or []
+    unexpected = [
+        p
+        for p in normalized_paths
+        if isinstance(p, str) and p not in _APPROVED_EMBEDDED_SELECTION_NORMALIZED_PATHS
+    ]
+
+    # Unknown runtime timestamp is checked first: it also forces payload_match
+    # False, but deserves its own specific fail-closed token.
+    if unknown_ts:
+        return {
+            "ok": False,
+            "error_summary": "step1a_embedded_selection_unknown_runtime_timestamp: "
+            + _compact_str_list(unknown_ts),
+        }
+    if parity.get("payload_match") is not True:
+        return {
+            "ok": False,
+            "error_summary": "step1a_embedded_selection_parity_mismatch: diff_paths="
+            + _compact_diff_paths(differences)
+            + "; normalized_paths="
+            + _compact_str_list(normalized_paths),
+        }
+    if unexpected:
+        return {
+            "ok": False,
+            "error_summary": "step1a_embedded_selection_unexpected_normalized_path: "
+            + _compact_str_list(unexpected),
+        }
+    return {"ok": True, "error_summary": ""}
+
+
+def _unwritten_selection_status(error_summary: str) -> dict[str, Any]:
+    """Report-only ``unwritten`` embedded-selection status with an upstream token."""
+    status: dict[str, Any] = {
+        "artifact": "embedded_active_anchor_registry_selection",
+        "output_path": "",
+        "writer_source": "unwritten",
+        "fallback_used": False,
+        "error_summary": error_summary,
+    }
+    try:
+        status["output_path"] = str(step1_embedded_active_registry_selection_path())
+    except Exception:  # noqa: BLE001 - report-only: best-effort path resolution
+        pass
+    return status
+
+
 def _write_evidence_packet_report_only(
     *,
     strategy_settings: Mapping[str, Any] | None,
-) -> dict[str, Any]:
+    evidence_packet_write_log: list[dict[str, Any]] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Run one guarded evidence-packet + embedded-selection write pass; log statuses.
+
+    Thin wrapper around a single write pass (S1A-11 packet + S1A-12 embedded
+    selection). The evidence-packet writer is invoked MORE THAN ONCE during one
+    Step 1 parse: the initial layer-0 write, then the handoff/compiler read-back
+    preparation write (via ``_load_or_build_evidence_packet``), and — rarely —
+    a memo-layer rebuild when the disk packet is unreadable. Each invocation
+    re-runs both guards independently and can overwrite both artifacts, so the
+    per-invocation statuses are appended to ``evidence_packet_write_log`` (when
+    provided) and the switch-status writer later reports the statuses of the
+    LAST invocation that determined the final disk contents (see
+    ``_resolve_final_evidence_packet_write_statuses``) — never first-write
+    provenance for subsequently overwritten artifacts. Returns
+    ``(evidence_packet_status, embedded_selection_status)`` for THIS invocation.
+    """
+    packet_status, selection_status = _write_evidence_packet_and_selection_once(
+        strategy_settings=strategy_settings
+    )
+    if evidence_packet_write_log is not None:
+        evidence_packet_write_log.append(
+            {
+                "evidence_packet": packet_status,
+                "embedded_active_anchor_registry_selection": selection_status,
+            }
+        )
+    return packet_status, selection_status
+
+
+def _write_evidence_packet_and_selection_once(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Write the deterministic evidence packet from the Step 1A source (S1A-11).
 
     Seventh artifact switch, and the FIRST grounding-input switch: support_signals
@@ -1435,10 +1573,20 @@ def _write_evidence_packet_report_only(
     Report-only: never raises into the Step 1 parse flow, never gates the
     pipeline, never feeds the degraded-mode decision, and never changes any
     permission / gate / order path. Output path, schema, and markers are
-    unchanged; a missing snapshot still becomes an explicit DATA_GAP. The embedded
-    registry selection artifact stays production-sourced — persisted from the
-    legacy capture (S1A-12 defers that switch). Returns report-only provenance for
-    ``step1a_artifact_switch_status.json``.
+    unchanged; a missing snapshot still becomes an explicit DATA_GAP.
+
+    S1A-12 (eighth switch): after a successful packet write, the embedded
+    selection artifact is written by the guarded S1A-12 selection writer from
+    the two captures this pass ALREADY produced — the legacy capture from the
+    legacy packet build and the Step 1A capture from the same accessor call
+    that built the Step 1A candidate (no new independent selection compile).
+    The Step 1A selection reaches disk only when this pass's packet guard chose
+    the Step 1A packet AND ``compare_embedded_selection_parity`` confirms the
+    full canonical payloads match (lineage coupling: a packet fallback forces a
+    selection fallback so the artifact always describes the selection lineage
+    behind the packet written by this pass). Returns
+    ``(evidence_packet_status, embedded_selection_status)`` report-only
+    provenance for ``step1a_artifact_switch_status.json``.
     """
     status: dict[str, Any] = {
         "artifact": "evidence_packet",
@@ -1448,6 +1596,7 @@ def _write_evidence_packet_report_only(
         "error_summary": "",
     }
     legacy_selection_capture: dict[str, Any] = {}
+    step1a_selection_capture: dict[str, Any] = {}
     try:
         output_path = step1_evidence_packet_path()
         status["output_path"] = str(output_path)
@@ -1490,9 +1639,11 @@ def _write_evidence_packet_report_only(
         )
     except Exception as exc:  # noqa: BLE001 - legacy build failed -> preserve swallowed behavior
         # Lower-bound of "both fail": nothing written, nothing on disk changed.
+        # The selection write depends on the legacy capture AND a successful
+        # packet write, so it is also skipped (pre-switch swallowed behavior).
         status["writer_source"] = "unwritten"
         status["error_summary"] = f"legacy_evidence_packet_build_failed: {exc}"
-        return status
+        return status, _unwritten_selection_status("legacy_evidence_packet_build_failed_upstream")
 
     # Decide the disk payload: Step 1A only behind the strict guard, else legacy.
     payload = legacy_packet
@@ -1508,6 +1659,12 @@ def _write_evidence_packet_report_only(
             source_artifacts=source_artifacts,
             generated_at=generated_at,
             now_date=settings_as_of,
+            # S1A-12: capture the EXACT selection this candidate embedded (the
+            # accessor copies it out before assembling the packet) so the guarded
+            # selection writer below reuses it — no new independent selection
+            # compile, no mid-run input drift, and the out-param provably does
+            # not change the candidate bytes or this guard's decision.
+            embedded_selection_out=step1a_selection_capture,
         )
         parity = compare_evidence_packet_runtime_parity(legacy_packet, step1a_candidate)
         guard = _evaluate_step1a_evidence_packet_guard(parity)
@@ -1528,44 +1685,121 @@ def _write_evidence_packet_report_only(
     try:
         write_json(output_path, payload)
     except Exception as exc:  # noqa: BLE001 - report-only: never break Step 1 parse
+        # Ordering preserved from the pre-switch flow: the selection is written
+        # only after a successful packet write, so a failed packet write leaves
+        # the selection unwritten by THIS pass (a prior pass's artifact, if any,
+        # remains on disk untouched — write_json never removes the target).
         status["writer_source"] = "unwritten"
         status["error_summary"] = (
             f"{status['error_summary']}; evidence_packet_write_failed: {exc}"
             if status["error_summary"]
             else f"evidence_packet_write_failed: {exc}"
         )
-        return status
+        return status, _unwritten_selection_status("evidence_packet_write_failed_upstream")
 
-    # Report-only S1A-2: persist the exact PRODUCTION (legacy) embedded selection
-    # the packet embedded so the Step 1A shadow diff can compare it. It stays
-    # production-sourced (production_source:true / step1a_output:false). On a clean
-    # guard-pass run the on-disk packet is the Step 1A candidate, whose
-    # active_anchor_registry equals this legacy selection's selected_registry (the
-    # guard proved runtime-subtree parity). Consumed by nothing else; any failure
+    # Report-only S1A-12 (was S1A-2): the embedded-selection artifact is now
+    # written by the guarded selection writer from the two captures produced
+    # above — Step 1A capture behind the full-payload parity guard when THIS
+    # pass's packet guard chose Step 1A, else the legacy capture (today's exact
+    # bytes). Consumed by nothing but the report-only shadow diff; any failure
     # is swallowed and only makes the shadow report that input unavailable.
     try:
-        _write_embedded_active_registry_selection_report_only(legacy_selection_capture)
-    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
-        pass
-    return status
+        selection_status = _write_embedded_active_registry_selection_report_only(
+            legacy_selection=legacy_selection_capture,
+            step1a_selection=step1a_selection_capture,
+            evidence_packet_status=status,
+        )
+    except Exception as exc:  # noqa: BLE001 - report-only: never break Step 1 parse
+        selection_status = _unwritten_selection_status(f"embedded_selection_write_failed: {exc}")
+    return status, selection_status
 
 
 def _write_embedded_active_registry_selection_report_only(
-    selection: Mapping[str, Any],
-) -> None:
-    """Persist the production embedded registry selection for shadow parity (S1A-2).
+    *,
+    legacy_selection: Mapping[str, Any],
+    step1a_selection: Mapping[str, Any],
+    evidence_packet_status: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Write the guarded embedded-selection artifact from the Step 1A source (S1A-12).
 
-    Writes ``embedded_active_registry_selection.json``: the selection object the
-    evidence packet ALREADY produced in memory, annotated with non-authority
-    markers. It records the selection after the fact and is read only by the
-    report-only Step 1A shadow comparison — never by support_signals, readiness,
-    gates, Step 2/3/4, final gate, weekly, broker/live, or any order path. Any
-    failure is swallowed; the selection itself is unaffected either way.
+    Eighth artifact switch. Writes ``embedded_active_registry_selection.json``
+    (existing filename/path unchanged; canonical artifact key
+    ``embedded_active_anchor_registry_selection``) from the two selection
+    captures the SAME write pass already produced — never a new selection
+    compile. The Step 1A capture reaches disk only when ALL hold: this pass's
+    S1A-11 packet guard chose the Step 1A packet (lineage coupling — the
+    artifact must describe the selection lineage behind the packet just
+    written, so a packet fallback forces a selection fallback even if the
+    selection comparator itself would pass), both captures exist, and
+    ``compare_embedded_selection_parity`` reports a full-payload match with no
+    unknown timestamp and only approved generated_at paths normalized. On any
+    other outcome the legacy capture — today's exact bytes — is written; an
+    empty legacy capture writes nothing (no unverified Step 1A payload may
+    reach disk). Wrapper provenance is stamped truthfully per branch:
+    ``production_source:false / step1a_output:true`` only for a guard-passed
+    Step 1A write, else ``production_source:true / step1a_output:false``.
+
+    The artifact stays read ONLY by the report-only Step 1A shadow comparison —
+    never by support_signals, readiness, gates, Step 2/3/4, final gate, weekly,
+    broker/live, or any order path. Never raises into the Step 1 parse flow;
+    returns report-only provenance for ``step1a_artifact_switch_status.json``.
     """
+    status: dict[str, Any] = {
+        "artifact": "embedded_active_anchor_registry_selection",
+        "output_path": "",
+        "writer_source": "unwritten",
+        "fallback_used": False,
+        "error_summary": "",
+    }
     try:
-        if not selection:
-            return
-        artifact = dict(selection)
+        output_path = step1_embedded_active_registry_selection_path()
+        status["output_path"] = str(output_path)
+
+        if not legacy_selection:
+            # Pre-switch behavior preserved: no legacy capture -> nothing written
+            # (and the Step 1A capture cannot be verified without it).
+            status["error_summary"] = "legacy_selection_capture_empty"
+            return status
+
+        payload: Mapping[str, Any] = legacy_selection
+        production_source = True
+        packet_writer_source = str(evidence_packet_status.get("writer_source", ""))
+        packet_error_summary = str(evidence_packet_status.get("error_summary", ""))
+        if packet_writer_source != "step1a":
+            # Lineage coupling: the packet on disk came from the legacy build,
+            # so the selection artifact must describe the legacy lineage too.
+            status["writer_source"] = "legacy_fallback"
+            status["fallback_used"] = True
+            if "step1a_accessor_failed" in packet_error_summary or not step1a_selection:
+                status["error_summary"] = "step1a_accessor_failed: no_step1a_selection_capture"
+            else:
+                status["error_summary"] = (
+                    "step1a_embedded_selection_skipped_evidence_packet_fallback"
+                )
+        elif not step1a_selection:
+            # Defensive: the accessor succeeded but populated no capture.
+            status["writer_source"] = "legacy_fallback"
+            status["fallback_used"] = True
+            status["error_summary"] = "step1a_accessor_failed: step1a_selection_capture_empty"
+        else:
+            try:
+                parity = compare_embedded_selection_parity(legacy_selection, step1a_selection)
+                guard = _evaluate_step1a_embedded_selection_guard(parity)
+            except Exception as exc:  # noqa: BLE001 - comparator failure -> legacy fallback
+                guard = {
+                    "ok": False,
+                    "error_summary": f"step1a_embedded_selection_guard_failed: {exc}",
+                }
+            if guard["ok"]:
+                payload = step1a_selection
+                production_source = False
+                status["writer_source"] = "step1a"
+            else:
+                status["writer_source"] = "legacy_fallback"
+                status["fallback_used"] = True
+                status["error_summary"] = str(guard["error_summary"])
+
+        artifact = dict(payload)
         artifact.update(
             {
                 "consumed_by_gates": False,
@@ -1575,14 +1809,106 @@ def _write_embedded_active_registry_selection_report_only(
                 "cannot_affect_registry_selection": True,
                 "not_registry_selection_input": True,
                 "not_order_input": True,
-                "production_source": True,
-                "step1a_output": False,
+                "production_source": production_source,
+                "step1a_output": not production_source,
                 "safe_to_ignore": True,
             }
         )
-        write_json(step1_embedded_active_registry_selection_path(), artifact)
-    except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
-        pass
+        write_json(output_path, artifact)
+        return status
+    except Exception as exc:  # noqa: BLE001 - report-only: never break Step 1 parse
+        status["writer_source"] = "unwritten"
+        token = f"embedded_selection_write_failed: {exc}"
+        status["error_summary"] = (
+            f"{status['error_summary']}; {token}" if status["error_summary"] else token
+        )
+        return status
+
+
+def _resolve_final_evidence_packet_write_statuses(
+    evidence_packet_write_log: list[Mapping[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Resolve final-disk-truth statuses across the parse's write invocations.
+
+    The evidence-packet writer runs more than once per parse and each pass can
+    overwrite both artifacts, so the switch status must describe the FINAL
+    on-disk write, not the first invocation. Per artifact, independently: the
+    final status is the status of the LAST invocation that actually wrote the
+    file (``writer_source`` in ``step1a`` / ``legacy_fallback``); an
+    ``unwritten`` pass wrote nothing, so a preceding successful write's bytes
+    remain on disk and its status stays the disk truth (``write_json`` never
+    removes the target; a mid-write I/O failure could leave partial content —
+    pre-existing writer behavior, and the shadow integrity comparison reports an
+    unreadable artifact as an explicit skip, never a false pass). Only when NO
+    invocation wrote is the final status ``unwritten``. Also returns per-artifact
+    report-only multi-write diagnostics (invocation counts, writer-source
+    tokens, and whether first and final statuses differ) — status/provenance/
+    error-token information only, never anchor content, consumed by nothing.
+    """
+
+    def _entries(artifact: str) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for invocation in evidence_packet_write_log:
+            entry = invocation.get(artifact) if isinstance(invocation, Mapping) else None
+            if isinstance(entry, Mapping):
+                out.append(dict(entry))
+        return out
+
+    def _final(entries: list[dict[str, Any]], artifact: str) -> dict[str, Any]:
+        written = [e for e in entries if e.get("writer_source") in ("step1a", "legacy_fallback")]
+        if written:
+            return written[-1]
+        if entries:
+            return entries[-1]
+        return {
+            "artifact": artifact,
+            "output_path": "",
+            "writer_source": "unwritten",
+            "fallback_used": False,
+            "error_summary": "no_write_invocation_recorded",
+        }
+
+    def _status_key(entry: Mapping[str, Any]) -> tuple[str, bool, str]:
+        return (
+            str(entry.get("writer_source", "")),
+            entry.get("fallback_used") is True,
+            str(entry.get("error_summary", "")),
+        )
+
+    def _diagnostics(entries: list[dict[str, Any]], artifact: str) -> dict[str, Any]:
+        final = _final(entries, artifact)
+        first = entries[0] if entries else final
+        written_indexes = [
+            index
+            for index, entry in enumerate(entries)
+            if entry.get("writer_source") in ("step1a", "legacy_fallback")
+        ]
+        return {
+            "invocation_count": len(entries),
+            "writer_sources": [str(e.get("writer_source", "")) for e in entries],
+            "first_writer_source": str(first.get("writer_source", "")),
+            "first_fallback_used": first.get("fallback_used") is True,
+            "first_error_summary": str(first.get("error_summary", "")),
+            "final_writer_source": str(final.get("writer_source", "")),
+            # 1-based invocation whose bytes are on disk; 0 = no pass wrote.
+            "final_disk_write_invocation": (written_indexes[-1] + 1) if written_indexes else 0,
+            "first_and_final_statuses_differ": bool(entries)
+            and _status_key(first) != _status_key(final),
+        }
+
+    packet_entries = _entries("evidence_packet")
+    selection_entries = _entries("embedded_active_anchor_registry_selection")
+    diagnostics = {
+        "evidence_packet": _diagnostics(packet_entries, "evidence_packet"),
+        "embedded_active_anchor_registry_selection": _diagnostics(
+            selection_entries, "embedded_active_anchor_registry_selection"
+        ),
+    }
+    return (
+        _final(packet_entries, "evidence_packet"),
+        _final(selection_entries, "embedded_active_anchor_registry_selection"),
+        diagnostics,
+    )
 
 
 def _write_active_research_anchor_registry_report_only(
@@ -1644,12 +1970,18 @@ def _write_active_research_anchor_registry_report_only(
 
 def _write_step1a_artifact_switch_status_report_only(
     switched: list[Mapping[str, Any]],
+    *,
+    evidence_packet_write_invocations: Mapping[str, Any] | None = None,
 ) -> None:
     """Write ``step1a_artifact_switch_status.json`` (S1A-3, report-only).
 
     Per-artifact provenance for the Step 1A writer switches: which source wrote
     each switched artifact this run (``step1a`` | ``legacy_fallback`` |
-    ``unwritten``). Consumed by NOTHING: not readiness, not evidence_packet, not
+    ``unwritten``). The evidence_packet / embedded-selection entries are the
+    FINAL-write statuses (their writer runs more than once per parse);
+    ``evidence_packet_write_invocations`` carries the per-invocation report-only
+    diagnostics (status/provenance/error tokens only, never anchor content).
+    Consumed by NOTHING: not readiness, not evidence_packet, not
     support_signals, not gates, not Step 2/3/4, not final gate, not weekly, not
     broker/live, not any order path. Any failure is swallowed.
     """
@@ -1674,16 +2006,19 @@ def _write_step1a_artifact_switch_status_report_only(
             "not_allocation_input": True,
             "no_execution_authority": True,
             "safe_to_ignore": True,
-            # S1A-5.1/S1A-11: boundary-scope markers. The writer-source switches
-            # change WHO compiles the payloads, not artifact paths. S1A-11 flips
-            # evidence_packet_uses_step1a_output to True (its disk writer is now
-            # Step 1A-sourced behind the strict parity guard); the runtime-authority
-            # markers stay False because the guard proves the runtime subtree is
-            # byte-identical, the embedded-selection artifact stays production-
-            # sourced, and no gate/order/readiness path consumes Step 1A output.
+            # S1A-5.1/S1A-11/S1A-12: boundary-scope markers. The writer-source
+            # switches change WHO compiles the payloads, not artifact paths.
+            # S1A-11 flipped evidence_packet_uses_step1a_output to True; S1A-12
+            # flips embedded_selection_uses_step1a_output to True (the selection
+            # DISK artifact is now Step 1A-sourced behind a full-payload parity
+            # guard lineage-coupled to the packet guard). The runtime-authority
+            # markers stay False because the guards prove byte-identical
+            # payloads (legacy bytes on any divergence), the selection artifact
+            # is consumed by nothing at runtime, and no gate/order/readiness
+            # path consumes Step 1A output.
             "production_artifact_paths_switched": False,
             "evidence_packet_uses_step1a_output": True,
-            "embedded_selection_uses_step1a_output": False,
+            "embedded_selection_uses_step1a_output": True,
             "support_signals_uses_step1a_output": False,
             "readiness_uses_step1a_output": False,
             "order_path_uses_step1a_output": False,
@@ -1703,6 +2038,11 @@ def _write_step1a_artifact_switch_status_report_only(
                 for entry in switched
                 if isinstance(entry, Mapping)
             },
+            # S1A-12 final-write truthfulness: the packet/selection writer runs
+            # more than once per parse; these report-only diagnostics record
+            # every invocation's provenance and flag when first and final
+            # statuses differ. Authority-free and consumed by nothing.
+            "evidence_packet_write_invocations": dict(evidence_packet_write_invocations or {}),
         }
         write_json(step1a_artifact_switch_status_path(), artifact)
     except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
@@ -2414,13 +2754,22 @@ def _allowed_buy_universe_for_anchor_registry(
 def _load_or_build_evidence_packet(
     *,
     strategy_settings: Mapping[str, Any] | None,
+    evidence_packet_write_log: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Ensure the deterministic evidence packet is fresh on disk, then return it.
 
-    Used by the analyst-memo render/parse (R2C). Falls back to an in-memory build
-    so rendering/parsing still works even if the disk write/read fails.
+    Used by the analyst-memo render/parse (R2C) and the handoff compiler (R2D)
+    read-back preparation. Falls back to an in-memory build so rendering/parsing
+    still works even if the disk write/read fails. This is the parse flow's
+    SECOND (or later) guarded write invocation: it overwrites both the evidence
+    packet and the embedded-selection artifact, so its statuses are appended to
+    ``evidence_packet_write_log`` (when provided) for truthful final-write
+    switch-status reporting.
     """
-    _write_evidence_packet_report_only(strategy_settings=strategy_settings)
+    _write_evidence_packet_report_only(
+        strategy_settings=strategy_settings,
+        evidence_packet_write_log=evidence_packet_write_log,
+    )
     try:
         return read_json(step1_evidence_packet_path())
     except Exception:  # noqa: BLE001 - report-only fallback to in-memory build
@@ -2440,6 +2789,7 @@ def _load_or_build_evidence_packet(
 def _run_analyst_memo_parse(
     *,
     strategy_settings: Mapping[str, Any] | None,
+    evidence_packet_write_log: list[dict[str, Any]] | None = None,
 ) -> dict[str, str] | None:
     """Parse + validate a pasted analyst memo and write its two report-only artifacts.
 
@@ -2457,7 +2807,10 @@ def _run_analyst_memo_parse(
     try:
         packet = read_json(step1_evidence_packet_path())
     except Exception:  # noqa: BLE001 - build the packet if it is not on disk yet
-        packet = _load_or_build_evidence_packet(strategy_settings=strategy_settings)
+        packet = _load_or_build_evidence_packet(
+            strategy_settings=strategy_settings,
+            evidence_packet_write_log=evidence_packet_write_log,
+        )
     universe = evidence_universe_from_packet(packet)
 
     result = parse_analyst_memo_text(raw_text, evidence_universe=universe)
@@ -2489,16 +2842,22 @@ def _run_analyst_memo_parse(
 def _parse_analyst_memo_report_only(
     *,
     strategy_settings: Mapping[str, Any] | None,
+    evidence_packet_write_log: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Run the analyst-memo parse defensively as a report-only layer (R2C).
 
     Step 1 parse must never fail because of this observer, and the memo must
     never change the degraded-mode decision or any allowed action. A missing raw
-    memo is simply skipped; any error is swallowed.
+    memo is simply skipped; any error is swallowed. When the disk packet is
+    unreadable this layer rebuilds it — a guarded write invocation whose
+    statuses flow into ``evidence_packet_write_log``.
     """
     absent = {"present": False, "valid": False, "validation_path": "", "memo_path": ""}
     try:
-        result = _run_analyst_memo_parse(strategy_settings=strategy_settings)
+        result = _run_analyst_memo_parse(
+            strategy_settings=strategy_settings,
+            evidence_packet_write_log=evidence_packet_write_log,
+        )
         return result if result is not None else absent
     except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
         return absent
@@ -2565,9 +2924,18 @@ def _load_analyst_memo_for_compiler() -> Mapping[str, Any] | None:
 def _run_compile_research_handoff(
     *,
     strategy_settings: Mapping[str, Any] | None,
+    evidence_packet_write_log: list[dict[str, Any]] | None = None,
 ) -> dict[str, str]:
-    """Compile + validate + write the three report-only R2D artifacts."""
-    packet = _load_or_build_evidence_packet(strategy_settings=strategy_settings)
+    """Compile + validate + write the three report-only R2D artifacts.
+
+    The read-back preparation below is the parse flow's second guarded
+    evidence-packet/selection write invocation; its statuses flow into
+    ``evidence_packet_write_log`` so switch status reports final disk truth.
+    """
+    packet = _load_or_build_evidence_packet(
+        strategy_settings=strategy_settings,
+        evidence_packet_write_log=evidence_packet_write_log,
+    )
     analyst_memo = _load_analyst_memo_for_compiler()
     result = write_compiled_research_handoff(
         candidate_path=step1_compiled_handoff_candidate_path(),
@@ -2593,12 +2961,15 @@ def _run_compile_research_handoff(
 def _compile_research_handoff_report_only(
     *,
     strategy_settings: Mapping[str, Any] | None,
+    evidence_packet_write_log: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Run the deterministic handoff compiler defensively as a report-only layer (R2D).
 
     Step 1 parse must never fail because of this observer, and the compiled
     candidate must never change the degraded-mode decision or any allowed action
     (it is not fed into the availability evaluator). Any error is swallowed.
+    Its evidence-packet read-back preparation re-runs the guarded packet +
+    selection writers; those statuses flow into ``evidence_packet_write_log``.
     """
     empty = {
         "candidate_path": "",
@@ -2609,7 +2980,10 @@ def _compile_research_handoff_report_only(
         "compiled_candidate_valid": "",
     }
     try:
-        return _run_compile_research_handoff(strategy_settings=strategy_settings)
+        return _run_compile_research_handoff(
+            strategy_settings=strategy_settings,
+            evidence_packet_write_log=evidence_packet_write_log,
+        )
     except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
         return empty
 

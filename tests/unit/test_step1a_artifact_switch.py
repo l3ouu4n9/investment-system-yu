@@ -172,15 +172,16 @@ def test_parse_writes_registry_from_step1a_source_and_switch_status(
     assert status["safe_to_ignore"] is True
     assert "integrity" in status["shadow_comparison_note"]
 
-    # S1A-5.1/S1A-11 boundary-scope markers: the switches change WHO compiles the
-    # payloads — not artifact paths, not the embedded selection, not support_signals
-    # grounding, not readiness, and not any order path or runtime authority. S1A-11
-    # flips evidence_packet_uses_step1a_output to True (its disk writer is now
-    # Step 1A-sourced behind the strict parity guard); the runtime-authority markers
-    # stay False.
+    # S1A-5.1/S1A-11/S1A-12 boundary-scope markers: the switches change WHO
+    # compiles the payloads — not artifact paths, not support_signals grounding,
+    # not readiness, and not any order path or runtime authority. S1A-11 flipped
+    # evidence_packet_uses_step1a_output to True; S1A-12 flips
+    # embedded_selection_uses_step1a_output to True (the selection DISK artifact
+    # writer is Step 1A-sourced behind the full-payload parity guard); the
+    # runtime-authority markers stay False.
     assert status["production_artifact_paths_switched"] is False
     assert status["evidence_packet_uses_step1a_output"] is True
-    assert status["embedded_selection_uses_step1a_output"] is False
+    assert status["embedded_selection_uses_step1a_output"] is True
     assert status["support_signals_uses_step1a_output"] is False
     assert status["readiness_uses_step1a_output"] is False
     assert status["order_path_uses_step1a_output"] is False
@@ -192,20 +193,25 @@ def test_parse_writes_registry_from_step1a_source_and_switch_status(
     assert entry["error_summary"] == ""
     assert entry["output_path"] == str(step1_research.step1_active_research_anchor_registry_path())
 
-    # Exactly the seven S1A-3/4/5/6/7/8/11 switched artifacts (S1A-11 adds
-    # evidence_packet) — no eighth switch.
+    # Exactly the eight S1A-3/4/5/6/7/8/11/12 switched artifacts (S1A-12 adds the
+    # embedded selection under its canonical anchor-spelled bundle key; the disk
+    # filename stays embedded_active_registry_selection.json) — no ninth switch.
     assert sorted(status["switched_artifacts"]) == [
         "active_research_anchor_registry",
         "active_research_anchor_registry_with_approvals",
         "approval_registry_dual_read_diff",
         "approval_registry_switch_readiness",
+        "embedded_active_anchor_registry_selection",
         "evidence_packet",
         "research_anchor_approvals_validation",
         "research_anchor_revocations_validation",
     ]
+    assert status["switched_artifacts"]["embedded_active_anchor_registry_selection"][
+        "output_path"
+    ] == str(step1_research.step1_embedded_active_registry_selection_path())
     # S1A-5.1 drift guard: the code-level design-state constant the shadow diff
     # reports must match the per-run switch-status truth, and every switched
-    # artifact must keep a shadow comparison entry. A seventh switch that skips
+    # artifact must keep a shadow comparison entry. A new switch that skips
     # updating the constant fails here.
     assert sorted(STEP1A_WRITER_SOURCE_ARTIFACTS) == sorted(status["switched_artifacts"])
     assert set(STEP1A_WRITER_SOURCE_ARTIFACTS) <= set(_ARTIFACT_KEYS)
@@ -1181,8 +1187,9 @@ def test_parse_writes_with_approvals_from_step1a_source_and_dual_read_unchanged(
     assert entry["fallback_used"] is False
     assert entry["error_summary"] == ""
     assert entry["output_path"] == str(artifact_path)
-    # All seven switched writers report step1a in a normal run (S1A-11 adds
-    # evidence_packet: on a clean run its strict parity guard passes).
+    # All eight switched writers report step1a in a normal run (S1A-11 added
+    # evidence_packet; S1A-12 adds the embedded selection: on a clean run both
+    # parity guards pass).
     assert {k: v["writer_source"] for k, v in status["switched_artifacts"].items()} == {
         "active_research_anchor_registry": "step1a",
         "research_anchor_approvals_validation": "step1a",
@@ -1191,6 +1198,7 @@ def test_parse_writes_with_approvals_from_step1a_source_and_dual_read_unchanged(
         "approval_registry_switch_readiness": "step1a",
         "approval_registry_dual_read_diff": "step1a",
         "evidence_packet": "step1a",
+        "embedded_active_anchor_registry_selection": "step1a",
     }
 
     # S1A-8: the dual-read diff is now switched but its guard writes the Step 1A
@@ -2001,7 +2009,7 @@ def test_reader_invariance_between_step1a_and_legacy_fallback_runs(
         assert _strip_generated_at(switched[key]) == _strip_generated_at(legacy[key]), key
 
 
-def test_switch_boundaries_no_new_consumer_and_embedded_selection_untouched(
+def test_switch_boundaries_no_new_consumer_and_embedded_selection_provenance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2035,10 +2043,12 @@ def test_switch_boundaries_no_new_consumer_and_embedded_selection_untouched(
     _setup_repo(tmp_path, monkeypatch)
     step1_research.parse_step1_output(strategy_settings=_settings())
 
-    # The embedded selection artifact remains production-sourced (S1A-2), not
-    # Step 1A output — the switch touched only the baseline registry writer.
+    # S1A-12: on a clean run the embedded selection artifact is Step 1A-sourced
+    # behind the full-payload parity guard, with truthful wrapper provenance —
+    # and its selected registry still equals the registry the evidence packet
+    # embedded, byte-for-byte (lineage coupling to the packet guard).
     selection = _read(step1_research.step1_embedded_active_registry_selection_path())
-    assert selection["production_source"] is True
-    assert selection["step1a_output"] is False
+    assert selection["production_source"] is False
+    assert selection["step1a_output"] is True
     packet = _read(step1_research.step1_evidence_packet_path())
     assert selection["selected_registry"] == packet["active_anchor_registry"]

@@ -958,3 +958,91 @@ def compare_evidence_packet_runtime_parity(
         "report_only_differences": report_only_differences,
         "unknown_runtime_timestamp_fields": unknown_runtime_timestamp_fields,
     }
+
+
+# --- S1A-12 embedded-selection parity -----------------------------------------
+#
+# Pure, deterministic, fail-closed comparator for the guarded S1A-12
+# embedded-selection disk-writer switch. It compares the CANONICAL selection
+# captures (the raw ``build_embedded_active_anchor_registry_selection`` payloads
+# each evidence-packet build copied out via ``embedded_selection_out``) BEFORE
+# the disk writer adds its wrapper/provenance fields (``production_source``,
+# ``step1a_output``, consumed_by_* markers) — so provenance is excluded from the
+# comparison by construction, not by stripping. Reads no disk, calls no LLM,
+# writes no files, and never mutates its inputs (the normalizer deep-copies).
+#
+# ONE comparison tier: the selection artifact has no runtime consumer to scope a
+# "runtime subtree" against (only the report-only shadow diff reads it), and the
+# conservative first-switch policy blocks on ANY difference — so there is no
+# report-only/non-blocking difference category. Only ``generated_at`` values are
+# normalized (recursively, like the S1A-10 packet comparator); the switched
+# writer's guard additionally requires the normalized paths to stay within its
+# approved six-path allowlist. Any ISO-datetime string under a non-generated_at
+# key ANYWHERE in either canonical payload fails closed; bare dates
+# (``as_of_date``, anchor validity dates) are never normalized or flagged.
+
+_EMBEDDED_SELECTION_PARITY_SCHEMA_VERSION = "embedded_selection_parity_v1"
+
+
+def compare_embedded_selection_parity(
+    production_selection: Mapping[str, Any] | None,
+    step1a_selection: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Compare a production vs Step 1A embedded selection for full-payload parity.
+
+    Deterministic, fail-closed, side-effect-free. Both canonical selection
+    payloads are generated_at-normalized (deep copies), then compared EXACTLY —
+    ``schema_version``, safety markers, ``selected_source``,
+    ``selected_registry`` / ``baseline_registry`` / ``approvals_registry``
+    (recursively), ``dual_read_diff``, the full ``readiness`` result (decision
+    fields, conditions, failed_conditions, source hashes), and every other
+    builder field. ``payload_match`` is True only when there is NO difference of
+    any kind and no unknown ISO-datetime leaked anywhere in either payload.
+    Null vs absent stays distinct and list ordering stays significant (the
+    shared ``_diff_paths`` walker records both). A missing / non-mapping / empty
+    input is itself recorded as an explicit difference (fail closed, never a
+    silent pass). Returns a diagnostics dict only; nothing consumes it as
+    authority.
+    """
+    differences: list[dict[str, Any]] = []
+    production_available = isinstance(production_selection, Mapping) and bool(production_selection)
+    step1a_available = isinstance(step1a_selection, Mapping) and bool(step1a_selection)
+    if not production_available:
+        differences.append({"path": "", "reason": "production_selection_unavailable"})
+    if not step1a_available:
+        differences.append({"path": "", "reason": "step1a_selection_unavailable"})
+
+    prod_norm: dict[str, Any] = _deep_copy_json(production_selection) if production_available else {}
+    step_norm: dict[str, Any] = _deep_copy_json(step1a_selection) if step1a_available else {}
+    prod_paths: list[str] = []
+    step_paths: list[str] = []
+    _normalize_generated_at_in_place(prod_norm, "", prod_paths)
+    _normalize_generated_at_in_place(step_norm, "", step_paths)
+
+    # The WHOLE canonical payload is guard-relevant: scan both normalized copies
+    # end-to-end for any remaining ISO-datetime string (fail closed).
+    unknown_hits: list[str] = []
+    _collect_unknown_runtime_timestamps(prod_norm, "", unknown_hits)
+    _collect_unknown_runtime_timestamps(step_norm, "", unknown_hits)
+    unknown_runtime_timestamp_fields = sorted(set(unknown_hits))
+
+    _diff_paths(prod_norm, step_norm, "", differences)
+
+    payload_match = not differences and not unknown_runtime_timestamp_fields
+
+    return {
+        "schema_version": _EMBEDDED_SELECTION_PARITY_SCHEMA_VERSION,
+        "is_llm_generated": False,
+        "report_only": True,
+        "permission_effect": "none",
+        "not_authorization": True,
+        "not_order_input": True,
+        "consumed_by_gates": False,
+        "consumed_by_order_path": False,
+        "safe_to_ignore": True,
+        "payload_match": payload_match,
+        "normalization_allowlist": [_PARITY_GENERATED_AT_KEY],
+        "normalized_paths": sorted(set(prod_paths) | set(step_paths)),
+        "differences": differences,
+        "unknown_runtime_timestamp_fields": unknown_runtime_timestamp_fields,
+    }

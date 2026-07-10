@@ -71,8 +71,14 @@ _ARTIFACT_KEYS = (
 # reaches disk only when compare_evidence_packet_runtime_parity confirms the
 # runtime-relevant subtree is byte-identical (only generated_at normalized), with
 # NO report-only differences either — so support_signals, which grounds off the
-# disk read-back, sees an identical registry. The embedded-selection artifact stays
-# production-sourced (S1A-12 defers that switch); runtime authority is unchanged.
+# disk read-back, sees an identical registry. The embedded-selection artifact
+# (S1A-12) is Step 1A-sourced behind a full-payload parity guard
+# (compare_embedded_selection_parity) that is lineage-coupled to the packet guard:
+# a packet fallback forces a selection fallback, so the artifact always describes
+# the selection lineage behind the packet written by the same pass. Its canonical
+# key below is the bundle key (anchor-spelled); the on-disk filename stays
+# embedded_active_registry_selection.json (no path switch). Runtime authority is
+# unchanged.
 STEP1A_WRITER_SOURCE_ARTIFACTS = (
     "active_research_anchor_registry",
     "research_anchor_approvals_validation",
@@ -81,6 +87,7 @@ STEP1A_WRITER_SOURCE_ARTIFACTS = (
     "approval_registry_switch_readiness",
     "approval_registry_dual_read_diff",
     "evidence_packet",
+    "embedded_active_anchor_registry_selection",
 )
 
 
@@ -417,10 +424,13 @@ def build_step1a_evidence_packet(
     by the switched writer's run-time parity guard).
 
     ``embedded_selection_out``: when provided, the in-memory embedded selection is
-    copied into it so ``_build`` keeps producing the Step 1A embedded-selection
-    bundle artifact from the exact selection this packet embedded (no drift). The
-    switched Step 1 disk writer does NOT use this out-param — it persists the
-    production embedded-selection witness from its own legacy capture.
+    copied into it so the caller receives the EXACT selection this packet
+    embedded (no drift). ``_build`` uses it for the Step 1A embedded-selection
+    bundle artifact, and — since S1A-12 — the switched Step 1 disk writer passes
+    it too, so the guarded embedded-selection artifact is written from the same
+    selection that produced the Step 1A packet candidate (never a second
+    independent selection compile). Populating the out-param does not change the
+    returned packet bytes.
 
     Pure: reads only the two operator YAML files (via the shared compilers /
     validators / summary builder), writes nothing, calls no LLM, reads no on-disk
@@ -821,14 +831,15 @@ def _shadow_result(
         "production_artifact_paths_switched": False,
         "step1a_writer_source_artifacts": list(STEP1A_WRITER_SOURCE_ARTIFACTS),
         "step1a_writer_source_artifact_count": len(STEP1A_WRITER_SOURCE_ARTIFACTS),
-        # S1A-11 flips evidence_packet_uses_step1a_output to True (the writer now
-        # sources the disk payload from the Step 1A accessor behind a strict
-        # run-time parity guard). The runtime-authority markers stay False: the
-        # guard proves the runtime subtree is byte-identical, so support_signals'
-        # disk read-back grounds off an equivalent registry, and the embedded
-        # selection artifact stays production-sourced.
+        # S1A-11 flipped evidence_packet_uses_step1a_output to True; S1A-12 flips
+        # embedded_selection_uses_step1a_output to True (the selection DISK
+        # artifact writer now sources from the Step 1A capture behind a
+        # full-payload parity guard lineage-coupled to the packet guard). The
+        # runtime-authority markers stay False: the guards prove byte-identical
+        # payloads, support_signals' disk read-back grounds off an equivalent
+        # registry, and the selection artifact is consumed by nothing at runtime.
         "evidence_packet_uses_step1a_output": True,
-        "embedded_selection_uses_step1a_output": False,
+        "embedded_selection_uses_step1a_output": True,
         "support_signals_uses_step1a_output": False,
         "readiness_uses_step1a_output": False,
         "order_path_uses_step1a_output": False,
@@ -839,15 +850,19 @@ def _shadow_result(
             "paths, schemas, and payload bytes are unchanged. The list is "
             "code-level design state — per-run provenance, including any legacy "
             "fallback, is recorded in step1a_artifact_switch_status.json. The "
-            "evidence_packet writer (S1A-11) is now Step 1A-sourced behind a "
+            "evidence_packet writer (S1A-11) is Step 1A-sourced behind a "
             "strict runtime-parity guard: the Step 1A payload reaches disk only "
             "when the runtime subtree is byte-identical (only generated_at "
             "normalized) with no report-only differences, so support_signals — "
             "which grounds off the disk read-back — still consumes the same "
             "evidence_packet.active_anchor_registry it does today. The embedded "
-            "registry selection remains production-sourced, readiness is "
-            "unswitched, and Step 2/3/4/final/weekly and all order paths consume "
-            "no Step 1A output; no execution authority changed."
+            "registry selection DISK artifact (S1A-12) is likewise Step "
+            "1A-sourced behind a full-payload parity guard lineage-coupled to "
+            "the packet guard (legacy bytes on any divergence or packet "
+            "fallback; filename unchanged). Readiness is unswitched, the "
+            "grounding observatory remains the unswitched production "
+            "summarizer, and Step 2/3/4/final/weekly and all order paths "
+            "consume no Step 1A output; no execution authority changed."
         ),
         "safe_to_ignore": True,
         "comparison_status": status,

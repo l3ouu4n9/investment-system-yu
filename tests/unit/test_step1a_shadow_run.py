@@ -151,12 +151,14 @@ def test_shadow_diff_artifact_written_with_required_markers_and_parity(
         "approval_registry_switch_readiness",
         "approval_registry_dual_read_diff",
         "evidence_packet",
+        "embedded_active_anchor_registry_selection",
     ]
-    assert diff["step1a_writer_source_artifact_count"] == 7
-    # S1A-11: the evidence_packet disk writer is now Step 1A-sourced behind the
-    # strict parity guard; runtime-authority markers stay False.
+    assert diff["step1a_writer_source_artifact_count"] == 8
+    # S1A-11/S1A-12: the evidence_packet and embedded-selection disk writers are
+    # Step 1A-sourced behind their parity guards; runtime-authority markers stay
+    # False.
     assert diff["evidence_packet_uses_step1a_output"] is True
-    assert diff["embedded_selection_uses_step1a_output"] is False
+    assert diff["embedded_selection_uses_step1a_output"] is True
     assert diff["support_signals_uses_step1a_output"] is False
     assert diff["readiness_uses_step1a_output"] is False
     assert diff["order_path_uses_step1a_output"] is False
@@ -219,7 +221,7 @@ def test_shadow_diff_artifact_written_with_required_markers_and_parity(
         assert not Path(entry).is_file()
 
 
-def test_embedded_selection_artifact_written_with_markers_and_production_source(
+def test_embedded_selection_artifact_written_with_markers_and_step1a_provenance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -241,12 +243,15 @@ def test_embedded_selection_artifact_written_with_markers_and_production_source(
     assert artifact["cannot_affect_registry_selection"] is True
     assert artifact["not_registry_selection_input"] is True
     assert artifact["not_order_input"] is True
-    assert artifact["production_source"] is True
-    assert artifact["step1a_output"] is False
+    # S1A-12: on a clean guard-pass run the disk artifact is the Step 1A capture
+    # with truthful wrapper provenance (legacy fallback keeps production_source
+    # True / step1a_output False — covered by the S1A-12 switch tests).
+    assert artifact["production_source"] is False
+    assert artifact["step1a_output"] is True
     assert artifact["safe_to_ignore"] is True
 
-    # The artifact IS the production selection: its selected registry equals the
-    # registry the evidence packet embedded, byte-for-byte.
+    # Lineage coupling: the selected registry equals the registry the evidence
+    # packet embedded, byte-for-byte (the guard proved full-payload parity).
     packet = _read(step1_research.step1_evidence_packet_path())
     assert artifact["selected_registry"] == packet["active_anchor_registry"]
     assert artifact["selected_source"] in ("baseline_fallback", "approvals_inclusive", "fail_closed_empty")
@@ -258,7 +263,7 @@ def test_embedded_selection_write_failure_is_swallowed_and_shadow_reports_skip(
 ) -> None:
     _setup_repo(tmp_path, monkeypatch)
 
-    def broken_writer(_selection: Any) -> None:
+    def broken_writer(*_args: Any, **_kwargs: Any) -> None:
         raise RuntimeError("selection artifact write failed")
 
     monkeypatch.setattr(

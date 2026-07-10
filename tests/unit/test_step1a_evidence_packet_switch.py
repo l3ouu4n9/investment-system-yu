@@ -207,14 +207,16 @@ def test_guard_pass_writes_step1a_and_records_provenance(
     assert entry["error_summary"] == ""
     assert entry["output_path"] == str(step1_research.step1_evidence_packet_path())
 
-    # Exactly seven switched artifacts — evidence_packet is the seventh, no eighth.
-    assert len(status["switched_artifacts"]) == 7
+    # Exactly eight switched artifacts — S1A-12 adds the embedded selection
+    # (canonical anchor-spelled key), no ninth.
+    assert len(status["switched_artifacts"]) == 8
     assert "evidence_packet" in status["switched_artifacts"]
+    assert "embedded_active_anchor_registry_selection" in status["switched_artifacts"]
 
-    # The writer flips evidence_packet_uses_step1a_output True; runtime authority
-    # markers stay False (guard proves the runtime subtree is byte-identical).
+    # The writers flip evidence_packet/embedded_selection_uses_step1a_output True;
+    # runtime authority markers stay False (guards prove byte-identical payloads).
     assert status["evidence_packet_uses_step1a_output"] is True
-    assert status["embedded_selection_uses_step1a_output"] is False
+    assert status["embedded_selection_uses_step1a_output"] is True
     assert status["support_signals_uses_step1a_output"] is False
     assert status["readiness_uses_step1a_output"] is False
     assert status["order_path_uses_step1a_output"] is False
