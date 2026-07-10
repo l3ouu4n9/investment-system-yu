@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from datetime import date, datetime, timezone
 import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +57,9 @@ from investment_orchestrator.research.evidence_packet import (
 )
 from investment_orchestrator.research.grounding_status_observatory import (
     build_grounding_status_observatory,
+)
+from investment_orchestrator.research.step1a_retirement_observation import (
+    build_step1a_retirement_observation,
 )
 from investment_orchestrator.research.handoff_compiler import write_compiled_research_handoff
 from investment_orchestrator.research.promoted_handoff_verifier import (
@@ -195,6 +199,7 @@ GROUNDING_STATUS_OBSERVATORY_FILENAME = "grounding_status_observatory.json"
 EMBEDDED_ACTIVE_REGISTRY_SELECTION_FILENAME = "embedded_active_registry_selection.json"
 STEP1A_GROUNDING_COMPILE_SHADOW_DIFF_FILENAME = "step1a_grounding_compile_shadow_diff.json"
 STEP1A_ARTIFACT_SWITCH_STATUS_FILENAME = "step1a_artifact_switch_status.json"
+STEP1A_RETIREMENT_OBSERVATION_FILENAME = "step1a_retirement_observation.json"
 RESEARCH_ANCHORS_INPUT_FILENAME = "research_anchors.yaml"
 RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME = "research_anchor_approvals.yaml"
 CURRENT_RUN_INPUT_NOTES_RE = re.compile(
@@ -485,6 +490,16 @@ def step1a_artifact_switch_status_path() -> Path:
     switched artifact this run. Not an authority and consumed by nothing.
     """
     return step1_artifact_dir() / STEP1A_ARTIFACT_SWITCH_STATUS_FILENAME
+
+
+def step1a_retirement_observation_path() -> Path:
+    """Return the single-run, report-only Step 1A retirement observation path.
+
+    This file describes only the current parse's final observed state.  It is
+    overwritten for the next current run and is not a history, archive, or
+    readiness accumulator.
+    """
+    return step1_artifact_dir() / STEP1A_RETIREMENT_OBSERVATION_FILENAME
 
 
 def resolve_step1_prompt_template_path() -> Path:
@@ -909,6 +924,10 @@ def parse_step1_output(
             diagnostic_reason="step1 parse failed before research_output.json was produced.",
             parse_error=str(exc),
         )
+        # The parse error remains authoritative.  This best-effort observer runs
+        # only after the no-output availability mapping has reached final disk
+        # state and can never mask or change the original failure.
+        _write_step1a_retirement_observation_report_only()
         raise
 
     # Report-only layer 1: validate the raw parsed output as-is.
@@ -973,6 +992,13 @@ def parse_step1_output(
         strategy_settings=handoff_strategy_settings,
         payload=payload,
     )
+    # Phase 1A retirement instrumentation.  This is deliberately last: every
+    # observed source below (including final packet/selection provenance,
+    # support signals, production-sourced observatory, shadow, and final
+    # availability/allowed-actions mapping) has reached its final current-run
+    # write state.  It reads those current mappings once and is consumed by
+    # nothing; it does not recompute availability or permission outcomes.
+    retirement_observation_summary = _write_step1a_retirement_observation_report_only()
 
     return {
         "research_output_path": str(step1_research_output_path()),
@@ -1111,6 +1137,10 @@ def parse_step1_output(
             embedded_selection_switch_status.get("writer_source", "")
         ),
         "step1a_artifact_switch_status_path": str(step1a_artifact_switch_status_path()),
+        "step1a_retirement_observation_path": retirement_observation_summary.get("path", ""),
+        "step1a_retirement_observation_completeness": retirement_observation_summary.get(
+            "observation_completeness", ""
+        ),
         "schema_version": str(payload.get("schema_version", "")),
     }
 
@@ -2871,6 +2901,131 @@ def _read_json_if_exists(path: Path) -> Any | None:
         return read_json(path)
     except Exception:  # noqa: BLE001 - report-only: a malformed artifact is treated as absent
         return None
+
+
+def _read_current_artifact_observation(
+    path: Path,
+) -> tuple[bool, bool, Mapping[str, Any] | None]:
+    """Read one final current-run artifact for an inert observation.
+
+    ``present`` and ``parseable`` remain distinct so a retained or malformed
+    disk artifact cannot be misreported as a successful current final write.
+    This helper is intentionally outside the pure retirement-observation
+    builder; the builder receives only its already-resolved values.
+    """
+    present = file_exists(path)
+    if not present:
+        return False, False, None
+    try:
+        value = read_json(path)
+    except Exception:  # noqa: BLE001 - report-only observation fails closed
+        return True, False, None
+    return True, True, value if isinstance(value, Mapping) else None
+
+
+def _resolve_step1a_retirement_observation_code_identity(
+    *,
+    repo_root_path: Path | None = None,
+) -> dict[str, Any]:
+    """Best-effort Git identity with no authority effect.
+
+    This optional diagnostic never blocks parsing. A missing Git executable,
+    non-repository directory, timeout, or command failure is explicitly
+    ``unavailable`` (never ``dirty``). Only a known clean commit is usable as
+    retirement evidence; the builder itself receives this result as an injected
+    mapping and stays pure.
+    """
+    root = repo_root_path if repo_root_path is not None else repo_root()
+    unavailable = {
+        "git_commit": None,
+        "git_state": "unavailable",
+        "code_version_usable_for_evidence": False,
+    }
+    try:
+        commit_result = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if commit_result.returncode != 0:
+            return unavailable
+        commit = commit_result.stdout.strip()
+        if not commit:
+            return unavailable
+        status_result = subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=all"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if status_result.returncode != 0:
+            return unavailable
+        dirty = bool(status_result.stdout.strip())
+        return {
+            "git_commit": commit,
+            "git_state": "dirty" if dirty else "clean",
+            "code_version_usable_for_evidence": not dirty,
+        }
+    except Exception:  # noqa: BLE001 - best-effort identity must never block parse
+        return unavailable
+
+
+def _write_step1a_retirement_observation_report_only() -> dict[str, str]:
+    """Write the one-run Step 1A retirement observation after final sources.
+
+    The grounding observatory remains production-sourced: this writer only
+    reads its final disk artifact and records that integration fact. It does not
+    replay an observatory, recompute support signals, availability, allowed
+    actions, or any guard. No production code reads the resulting file.
+    """
+    output_path = step1a_retirement_observation_path()
+    try:
+        artifact_paths = {
+            "switch_status": step1a_artifact_switch_status_path(),
+            "shadow_diff": step1a_grounding_compile_shadow_diff_path(),
+            "evidence_packet": step1_evidence_packet_path(),
+            "embedded_selection": step1_embedded_active_registry_selection_path(),
+            "compiled_support_signals": step1_compiled_support_signals_path(),
+            "grounding_status_observatory": step1_grounding_status_observatory_path(),
+            "research_availability": step1_research_availability_path(),
+        }
+        snapshots = {
+            name: _read_current_artifact_observation(path)
+            for name, path in artifact_paths.items()
+        }
+        evidence_present, evidence_parseable, evidence_packet = snapshots["evidence_packet"]
+        support_present, support_parseable, compiled_support_signals = snapshots[
+            "compiled_support_signals"
+        ]
+        observatory_mapping = snapshots["grounding_status_observatory"][2]
+        observation = build_step1a_retirement_observation(
+            generated_at=datetime.now(timezone.utc).isoformat(),
+            code_identity=_resolve_step1a_retirement_observation_code_identity(),
+            switch_status=snapshots["switch_status"][2],
+            shadow_diff=snapshots["shadow_diff"][2],
+            evidence_packet=evidence_packet,
+            embedded_selection=snapshots["embedded_selection"][2],
+            compiled_support_signals=compiled_support_signals,
+            grounding_status_observatory=observatory_mapping,
+            research_availability=snapshots["research_availability"][2],
+            evidence_packet_artifact_present=evidence_present,
+            evidence_packet_artifact_parseable=evidence_parseable,
+            compiled_support_signals_artifact_present=support_present,
+            compiled_support_signals_artifact_parseable=support_parseable,
+            observatory_integration_result=(
+                "production_sourced" if observatory_mapping is not None else None
+            ),
+        )
+        write_json(output_path, observation)
+        return {
+            "path": str(output_path),
+            "observation_completeness": str(observation.get("observation_completeness", "")),
+        }
+    except Exception:  # noqa: BLE001 - report-only writer must never affect Step 1
+        return {"path": "", "observation_completeness": ""}
 
 
 def _compiled_handoff_availability_inputs() -> dict[str, Any]:

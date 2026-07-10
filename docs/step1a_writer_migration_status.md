@@ -122,3 +122,20 @@ The next architecture track — not started here — is legacy-lineage retiremen
 probation evidence would justify removing the legacy/current builders behind the evidence-packet
 and embedded-selection guards, once their Step 1A counterparts have accumulated sufficient clean
 run history. That is a separate, explicitly scoped design effort.
+
+## 9. Phase 1A current-run retirement observation
+
+`artifacts/current/step1_research/step1a_retirement_observation.json` is a
+single current-run, report-only observation for a future offline review. It is
+overwritten on the next run; it is not a history, archive, accumulator,
+threshold, readiness assessment, or authorization to retire anything.
+
+The observation records final writer/guard facts, production-sourced observatory
+integration, deterministic grounding facts, and the existing availability /
+allowed-action outputs. Grounding artifacts remain **not permission inputs**:
+degraded or missing qualitative grounding does not expand permission and does
+not by itself necessarily force `HOLD` / `NO_TRADE`. In particular,
+`STRICT_FRESH` may coexist with degraded or empty qualitative grounding; the
+existing availability/handoff path remains the sole controller of `NEW_BUY` and
+`ORDER_COMPILATION`. Phase 1A only observes that relationship and changes none
+of those policies.
