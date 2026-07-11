@@ -218,15 +218,19 @@ def test_coverage_partitions_clean_code_and_configuration_changes() -> None:
         ("step1a_evidence_packet_unexpected_normalized_path: /tmp/a", "step1a_evidence_packet_unexpected_normalized_path"),
         ("step1a_evidence_packet_report_only_difference: /tmp/a", "step1a_evidence_packet_report_only_difference"),
         ("legacy_evidence_packet_build_failed: detail", "legacy_evidence_packet_build_failed"),
+        ("legacy_evidence_packet_build_failed_upstream: detail", "legacy_evidence_packet_build_failed_upstream"),
         ("evidence_packet_write_failed: detail", "evidence_packet_write_failed"),
+        ("evidence_packet_write_failed_upstream: detail", "evidence_packet_write_failed_upstream"),
         ("step1a_embedded_selection_parity_result_unavailable", "step1a_embedded_selection_parity_result_unavailable"),
         ("step1a_embedded_selection_unknown_runtime_timestamp: /tmp/a", "step1a_embedded_selection_unknown_runtime_timestamp"),
         ("step1a_embedded_selection_parity_mismatch: diff_paths=/tmp/a", "step1a_embedded_selection_parity_mismatch"),
         ("step1a_embedded_selection_unexpected_normalized_path: /tmp/a", "step1a_embedded_selection_unexpected_normalized_path"),
         ("step1a_embedded_selection_guard_failed: detail", "step1a_embedded_selection_guard_failed"),
         ("step1a_embedded_selection_skipped_evidence_packet_fallback", "step1a_embedded_selection_skipped_evidence_packet_fallback"),
+        ("legacy_selection_capture_empty: detail", "legacy_selection_capture_empty"),
         ("step1a_accessor_failed: detail", "step1a_accessor_failed"),
         ("embedded_selection_write_failed: detail", "embedded_selection_write_failed"),
+        ("no_write_invocation_recorded: detail", "no_write_invocation_recorded"),
     ],
 )
 def test_error_token_extraction_never_keeps_dynamic_suffix(summary: str, token: str) -> None:
@@ -245,6 +249,8 @@ def test_unknown_error_token_hashes_without_copying_raw_error() -> None:
     assert result["canonical_error_token"] == "unknown_error_token"
     assert result["unknown_error_present"] is True
     assert result["error_summary_sha256"] == hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    assert len(result["error_summary_sha256"]) == 64
+    assert result["error_summary_sha256"].islower()
     assert raw not in json.dumps(result)
     assert extract_canonical_error_token("")["canonical_error_token"] == ""
 
@@ -263,7 +269,12 @@ def test_missing_or_malformed_required_source_fails_closed(field: str, malformed
     observation = _build(**{field: malformed})
 
     assert observation["observation_completeness"] == "incomplete"
-    assert field in observation["missing_observation_fields"]
+    diagnostics = (
+        observation["missing_observation_fields"]
+        if malformed is None
+        else observation["malformed_observation_fields"]
+    )
+    assert field in diagnostics
     assert "retirement_ready" not in observation
 
 
@@ -279,6 +290,157 @@ def test_missing_hash_and_unexpected_version_are_incomplete_without_raw_hashing(
     assert observation["observation_completeness"] == "incomplete"
     assert "evidence_packet.strategy_settings_hash" in observation["missing_observation_fields"]
     assert "schema_version_unexpected:switch_status" in observation["compatibility_blockers"]
+
+
+@pytest.mark.parametrize(
+    "value, valid",
+    [
+        ("a" * 64, True),
+        ("/secret/raw-strategy-content", False),
+        ("", False),
+        ("a" * 63, False),
+        ("a" * 65, False),
+        ("g" * 64, False),
+        (42, False),
+    ],
+)
+def test_strategy_hash_must_be_canonical_sha256_and_never_leaks_raw_value(
+    value: Any,
+    valid: bool,
+) -> None:
+    packet = deepcopy(_builder_inputs()["evidence_packet"])
+    packet["strategy_settings_hash"] = value
+
+    observation = _build(evidence_packet=packet)
+    serialized = json.dumps(observation, sort_keys=True)
+
+    if valid:
+        assert observation["observation_completeness"] == "complete"
+        assert observation["configuration_hashes"]["strategy_settings_hash"] == value
+    else:
+        assert observation["observation_completeness"] == "incomplete"
+        assert observation["configuration_hashes"]["strategy_settings_hash"] is None
+        assert "evidence_packet.strategy_settings_hash" in observation[
+            "malformed_observation_fields"
+        ]
+        if value == "/secret/raw-strategy-content":
+            assert value not in serialized
+
+
+@pytest.mark.parametrize(
+    "source_id, hash_field",
+    [
+        ("operator_research_anchors_yaml", "research_anchors_sha256"),
+        ("operator_research_anchor_approvals_yaml", "research_anchor_approvals_sha256"),
+        ("operator_research_anchor_revocations_yaml", "research_anchor_revocations_sha256"),
+    ],
+)
+def test_source_manifest_hashes_must_be_canonical_sha256(
+    source_id: str,
+    hash_field: str,
+) -> None:
+    packet = deepcopy(_builder_inputs()["evidence_packet"])
+    entry = next(
+        item
+        for item in packet["active_anchor_registry"]["source_manifest"]
+        if item["source_id"] == source_id
+    )
+    entry["sha256"] = "/secret/raw-source-content"
+
+    observation = _build(evidence_packet=packet)
+
+    assert observation["observation_completeness"] == "incomplete"
+    assert observation["configuration_hashes"][hash_field] is None
+    assert "/secret/raw-source-content" not in json.dumps(observation, sort_keys=True)
+    assert observation["coverage_identity"]["composite_config_fingerprint"] is None
+
+
+@pytest.mark.parametrize(
+    "summary, expected_diagnostic",
+    [
+        pytest.param(None, "malformed", id="null"),
+        pytest.param([], "malformed", id="list"),
+        pytest.param({}, "malformed", id="mapping"),
+        pytest.param(7, "malformed", id="integer"),
+        pytest.param(True, "malformed", id="boolean"),
+    ],
+)
+def test_malformed_error_summary_is_not_a_valid_empty_summary(
+    summary: Any,
+    expected_diagnostic: str,
+) -> None:
+    switch = deepcopy(_builder_inputs()["switch_status"])
+    switch["switched_artifacts"]["evidence_packet"]["error_summary"] = summary
+
+    observation = _build(switch_status=switch)
+    writer = observation["writer_outcomes"]["evidence_packet"]
+
+    assert observation["observation_completeness"] == "incomplete"
+    assert writer["canonical_error_token"] is None
+    assert writer["unknown_error_present"] is None
+    assert "switch_status.evidence_packet.error_summary" in observation[
+        f"{expected_diagnostic}_observation_fields"
+    ]
+
+
+def test_missing_error_summary_is_incomplete_not_a_valid_empty_summary() -> None:
+    switch = deepcopy(_builder_inputs()["switch_status"])
+    del switch["switched_artifacts"]["evidence_packet"]["error_summary"]
+
+    observation = _build(switch_status=switch)
+
+    assert observation["observation_completeness"] == "incomplete"
+    assert observation["writer_outcomes"]["evidence_packet"]["canonical_error_token"] is None
+    assert "switch_status.evidence_packet.error_summary" in observation[
+        "missing_observation_fields"
+    ]
+
+
+def test_valid_empty_error_summary_is_observed_as_empty_token() -> None:
+    switch = deepcopy(_builder_inputs()["switch_status"])
+    switch["switched_artifacts"]["evidence_packet"]["fallback_used"] = False
+    switch["switched_artifacts"]["evidence_packet"]["error_summary"] = ""
+
+    observation = _build(switch_status=switch)
+    writer = observation["writer_outcomes"]["evidence_packet"]
+
+    assert observation["observation_completeness"] == "complete"
+    assert writer["canonical_error_token"] == ""
+    assert writer["unknown_error_present"] is False
+    assert writer["error_summary_sha256"] is None
+
+
+@pytest.mark.parametrize(
+    "value, diagnostics_key",
+    [
+        ("not-a-timestamp", "malformed_observation_fields"),
+        ("", "malformed_observation_fields"),
+        (7, "malformed_observation_fields"),
+        ("2026-07-10T12:00:00Z", "malformed_observation_fields"),
+        ("2026-07-10T12:00:00+01:00", "malformed_observation_fields"),
+        ("2026-07-10T12:00:00", "malformed_observation_fields"),
+        ("2026-07-10T12:00:00.123+00:00", "malformed_observation_fields"),
+        (None, "missing_observation_fields"),
+    ],
+)
+def test_generated_at_must_match_the_production_utc_isoformat_contract(
+    value: Any,
+    diagnostics_key: str,
+) -> None:
+    observation = _build(generated_at=value)
+
+    assert observation["observation_completeness"] == "incomplete"
+    assert observation["observation_identity"]["generated_at"] is None
+    assert observation["observation_identity"]["observation_id"] is None
+    assert "observation_identity.generated_at" in observation[diagnostics_key]
+
+
+def test_production_generated_at_is_valid_and_identifies_observation() -> None:
+    observation = _build(generated_at="2026-07-10T12:00:00.123456+00:00")
+
+    assert observation["observation_completeness"] == "complete"
+    assert observation["observation_identity"]["generated_at"] == "2026-07-10T12:00:00.123456+00:00"
+    assert isinstance(observation["observation_identity"]["observation_id"], str)
 
 
 def test_actual_grounding_and_permission_observations_do_not_infer_from_writer_status() -> None:
@@ -301,6 +463,136 @@ def test_actual_grounding_and_permission_observations_do_not_infer_from_writer_s
     assert permission["new_buy_allowed"] is True
     assert permission["order_compilation_allowed"] is True
     assert observation["observation_completeness"] == "incomplete"
+
+
+@pytest.mark.parametrize(
+    "actions, new_buy_allowed, order_compilation_allowed",
+    [
+        (["HOLD"], False, False),
+        (["HOLD", "NEW_BUY"], True, False),
+        (["HOLD", "ORDER_COMPILATION"], False, True),
+    ],
+)
+def test_permission_context_consistency_preserves_existing_observed_values(
+    actions: list[str],
+    new_buy_allowed: bool,
+    order_compilation_allowed: bool,
+) -> None:
+    availability = deepcopy(_builder_inputs()["research_availability"])
+    availability["allowed_actions"] = actions
+    availability["new_buy_permission"] = new_buy_allowed
+    availability["order_compilation_allowed"] = order_compilation_allowed
+
+    observation = _build(research_availability=availability)
+    permission = observation["permission_context_observation"]
+
+    assert observation["observation_completeness"] == "complete"
+    assert permission["allowed_actions"] == actions
+    assert permission["new_buy_allowed"] is new_buy_allowed
+    assert permission["order_compilation_allowed"] is order_compilation_allowed
+    assert permission["permission_context_consistent"] is True
+    assert observation["permission_context_inconsistencies"] == []
+
+
+@pytest.mark.parametrize(
+    "actions, new_buy_allowed, order_compilation_allowed, expected",
+    [
+        (
+            ["HOLD"],
+            True,
+            True,
+            {
+                "permission_context.new_buy_allowed_mismatch_allowed_actions",
+                "permission_context.order_compilation_allowed_mismatch_allowed_actions",
+            },
+        ),
+        (
+            ["HOLD", "NEW_BUY", "ORDER_COMPILATION"],
+            False,
+            False,
+            {
+                "permission_context.new_buy_allowed_mismatch_allowed_actions",
+                "permission_context.order_compilation_allowed_mismatch_allowed_actions",
+            },
+        ),
+    ],
+)
+def test_permission_context_contradictions_are_incomplete_observations_only(
+    actions: list[str],
+    new_buy_allowed: bool,
+    order_compilation_allowed: bool,
+    expected: set[str],
+) -> None:
+    availability = deepcopy(_builder_inputs()["research_availability"])
+    availability["allowed_actions"] = actions
+    availability["new_buy_permission"] = new_buy_allowed
+    availability["order_compilation_allowed"] = order_compilation_allowed
+
+    observation = _build(research_availability=availability)
+
+    assert observation["observation_completeness"] == "incomplete"
+    assert observation["permission_context_observation"]["permission_context_consistent"] is False
+    assert set(observation["permission_context_inconsistencies"]) == expected
+    # These are copied diagnostic facts, never recalculated or changed.
+    assert observation["permission_context_observation"]["new_buy_allowed"] is new_buy_allowed
+    assert observation["permission_context_observation"]["order_compilation_allowed"] is order_compilation_allowed
+
+
+@pytest.mark.parametrize(
+    "actions",
+    [
+        ["HOLD", "HOLD"],
+        ["HOLD", 1],
+        ["HOLD", "UNKNOWN_ACTION"],
+        "HOLD",
+    ],
+)
+def test_malformed_allowed_actions_are_incomplete(actions: Any) -> None:
+    availability = deepcopy(_builder_inputs()["research_availability"])
+    availability["allowed_actions"] = actions
+
+    observation = _build(research_availability=availability)
+
+    assert observation["observation_completeness"] == "incomplete"
+    assert observation["permission_context_observation"]["allowed_actions"] is None
+    assert observation["permission_context_observation"]["permission_context_consistent"] is None
+    assert "research_availability.allowed_actions" in observation["malformed_observation_fields"]
+
+
+@pytest.mark.parametrize(
+    "mutator, field",
+    [
+        (
+            lambda values: values["switch_status"]["switched_artifacts"]["evidence_packet"].update(
+                {"writer_source": "raw/path"}
+            ),
+            "switch_status.evidence_packet.writer_source",
+        ),
+        (
+            lambda values: values["embedded_selection"].update({"selected_source": "raw/path"}),
+            "embedded_selection.selected_source",
+        ),
+        (
+            lambda values: values["shadow_diff"].update({"comparison_status": "raw/path"}),
+            "shadow_diff.comparison_status",
+        ),
+        (
+            lambda values: values["research_availability"].update({"state": "RAW_STATE"}),
+            "research_availability.state",
+        ),
+    ],
+)
+def test_bounded_nested_token_validation_fails_closed(
+    mutator: Any,
+    field: str,
+) -> None:
+    values = _builder_inputs()
+    mutator(values)
+    observation = build_step1a_retirement_observation(**values)
+
+    assert observation["observation_completeness"] == "incomplete"
+    assert field in observation["malformed_observation_fields"]
+    assert "raw/path" not in json.dumps(observation, sort_keys=True)
 
 
 def test_code_identity_clean_dirty_and_unavailable_semantics() -> None:

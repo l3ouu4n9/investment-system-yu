@@ -13,12 +13,40 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from typing import Any
+
+from investment_orchestrator.state.research_availability import (
+    ACTIONS,
+    PROMOTED_RESEARCH_AUDIT_ACTION,
+    PROMOTED_RESEARCH_DECISION_ACTION,
+    _ALLOWED_ACTIONS_BY_STATE,
+)
 
 
 SCHEMA_VERSION = "step1a_retirement_observation_v1"
 CLASSIFICATION_CONTRACT_VERSION = "step1a_retirement_observation_classification_v1"
 COVERAGE_CONTRACT_VERSION = "step1a_retirement_observation_coverage_v1"
+
+_SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+_GIT_COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
+_SAFE_DIAGNOSTIC_TOKEN_RE = re.compile(r"[a-z][a-z0-9_]*\Z")
+# Exact UTC shape emitted by ``datetime.now(timezone.utc).isoformat()`` in the
+# report-only writer. ``datetime.isoformat`` emits either no fractional seconds
+# or exactly six digits, and UTC is represented as ``+00:00``.
+_GENERATED_AT_RE = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{6})?\+00:00\Z"
+)
+
+_VALID_WRITER_SOURCES = frozenset({"step1a", "legacy_fallback", "unwritten"})
+_VALID_SELECTED_SOURCES = frozenset(
+    {"approvals_inclusive", "baseline_fallback", "fail_closed_empty"}
+)
+_VALID_SHADOW_STATUSES = frozenset({"failed", "mismatch", "pass_with_skips", "pass"})
+_VALID_ALLOWED_ACTIONS = frozenset(
+    (*ACTIONS, PROMOTED_RESEARCH_DECISION_ACTION, PROMOTED_RESEARCH_AUDIT_ACTION)
+)
+_VALID_RESEARCH_STATES = frozenset(_ALLOWED_ACTIONS_BY_STATE)
 
 _EXPECTED_SCHEMA_VERSIONS = {
     "switch_status": "step1a_artifact_switch_status_v1",
@@ -68,7 +96,9 @@ def extract_canonical_error_token(error_summary: Any) -> dict[str, Any]:
     its prefix without any dynamic suffix.  Any other non-empty summary is
     represented only by ``unknown_error_token`` plus its SHA-256 digest.
     """
-    if not isinstance(error_summary, str) or not error_summary:
+    if not isinstance(error_summary, str):
+        return _unavailable_error_token()
+    if not error_summary:
         return {
             "canonical_error_token": "",
             "unknown_error_present": False,
@@ -137,34 +167,59 @@ def _build_step1a_retirement_observation(
     **sources: Any,
 ) -> dict[str, Any]:
     missing: list[str] = []
+    malformed: list[str] = []
     compatibility_blockers: list[str] = []
+    permission_context_inconsistencies: list[str] = []
 
-    generated_at = _string_or_none(sources["generated_at"])
-    if generated_at is None:
-        _add_missing(missing, "observation_identity.generated_at")
+    generated_at = _generated_at_or_none(
+        sources["generated_at"],
+        "observation_identity.generated_at",
+        missing,
+        malformed,
+    )
 
     source_mappings = {
-        name: _mapping_or_none(sources[name], name, missing)
+        name: _mapping_or_none(sources[name], name, missing, malformed)
         for name in _EXPECTED_SCHEMA_VERSIONS
     }
     availability = _mapping_or_none(
-        sources["research_availability"], "research_availability", missing
+        sources["research_availability"], "research_availability", missing, malformed
     )
 
     contract_versions: dict[str, str | None] = {}
     for name, expected_version in _EXPECTED_SCHEMA_VERSIONS.items():
         mapping = source_mappings[name]
-        version = _string_or_none(mapping.get("schema_version")) if mapping else None
+        version = _required_token_or_none(
+            mapping,
+            "schema_version",
+            f"{name}.schema_version",
+            missing,
+            malformed,
+        )
+        if version is not None and not _is_safe_diagnostic_token(version):
+            _add_malformed(malformed, f"{name}.schema_version")
+            version = None
         contract_versions[name] = version
         if version is None:
-            _add_missing(missing, f"{name}.schema_version")
             _add_unique(compatibility_blockers, f"schema_version_missing:{name}")
         elif version != expected_version:
             _add_unique(compatibility_blockers, f"schema_version_unexpected:{name}")
 
-    code_identity_observation = _code_identity_observation(sources["code_identity"], missing)
-    configuration_hashes = _configuration_hashes(source_mappings["evidence_packet"], missing)
-    composite_config_fingerprint = _sha256_value(configuration_hashes)
+    code_identity_observation = _code_identity_observation(
+        sources["code_identity"], missing, malformed
+    )
+    configuration_hashes = _configuration_hashes(
+        source_mappings["evidence_packet"], missing, malformed
+    )
+    composite_config_fingerprint = (
+        _validated_derived_sha256(
+            _sha256_value(configuration_hashes),
+            "coverage_identity.composite_config_fingerprint",
+            malformed,
+        )
+        if all(value is not None for value in configuration_hashes.values())
+        else None
+    )
     if composite_config_fingerprint is None:
         _add_missing(missing, "coverage_identity.composite_config_fingerprint")
 
@@ -174,8 +229,9 @@ def _build_step1a_retirement_observation(
         grounding_status_observatory=source_mappings["grounding_status_observatory"],
         research_availability=availability,
         missing=missing,
+        malformed=malformed,
     )
-    writer_outcomes = _writer_outcomes(source_mappings["switch_status"], missing)
+    writer_outcomes = _writer_outcomes(source_mappings["switch_status"], missing, malformed)
     fallback_error_tokens = sorted(
         {
             outcome["canonical_error_token"]
@@ -187,11 +243,13 @@ def _build_step1a_retirement_observation(
         shadow_diff=source_mappings["shadow_diff"],
         writer_outcomes=writer_outcomes,
         missing=missing,
+        malformed=malformed,
     )
     shadow_and_observatory = _shadow_and_observatory_observation(
         shadow_diff=source_mappings["shadow_diff"],
         observatory_integration_result=sources["observatory_integration_result"],
         missing=missing,
+        malformed=malformed,
     )
     grounding_observation = _grounding_observation(
         evidence_packet=source_mappings["evidence_packet"],
@@ -206,8 +264,14 @@ def _build_step1a_retirement_observation(
             "compiled_support_signals_artifact_parseable"
         ],
         missing=missing,
+        malformed=malformed,
     )
-    permission_context = _permission_context_observation(availability, missing)
+    permission_context = _permission_context_observation(
+        availability,
+        missing,
+        malformed,
+        permission_context_inconsistencies,
+    )
 
     coverage_material = {
         "coverage_contract_version": COVERAGE_CONTRACT_VERSION,
@@ -244,7 +308,11 @@ def _build_step1a_retirement_observation(
             "order_compilation_allowed": permission_context["order_compilation_allowed"],
         },
     }
-    coverage_key = _sha256_value(coverage_material)
+    coverage_key = _validated_derived_sha256(
+        _sha256_value(coverage_material),
+        "coverage_identity.coverage_key",
+        malformed,
+    )
 
     outcome_summary = {
         "writer_outcomes": writer_outcomes,
@@ -253,12 +321,16 @@ def _build_step1a_retirement_observation(
         "permission_context_observation": permission_context,
     }
     observation_id = (
-        _sha256_value(
+        _validated_derived_sha256(
+            _sha256_value(
             {
                 "generated_at": generated_at,
                 "coverage_key": coverage_key,
                 "current_outcome_summary": outcome_summary,
             }
+            ),
+            "observation_identity.observation_id",
+            malformed,
         )
         if generated_at is not None and coverage_key is not None
         else None
@@ -267,8 +339,15 @@ def _build_step1a_retirement_observation(
         _add_missing(missing, "observation_identity.observation_id")
 
     missing = sorted(set(missing))
+    malformed = sorted(set(malformed))
     compatibility_blockers = sorted(set(compatibility_blockers))
-    complete = not missing and not compatibility_blockers
+    permission_context_inconsistencies = sorted(set(permission_context_inconsistencies))
+    complete = not (
+        missing
+        or malformed
+        or compatibility_blockers
+        or permission_context_inconsistencies
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "is_llm_generated": False,
@@ -312,22 +391,41 @@ def _build_step1a_retirement_observation(
         "permission_context_observation": permission_context,
         "observation_completeness": "complete" if complete else "incomplete",
         "missing_observation_fields": missing,
+        "malformed_observation_fields": malformed,
         "compatibility_blockers": compatibility_blockers,
+        "permission_context_inconsistencies": permission_context_inconsistencies,
     }
 
 
-def _code_identity_observation(value: Any, missing: list[str]) -> dict[str, Any]:
-    identity = _mapping_or_none(value, "code_identity", missing)
-    state = _string_or_none(identity.get("git_state")) if identity else None
-    commit = _string_or_none(identity.get("git_commit")) if identity else None
+def _code_identity_observation(
+    value: Any,
+    missing: list[str],
+    malformed: list[str],
+) -> dict[str, Any]:
+    identity = _mapping_or_none(value, "code_identity", missing, malformed)
+    state = _required_token_or_none(
+        identity,
+        "git_state",
+        "code_identity.git_state",
+        missing,
+        malformed,
+    )
+    commit_value = identity.get("git_commit") if identity and "git_commit" in identity else None
+    commit = commit_value if _is_git_commit(commit_value) else None
     if state not in {"clean", "dirty", "unavailable"}:
-        _add_missing(missing, "code_identity.git_state")
+        if state is not None:
+            _add_malformed(malformed, "code_identity.git_state")
         state = "unavailable"
         commit = None
-    if state == "clean" and commit is None:
-        _add_missing(missing, "code_identity.git_commit")
+    if state == "clean":
+        if identity is None or "git_commit" not in identity:
+            _add_missing(missing, "code_identity.git_commit")
+        elif not _is_git_commit(commit_value):
+            _add_malformed(malformed, "code_identity.git_commit")
     if state == "unavailable":
         commit = None
+    elif commit_value is not None and not _is_git_commit(commit_value):
+        _add_malformed(malformed, "code_identity.git_commit")
     return {
         "git_commit": commit,
         "git_state": state,
@@ -338,33 +436,56 @@ def _code_identity_observation(value: Any, missing: list[str]) -> dict[str, Any]
 def _configuration_hashes(
     evidence_packet: Mapping[str, Any] | None,
     missing: list[str],
+    malformed: list[str],
 ) -> dict[str, str | None]:
-    strategy_hash = _string_or_none(evidence_packet.get("strategy_settings_hash")) if evidence_packet else None
-    if strategy_hash is None:
-        _add_missing(missing, "evidence_packet.strategy_settings_hash")
+    strategy_hash = _required_sha256_or_none(
+        evidence_packet,
+        "strategy_settings_hash",
+        "evidence_packet.strategy_settings_hash",
+        missing,
+        malformed,
+    )
     hashes: dict[str, str | None] = {"strategy_settings_hash": strategy_hash}
     manifest = _mapping_or_none(
         evidence_packet.get("active_anchor_registry") if evidence_packet else None,
         "evidence_packet.active_anchor_registry",
         missing,
+        malformed,
     )
     entries = manifest.get("source_manifest") if manifest else None
-    source_hashes: dict[str, str] = {}
+    source_hashes: dict[str, str | None] = {}
     if isinstance(entries, list):
+        seen_source_ids: set[str] = set()
         for entry in entries:
             if not isinstance(entry, Mapping):
                 continue
-            source_id = _string_or_none(entry.get("source_id"))
-            source_hash = _string_or_none(entry.get("sha256"))
-            if source_id is not None and source_hash is not None:
-                source_hashes[source_id] = source_hash
+            source_id = entry.get("source_id")
+            if not isinstance(source_id, str) or source_id not in _SOURCE_HASH_IDS.values():
+                continue
+            source_field = (
+                "evidence_packet.active_anchor_registry.source_manifest."
+                f"{source_id}"
+            )
+            if source_id in seen_source_ids:
+                _add_malformed(malformed, source_field)
+                continue
+            seen_source_ids.add(source_id)
+            source_hashes[source_id] = _required_sha256_or_none(
+                entry,
+                "sha256",
+                f"{source_field}.sha256",
+                missing,
+                malformed,
+            )
     else:
         _add_missing(missing, "evidence_packet.active_anchor_registry.source_manifest")
     for field, source_id in _SOURCE_HASH_IDS.items():
         value = source_hashes.get(source_id)
         hashes[field] = value
         if value is None:
-            _add_missing(missing, f"evidence_packet.active_anchor_registry.{field}")
+            source_field = f"evidence_packet.active_anchor_registry.{field}"
+            if source_id not in source_hashes:
+                _add_missing(missing, source_field)
     return hashes
 
 
@@ -375,47 +496,76 @@ def _input_state_observations(
     grounding_status_observatory: Mapping[str, Any] | None,
     research_availability: Mapping[str, Any] | None,
     missing: list[str],
+    malformed: list[str],
 ) -> dict[str, Any]:
     strategy_summary = _mapping_or_none(
         evidence_packet.get("strategy_settings_summary") if evidence_packet else None,
         "evidence_packet.strategy_settings_summary",
         missing,
+        malformed,
     )
-    as_of = _string_or_none(strategy_summary.get("as_of")) if strategy_summary else None
-    if as_of is None:
-        _add_missing(missing, "evidence_packet.strategy_settings_summary.as_of")
+    as_of = _required_token_or_none(
+        strategy_summary,
+        "as_of",
+        "evidence_packet.strategy_settings_summary.as_of",
+        missing,
+        malformed,
+    )
 
     manifest = _mapping_or_none(
         evidence_packet.get("active_anchor_registry") if evidence_packet else None,
         "evidence_packet.active_anchor_registry",
         missing,
+        malformed,
     )
     manifest_entries = manifest.get("source_manifest") if manifest else None
-    approvals_state = _manifest_state(manifest_entries, "operator_research_anchor_approvals_yaml")
-    revocations_state = _manifest_state(manifest_entries, "operator_research_anchor_revocations_yaml")
-    if approvals_state == "unknown":
-        _add_missing(missing, "evidence_packet.active_anchor_registry.approvals_present")
-    if revocations_state == "unknown":
-        _add_missing(missing, "evidence_packet.active_anchor_registry.revocations_state")
-
-    selected_source = _string_or_none(embedded_selection.get("selected_source")) if embedded_selection else None
-    if selected_source is None:
-        _add_missing(missing, "embedded_selection.selected_source")
+    approvals_state = _manifest_state(
+        manifest_entries,
+        "operator_research_anchor_approvals_yaml",
+        "evidence_packet.active_anchor_registry.approvals_present",
+        missing,
+        malformed,
+    )
+    revocations_state = _manifest_state(
+        manifest_entries,
+        "operator_research_anchor_revocations_yaml",
+        "evidence_packet.active_anchor_registry.revocations_state",
+        missing,
+        malformed,
+    )
+    selected_source = _required_token_or_none(
+        embedded_selection,
+        "selected_source",
+        "embedded_selection.selected_source",
+        missing,
+        malformed,
+    )
+    if selected_source not in _VALID_SELECTED_SOURCES:
+        if selected_source is not None:
+            _add_malformed(malformed, "embedded_selection.selected_source")
+        selected_source = None
 
     snapshot_summary = _mapping_or_none(
         evidence_packet.get("portfolio_snapshot_summary") if evidence_packet else None,
         "evidence_packet.portfolio_snapshot_summary",
         missing,
+        malformed,
     )
-    snapshot_available = snapshot_summary.get("available") if snapshot_summary else None
-    if not isinstance(snapshot_available, bool):
-        _add_missing(missing, "evidence_packet.portfolio_snapshot_summary.available")
+    snapshot_available = _required_bool_or_none(
+        snapshot_summary,
+        "available",
+        "evidence_packet.portfolio_snapshot_summary.available",
+        missing,
+        malformed,
+    )
 
-    last_good_available = (
-        research_availability.get("last_good_available") if research_availability else None
+    last_good_available = _required_bool_or_none(
+        research_availability,
+        "last_good_available",
+        "research_availability.last_good_available",
+        missing,
+        malformed,
     )
-    if not isinstance(last_good_available, bool):
-        _add_missing(missing, "research_availability.last_good_available")
 
     # The supplied production observatory is intentionally not recomputed here;
     # this field just records whether its own deterministic mapping was usable.
@@ -434,16 +584,19 @@ def _input_state_observations(
 def _writer_outcomes(
     switch_status: Mapping[str, Any] | None,
     missing: list[str],
+    malformed: list[str],
 ) -> dict[str, dict[str, Any]]:
     switched = _mapping_or_none(
         switch_status.get("switched_artifacts") if switch_status else None,
         "switch_status.switched_artifacts",
         missing,
+        malformed,
     )
     invocations = _mapping_or_none(
         switch_status.get("evidence_packet_write_invocations") if switch_status else None,
         "switch_status.evidence_packet_write_invocations",
         missing,
+        malformed,
     )
     return {
         "evidence_packet": _writer_outcome(
@@ -451,6 +604,7 @@ def _writer_outcomes(
             invocation=invocations.get("evidence_packet") if invocations else None,
             field_prefix="switch_status.evidence_packet",
             missing=missing,
+            malformed=malformed,
         ),
         "embedded_selection": _writer_outcome(
             status=(
@@ -461,6 +615,7 @@ def _writer_outcomes(
             ),
             field_prefix="switch_status.embedded_active_anchor_registry_selection",
             missing=missing,
+            malformed=malformed,
         ),
     }
 
@@ -471,19 +626,48 @@ def _writer_outcome(
     invocation: Any,
     field_prefix: str,
     missing: list[str],
+    malformed: list[str],
 ) -> dict[str, Any]:
-    status_mapping = _mapping_or_none(status, field_prefix, missing)
+    status_mapping = _mapping_or_none(status, field_prefix, missing, malformed)
     invocation_mapping = _mapping_or_none(
-        invocation, f"{field_prefix}_write_invocations", missing
+        invocation, f"{field_prefix}_write_invocations", missing, malformed
     )
-    writer_source = _string_or_none(status_mapping.get("writer_source")) if status_mapping else None
-    fallback_used = status_mapping.get("fallback_used") if status_mapping else None
-    if writer_source is None:
-        _add_missing(missing, f"{field_prefix}.writer_source")
-    if not isinstance(fallback_used, bool):
-        _add_missing(missing, f"{field_prefix}.fallback_used")
+    writer_source = _required_token_or_none(
+        status_mapping,
+        "writer_source",
+        f"{field_prefix}.writer_source",
+        missing,
+        malformed,
+    )
+    if writer_source not in _VALID_WRITER_SOURCES:
+        if writer_source is not None:
+            _add_malformed(malformed, f"{field_prefix}.writer_source")
+        writer_source = None
+    fallback_used = _required_bool_or_none(
+        status_mapping,
+        "fallback_used",
+        f"{field_prefix}.fallback_used",
+        missing,
+        malformed,
+    )
+    if fallback_used is None:
         fallback_used = None
-    error = extract_canonical_error_token(status_mapping.get("error_summary") if status_mapping else None)
+    error_summary_field = f"{field_prefix}.error_summary"
+    if status_mapping is None or "error_summary" not in status_mapping:
+        _add_missing(missing, error_summary_field)
+        error = _unavailable_error_token()
+    elif not isinstance(status_mapping["error_summary"], str):
+        _add_malformed(malformed, error_summary_field)
+        error = _unavailable_error_token()
+    else:
+        error = extract_canonical_error_token(status_mapping["error_summary"])
+        digest = error.get("error_summary_sha256")
+        if digest is not None:
+            error["error_summary_sha256"] = _validated_derived_sha256(
+                digest,
+                f"{error_summary_field}.sha256",
+                malformed,
+            )
 
     invocation_count = invocation_mapping.get("invocation_count") if invocation_mapping else None
     divergence = (
@@ -493,13 +677,31 @@ def _writer_outcome(
         invocation_mapping.get("final_disk_write_invocation") if invocation_mapping else None
     )
     if not _non_bool_int(invocation_count):
-        _add_missing(missing, f"{field_prefix}_write_invocations.invocation_count")
+        _add_field_problem(
+            invocation_mapping,
+            "invocation_count",
+            f"{field_prefix}_write_invocations.invocation_count",
+            missing,
+            malformed,
+        )
         invocation_count = None
     if not isinstance(divergence, bool):
-        _add_missing(missing, f"{field_prefix}_write_invocations.first_and_final_statuses_differ")
+        _add_field_problem(
+            invocation_mapping,
+            "first_and_final_statuses_differ",
+            f"{field_prefix}_write_invocations.first_and_final_statuses_differ",
+            missing,
+            malformed,
+        )
         divergence = None
     if not _non_bool_int(final_disk_write_invocation):
-        _add_missing(missing, f"{field_prefix}_write_invocations.final_disk_write_invocation")
+        _add_field_problem(
+            invocation_mapping,
+            "final_disk_write_invocation",
+            f"{field_prefix}_write_invocations.final_disk_write_invocation",
+            missing,
+            malformed,
+        )
         final_disk_write_invocation = None
     return {
         "final_writer_source": writer_source,
@@ -516,11 +718,13 @@ def _guard_summaries(
     shadow_diff: Mapping[str, Any] | None,
     writer_outcomes: Mapping[str, Mapping[str, Any]],
     missing: list[str],
+    malformed: list[str],
 ) -> dict[str, dict[str, Any]]:
     comparisons = _mapping_or_none(
         shadow_diff.get("comparisons") if shadow_diff else None,
         "shadow_diff.comparisons",
         missing,
+        malformed,
     )
     return {
         "evidence_packet": _guard_summary(
@@ -528,6 +732,7 @@ def _guard_summaries(
             writer_outcome=writer_outcomes["evidence_packet"],
             field_prefix="shadow_diff.comparisons.evidence_packet",
             missing=missing,
+            malformed=malformed,
         ),
         "embedded_selection": _guard_summary(
             comparison=(
@@ -538,6 +743,7 @@ def _guard_summaries(
             writer_outcome=writer_outcomes["embedded_selection"],
             field_prefix="shadow_diff.comparisons.embedded_active_anchor_registry_selection",
             missing=missing,
+            malformed=malformed,
         ),
     }
 
@@ -548,15 +754,16 @@ def _guard_summary(
     writer_outcome: Mapping[str, Any],
     field_prefix: str,
     missing: list[str],
+    malformed: list[str],
 ) -> dict[str, Any]:
-    mapping = _mapping_or_none(comparison, field_prefix, missing)
+    mapping = _mapping_or_none(comparison, field_prefix, missing, malformed)
     match_observed = mapping.get("semantic_match") if mapping else None
     if not isinstance(match_observed, bool):
-        _add_missing(missing, f"{field_prefix}.semantic_match")
+        _add_field_problem(mapping, "semantic_match", f"{field_prefix}.semantic_match", missing, malformed)
         match_observed = None
     differences = mapping.get("differences") if mapping else None
     if not isinstance(differences, list):
-        _add_missing(missing, f"{field_prefix}.differences")
+        _add_field_problem(mapping, "differences", f"{field_prefix}.differences", missing, malformed)
         differences_count = None
     else:
         differences_count = len(differences)
@@ -564,6 +771,7 @@ def _guard_summary(
         mapping.get("current_summary") if mapping else None,
         f"{field_prefix}.current_summary",
         missing,
+        malformed,
     )
     unknown_timestamp_fields = (
         current_summary.get("parity_unknown_runtime_timestamp_fields") if current_summary else None
@@ -581,7 +789,13 @@ def _guard_summary(
         # field list (the embedded-selection summary has that shape today).
         unknown_timestamp_observed = error_token in unknown_timestamp_tokens
     else:
-        _add_missing(missing, f"{field_prefix}.parity_unknown_runtime_timestamp_fields")
+        _add_field_problem(
+            current_summary,
+            "parity_unknown_runtime_timestamp_fields",
+            f"{field_prefix}.parity_unknown_runtime_timestamp_fields",
+            missing,
+            malformed,
+        )
         unknown_timestamp_observed = None
     unexpected_path_observed = (
         True
@@ -606,33 +820,75 @@ def _shadow_and_observatory_observation(
     shadow_diff: Mapping[str, Any] | None,
     observatory_integration_result: Any,
     missing: list[str],
+    malformed: list[str],
 ) -> dict[str, Any]:
-    comparison_status = _string_or_none(shadow_diff.get("comparison_status")) if shadow_diff else None
+    comparison_status = _required_token_or_none(
+        shadow_diff,
+        "comparison_status",
+        "shadow_diff.comparison_status",
+        missing,
+        malformed,
+    )
     parity_passed = shadow_diff.get("parity_passed") if shadow_diff else None
     comparison_complete = shadow_diff.get("comparison_complete") if shadow_diff else None
     skipped = shadow_diff.get("skipped_artifacts") if shadow_diff else None
     mismatches = shadow_diff.get("mismatch_artifacts") if shadow_diff else None
-    if comparison_status is None:
-        _add_missing(missing, "shadow_diff.comparison_status")
+    if comparison_status not in _VALID_SHADOW_STATUSES:
+        if comparison_status is not None:
+            _add_malformed(malformed, "shadow_diff.comparison_status")
+        comparison_status = None
     if not isinstance(parity_passed, bool):
-        _add_missing(missing, "shadow_diff.parity_passed")
+        _add_field_problem(shadow_diff, "parity_passed", "shadow_diff.parity_passed", missing, malformed)
         parity_passed = None
     if not isinstance(comparison_complete, bool):
-        _add_missing(missing, "shadow_diff.comparison_complete")
+        _add_field_problem(
+            shadow_diff,
+            "comparison_complete",
+            "shadow_diff.comparison_complete",
+            missing,
+            malformed,
+        )
         comparison_complete = None
-    if not isinstance(skipped, list) or not all(isinstance(item, str) for item in skipped):
-        _add_missing(missing, "shadow_diff.skipped_artifacts")
+    if (
+        not isinstance(skipped, list)
+        or not all(isinstance(item, str) and _is_safe_diagnostic_token(item) for item in skipped)
+        or len(skipped) != len(set(skipped))
+    ):
+        _add_field_problem(
+            shadow_diff,
+            "skipped_artifacts",
+            "shadow_diff.skipped_artifacts",
+            missing,
+            malformed,
+        )
         skipped = None
     else:
         skipped = sorted(set(skipped))
-    if not isinstance(mismatches, list) or not all(isinstance(item, str) for item in mismatches):
-        _add_missing(missing, "shadow_diff.mismatch_artifacts")
+    if (
+        not isinstance(mismatches, list)
+        or not all(isinstance(item, str) and _is_safe_diagnostic_token(item) for item in mismatches)
+        or len(mismatches) != len(set(mismatches))
+    ):
+        _add_field_problem(
+            shadow_diff,
+            "mismatch_artifacts",
+            "shadow_diff.mismatch_artifacts",
+            missing,
+            malformed,
+        )
         mismatches = None
     else:
         mismatches = sorted(set(mismatches))
-    integration = _string_or_none(observatory_integration_result)
-    if integration is None:
-        _add_missing(missing, "observatory_integration_result")
+    integration = _token_value_or_none(
+        observatory_integration_result,
+        "observatory_integration_result",
+        missing,
+        malformed,
+    )
+    if integration != "production_sourced":
+        if integration is not None:
+            _add_malformed(malformed, "observatory_integration_result")
+        integration = None
     return {
         "comparison_status": comparison_status,
         "parity_passed": parity_passed,
@@ -653,20 +909,31 @@ def _grounding_observation(
     compiled_support_signals_artifact_present: Any,
     compiled_support_signals_artifact_parseable: Any,
     missing: list[str],
+    malformed: list[str],
 ) -> dict[str, Any]:
     packet_present = _bool_or_none(
-        evidence_packet_artifact_present, "evidence_packet_final_artifact_present", missing
+        evidence_packet_artifact_present,
+        "evidence_packet_final_artifact_present",
+        missing,
+        malformed,
     )
     packet_parseable = _bool_or_none(
-        evidence_packet_artifact_parseable, "evidence_packet_final_artifact_parseable", missing
+        evidence_packet_artifact_parseable,
+        "evidence_packet_final_artifact_parseable",
+        missing,
+        malformed,
     )
     support_present = _bool_or_none(
-        compiled_support_signals_artifact_present, "compiled_support_signals_present", missing
+        compiled_support_signals_artifact_present,
+        "compiled_support_signals_present",
+        missing,
+        malformed,
     )
     support_parseable = _bool_or_none(
         compiled_support_signals_artifact_parseable,
         "compiled_support_signals_parseable",
         missing,
+        malformed,
     )
     if packet_present is not True:
         _add_missing(missing, "evidence_packet_final_artifact_present")
@@ -678,7 +945,13 @@ def _grounding_observation(
         _add_missing(missing, "compiled_support_signals_parseable")
     accepted = compiled_support_signals.get("accepted_support_signals") if compiled_support_signals else None
     if not isinstance(accepted, list):
-        _add_missing(missing, "compiled_support_signals.accepted_support_signals")
+        _add_field_problem(
+            compiled_support_signals,
+            "accepted_support_signals",
+            "compiled_support_signals.accepted_support_signals",
+            missing,
+            malformed,
+        )
         accepted_count = None
     else:
         accepted_count = len(accepted)
@@ -688,7 +961,13 @@ def _grounding_observation(
         else None
     )
     if not isinstance(grounded_memo_support_present, bool):
-        _add_missing(missing, "research_availability.grounded_memo_support_present")
+        _add_field_problem(
+            research_availability,
+            "grounded_memo_support_present",
+            "research_availability.grounded_memo_support_present",
+            missing,
+            malformed,
+        )
         grounded_memo_support_present = None
     return {
         "evidence_packet_final_artifact_present": packet_present,
@@ -706,44 +985,97 @@ def _grounding_observation(
 def _permission_context_observation(
     research_availability: Mapping[str, Any] | None,
     missing: list[str],
+    malformed: list[str],
+    inconsistencies: list[str],
 ) -> dict[str, Any]:
-    state = _string_or_none(research_availability.get("state")) if research_availability else None
-    availability_state = (
-        _string_or_none(research_availability.get("research_availability"))
-        if research_availability
-        else None
+    state = _required_token_or_none(
+        research_availability,
+        "state",
+        "research_availability.state",
+        missing,
+        malformed,
+    )
+    availability_state = _required_token_or_none(
+        research_availability,
+        "research_availability",
+        "research_availability.research_availability",
+        missing,
+        malformed,
     )
     actions = research_availability.get("allowed_actions") if research_availability else None
-    new_buy_allowed = research_availability.get("new_buy_permission") if research_availability else None
-    order_compilation_allowed = (
-        research_availability.get("order_compilation_allowed") if research_availability else None
+    new_buy_allowed = _required_bool_or_none(
+        research_availability,
+        "new_buy_permission",
+        "research_availability.new_buy_permission",
+        missing,
+        malformed,
     )
-    if state is None:
-        _add_missing(missing, "research_availability.state")
-    if availability_state is None:
-        _add_missing(missing, "research_availability.research_availability")
-    if not isinstance(actions, list) or not all(isinstance(item, str) for item in actions):
-        _add_missing(missing, "research_availability.allowed_actions")
+    order_compilation_allowed = _required_bool_or_none(
+        research_availability,
+        "order_compilation_allowed",
+        "research_availability.order_compilation_allowed",
+        missing,
+        malformed,
+    )
+    if state not in _VALID_RESEARCH_STATES:
+        if state is not None:
+            _add_malformed(malformed, "research_availability.state")
+        state = None
+    if not isinstance(actions, list):
+        _add_field_problem(
+            research_availability,
+            "allowed_actions",
+            "research_availability.allowed_actions",
+            missing,
+            malformed,
+        )
         actions = None
     else:
-        actions = list(actions)
-    if not isinstance(new_buy_allowed, bool):
-        _add_missing(missing, "research_availability.new_buy_permission")
-        new_buy_allowed = None
-    if not isinstance(order_compilation_allowed, bool):
-        _add_missing(missing, "research_availability.order_compilation_allowed")
-        order_compilation_allowed = None
+        invalid_actions = (
+            not all(isinstance(item, str) and item in _VALID_ALLOWED_ACTIONS for item in actions)
+            or len(actions) != len(set(actions))
+        )
+        if invalid_actions:
+            _add_malformed(malformed, "research_availability.allowed_actions")
+            actions = None
+        else:
+            actions = list(actions)
+
+    if availability_state is not None:
+        if not _is_safe_diagnostic_token(availability_state):
+            _add_malformed(malformed, "research_availability.research_availability")
+            availability_state = None
+        elif state is not None and availability_state != state.lower():
+            _add_malformed(malformed, "research_availability.research_availability")
+            availability_state = None
+
+    permission_context_consistent: bool | None = None
+    if actions is not None and new_buy_allowed is not None and order_compilation_allowed is not None:
+        permission_context_consistent = True
+        if new_buy_allowed != ("NEW_BUY" in actions):
+            _add_unique(
+                inconsistencies,
+                "permission_context.new_buy_allowed_mismatch_allowed_actions",
+            )
+            permission_context_consistent = False
+        if order_compilation_allowed != ("ORDER_COMPILATION" in actions):
+            _add_unique(
+                inconsistencies,
+                "permission_context.order_compilation_allowed_mismatch_allowed_actions",
+            )
+            permission_context_consistent = False
     return {
         "research_state": state,
         "research_availability_state": availability_state,
         "allowed_actions": actions,
         "new_buy_allowed": new_buy_allowed,
         "order_compilation_allowed": order_compilation_allowed,
+        "permission_context_consistent": permission_context_consistent,
     }
 
 
 def _minimal_incomplete_observation(generated_at: Any) -> dict[str, Any]:
-    timestamp = _string_or_none(generated_at)
+    timestamp = generated_at if _is_generated_at(generated_at) else None
     return {
         "schema_version": SCHEMA_VERSION,
         "is_llm_generated": False,
@@ -760,39 +1092,69 @@ def _minimal_incomplete_observation(generated_at: Any) -> dict[str, Any]:
         "coverage_identity": {"coverage_key": None, "composite_config_fingerprint": None},
         "observation_completeness": "incomplete",
         "missing_observation_fields": ["builder_internal_error"],
+        "malformed_observation_fields": [],
         "compatibility_blockers": [],
+        "permission_context_inconsistencies": [],
     }
 
 
-def _mapping_or_none(value: Any, field: str, missing: list[str]) -> Mapping[str, Any] | None:
+def _mapping_or_none(
+    value: Any,
+    field: str,
+    missing: list[str],
+    malformed: list[str],
+) -> Mapping[str, Any] | None:
+    if value is None:
+        _add_missing(missing, field)
+        return None
     if isinstance(value, Mapping):
         return value
-    _add_missing(missing, field)
+    _add_malformed(malformed, field)
     return None
 
 
-def _bool_or_none(value: Any, field: str, missing: list[str]) -> bool | None:
+def _bool_or_none(
+    value: Any,
+    field: str,
+    missing: list[str],
+    malformed: list[str],
+) -> bool | None:
+    if value is None:
+        _add_missing(missing, field)
+        return None
     if isinstance(value, bool):
         return value
-    _add_missing(missing, field)
+    _add_malformed(malformed, field)
     return None
 
 
-def _manifest_state(entries: Any, source_id: str) -> str:
+def _manifest_state(
+    entries: Any,
+    source_id: str,
+    field: str,
+    missing: list[str],
+    malformed: list[str],
+) -> str:
     if not isinstance(entries, list):
+        _add_missing(missing, field)
         return "unknown"
     for entry in entries:
         if not isinstance(entry, Mapping) or entry.get("source_id") != source_id:
             continue
         present = entry.get("present")
         valid = entry.get("valid")
+        if not isinstance(present, bool) or not isinstance(valid, bool):
+            _add_malformed(malformed, field)
+            return "unknown"
         if present is False:
             return "absent"
         if present is True and valid is True:
             return "present_valid"
         if present is True and valid is False:
             return "present_invalid"
-        return "present_unknown"
+        _add_malformed(malformed, field)
+        return "unknown"
+    _add_missing(missing, field)
     return "unknown"
 
 
@@ -820,6 +1182,141 @@ def _string_or_none(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _generated_at_or_none(
+    value: Any,
+    field: str,
+    missing: list[str],
+    malformed: list[str],
+) -> str | None:
+    if value is None:
+        _add_missing(missing, field)
+        return None
+    if not _is_generated_at(value):
+        _add_malformed(malformed, field)
+        return None
+    return value
+
+
+def _is_generated_at(value: Any) -> bool:
+    if not isinstance(value, str) or _GENERATED_AT_RE.fullmatch(value) is None:
+        return False
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None and parsed.utcoffset() == timezone.utc.utcoffset(parsed)
+
+
+def _required_token_or_none(
+    mapping: Mapping[str, Any] | None,
+    key: str,
+    field: str,
+    missing: list[str],
+    malformed: list[str],
+) -> str | None:
+    if mapping is None or key not in mapping:
+        _add_missing(missing, field)
+        return None
+    value = mapping[key]
+    if not isinstance(value, str) or not value:
+        _add_malformed(malformed, field)
+        return None
+    return value
+
+
+def _token_value_or_none(
+    value: Any,
+    field: str,
+    missing: list[str],
+    malformed: list[str],
+) -> str | None:
+    if value is None:
+        _add_missing(missing, field)
+        return None
+    if not isinstance(value, str) or not value:
+        _add_malformed(malformed, field)
+        return None
+    return value
+
+
+def _required_bool_or_none(
+    mapping: Mapping[str, Any] | None,
+    key: str,
+    field: str,
+    missing: list[str],
+    malformed: list[str],
+) -> bool | None:
+    if mapping is None or key not in mapping:
+        _add_missing(missing, field)
+        return None
+    value = mapping[key]
+    if not isinstance(value, bool):
+        _add_malformed(malformed, field)
+        return None
+    return value
+
+
+def _required_sha256_or_none(
+    mapping: Mapping[str, Any] | None,
+    key: str,
+    field: str,
+    missing: list[str],
+    malformed: list[str],
+) -> str | None:
+    if mapping is None or key not in mapping:
+        _add_missing(missing, field)
+        return None
+    value = mapping[key]
+    if not _is_sha256(value):
+        _add_malformed(malformed, field)
+        return None
+    return value
+
+
+def _validated_derived_sha256(
+    value: Any,
+    field: str,
+    malformed: list[str],
+) -> str | None:
+    if _is_sha256(value):
+        return value
+    _add_malformed(malformed, field)
+    return None
+
+
+def _is_sha256(value: Any) -> bool:
+    return isinstance(value, str) and _SHA256_RE.fullmatch(value) is not None
+
+
+def _is_git_commit(value: Any) -> bool:
+    return isinstance(value, str) and _GIT_COMMIT_RE.fullmatch(value) is not None
+
+
+def _is_safe_diagnostic_token(value: Any) -> bool:
+    return isinstance(value, str) and _SAFE_DIAGNOSTIC_TOKEN_RE.fullmatch(value) is not None
+
+
+def _add_field_problem(
+    mapping: Mapping[str, Any] | None,
+    key: str,
+    field: str,
+    missing: list[str],
+    malformed: list[str],
+) -> None:
+    if mapping is None or key not in mapping:
+        _add_missing(missing, field)
+    else:
+        _add_malformed(malformed, field)
+
+
+def _unavailable_error_token() -> dict[str, Any]:
+    return {
+        "canonical_error_token": None,
+        "unknown_error_present": None,
+        "error_summary_sha256": None,
+    }
+
+
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -835,6 +1332,11 @@ def _sha256_value(value: Any) -> str | None:
 def _add_missing(missing: list[str], field: str) -> None:
     if field not in missing:
         missing.append(field)
+
+
+def _add_malformed(malformed: list[str], field: str) -> None:
+    if field not in malformed:
+        malformed.append(field)
 
 
 def _add_unique(values: list[str], value: str) -> None:
