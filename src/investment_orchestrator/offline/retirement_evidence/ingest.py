@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -24,13 +23,9 @@ from typing import Any
 from investment_orchestrator.research import step1a_retirement_observation as p1a
 
 from investment_orchestrator.offline.retirement_evidence import archive_contract as c
+from investment_orchestrator.offline.retirement_evidence import archive_record_contract as rc
 from investment_orchestrator.offline.retirement_evidence.source_validation import (
     classify_observation,
-)
-
-
-_SAFE_RECORD_BASENAME_RE = re.compile(
-    r"(?:[0-9]+|nogen)__(?:[0-9a-f]{12}|noid)__[0-9a-f]{64}\.json\Z"
 )
 
 
@@ -40,7 +35,7 @@ def _safe_record_basename(path: Path) -> str:
     Candidate discovery may encounter an operator-supplied filename.  Never
     echo an arbitrary basename from such a file through the library or CLI.
     """
-    return path.name if _SAFE_RECORD_BASENAME_RE.fullmatch(path.name) else "invalid_archive_record_basename"
+    return rc.safe_record_basename(path.name)
 
 
 class ArchiveLayoutError(Exception):
@@ -182,7 +177,7 @@ def _write_accepted_or_quarantined(
             stamp=stamp,
         )
 
-    observation_id = _stored_observation_id(payload)
+    observation_id = rc.stored_observation_id(payload)
 
     # Cross-record conflict: same observation id, different canonical content.
     conflict_path = _find_observation_id_conflict(
@@ -213,7 +208,9 @@ def _write_accepted_or_quarantined(
     )
     record_content_sha256 = envelope["archive_record_content_sha256"]
 
-    filename = _record_filename(payload, observation_id, canonical_payload_sha256)
+    filename = rc.expected_observation_record_filename(
+        payload, observation_id, canonical_payload_sha256
+    )
     target = dest_root / decision / filename
     written = _exclusive_write_json(target, envelope)
     duplicate = not written
@@ -284,10 +281,7 @@ def _build_envelope(
 
 
 def _record_content_hash(envelope: Mapping[str, Any]) -> str:
-    without_self = {
-        k: v for k, v in envelope.items() if k != "archive_record_content_sha256"
-    }
-    digest = p1a.canonical_sha256(without_self)
+    digest = rc.compute_archive_record_content_sha256(envelope)
     if digest is None:  # pragma: no cover - envelope is always serializable
         raise ArchiveIngestionError("archive_record_not_serializable")
     return digest
@@ -297,24 +291,13 @@ def _safe_source_metadata(payload: Mapping[str, Any], source_path: Path) -> dict
     coverage = payload.get("coverage_identity")
     return {
         "source_basename": source_path.name,
-        "source_observation_id": _stored_observation_id(payload),
+        "source_observation_id": rc.stored_observation_id(payload),
         "source_coverage_key": coverage.get("coverage_key")
         if isinstance(coverage, Mapping)
         else None,
-        "source_git_commit": _clean_payload_commit(payload),
+        "source_git_commit": rc.clean_payload_git_commit(payload),
         "source_schema_version": payload.get("schema_version"),
     }
-
-
-def _clean_payload_commit(payload: Mapping[str, Any]) -> str | None:
-    """The payload's clean git commit, or ``None`` - one source of truth shared
-    by envelope construction and existing-record verification."""
-    code = payload.get("code_identity")
-    if isinstance(code, Mapping) and code.get("git_state") == "clean":
-        candidate = code.get("git_commit")
-        if p1a.is_git_commit(candidate):
-            return candidate
-    return None
 
 
 # --- rejected ----------------------------------------------------------------
@@ -338,7 +321,7 @@ def _write_rejected(
         "source_basename": source_path.name,
         "source_file_sha256": source_file_sha256,
     }
-    filename = f"rejected__{source_file_sha256[:16]}__{source_file_sha256}.json"
+    filename = rc.expected_rejected_record_filename(source_file_sha256)
     target = dest_root / c.DECISION_REJECTED / filename
     written = _exclusive_write_json(target, record)
     return IngestResult(
@@ -384,40 +367,6 @@ def _validate_layout_version(version_path: Path) -> None:
 # metadata (observation id, canonical hash, self-hash) is never trusted alone;
 # filename prefixes are candidate discovery only, never identity.
 
-_RECORD_ENVELOPE_KEYS = frozenset(
-    {
-        "archive_record_schema_version",
-        "archive_layout_version",
-        "archive_tool_version",
-        "archive_tool_commit",
-        "archived_at",
-        "ingestion_decision",
-        "ingestion_reason_tokens",
-        "claimed_evidence_provenance",
-        "provenance_claim_source",
-        "provenance_verified",
-        "source_metadata",
-        "source_file_sha256",
-        "source_canonical_payload_sha256",
-        "recomputed_identity",
-        "observation_payload",
-        "archive_record_content_sha256",
-    }
-)
-_SOURCE_METADATA_KEYS = frozenset(
-    {
-        "source_basename",
-        "source_observation_id",
-        "source_coverage_key",
-        "source_git_commit",
-        "source_schema_version",
-    }
-)
-_RECOMPUTED_IDENTITY_KEYS = frozenset(
-    {"composite_config_fingerprint", "coverage_key", "observation_id"}
-)
-
-
 def _verify_existing_record(path: Path, expected_partition: str) -> Mapping[str, Any]:
     """Fully re-verify an existing archive record before trusting it.
 
@@ -434,7 +383,7 @@ def _verify_existing_record(path: Path, expected_partition: str) -> Mapping[str,
 
 def _existing_record_is_valid(record: Any, expected_partition: str) -> bool:
     # Envelope shape and versions.
-    if not isinstance(record, Mapping) or frozenset(record.keys()) != _RECORD_ENVELOPE_KEYS:
+    if not isinstance(record, Mapping) or frozenset(record.keys()) != rc.OBSERVATION_RECORD_ENVELOPE_KEYS:
         return False
     if record["archive_record_schema_version"] != c.ARCHIVE_RECORD_SCHEMA_VERSION:
         return False
@@ -463,7 +412,7 @@ def _existing_record_is_valid(record: Any, expected_partition: str) -> bool:
     if not isinstance(claim_source, str) or not claim_source:
         return False
     metadata = record["source_metadata"]
-    if not isinstance(metadata, Mapping) or frozenset(metadata.keys()) != _SOURCE_METADATA_KEYS:
+    if not isinstance(metadata, Mapping) or frozenset(metadata.keys()) != rc.SOURCE_METADATA_KEYS:
         return False
     basename = metadata["source_basename"]
     if not isinstance(basename, str) or not basename:
@@ -495,13 +444,13 @@ def _existing_record_is_valid(record: Any, expected_partition: str) -> bool:
     if not isinstance(reason_tokens, list) or tuple(reason_tokens) != result.reason_tokens:
         return False
     recomputed = record["recomputed_identity"]
-    if not isinstance(recomputed, Mapping) or frozenset(recomputed.keys()) != _RECOMPUTED_IDENTITY_KEYS:
+    if not isinstance(recomputed, Mapping) or frozenset(recomputed.keys()) != rc.RECOMPUTED_IDENTITY_KEYS:
         return False
-    for key in _RECOMPUTED_IDENTITY_KEYS:
+    for key in rc.RECOMPUTED_IDENTITY_KEYS:
         if recomputed[key] != result.recomputed_identity.get(key):
             return False
     # Envelope-to-payload consistency.
-    if metadata["source_observation_id"] != _stored_observation_id(payload):
+    if metadata["source_observation_id"] != rc.stored_observation_id(payload):
         return False
     coverage = payload.get("coverage_identity")
     payload_coverage_key = coverage.get("coverage_key") if isinstance(coverage, Mapping) else None
@@ -509,7 +458,7 @@ def _existing_record_is_valid(record: Any, expected_partition: str) -> bool:
         return False
     if metadata["source_schema_version"] != payload.get("schema_version"):
         return False
-    if metadata["source_git_commit"] != _clean_payload_commit(payload):
+    if metadata["source_git_commit"] != rc.clean_payload_git_commit(payload):
         return False
     return True
 
@@ -538,7 +487,7 @@ def _find_observation_id_conflict(
             continue
         for candidate in sorted(directory.glob(f"*__{prefix}__*.json")):
             record = _verify_existing_record(candidate, partition)
-            existing_id = _stored_observation_id(record["observation_payload"])
+            existing_id = rc.stored_observation_id(record["observation_payload"])
             if existing_id != observation_id:
                 continue
             if record["source_canonical_payload_sha256"] != canonical_payload_sha256:
@@ -602,37 +551,6 @@ def _best_effort_unlink(path: Path) -> None:
         path.unlink()
     except OSError:
         pass
-
-
-# --- helpers -----------------------------------------------------------------
-def _record_filename(
-    payload: Mapping[str, Any],
-    observation_id: str | None,
-    canonical_payload_sha256: str,
-) -> str:
-    generated_at = None
-    identity = payload.get("observation_identity")
-    if isinstance(identity, Mapping):
-        generated_at = identity.get("generated_at")
-    gen = _compact_generated_at(generated_at)
-    obs = observation_id[:12] if isinstance(observation_id, str) else "noid"
-    return f"{gen}__{obs}__{canonical_payload_sha256}.json"
-
-
-def _compact_generated_at(value: Any) -> str:
-    if not (isinstance(value, str) and p1a.is_valid_generated_at(value)):
-        return "nogen"
-    return "".join(ch for ch in value if ch.isdigit())
-
-
-def _stored_observation_id(payload: Any) -> str | None:
-    if not isinstance(payload, Mapping):
-        return None
-    identity = payload.get("observation_identity")
-    if not isinstance(identity, Mapping):
-        return None
-    observation_id = identity.get("observation_id")
-    return observation_id if isinstance(observation_id, str) else None
 
 
 def _read_source_bytes(source_path: Path) -> bytes:

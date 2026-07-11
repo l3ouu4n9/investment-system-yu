@@ -8,7 +8,9 @@ it authorizes nothing.  It is never imported by production runtime code.
 Public surface:
 
 * :mod:`.archive_contract`  - versions, partitions, provenance/reason vocab
+* :mod:`.archive_record_contract` - pure shared archive-record shape helpers
 * :mod:`.source_validation` - strict full v1-contract validator + classifier
 * :mod:`.ingest`            - ingestion library function + append-only writer
+* :mod:`.record_verifier`   - pure single-record verifier (Phase 2B-1)
 * :mod:`.cli`               - operator/CI command-line entry point
 """
