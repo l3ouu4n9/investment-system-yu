@@ -7,8 +7,9 @@ destination archive root; writes only beneath that root.
 Exit codes:
 * 0 - accepted or quarantined (including a deterministic duplicate no-op)
 * 3 - input rejected (a reason-only record was written; no payload preserved)
-* 2 - archive layout error, existing-record integrity failure, or operator-side
-      error (nothing written; fail closed)
+* 2 - archive layout, coordination, indeterminate-mutation, existing-record
+      integrity, or operator-side error.  Inspect the code-owned mutation state;
+      exit 2 does not by itself prove that nothing was written.
 """
 
 from __future__ import annotations
@@ -19,10 +20,15 @@ import sys
 from pathlib import Path
 
 from investment_orchestrator.offline.retirement_evidence import archive_contract as c
+from investment_orchestrator.offline.retirement_evidence.archive_coordination import (
+    CoordinationError,
+    TOKEN_PATH_OMITTED,
+)
 from investment_orchestrator.offline.retirement_evidence.ingest import (
     ArchiveIngestionError,
     ArchiveLayoutError,
     ExistingRecordIntegrityError,
+    IndeterminatePostPublicationError,
     ingest_observation,
 )
 
@@ -45,6 +51,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to the destination archive root (outside artifacts/current).",
     )
     parser.add_argument(
+        "--coordination-file",
+        default=None,
+        help=(
+            "Explicit pre-existing retirement_archive_coordination_v1 anchor "
+            "outside the archive root. The tool never creates or modifies it."
+        ),
+    )
+    parser.add_argument(
         "--provenance",
         choices=sorted(c.PROVENANCE_VALUES),
         default=None,
@@ -60,6 +74,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.coordination_file is None:
+        print(
+            json.dumps(
+                {"error": "archive_coordination_error", "token": TOKEN_PATH_OMITTED}
+            ),
+            file=sys.stderr,
+        )
+        return 2
 
     if args.provenance is None:
         claimed = c.DEFAULT_PROVENANCE
@@ -72,6 +94,7 @@ def main(argv: list[str] | None = None) -> int:
         result = ingest_observation(
             source_path=Path(args.source),
             dest_root=Path(args.dest),
+            coordination_path=Path(args.coordination_file),
             claimed_provenance=claimed,
             provenance_claim_source=claim_source,
         )
@@ -92,6 +115,25 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     except ArchiveIngestionError as exc:
         print(json.dumps({"error": "archive_ingestion_error", "token": exc.token}), file=sys.stderr)
+        return 2
+    except CoordinationError as exc:
+        print(json.dumps({"error": "archive_coordination_error", "token": exc.token}), file=sys.stderr)
+        return 2
+    except IndeterminatePostPublicationError as exc:
+        print(
+            json.dumps(
+                {
+                    "error": "archive_ingestion_indeterminate_post_publication",
+                    "token": exc.token,
+                    "coordination_token": exc.coordination_token,
+                    "mutation_state": exc.mutation_state,
+                    "layout_published": exc.layout_published,
+                    "record_published": exc.record_published,
+                    "cleanup_incomplete": exc.cleanup_incomplete,
+                }
+            ),
+            file=sys.stderr,
+        )
         return 2
 
     print(

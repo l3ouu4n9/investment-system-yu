@@ -17,6 +17,7 @@ from investment_orchestrator.research.step1a_retirement_observation import (
     _minimal_incomplete_observation,
 )
 from investment_orchestrator.offline.retirement_evidence import archive_contract as c
+from investment_orchestrator.offline.retirement_evidence import archive_coordination as coord
 from investment_orchestrator.offline.retirement_evidence.ingest import (
     ArchiveIngestionError,
     ArchiveLayoutError,
@@ -46,6 +47,10 @@ def _write_source(directory: Path, payload: Any, name: str = "step1a_retirement_
 def _ingest(source: Path, root: Path, **kwargs: Any):
     kwargs.setdefault("tool_identity", _TOOL)
     kwargs.setdefault("archived_at", _STAMP)
+    anchor = root.parent / "retirement-archive-coordination.anchor"
+    if not anchor.exists():
+        anchor.write_bytes(coord.COORDINATION_ANCHOR_BYTES)
+    kwargs.setdefault("coordination_path", anchor)
     return ingest_observation(source_path=source, dest_root=root, **kwargs)
 
 
@@ -506,8 +511,9 @@ def test_forced_link_failure_leaves_no_partial_record(
         raise OSError("simulated link failure")
 
     monkeypatch.setattr(ingest_mod.os, "link", boom)
-    with pytest.raises(OSError):
+    with pytest.raises(ingest_mod.IndeterminatePostPublicationError) as raised:
         _ingest(_write_source(tmp_path / "src", obs), root)
+    assert raised.value.token == "coordination_indeterminate_post_publication"
 
     accepted = root / c.PARTITION_ACCEPTED
     assert list(accepted.glob("*.json")) == []

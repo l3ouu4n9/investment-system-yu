@@ -11,6 +11,7 @@ import pytest
 
 from investment_orchestrator.workflow import step1_research
 from investment_orchestrator.offline.retirement_evidence import cli
+from investment_orchestrator.offline.retirement_evidence import archive_coordination as coord
 
 from test_step1a_shadow_run import _read, _settings, _setup_repo  # noqa: F401
 
@@ -103,9 +104,18 @@ def _write(tmp_path: Path, payload: Any, name: str = "obs.json") -> Path:
     return path
 
 
+def _coordination(tmp_path: Path) -> Path:
+    anchor = tmp_path / "retirement-archive-coordination.anchor"
+    anchor.write_bytes(coord.COORDINATION_ANCHOR_BYTES)
+    return anchor
+
+
 def test_cli_accepted_exit_zero(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     src = _write(tmp_path, _obs_for_cli())
-    code = cli.main(["--source", str(src), "--dest", str(tmp_path / "arch")])
+    code = cli.main([
+        "--source", str(src), "--dest", str(tmp_path / "arch"),
+        "--coordination-file", str(_coordination(tmp_path)),
+    ])
     out = json.loads(capsys.readouterr().out)
     assert code == 0
     assert out["decision"] == "accepted"
@@ -115,7 +125,10 @@ def test_cli_accepted_exit_zero(tmp_path: Path, capsys: pytest.CaptureFixture[st
 def test_cli_rejected_exit_three(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     src = tmp_path / "bad.json"
     src.write_text("{ not json", encoding="utf-8")
-    code = cli.main(["--source", str(src), "--dest", str(tmp_path / "arch")])
+    code = cli.main([
+        "--source", str(src), "--dest", str(tmp_path / "arch"),
+        "--coordination-file", str(_coordination(tmp_path)),
+    ])
     out = json.loads(capsys.readouterr().out)
     assert code == 3
     assert out["decision"] == "rejected"
@@ -126,7 +139,10 @@ def test_cli_layout_error_exit_two(tmp_path: Path, capsys: pytest.CaptureFixture
     root.mkdir()
     (root / "retirement_archive_layout_version").write_text("retirement_archive_layout_v999\n")
     src = _write(tmp_path, _obs_for_cli())
-    code = cli.main(["--source", str(src), "--dest", str(root)])
+    code = cli.main([
+        "--source", str(src), "--dest", str(root),
+        "--coordination-file", str(_coordination(tmp_path)),
+    ])
     err = json.loads(capsys.readouterr().err)
     assert code == 2
     assert err["error"] == "archive_layout_error"
@@ -137,3 +153,4 @@ def test_cli_has_no_tool_version_option() -> None:
     options = {action.dest for action in parser._actions}
     assert "tool_version" not in options
     assert "provenance" in options
+    assert "coordination_file" in options

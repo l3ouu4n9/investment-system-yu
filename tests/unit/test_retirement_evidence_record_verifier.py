@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from investment_orchestrator.offline.retirement_evidence import archive_contract as c
+from investment_orchestrator.offline.retirement_evidence import archive_coordination as coord
 from investment_orchestrator.offline.retirement_evidence import archive_record_contract as rc
 from investment_orchestrator.offline.retirement_evidence import record_verifier as verifier
 from investment_orchestrator.offline.retirement_evidence.ingest import ingest_observation
@@ -43,9 +44,13 @@ def _write_source(directory: Path, payload: Any, name: str = "step1a_retirement_
 
 
 def _ingest(source: Path, root: Path):
+    anchor = root.parent / "retirement-archive-coordination.anchor"
+    if not anchor.exists():
+        anchor.write_bytes(coord.COORDINATION_ANCHOR_BYTES)
     return ingest_observation(
         source_path=source,
         dest_root=root,
+        coordination_path=anchor,
         tool_identity=_TOOL,
         archived_at=_STAMP,
     )
