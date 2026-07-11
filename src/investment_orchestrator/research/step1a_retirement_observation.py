@@ -14,6 +14,7 @@ import json
 import re
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Any
 
 from investment_orchestrator.state.research_availability import (
@@ -86,6 +87,34 @@ _KNOWN_ERROR_PREFIXES = (
     "step1a_accessor_failed:",
     "embedded_selection_write_failed:",
     "no_write_invocation_recorded",
+)
+
+
+# --- Public contract surface (Phase 2 offline reuse) -------------------------
+# Read-only views of the domains and canonicalization the report-only writer
+# above already uses.  Offline evidence tooling (archival / verification) reuses
+# these so it validates and recomputes the exact committed v1 contract instead
+# of hard-coding a weaker parallel copy that could drift from the writer.  None
+# of this adds any behavior to the writer, reads any file, or is imported by
+# runtime Step 1 parsing.
+EXPECTED_SCHEMA_VERSIONS = MappingProxyType(dict(_EXPECTED_SCHEMA_VERSIONS))
+VALID_WRITER_SOURCES = frozenset(_VALID_WRITER_SOURCES)
+VALID_SELECTED_SOURCES = frozenset(_VALID_SELECTED_SOURCES)
+VALID_SHADOW_STATUSES = frozenset(_VALID_SHADOW_STATUSES)
+VALID_ALLOWED_ACTIONS = frozenset(_VALID_ALLOWED_ACTIONS)
+VALID_RESEARCH_STATES = frozenset(_VALID_RESEARCH_STATES)
+VALID_CODE_IDENTITY_STATES = frozenset({"clean", "dirty", "unavailable"})
+VALID_AS_OF_INPUT_CLASSES = frozenset({"missing", "iso_date", "non_iso_string"})
+VALID_MANIFEST_STATES = frozenset(
+    {"present_valid", "present_invalid", "absent", "unknown"}
+)
+VALID_BOOL_STATES = frozenset({"present", "absent", "unknown"})
+VALID_OBSERVATORY_INTEGRATION_RESULTS = frozenset({"production_sourced"})
+# Canonical error tokens the writer can emit (dynamic suffixes already stripped)
+# plus the unknown-token sentinel and the empty (no-error) token.
+KNOWN_CANONICAL_ERROR_TOKENS = frozenset(
+    {prefix.rstrip(":") for prefix in _KNOWN_ERROR_PREFIXES}
+    | {"unknown_error_token", ""}
 )
 
 
@@ -273,61 +302,36 @@ def _build_step1a_retirement_observation(
         permission_context_inconsistencies,
     )
 
-    coverage_material = {
-        "coverage_contract_version": COVERAGE_CONTRACT_VERSION,
-        "code_identity": code_identity_observation,
-        "contract_versions": contract_versions,
-        "composite_config_fingerprint": composite_config_fingerprint,
-        "input_state_observations": input_state,
-        "writer_outcome_classes": {
-            key: {
-                "final_writer_source": outcome["final_writer_source"],
-                "fallback_used": outcome["fallback_used"],
-                "canonical_error_token": outcome["canonical_error_token"],
-            }
-            for key, outcome in writer_outcomes.items()
-        },
-        "shadow_class": {
-            key: shadow_and_observatory[key]
-            for key in ("comparison_status", "parity_passed", "comparison_complete")
-        },
-        "grounding_class": {
-            "evidence_packet_final_artifact_present": grounding_observation[
-                "evidence_packet_final_artifact_present"
-            ],
-            "compiled_support_signals_present": grounding_observation[
-                "compiled_support_signals_present"
-            ],
-            "grounded_memo_support_present": grounding_observation[
-                "grounded_memo_support_present"
-            ],
-        },
-        "permission_class": {
-            "research_availability_state": permission_context["research_availability_state"],
-            "new_buy_allowed": permission_context["new_buy_allowed"],
-            "order_compilation_allowed": permission_context["order_compilation_allowed"],
-        },
-    }
+    coverage_material = _coverage_material(
+        code_identity=code_identity_observation,
+        contract_versions=contract_versions,
+        composite_config_fingerprint=composite_config_fingerprint,
+        input_state_observations=input_state,
+        writer_outcomes=writer_outcomes,
+        shadow_and_observatory=shadow_and_observatory,
+        grounding_observation=grounding_observation,
+        permission_context=permission_context,
+    )
     coverage_key = _validated_derived_sha256(
         _sha256_value(coverage_material),
         "coverage_identity.coverage_key",
         malformed,
     )
 
-    outcome_summary = {
-        "writer_outcomes": writer_outcomes,
-        "shadow_and_observatory": shadow_and_observatory,
-        "grounding_observation": grounding_observation,
-        "permission_context_observation": permission_context,
-    }
+    outcome_summary = _current_outcome_summary(
+        writer_outcomes=writer_outcomes,
+        shadow_and_observatory=shadow_and_observatory,
+        grounding_observation=grounding_observation,
+        permission_context=permission_context,
+    )
     observation_id = (
         _validated_derived_sha256(
             _sha256_value(
-            {
-                "generated_at": generated_at,
-                "coverage_key": coverage_key,
-                "current_outcome_summary": outcome_summary,
-            }
+                {
+                    "generated_at": generated_at,
+                    "coverage_key": coverage_key,
+                    "current_outcome_summary": outcome_summary,
+                }
             ),
             "observation_identity.observation_id",
             malformed,
@@ -394,6 +398,80 @@ def _build_step1a_retirement_observation(
         "malformed_observation_fields": malformed,
         "compatibility_blockers": compatibility_blockers,
         "permission_context_inconsistencies": permission_context_inconsistencies,
+    }
+
+
+def _coverage_material(
+    *,
+    code_identity: Mapping[str, Any],
+    contract_versions: Mapping[str, Any],
+    composite_config_fingerprint: str | None,
+    input_state_observations: Mapping[str, Any],
+    writer_outcomes: Mapping[str, Mapping[str, Any]],
+    shadow_and_observatory: Mapping[str, Any],
+    grounding_observation: Mapping[str, Any],
+    permission_context: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Deterministic logical-coverage material hashed into ``coverage_key``.
+
+    Shared by the writer above and by :func:`recompute_observation_identity` so
+    the coverage-class definition has exactly one source of truth and cannot
+    drift.  This helper only reshapes already-validated values; it performs no
+    validation and copies no raw content.
+    """
+    return {
+        "coverage_contract_version": COVERAGE_CONTRACT_VERSION,
+        "code_identity": code_identity,
+        "contract_versions": contract_versions,
+        "composite_config_fingerprint": composite_config_fingerprint,
+        "input_state_observations": input_state_observations,
+        "writer_outcome_classes": {
+            key: {
+                "final_writer_source": outcome["final_writer_source"],
+                "fallback_used": outcome["fallback_used"],
+                "canonical_error_token": outcome["canonical_error_token"],
+            }
+            for key, outcome in writer_outcomes.items()
+        },
+        "shadow_class": {
+            key: shadow_and_observatory[key]
+            for key in ("comparison_status", "parity_passed", "comparison_complete")
+        },
+        "grounding_class": {
+            "evidence_packet_final_artifact_present": grounding_observation[
+                "evidence_packet_final_artifact_present"
+            ],
+            "compiled_support_signals_present": grounding_observation[
+                "compiled_support_signals_present"
+            ],
+            "grounded_memo_support_present": grounding_observation[
+                "grounded_memo_support_present"
+            ],
+        },
+        "permission_class": {
+            "research_availability_state": permission_context["research_availability_state"],
+            "new_buy_allowed": permission_context["new_buy_allowed"],
+            "order_compilation_allowed": permission_context["order_compilation_allowed"],
+        },
+    }
+
+
+def _current_outcome_summary(
+    *,
+    writer_outcomes: Mapping[str, Any],
+    shadow_and_observatory: Mapping[str, Any],
+    grounding_observation: Mapping[str, Any],
+    permission_context: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Per-run outcome detail hashed (with ``generated_at``) into ``observation_id``.
+
+    Shared by the writer above and by :func:`recompute_observation_identity`.
+    """
+    return {
+        "writer_outcomes": writer_outcomes,
+        "shadow_and_observatory": shadow_and_observatory,
+        "grounding_observation": grounding_observation,
+        "permission_context_observation": permission_context,
     }
 
 
@@ -1342,3 +1420,144 @@ def _add_malformed(malformed: list[str], field: str) -> None:
 def _add_unique(values: list[str], value: str) -> None:
     if value not in values:
         values.append(value)
+
+
+# --- Public pure helpers (Phase 2 offline reuse) -----------------------------
+# Thin, read-only wrappers over the private predicates/canonicalization used by
+# the writer above.  They exist so offline evidence tooling reuses the exact
+# committed contract rather than re-implementing it.  None of them read files,
+# mutate input, or alter writer behavior.
+
+
+def is_canonical_sha256(value: Any) -> bool:
+    """True iff ``value`` is a lowercase 64-char hex SHA-256 string."""
+    return _is_sha256(value)
+
+
+def is_git_commit(value: Any) -> bool:
+    """True iff ``value`` is a lowercase 40-char hex git commit string."""
+    return _is_git_commit(value)
+
+
+def is_safe_diagnostic_token(value: Any) -> bool:
+    """True iff ``value`` matches the safe diagnostic token domain."""
+    return _is_safe_diagnostic_token(value)
+
+
+def is_valid_generated_at(value: Any) -> bool:
+    """True iff ``value`` matches the exact production UTC isoformat contract."""
+    return _is_generated_at(value)
+
+
+def is_non_negative_int(value: Any) -> bool:
+    """True iff ``value`` is a non-negative int and not a bool."""
+    return _non_bool_int(value)
+
+
+def canonical_sha256(value: Any) -> str | None:
+    """Return the SHA-256 of the canonical compact-sorted JSON of ``value``.
+
+    This is the exact canonicalization the writer uses for its internal derived
+    hashes, exposed so offline tooling can compute a payload-identity hash that
+    is reproducible and comparable.  Returns ``None`` if ``value`` is not
+    JSON-serializable.
+    """
+    return _sha256_value(value)
+
+
+def recompute_observation_identity(
+    observation: Mapping[str, Any],
+) -> dict[str, str | None]:
+    """Recompute the three derived identity hashes from a finished observation.
+
+    Pure and read-only.  Reconstructs the exact ``coverage_material`` /
+    ``current_outcome_summary`` shapes the writer hashes, via the shared
+    :func:`_coverage_material` / :func:`_current_outcome_summary` helpers, and
+    returns the recomputed ``composite_config_fingerprint``, ``coverage_key``,
+    and ``observation_id``.  A caller compares these against the stored values
+    to detect corruption or tampering; this function makes no judgement, copies
+    no raw content, and never raises.  Any hash whose inputs are absent (e.g.
+    the minimal builder-internal-error observation) is returned as ``None``.
+    """
+    result: dict[str, str | None] = {
+        "composite_config_fingerprint": None,
+        "coverage_key": None,
+        "observation_id": None,
+    }
+    if not isinstance(observation, Mapping):
+        return result
+
+    config_hashes = observation.get("configuration_hashes")
+    composite: str | None = None
+    if (
+        isinstance(config_hashes, Mapping)
+        and config_hashes
+        and all(value is not None for value in config_hashes.values())
+    ):
+        composite = _sha256_value(dict(config_hashes))
+    result["composite_config_fingerprint"] = composite
+
+    code_identity = observation.get("code_identity")
+    contract_versions = observation.get("contract_versions")
+    input_state = observation.get("input_state_observations")
+    writer_outcomes = observation.get("writer_outcomes")
+    shadow = observation.get("shadow_and_observatory_observation")
+    grounding = observation.get("grounding_observation")
+    permission = observation.get("permission_context_observation")
+    coverage_key: str | None = None
+    if all(
+        isinstance(part, Mapping)
+        for part in (
+            code_identity,
+            contract_versions,
+            input_state,
+            writer_outcomes,
+            shadow,
+            grounding,
+            permission,
+        )
+    ):
+        try:
+            material = _coverage_material(
+                code_identity=code_identity,
+                contract_versions=contract_versions,
+                composite_config_fingerprint=composite,
+                input_state_observations=input_state,
+                writer_outcomes=writer_outcomes,
+                shadow_and_observatory=shadow,
+                grounding_observation=grounding,
+                permission_context=permission,
+            )
+            coverage_key = _sha256_value(material)
+        except (KeyError, TypeError, AttributeError):
+            coverage_key = None
+    result["coverage_key"] = coverage_key
+
+    identity = observation.get("observation_identity")
+    generated_at = identity.get("generated_at") if isinstance(identity, Mapping) else None
+    if (
+        generated_at is not None
+        and coverage_key is not None
+        and all(
+            isinstance(part, Mapping)
+            for part in (writer_outcomes, shadow, grounding, permission)
+        )
+    ):
+        try:
+            outcome_summary = _current_outcome_summary(
+                writer_outcomes=writer_outcomes,
+                shadow_and_observatory=shadow,
+                grounding_observation=grounding,
+                permission_context=permission,
+            )
+            result["observation_id"] = _sha256_value(
+                {
+                    "generated_at": generated_at,
+                    "coverage_key": coverage_key,
+                    "current_outcome_summary": outcome_summary,
+                }
+            )
+        except (KeyError, TypeError, AttributeError):
+            result["observation_id"] = None
+
+    return result

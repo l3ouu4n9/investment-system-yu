@@ -15,7 +15,9 @@ import pytest
 
 from investment_orchestrator.research.step1a_retirement_observation import (
     build_step1a_retirement_observation,
+    canonical_sha256,
     extract_canonical_error_token,
+    recompute_observation_identity,
 )
 from investment_orchestrator.workflow import step1_research
 
@@ -707,3 +709,66 @@ def test_parse_writes_one_final_report_only_observation(
     assert observation["permission_context_observation"]["new_buy_allowed"] is False
     assert observation["permission_context_observation"]["order_compilation_allowed"] is False
     assert "retirement_ready" not in observation
+
+
+def _stored_identity(observation: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "composite_config_fingerprint": observation["coverage_identity"][
+            "composite_config_fingerprint"
+        ],
+        "coverage_key": observation["coverage_identity"]["coverage_key"],
+        "observation_id": observation["observation_identity"]["observation_id"],
+    }
+
+
+def test_recompute_identity_matches_writer_for_complete_observation() -> None:
+    observation = _build()
+    assert recompute_observation_identity(observation) == _stored_identity(observation)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"generated_at": "not-a-timestamp"},
+        {"code_identity": {"git_commit": "1" * 40, "git_state": "dirty"}},
+        {"code_identity": {"git_commit": None, "git_state": "unavailable"}},
+    ],
+)
+def test_recompute_identity_matches_writer_for_incomplete_or_degraded(
+    overrides: dict[str, Any],
+) -> None:
+    observation = _build(**overrides)
+    assert recompute_observation_identity(observation) == _stored_identity(observation)
+
+
+def test_recompute_identity_matches_writer_when_config_hash_missing() -> None:
+    packet = deepcopy(_builder_inputs()["evidence_packet"])
+    packet.pop("strategy_settings_hash")
+    observation = _build(evidence_packet=packet)
+    recomputed = recompute_observation_identity(observation)
+    assert recomputed == _stored_identity(observation)
+    assert recomputed["composite_config_fingerprint"] is None
+
+
+def test_recompute_identity_detects_tampered_configuration_hash() -> None:
+    observation = _build()
+    tampered = deepcopy(observation)
+    tampered["configuration_hashes"]["strategy_settings_hash"] = "f" * 64
+    recomputed = recompute_observation_identity(tampered)
+    assert recomputed["composite_config_fingerprint"] != tampered["coverage_identity"][
+        "composite_config_fingerprint"
+    ]
+
+
+def test_recompute_identity_is_safe_on_non_mapping_input() -> None:
+    assert recompute_observation_identity(None) == {
+        "composite_config_fingerprint": None,
+        "coverage_key": None,
+        "observation_id": None,
+    }
+
+
+def test_canonical_sha256_is_order_independent_and_none_for_unserializable() -> None:
+    assert canonical_sha256({"a": 1, "b": 2}) == canonical_sha256({"b": 2, "a": 1})
+    assert len(canonical_sha256({"a": 1})) == 64
+    assert canonical_sha256({"x": {1, 2, 3}}) is None
