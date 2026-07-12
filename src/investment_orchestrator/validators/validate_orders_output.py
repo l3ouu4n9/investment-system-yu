@@ -843,11 +843,11 @@ def _validate_keep_existing_against_snapshot(
         )
 
 
-def validate_orders_output_texts(
+def validate_orders_output(
     *,
-    template4_orders: str,
-    order_state_export: str,
-    exec_summary: str,
+    template4_orders_path: str | Path,
+    order_state_export_path: str | Path,
+    exec_summary_path: str | Path,
     audited_decision_packet: Any | None = None,
     strategy_settings: Mapping[str, Any] | None = None,
     effective_allowed_buy_universe: Collection[str] | None = None,
@@ -857,7 +857,7 @@ def validate_orders_output_texts(
     existing_buy_open_orders: ExistingBuyOpenOrdersParseResult | None = None,
     require_safety_context: bool = False,
 ) -> dict[str, str]:
-    """Validate already-extracted Step 4 output texts without filesystem access.
+    """Validate the required Step 4 output text artifacts.
 
     Beyond existence / non-empty / compile-ready cross-checks, deterministic
     safety checks run on BUY_ORDERS rows:
@@ -899,17 +899,17 @@ def validate_orders_output_texts(
     universe/budget/new-ticker checks apply only to submit/new buy legs, never to
     cancel legs.
     """
-    _require(
-        isinstance(template4_orders, str) and bool(template4_orders.strip()),
-        "Step 4 template4_orders text is empty.",
+    template4_orders = _validate_non_empty_text_file(
+        template4_orders_path,
+        label="template4_orders",
     )
-    _require(
-        isinstance(order_state_export, str) and bool(order_state_export.strip()),
-        "Step 4 order_state_export text is empty.",
+    order_state_export = _validate_non_empty_text_file(
+        order_state_export_path,
+        label="order_state_export",
     )
-    _require(
-        isinstance(exec_summary, str) and bool(exec_summary.strip()),
-        "Step 4 exec_summary text is empty.",
+    exec_summary = _validate_non_empty_text_file(
+        exec_summary_path,
+        label="exec_summary",
     )
 
     buy_order_rows = _buy_order_rows(template4_orders)
@@ -974,42 +974,3 @@ def validate_orders_output_texts(
         "order_state_export": order_state_export,
         "exec_summary": exec_summary,
     }
-
-
-def validate_orders_output(
-    *,
-    template4_orders_path: str | Path,
-    order_state_export_path: str | Path,
-    exec_summary_path: str | Path,
-    audited_decision_packet: Any | None = None,
-    strategy_settings: Mapping[str, Any] | None = None,
-    effective_allowed_buy_universe: Collection[str] | None = None,
-    hard_cap_open_orders_budget: Any | None = None,
-    target_new_buy_budget_this_run: Any | None = None,
-    max_new_tickers_per_week: int | None = None,
-    existing_buy_open_orders: ExistingBuyOpenOrdersParseResult | None = None,
-    require_safety_context: bool = False,
-) -> dict[str, str]:
-    """Read and validate the required Step 4 output artifacts."""
-    return validate_orders_output_texts(
-        template4_orders=_validate_non_empty_text_file(
-            template4_orders_path,
-            label="template4_orders",
-        ),
-        order_state_export=_validate_non_empty_text_file(
-            order_state_export_path,
-            label="order_state_export",
-        ),
-        exec_summary=_validate_non_empty_text_file(
-            exec_summary_path,
-            label="exec_summary",
-        ),
-        audited_decision_packet=audited_decision_packet,
-        strategy_settings=strategy_settings,
-        effective_allowed_buy_universe=effective_allowed_buy_universe,
-        hard_cap_open_orders_budget=hard_cap_open_orders_budget,
-        target_new_buy_budget_this_run=target_new_buy_budget_this_run,
-        max_new_tickers_per_week=max_new_tickers_per_week,
-        existing_buy_open_orders=existing_buy_open_orders,
-        require_safety_context=require_safety_context,
-    )

@@ -274,15 +274,13 @@ existing compile-ready / diagnostics checks are unchanged; still fail-closed in 
   `extract_orders_and_summary.main()` CLI is parser-development / debugging only and is **not** the
   primary Step 4 safety path. It no longer silently runs weaker validation: by **default it refuses**
   (prints a message directing the operator to `run_step4 parse`, **writes nothing**, exits non-zero).
-  Weaker parse-only behavior (`require_safety_context=False`, no settings/budgets/universe/audited
-  packet) runs **only** behind the explicit `--unsafe-parse-only` flag. It creates no artifact files
-  or directories and emits exactly one code-owned `step4_unsafe_parse_only_stdout_v1` JSON document
-  to stdout. Legacy caller-selected output options are rejected rather than ignored. The JSON and
-  stderr warning state that the output is unvalidated, non-authoritative, not manual-order-ready,
-  and not broker-ready. Redirecting stdout does not make the JSON a canonical Step 4 artifact; users
-  must never redirect it into canonical paths and treat it as validated. The unsafe path never calls
-  the quarantine-to-canonical publisher. The authoritative `extract_orders_and_summary` function API is unchanged,
-  as is the primary `run_step4 parse` path; only that validated workflow may create canonical Step 4 artifacts.
+  The former weaker `--unsafe-parse-only` path is **temporarily disabled** pending the separately
+  reviewed canonical Step 4 grammar and diagnostic design. It exits non-zero with the deterministic
+  token `unsafe_parse_only_temporarily_disabled`; it reads no raw Step 4 input, invokes no parser or
+  validator, and creates neither artifact files nor stdout diagnostic output. The authoritative
+  `extract_orders_and_summary` function API is unchanged, as is the primary `run_step4 parse` path. Only
+  that normal validated workflow may create canonical Step 4 artifacts. Repair B grammar and safe
+  diagnostic work remain pending and are not implemented by this containment change.
 - **Still deferred:** true group-level (all-or-nothing) multi-file publish (per-file atomic publish is
   implemented in **G2.2** — see above; wiring `target_new_buy_budget_this_run` is implemented in **G5**
   — see §10; standalone CLI safety gate is implemented in **G6** — see above).
