@@ -1,0 +1,33 @@
+{
+  "manifest_schema_version": "retirement_phase2a_precoord_baseline_manifest_v1",
+  "fixture_schema_version": "retirement_phase2a_precoord_baseline_v1",
+  "baseline_commit": "d206d7686240c1c176a77d217416429d09db7858",
+  "coordination_commit": "455d76d299996fe3f156d5ba0a6dc62150ce3853",
+  "baseline_source_path": "src/investment_orchestrator/offline/retirement_evidence/ingest.py",
+  "covered_scenarios": [
+    "accepted_default",
+    "accepted_explicit",
+    "quarantined",
+    "dirty_identity",
+    "unavailable_identity",
+    "minimal_builder_error",
+    "malformed_rejection",
+    "unknown_schema_rejection",
+    "completeness_contradiction",
+    "duplicate_noop",
+    "canonical_payload_duplicate",
+    "observation_id_conflict",
+    "filename_collision",
+    "existing_record_integrity_failure"
+  ],
+  "fixtures": {
+    "precoord_scenarios_v1.json.gz.b64": {
+      "encoding": "base64(gzip(canonical UTF-8 JSON))",
+      "file_sha256": "df3234cc0548091dfaad9a314ffe9087baa5f9a243737cc9f240c05f7c5a9c37",
+      "compressed_payload_sha256": "298f9a3accbf0e0af5d65fb32fc54fa9aef62967fb68283bd0bdd33dd1b07f05",
+      "decompressed_json_sha256": "36b2b26fac004a71339283616623dbd0af01ff9fba81136a0a7e613f8aa36ec8"
+    }
+  },
+  "generation_method": "One-time execution of the exact ingest.py source blob from baseline_commit using this test's fixed deterministic scenario matrix; snapshots store every archive-relative path type and exact file bytes. Normal test execution does not invoke Git or regenerate fixtures.",
+  "coordination_metadata_absent": true
+}
