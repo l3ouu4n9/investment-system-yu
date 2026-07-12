@@ -1,0 +1,4 @@
+TEMPLATE5_EXEC_SUMMARY
+compiler_status=OBSERVATION_ONLY_BUY_ROW
+buy_orders_action_summary=NEW_ORDER
+sell_orders_action_summary=NONE

@@ -1,0 +1,4 @@
+TEMPLATE5_EXEC_SUMMARY
+compiler_status=OBSERVATION_ONLY_CANCEL_EXISTING
+buy_orders_action_summary=CANCEL_EXISTING_ONLY
+sell_orders_action_summary=NONE

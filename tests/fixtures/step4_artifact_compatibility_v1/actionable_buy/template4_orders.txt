@@ -1,0 +1,5 @@
+TEMPLATE4_ORDERS
+SELL_ORDERS
+NONE
+BUY_ORDERS
+ticker=FIXTURE | template_id=FIXTURE_TEMPLATE | plan_type=new_limit_ladder | step_name=L1 | shares=FIXTURE_SHARES | limit_price=FIXTURE_PRICE | limit_price_rule=FIXTURE_LIMIT_PRICE_RULE | time_in_force=DAY | expiry_if_gtd=null | order_intent=NEW_ORDER | event_id_refs=[FIXTURE_EVENT] | structural_theme_refs=[FIXTURE_THEME] | event_window_handling=FIXTURE_WINDOW | event_window_anchor_type=FIXTURE_ANCHOR | event_window_anchor_key_date_et=FIXTURE_DATE | intended_place_date_et=FIXTURE_DATE | actionable_window_cutoff_et=FIXTURE_DATE | note=FIXTURE_NOTE

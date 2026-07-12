@@ -1,0 +1,22 @@
+{
+  "fixture_schema": "step4_fixture_evidence_v1",
+  "fixture_name": "cancel_only",
+  "evidence_kind": "OBSERVED_CURRENT_FORMAT_EXAMPLE",
+  "evidence_categories": [
+    "STRATEGY_C_PROMPT",
+    "CURRENT_FORMAT_ARCHIVE_OBSERVATION",
+    "VALIDATOR_TEST_EVIDENCE"
+  ],
+  "synthetic_data": true,
+  "authority": {
+    "runtime_valid": false,
+    "canonical_publication_authorized": false,
+    "manual_order_ready": false,
+    "broker_ready": false,
+    "sell_authorized": false
+  },
+  "policy_status": {
+    "canonical_validity": "NOT_ASSESSED",
+    "b2_policy": "UNRESOLVED"
+  }
+}

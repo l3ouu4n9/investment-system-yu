@@ -1,0 +1,4 @@
+TEMPLATE5_EXEC_SUMMARY
+compiler_status=STRUCTURAL_OBSERVATION_ONLY
+sell_orders_action_summary=TRIM_STRUCTURAL_FIXTURE
+buy_orders_action_summary=NONE

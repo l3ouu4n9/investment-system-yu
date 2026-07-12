@@ -1,0 +1,5 @@
+TEMPLATE4_ORDERS
+SELL_ORDERS
+ticker=FIXTURE | plan_type=sell_fixture | action=TRIM | shares_to_sell=FIXTURE_SHARES | lot_id=FIXTURE_LOT | limit_price=FIXTURE_PRICE | limit_price_rule=FIXTURE_LIMIT_PRICE_RULE | time_in_force=DAY | expiry_if_gtd=null | acquired_before_date=FIXTURE_DATE | lot_selection_mode=FIXTURE_LOT_SELECTION | event_id_refs=[FIXTURE_EVENT] | structural_theme_refs=[FIXTURE_THEME] | note=FIXTURE_NOTE | event_window_handling_for_sell=FIXTURE_WINDOW | event_window_anchor_type=FIXTURE_ANCHOR | event_window_anchor_key_date_et=FIXTURE_DATE | intended_place_date_et=FIXTURE_DATE | actionable_window_cutoff_et=FIXTURE_DATE | future_cap_add_if_filled=false | redeploy_timing=none | redeploy_to=none
+BUY_ORDERS
+NONE

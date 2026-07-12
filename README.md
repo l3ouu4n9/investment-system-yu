@@ -26,6 +26,13 @@ documentation-only operator-review worksheet. It is not consumed by runtime,
 is not an authorization source, and has no effect on permissions, budgets,
 allocations, orders, or execution.
 
+## Step 4 Evidence Fixtures
+
+[Step 4 Artifact Compatibility B1a](docs/step4_artifact_compatibility_b1.md) provides
+repository-owned, synthetic Step 4 evidence fixtures. They are not runtime inputs or an
+authorization source, and do not change validation, publication, readiness, permissions,
+orders, or execution. Canonical parser work remains pending in B2.
+
 ## Environment
 
 Core runtime dependencies live in `pyproject.toml`.

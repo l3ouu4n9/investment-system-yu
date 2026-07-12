@@ -1,0 +1,7 @@
+ORDER_STATE_EXPORT
+(2a) existing_buy_open_orders_summary
+NONE
+(2b) sell_open_orders
+NONE
+DEFERRED_NOT_YET_LIVE
+action_date_et=FIXTURE_DATE | ticker=FIXTURE | action=CANCEL_EXISTING | current_live_ssot_reference=FIXTURE_CURRENT_STATE | intended_next_ssot_reference=FIXTURE_NEXT_STATE | reason=FIXTURE_REASON
