@@ -72,25 +72,23 @@ BUY_ACTION_VALUES = {
 }
 BUY_SIDE_COMPILER_ACTION_VALUES = BUY_ACTION_VALUES | {"CANCEL_EXISTING"}
 ROW_INTENTS_BY_FINAL_ACTION = {
-    "NEW_ORDER": {"", "NEW_ORDER", "BUY", "SUBMIT_BUY", "EXECUTE_BUY"},
-    "BUY": {"", "NEW_ORDER", "BUY", "SUBMIT_BUY", "EXECUTE_BUY"},
-    "SUBMIT_BUY": {"", "NEW_ORDER", "BUY", "SUBMIT_BUY", "EXECUTE_BUY"},
-    "EXECUTE_BUY": {"", "NEW_ORDER", "BUY", "SUBMIT_BUY", "EXECUTE_BUY"},
+    "NEW_ORDER": {"NEW_ORDER", "BUY", "SUBMIT_BUY", "EXECUTE_BUY"},
+    "BUY": {"NEW_ORDER", "BUY", "SUBMIT_BUY", "EXECUTE_BUY"},
+    "SUBMIT_BUY": {"NEW_ORDER", "BUY", "SUBMIT_BUY", "EXECUTE_BUY"},
+    "EXECUTE_BUY": {"NEW_ORDER", "BUY", "SUBMIT_BUY", "EXECUTE_BUY"},
     "REPLACE_EXISTING": {
-        "",
         "REPLACE_EXISTING",
         "REPLACE",
         "REPLACE_EXISTING_CANCEL_LEG",
         "REPLACE_EXISTING_SUBMIT_LEG",
     },
     "REPLACE": {
-        "",
         "REPLACE_EXISTING",
         "REPLACE",
         "REPLACE_EXISTING_CANCEL_LEG",
         "REPLACE_EXISTING_SUBMIT_LEG",
     },
-    "CANCEL_EXISTING": {"", "CANCEL_EXISTING"},
+    "CANCEL_EXISTING": {"CANCEL_EXISTING"},
 }
 
 
@@ -134,6 +132,23 @@ def _buy_order_rows(template4_orders: str) -> list[dict[str, str]]:
         if _normalize_ticker(fields.get("ticker")):
             rows.append(fields)
     return rows
+
+
+def _require_nonblank_buy_order_intents(
+    buy_order_rows: list[dict[str, str]],
+) -> None:
+    """Require an explicit nonblank intent before classifying any BUY row."""
+    missing = [
+        index
+        for index, row in enumerate(buy_order_rows, start=1)
+        if "order_intent" not in row or not str(row.get("order_intent", "")).strip()
+    ]
+    _require(
+        not missing,
+        "BUY_ORDERS row(s) missing required nonempty order_intent: "
+        + ", ".join(str(index) for index in missing)
+        + ".",
+    )
 
 
 def _compile_ready_final_plans(audited_decision_packet: Any) -> dict[str, set[str]]:
@@ -259,7 +274,7 @@ def _validate_buy_row_numerics(buy_order_rows: list[dict[str, str]]) -> None:
     for row in buy_order_rows:
         ticker = _normalize_ticker(row.get("ticker"))
         intent = _normalize_action(row.get("order_intent"))
-        is_submit = intent in _SUBMIT_BUY_INTENTS or intent == ""
+        is_submit = intent in _SUBMIT_BUY_INTENTS
 
         if "limit_price" in row:
             price = _parse_decimal(row.get("limit_price"))
@@ -388,7 +403,6 @@ def _enforce_safety_context_present(
         row
         for row in buy_order_rows
         if _normalize_action(row.get("order_intent")) in _SUBMIT_BUY_INTENTS
-        or _normalize_action(row.get("order_intent")) == ""
     ]
     if submit_rows:
         _require(
@@ -457,7 +471,7 @@ def _validate_buy_universe_allowlist(
         intent = _normalize_action(row.get("order_intent"))
         if intent in _CANCEL_INTENTS:
             continue
-        if intent not in _SUBMIT_BUY_INTENTS and intent != "":
+        if intent not in _SUBMIT_BUY_INTENTS:
             continue
         ticker = _normalize_ticker(row.get("ticker"))
         if ticker and ticker not in allowed_universe:
@@ -474,7 +488,7 @@ def _submit_buy_notional(buy_order_rows: list[dict[str, str]]) -> Decimal:
     total = Decimal("0")
     for row in buy_order_rows:
         intent = _normalize_action(row.get("order_intent"))
-        if intent not in _SUBMIT_BUY_INTENTS and intent != "":
+        if intent not in _SUBMIT_BUY_INTENTS:
             continue
         shares = _parse_decimal(row.get("shares"))
         price = _parse_decimal(row.get("limit_price"))
@@ -488,7 +502,7 @@ def _net_new_buy_notional(buy_order_rows: list[dict[str, str]]) -> Decimal:
 
     Net-new legs are ``NEW_ORDER`` / ``BUY`` / ``SUBMIT_BUY`` / ``EXECUTE_BUY``.
     ``REPLACE_EXISTING_*`` (budget-neutral reanchors of already-budgeted exposure),
-    ``CANCEL_EXISTING``, KEEP rows, and blank-intent rows are excluded. This is the
+    ``CANCEL_EXISTING`` and KEEP rows are excluded. This is the
     notional measured against ``target_new_buy_budget_this_run``: a replacement
     recycles existing open-order budget at a new anchor and must not consume the
     per-run new-buy budget — it stays bound by ``hard_cap_open_orders_budget``.
@@ -676,7 +690,7 @@ def _submit_notional_by_ticker(buy_order_rows: list[dict[str, str]]) -> dict[str
     totals: dict[str, Decimal] = {}
     for row in buy_order_rows:
         intent = _normalize_action(row.get("order_intent"))
-        if intent not in _SUBMIT_BUY_INTENTS and intent != "":
+        if intent not in _SUBMIT_BUY_INTENTS:
             continue
         ticker = _normalize_ticker(row.get("ticker"))
         if not ticker:
@@ -829,11 +843,11 @@ def _validate_keep_existing_against_snapshot(
         )
 
 
-def validate_orders_output(
+def validate_orders_output_texts(
     *,
-    template4_orders_path: str | Path,
-    order_state_export_path: str | Path,
-    exec_summary_path: str | Path,
+    template4_orders: str,
+    order_state_export: str,
+    exec_summary: str,
     audited_decision_packet: Any | None = None,
     strategy_settings: Mapping[str, Any] | None = None,
     effective_allowed_buy_universe: Collection[str] | None = None,
@@ -843,7 +857,7 @@ def validate_orders_output(
     existing_buy_open_orders: ExistingBuyOpenOrdersParseResult | None = None,
     require_safety_context: bool = False,
 ) -> dict[str, str]:
-    """Validate the required Step 4 output text artifacts.
+    """Validate already-extracted Step 4 output texts without filesystem access.
 
     Beyond existence / non-empty / compile-ready cross-checks, deterministic
     safety checks run on BUY_ORDERS rows:
@@ -885,20 +899,21 @@ def validate_orders_output(
     universe/budget/new-ticker checks apply only to submit/new buy legs, never to
     cancel legs.
     """
-    template4_orders = _validate_non_empty_text_file(
-        template4_orders_path,
-        label="template4_orders",
+    _require(
+        isinstance(template4_orders, str) and bool(template4_orders.strip()),
+        "Step 4 template4_orders text is empty.",
     )
-    order_state_export = _validate_non_empty_text_file(
-        order_state_export_path,
-        label="order_state_export",
+    _require(
+        isinstance(order_state_export, str) and bool(order_state_export.strip()),
+        "Step 4 order_state_export text is empty.",
     )
-    exec_summary = _validate_non_empty_text_file(
-        exec_summary_path,
-        label="exec_summary",
+    _require(
+        isinstance(exec_summary, str) and bool(exec_summary.strip()),
+        "Step 4 exec_summary text is empty.",
     )
 
     buy_order_rows = _buy_order_rows(template4_orders)
+    _require_nonblank_buy_order_intents(buy_order_rows)
     _validate_buy_row_numerics(buy_order_rows)
     _validate_no_duplicate_buy_rows(buy_order_rows)
     _validate_no_conflicting_buy_actions(buy_order_rows)
@@ -959,3 +974,42 @@ def validate_orders_output(
         "order_state_export": order_state_export,
         "exec_summary": exec_summary,
     }
+
+
+def validate_orders_output(
+    *,
+    template4_orders_path: str | Path,
+    order_state_export_path: str | Path,
+    exec_summary_path: str | Path,
+    audited_decision_packet: Any | None = None,
+    strategy_settings: Mapping[str, Any] | None = None,
+    effective_allowed_buy_universe: Collection[str] | None = None,
+    hard_cap_open_orders_budget: Any | None = None,
+    target_new_buy_budget_this_run: Any | None = None,
+    max_new_tickers_per_week: int | None = None,
+    existing_buy_open_orders: ExistingBuyOpenOrdersParseResult | None = None,
+    require_safety_context: bool = False,
+) -> dict[str, str]:
+    """Read and validate the required Step 4 output artifacts."""
+    return validate_orders_output_texts(
+        template4_orders=_validate_non_empty_text_file(
+            template4_orders_path,
+            label="template4_orders",
+        ),
+        order_state_export=_validate_non_empty_text_file(
+            order_state_export_path,
+            label="order_state_export",
+        ),
+        exec_summary=_validate_non_empty_text_file(
+            exec_summary_path,
+            label="exec_summary",
+        ),
+        audited_decision_packet=audited_decision_packet,
+        strategy_settings=strategy_settings,
+        effective_allowed_buy_universe=effective_allowed_buy_universe,
+        hard_cap_open_orders_budget=hard_cap_open_orders_budget,
+        target_new_buy_budget_this_run=target_new_buy_budget_this_run,
+        max_new_tickers_per_week=max_new_tickers_per_week,
+        existing_buy_open_orders=existing_buy_open_orders,
+        require_safety_context=require_safety_context,
+    )

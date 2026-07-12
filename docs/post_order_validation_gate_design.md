@@ -248,6 +248,10 @@ existing compile-ready / diagnostics checks are unchanged; still fail-closed in 
   exempt); and (b) **slot intent conflict** — the same `(ticker, plan_type, step_name)` ladder slot
   appears with two or more distinct non-empty `order_intent` values. Multi-step ladders (distinct
   `step_name`) and replace cancel/submit legs (distinct `plan_type`) occupy different slots and pass.
+- **Nonblank BUY intent (implemented):** every parsed `BUY_ORDERS` row must contain a nonempty
+  `order_intent`. Missing, malformed-without-a-key, empty, and whitespace-only values reject the
+  complete candidate before submit classification, arithmetic, duplicate/conflict analysis, or
+  final-plan compatibility checks. Existing nonblank normalization and aliases are unchanged.
 - **Fail-closed on missing safety context (G1.1 implemented):** an opt-in
   `require_safety_context` flag makes `validate_orders_output` fail closed when BUY **submit** rows
   are present but the allowed universe / `hard_cap_open_orders_budget` is missing, or when net-new
@@ -270,11 +274,15 @@ existing compile-ready / diagnostics checks are unchanged; still fail-closed in 
   `extract_orders_and_summary.main()` CLI is parser-development / debugging only and is **not** the
   primary Step 4 safety path. It no longer silently runs weaker validation: by **default it refuses**
   (prints a message directing the operator to `run_step4 parse`, **writes nothing**, exits non-zero).
-  The legacy weaker parse-only behavior (`require_safety_context=False`, no settings/budgets/universe/
-  audited packet) runs **only** behind the explicit `--unsafe-parse-only` flag, which prints a clear
-  non-safety **WARNING** that its output must not be treated as validated order output or used to
-  approve trades. The internal `extract_orders_and_summary` **function API is unchanged** (the primary
-  path and tests call it directly with full context); only the CLI `main()` gate changed.
+  Weaker parse-only behavior (`require_safety_context=False`, no settings/budgets/universe/audited
+  packet) runs **only** behind the explicit `--unsafe-parse-only` flag. It creates no artifact files
+  or directories and emits exactly one code-owned `step4_unsafe_parse_only_stdout_v1` JSON document
+  to stdout. Legacy caller-selected output options are rejected rather than ignored. The JSON and
+  stderr warning state that the output is unvalidated, non-authoritative, not manual-order-ready,
+  and not broker-ready. Redirecting stdout does not make the JSON a canonical Step 4 artifact; users
+  must never redirect it into canonical paths and treat it as validated. The unsafe path never calls
+  the quarantine-to-canonical publisher. The authoritative `extract_orders_and_summary` function API is unchanged,
+  as is the primary `run_step4 parse` path; only that validated workflow may create canonical Step 4 artifacts.
 - **Still deferred:** true group-level (all-or-nothing) multi-file publish (per-file atomic publish is
   implemented in **G2.2** — see above; wiring `target_new_buy_budget_this_run` is implemented in **G5**
   — see §10; standalone CLI safety gate is implemented in **G6** — see above).
@@ -525,8 +533,9 @@ operator value into `validate_orders_output` and widens what the already-enforce
   `extract_orders_and_summary` → `validate_orders_output`, with `require_safety_context=True`.
 - **Net-new-only semantics:** the validator measures the ceiling against a **net-new-only** notional
   (`_net_new_buy_notional`, over `NEW_ORDER` / `BUY` / `SUBMIT_BUY` / `EXECUTE_BUY`). `REPLACE_EXISTING_*`,
-  `CANCEL_EXISTING`, KEEP, and blank-intent legs are **excluded** — replacements recycle already-budgeted
-  exposure and must not consume the per-run new-buy budget.
+  `CANCEL_EXISTING`, and KEEP are **excluded** — replacements recycle already-budgeted exposure and
+  must not consume the per-run new-buy budget. Blank-intent BUY rows are invalid and fail before
+  this arithmetic runs.
 - **Hard cap unchanged:** `hard_cap_open_orders_budget` continues to bound the broader submit-side
   notional (and the G3 total-exposure reconciliation is unchanged). Replacement/cancel notional remains
   subject to the hard cap; G5 does **not** weaken it.

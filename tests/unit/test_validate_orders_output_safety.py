@@ -39,6 +39,54 @@ def run(tmp_path: Path, orders_body: str, **kwargs: Any) -> dict[str, str]:
     return validate_orders_output(**paths, **kwargs)
 
 
+# --- required BUY row intent -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "orders_body",
+    [
+        "ticker=QQQ | step_name=L1 | shares=1 | limit_price=10.00\n",
+        "ticker=QQQ | step_name=L1 | shares=1 | limit_price=10.00 | order_intent\n",
+        "ticker=QQQ | step_name=L1 | shares=1 | limit_price=10.00 | order_intent=\n",
+        "ticker=QQQ | step_name=L1 | shares=1 | limit_price=10.00 | order_intent=   \n",
+    ],
+    ids=("missing", "malformed-no-equals", "empty", "whitespace-only"),
+)
+def test_blank_or_missing_buy_order_intent_fails_before_classification(
+    tmp_path: Path,
+    orders_body: str,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"^BUY_ORDERS row\(s\) missing required nonempty order_intent: 1\.$",
+    ):
+        run(tmp_path, orders_body)
+
+
+def test_one_blank_intent_rejects_mixed_candidate(tmp_path: Path) -> None:
+    body = (
+        "ticker=QQQ | plan_type=new_limit_ladder | step_name=L1 | shares=1 | "
+        "limit_price=10.00 | order_intent=NEW_ORDER\n"
+        "ticker=SMH | plan_type=new_limit_ladder | step_name=L1 | shares=1 | "
+        "limit_price=10.00 | order_intent=\n"
+    )
+    with pytest.raises(ValueError, match="required nonempty order_intent: 2"):
+        run(tmp_path, body, strategy_settings=settings())
+
+
+def test_blank_and_canonical_same_slot_rejects_blank_before_conflict_analysis(
+    tmp_path: Path,
+) -> None:
+    body = (
+        "ticker=QQQ | plan_type=new_limit_ladder | step_name=L1 | shares=1 | "
+        "limit_price=10.00 | order_intent=NEW_ORDER\n"
+        "ticker=QQQ | plan_type=new_limit_ladder | step_name=L1 | shares=1 | "
+        "limit_price=10.00 | order_intent=   \n"
+    )
+    with pytest.raises(ValueError, match="required nonempty order_intent: 2"):
+        run(tmp_path, body, strategy_settings=settings())
+
+
 # --- universe allowlist ------------------------------------------------------
 
 
@@ -234,6 +282,114 @@ def audited(plans: list[dict[str, Any]]) -> dict[str, Any]:
     # Only fields validate_orders_output consumes; no core_deployment_diagnostics
     # so the exec_summary diagnostic cross-check is skipped.
     return {"final_execution_plans": plans}
+
+
+def test_blank_intent_cannot_evade_target_budget_or_aggregate_ticker_limit(
+    tmp_path: Path,
+) -> None:
+    body = (
+        "ticker=QQQ | step_name=L1 | shares=10 | limit_price=500.00 | "
+        "order_intent=\n"
+    )
+    pkt = audited([plan("QQQ", "NEW_ORDER", 5000.00, 5000.00)])
+    with pytest.raises(ValueError, match="required nonempty order_intent"):
+        run(
+            tmp_path,
+            body,
+            audited_decision_packet=pkt,
+            strategy_settings=settings(),
+            effective_allowed_buy_universe=["QQQ"],
+            hard_cap_open_orders_budget="10000",
+            target_new_buy_budget_this_run="1",
+            max_new_tickers_per_week=0,
+            require_safety_context=True,
+        )
+
+
+def test_blank_intent_cannot_evade_per_bucket_ticker_limit(tmp_path: Path) -> None:
+    body = (
+        "ticker=QQQ | step_name=L1 | shares=1 | limit_price=10.00 | "
+        "order_intent=   \n"
+    )
+    constrained_settings = settings() | {
+        "max_new_tickers_per_week": {
+            "base_universe_new_tickers_per_week": 0,
+            "extended_etf_sleeve_new_tickers_per_week": 0,
+        }
+    }
+    with pytest.raises(ValueError, match="required nonempty order_intent"):
+        run(tmp_path, body, strategy_settings=constrained_settings)
+
+
+@pytest.mark.parametrize(
+    ("final_action", "row_intent"),
+    [
+        ("NEW_ORDER", "NEW_ORDER"),
+        ("NEW_ORDER", "BUY"),
+        ("NEW_ORDER", "SUBMIT_BUY"),
+        ("NEW_ORDER", "EXECUTE_BUY"),
+        ("REPLACE_EXISTING", "REPLACE_EXISTING"),
+        ("REPLACE_EXISTING", "REPLACE"),
+        ("REPLACE_EXISTING", "REPLACE_EXISTING_CANCEL_LEG"),
+        ("REPLACE_EXISTING", "REPLACE_EXISTING_SUBMIT_LEG"),
+        ("CANCEL_EXISTING", "CANCEL_EXISTING"),
+    ],
+)
+def test_existing_nonblank_intent_compatibility_is_preserved(
+    tmp_path: Path,
+    final_action: str,
+    row_intent: str,
+) -> None:
+    body = (
+        "ticker=QQQ | plan_type=new_limit_ladder | step_name=L1 | shares=1 | "
+        f"limit_price=10.00 | order_intent={row_intent}\n"
+    )
+    run(
+        tmp_path,
+        body,
+        audited_decision_packet=audited([plan("QQQ", final_action, 10.00, 10.00)]),
+    )
+
+
+@pytest.mark.parametrize("row_intent", ["new_order", "  NEW_ORDER  "])
+def test_existing_nonblank_case_and_whitespace_normalization_is_preserved(
+    tmp_path: Path,
+    row_intent: str,
+) -> None:
+    body = (
+        "ticker=QQQ | step_name=L1 | shares=1 | limit_price=10.00 | "
+        f"order_intent={row_intent}\n"
+    )
+    run(
+        tmp_path,
+        body,
+        audited_decision_packet=audited([plan("QQQ", "NEW_ORDER", 10.00, 10.00)]),
+    )
+
+
+@pytest.mark.parametrize("row_intent", ["UNKNOWN", "null"])
+def test_existing_unknown_nonblank_intents_remain_rejected(
+    tmp_path: Path,
+    row_intent: str,
+) -> None:
+    body = (
+        "ticker=QQQ | step_name=L1 | shares=1 | limit_price=10.00 | "
+        f"order_intent={row_intent}\n"
+    )
+    with pytest.raises(ValueError, match="order_intent values that do not match"):
+        run(
+            tmp_path,
+            body,
+            audited_decision_packet=audited([plan("QQQ", "NEW_ORDER", 10.00, 10.00)]),
+        )
+
+
+def test_keep_existing_plan_still_produces_no_buy_row(tmp_path: Path) -> None:
+    run(
+        tmp_path,
+        "NONE\n",
+        audited_decision_packet=audited([plan("QQQ", "KEEP_EXISTING", 10.00, 10.00)]),
+    )
 
 
 def test_total_exposure_within_cap_passes(tmp_path: Path) -> None:

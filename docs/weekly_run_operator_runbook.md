@@ -47,8 +47,12 @@ The standalone extractor module
 (`python -m investment_orchestrator.parsers.extract_orders_and_summary`) is **not** that path: it is a
 parser-development / debugging tool. By default it **refuses to run** and points back to
 `run_step4 parse`; its `--unsafe-parse-only` mode skips the substantive order-safety checks and prints
-a warning. **Never use `--unsafe-parse-only` output to place or approve orders, and automation must
-never call it to approve trades** — only `run_step4 parse` output is validated.
+a warning. Unsafe mode creates no artifact files or directories and emits one explicitly
+unvalidated `step4_unsafe_parse_only_stdout_v1` JSON document to stdout. Legacy output-path options
+are rejected. Redirecting that stdout into a file does not make it canonical; never redirect it into
+canonical Step 4 paths or treat it as validated, manual-order-ready, or broker-ready.
+**Never use `--unsafe-parse-only` output to place or approve orders, and automation must never call it to approve trades**
+— only `run_step4 parse` may create validated canonical Step 4 artifacts.
 
 ### 2.1 Weekly-level command (controlled routing)
 

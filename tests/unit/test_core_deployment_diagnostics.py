@@ -179,7 +179,10 @@ def test_strategy_c_summary_accepts_diagnostics_without_buy_orders(tmp_path: Pat
 def test_strategy_c_diagnostics_do_not_generate_buy_orders(tmp_path: Path) -> None:
     template4_path, state_path, summary_path = write_step4_files(
         tmp_path,
-        orders="TEMPLATE4_ORDERS\nBUY_ORDERS\nticker=QQQ | step_name=L1\n",
+        orders=(
+            "TEMPLATE4_ORDERS\nBUY_ORDERS\n"
+            "ticker=QQQ | step_name=L1 | order_intent=NEW_ORDER\n"
+        ),
         summary=diagnostic_summary_text(),
     )
 
@@ -195,7 +198,10 @@ def test_strategy_c_diagnostics_do_not_generate_buy_orders(tmp_path: Path) -> No
 def test_strategy_c_buy_orders_only_from_executable_final_plans(tmp_path: Path) -> None:
     template4_path, state_path, summary_path = write_step4_files(
         tmp_path,
-        orders="TEMPLATE4_ORDERS\nBUY_ORDERS\nticker=QQQ | step_name=L1\n",
+        orders=(
+            "TEMPLATE4_ORDERS\nBUY_ORDERS\n"
+            "ticker=QQQ | step_name=L1 | order_intent=NEW_ORDER\n"
+        ),
         summary=diagnostic_summary_text(),
     )
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping
+import json
 from pathlib import Path
 from typing import Any
 
@@ -10,11 +11,18 @@ from investment_orchestrator.common.io import atomic_write_text, read_text, writ
 from investment_orchestrator.parsers.portfolio_snapshot_existing_orders import (
     ExistingBuyOpenOrdersParseResult,
 )
-from investment_orchestrator.validators.validate_orders_output import validate_orders_output
+from investment_orchestrator.validators.validate_orders_output import (
+    validate_orders_output,
+    validate_orders_output_texts,
+)
 
 
 class Step4ExtractionError(ValueError):
     """Raised when a Step 4 raw output cannot be parsed safely."""
+
+
+class UnsafeParseOnlyError(RuntimeError):
+    """Path-free, code-owned failure from stdout-only unsafe diagnostics."""
 
 
 def extract_required_block(text: str, start_marker: str, end_marker: str) -> str:
@@ -29,6 +37,15 @@ def extract_required_block(text: str, start_marker: str, end_marker: str) -> str
 
 
 QUARANTINE_DIRNAME = "quarantine"
+UNSAFE_STDOUT_SCHEMA = "step4_unsafe_parse_only_stdout_v1"
+_UNSAFE_STDOUT_METADATA = {
+    "schema": UNSAFE_STDOUT_SCHEMA,
+    "status": "UNSAFE_UNVALIDATED_DIAGNOSTIC_ONLY",
+    "deterministic_order_ready": False,
+    "manual_order_authorized": False,
+    "broker_ready": False,
+    "canonical_artifact": False,
+}
 
 
 def _normalize_artifact_text(text: str) -> str:
@@ -77,6 +94,37 @@ def parse_step4_output_text(raw_text: str) -> tuple[str, str, str]:
         "TEMPLATE5_EXEC_SUMMARY_END",
     )
     return template4_orders_text, order_state_export_text, exec_summary_text
+
+
+def build_unsafe_parse_only_stdout(
+    *, raw_output_path: str | Path
+) -> dict[str, str | bool]:
+    """Return one validated-as-diagnostic, non-authoritative stdout envelope."""
+    try:
+        raw_text = read_text(raw_output_path)
+    except (OSError, UnicodeError, ValueError):
+        raise UnsafeParseOnlyError("unsafe_parse_only_input_read_failed") from None
+    try:
+        template4_text, state_text, summary_text = parse_step4_output_text(raw_text)
+    except (Step4ExtractionError, ValueError):
+        raise UnsafeParseOnlyError("unsafe_parse_only_input_invalid") from None
+    template4_text = _normalize_artifact_text(template4_text)
+    state_text = _normalize_artifact_text(state_text)
+    summary_text = _normalize_artifact_text(summary_text)
+    try:
+        validate_orders_output_texts(
+            template4_orders=template4_text,
+            order_state_export=state_text,
+            exec_summary=summary_text,
+        )
+    except ValueError:
+        raise UnsafeParseOnlyError("unsafe_parse_only_validation_failed") from None
+    return {
+        **_UNSAFE_STDOUT_METADATA,
+        "template4_orders_text": template4_text,
+        "order_state_export_text": state_text,
+        "exec_summary_text": summary_text,
+    }
 
 
 def extract_orders_and_summary(
@@ -175,13 +223,16 @@ _REFUSAL_MESSAGE = (
     "are skipped.\n"
     f"Use the safe primary path instead:\n    {PRIMARY_PATH_HINT}\n"
     "If you only need parser-development / debugging output (NOT validated orders), "
-    "re-run with --unsafe-parse-only."
+    "re-run with --unsafe-parse-only; diagnostics are emitted only to stdout."
 )
 _UNSAFE_WARNING = (
     "WARNING: --unsafe-parse-only is a parser-development / debugging mode. It does "
     "NOT perform complete Step 4 order-safety validation (no strategy settings / "
     "budgets / universe / audited packet; require_safety_context=False). Its output "
-    "MUST NOT be treated as validated order output or used to approve trades. "
+    "is one stdout-only JSON document that is unvalidated, non-authoritative, "
+    "not manual-order-ready, not broker-ready, "
+    "and not accepted by deterministic final validation. It MUST NOT be treated as "
+    "validated order output or used to approve trades. "
     f"Use the primary path to approve orders: {PRIMARY_PATH_HINT}"
 )
 
@@ -192,10 +243,10 @@ def main(argv: list[str] | None = None) -> int:
     This is **not** the primary Step 4 safety path. By default it now **refuses**
     to run and directs the operator to ``run_step4 parse`` (which supplies the
     audited packet / strategy settings / budgets / universe and opts in to
-    ``require_safety_context=True``). The legacy weaker parse-only behavior is
-    available **only** behind the explicit ``--unsafe-parse-only`` flag, which
-    prints a clear non-safety warning. The internal ``extract_orders_and_summary``
-    function API is unchanged; only the CLI gate is added.
+    ``require_safety_context=True``). Weaker parsing is available **only** behind
+    the explicit ``--unsafe-parse-only`` flag, which emits one stdout-only JSON
+    diagnostic and prints a clear non-safety warning to stderr. The
+    authoritative ``extract_orders_and_summary`` function remains separate.
     """
     import argparse
     import sys
@@ -209,16 +260,21 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
     parser.add_argument("--raw-output", required=True, help="Path to step4 raw_output.txt")
-    parser.add_argument("--template4-orders", required=True, help="Path to write template4_orders.txt")
+    parser.add_argument(
+        "--template4-orders",
+        help="Legacy per-file output option; forbidden with --unsafe-parse-only.",
+    )
     parser.add_argument(
         "--order-state-export",
-        required=True,
-        help="Path to write order_state_export.txt",
+        help="Legacy per-file output option; forbidden with --unsafe-parse-only.",
     )
     parser.add_argument(
         "--exec-summary",
-        required=True,
-        help="Path to write exec_summary.txt",
+        help="Legacy per-file output option; forbidden with --unsafe-parse-only.",
+    )
+    parser.add_argument(
+        "--unsafe-debug-output-dir",
+        help="Obsolete unsafe filesystem output option; always rejected.",
     )
     parser.add_argument(
         "--unsafe-parse-only",
@@ -236,14 +292,26 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{parser.prog}: {_REFUSAL_MESSAGE}", file=sys.stderr)
         return 2
 
-    print(_UNSAFE_WARNING, file=sys.stderr)
-    extract_orders_and_summary(
-        raw_output_path=Path(args.raw_output),
-        template4_orders_path=Path(args.template4_orders),
-        order_state_export_path=Path(args.order_state_export),
-        exec_summary_path=Path(args.exec_summary),
+    legacy_outputs = (
+        args.template4_orders,
+        args.order_state_export,
+        args.exec_summary,
+        args.unsafe_debug_output_dir,
     )
-    print(args.template4_orders)
+    if any(value is not None for value in legacy_outputs):
+        print(
+            f"{parser.prog}: unsafe_parse_only_stdout_only_legacy_output_flags_forbidden",
+            file=sys.stderr,
+        )
+        return 2
+
+    print(_UNSAFE_WARNING, file=sys.stderr)
+    try:
+        result = build_unsafe_parse_only_stdout(raw_output_path=Path(args.raw_output))
+    except UnsafeParseOnlyError as exc:
+        print(f"{parser.prog}: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
     return 0
 
 
