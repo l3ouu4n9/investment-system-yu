@@ -19,6 +19,13 @@ The active workflow reads `inputs/current/portfolio_snapshot.txt` and
 `inputs/current/current_run_state.json` and `inputs/current/operator_notes.txt`
 are reserved operator scratch files; they are not consumed by the current CLIs.
 
+## Investment Goal Profile
+
+[Investment Goal Profile v1](docs/investment_goal_profile_v1.md) is a
+documentation-only operator-review worksheet. It is not consumed by runtime,
+is not an authorization source, and has no effect on permissions, budgets,
+allocations, orders, or execution.
+
 ## Environment
 
 Core runtime dependencies live in `pyproject.toml`.
