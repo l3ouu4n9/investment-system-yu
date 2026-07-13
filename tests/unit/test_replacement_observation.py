@@ -1126,14 +1126,66 @@ def test_every_json_artifact_has_code_owned_authority_markers(isolated_repo: Pat
 
 def test_runtime_has_no_r2f_consumer_or_forbidden_downstream_call() -> None:
     source_root = Path(__file__).resolve().parents[2] / "src/investment_orchestrator"
+    allowed_isolated_readers = {
+        source_root / "research/replacement_observation.py",
+        source_root / "research/replacement_generation_reader.py",
+    }
     consumers: list[Path] = []
     for path in source_root.rglob("*.py"):
-        if path.name == "replacement_observation.py" or path.as_posix().endswith("cli/run_step1.py"):
+        if path in allowed_isolated_readers or path == source_root / "cli/run_step1.py":
             continue
         text = path.read_text(encoding="utf-8")
         if r2f.GENERATIONS_DIRECTORY in text and "r2f_report_only" in text:
             consumers.append(path)
     assert consumers == []
+
+    # R2F-1b-a may only add this exact descriptor-read-only source verifier.
+    # It remains prohibited for availability, permission, weekly, gate, order,
+    # broker, and other runtime modules to import it or consume R2F artifacts.
+    reader_path = source_root / "research/replacement_generation_reader.py"
+    reader_source = reader_path.read_text(encoding="utf-8")
+    for forbidden in (
+        "os.mkdir(",
+        "os.rename(",
+        "os.replace(",
+        "os.unlink(",
+        "os.write(",
+        "O_CREAT",
+        "write_json(",
+        "evaluate_research_availability",
+        "research_degraded_mode_decision",
+        "run_weekly",
+        "step2_",
+        "step3_",
+        "step4_",
+        "final_execution_safety",
+        "compile_research_handoff",
+        "submit_order",
+        "broker_client",
+        "quarantine",
+    ):
+        assert forbidden not in reader_source
+    for forbidden_import in (
+        "investment_orchestrator.state.",
+        "investment_orchestrator.workflow.",
+        "investment_orchestrator.cli.",
+        "investment_orchestrator.broker",
+        "investment_orchestrator.order",
+    ):
+        assert forbidden_import not in reader_source
+    for path in source_root.rglob("*.py"):
+        if path == reader_path:
+            continue
+        text = path.read_text(encoding="utf-8")
+        runtime_path = (
+            any(part in {"state", "workflow", "cli"} for part in path.parts)
+            or "order" in path.name
+            or "broker" in path.name
+            or "handoff" in path.name
+        )
+        if runtime_path:
+            assert "replacement_generation_reader" not in text, path
+
     source = Path(r2f.__file__).read_text(encoding="utf-8")
     for forbidden in (
         "parse_analyst_memo_text",
