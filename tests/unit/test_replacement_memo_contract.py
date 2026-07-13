@@ -79,7 +79,10 @@ ticker_role_fallback:
             sort_keys=False,
         ),
     )
-    _write(root / "prompts/analyst_memo.txt", "MEMO\n{{ evidence_packet_json }}\n")
+    _write(
+        root / "prompts/r2f_analyst_memo_content_v2.txt",
+        (Path(__file__).parents[2] / "prompts/r2f_analyst_memo_content_v2.txt").read_text(),
+    )
 
 
 def _capture(root: Path, generation_id: str) -> reader._VerifiedMemoInput:
@@ -127,9 +130,9 @@ def _envelope(
     memo_result: str = "NO_TRADE",
     observations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    _ = source
     return {
         "schema_version": memo.RAW_MEMO_SCHEMA_VERSION,
-        "source_binding": source.to_dict(),
         "memo_result": memo_result,
         "confidence": "MEDIUM",
         "instrument_observations": [] if observations is None else observations,
@@ -209,6 +212,72 @@ def test_valid_no_trade_is_strict_and_non_authoritative(
     assert result.canonical_sha256 == hashlib.sha256(result.canonical_bytes).hexdigest()
 
 
+def test_v2_prompt_and_content_only_validator_have_exact_no_trade_parity(
+    source_context: tuple[Path, str, Path, reader.VerifiedSourceBinding, tuple[reader.EligibleInstrument, ...], tuple[str, ...]],
+) -> None:
+    root, generation_id, generation, source, _eligible, _active_ids = source_context
+    prompt = (generation / reader.PROMPT_FILENAME).read_text(encoding="utf-8")
+    assert '"schema_version": "r2f_analyst_memo_content_v2"' in prompt
+    assert "source_binding" not in prompt
+    assert generation_id not in prompt
+    raw_value = _envelope(source)
+    assert set(raw_value) == {
+        "schema_version",
+        "memo_result",
+        "confidence",
+        "instrument_observations",
+    }
+    result = _validate_from_generation(
+        root,
+        generation_id,
+        generation,
+        json.dumps(raw_value, ensure_ascii=False, indent=2).encode("utf-8"),
+    )
+    assert result.payload["schema_version"] == "r2f_validated_memo_envelope_v2"
+    assert result.payload["source_binding"] == source.to_dict()
+    assert result.payload["source_binding"]["generation_id"] == generation_id
+    assert result.payload["source_binding"]["prompt_contract_schema_version"] == (
+        reader.PROMPT_CONTRACT_SCHEMA_VERSION
+    )
+    assert result.payload["source_binding"]["generation_identity_schema_version"] == (
+        reader.V2_GENERATION_IDENTITY_SCHEMA_VERSION
+    )
+    assert result.payload["source_binding"]["raw_memo_schema_version"] == (
+        memo.RAW_MEMO_SCHEMA_VERSION
+    )
+
+
+def test_legacy_raw_memo_schema_never_passes_as_v2(
+    source_context: tuple[Path, str, Path, reader.VerifiedSourceBinding, tuple[reader.EligibleInstrument, ...], tuple[str, ...]],
+) -> None:
+    _root, _generation_id, _generation, source, eligible, active_ids = source_context
+    value = _envelope(source)
+    value["schema_version"] = "r2f_analyst_memo_envelope_v1"
+    with pytest.raises(memo.ReplacementMemoContractError, match="MEMO_SCHEMA_UNSUPPORTED"):
+        _validate(value, source, eligible, active_ids)
+
+
+def test_zero_active_anchor_context_allows_no_trade_but_not_observation_only(
+    source_context: tuple[Path, str, Path, reader.VerifiedSourceBinding, tuple[reader.EligibleInstrument, ...], tuple[str, ...]],
+) -> None:
+    _root, _generation_id, _generation, source, eligible, _active_ids = source_context
+    assert _validate(_envelope(source), source, eligible, ()).payload["contract_validation"] == "VALID"
+    with pytest.raises(
+        memo.ReplacementMemoContractError,
+        match="MEMO_EVIDENCE_REFERENCE_INVALID",
+    ):
+        _validate(
+            _envelope(
+                source,
+                memo_result="OBSERVATION_ONLY",
+                observations=[_observation()],
+            ),
+            source,
+            eligible,
+            (),
+        )
+
+
 def test_valid_observations_are_sorted_by_evidence_universe_and_categorized(
     source_context: tuple[Path, str, Path, reader.VerifiedSourceBinding, tuple[reader.EligibleInstrument, ...], tuple[str, ...]],
 ) -> None:
@@ -273,10 +342,10 @@ def test_raw_memo_parse_failures_are_bounded(
 @pytest.mark.parametrize(
     "raw_text",
     [
-        '{"schema_version":"r2f_analyst_memo_envelope_v1","schema_version":"x"}',
-        '{"schema_version":"r2f_analyst_memo_envelope_v1","source_binding":{"r2f1a_generation_id":"a","r2f1a_generation_id":"b"}}',
-        '{"schema_version":"r2f_analyst_memo_envelope_v1","source_binding":{},"memo_result":"OBSERVATION_ONLY","confidence":"LOW","instrument_observations":[{"instrument_id":"FIXA","instrument_id":"FIXB"}]}',
-        '{"schema_version":"r2f_analyst_memo_envelope_v1","source_binding":{},"memo_result":"OBSERVATION_ONLY","confidence":"LOW","instrument_observations":[{"instrument_id":"FIXA","research_view":"PREFER","rationale":"x","evidence_references":[{"namespace":"ACTIVE_ANCHOR","namespace":"x","evidence_id":"ANCHOR_FIXA"}]}]}',
+        '{"schema_version":"r2f_analyst_memo_content_v2","schema_version":"x"}',
+        '{"schema_version":"r2f_analyst_memo_content_v2","memo_result":"NO_TRADE","confidence":"LOW","confidence":"HIGH","instrument_observations":[]}',
+        '{"schema_version":"r2f_analyst_memo_content_v2","memo_result":"OBSERVATION_ONLY","confidence":"LOW","instrument_observations":[{"instrument_id":"FIXA","instrument_id":"FIXB"}]}',
+        '{"schema_version":"r2f_analyst_memo_content_v2","memo_result":"OBSERVATION_ONLY","confidence":"LOW","instrument_observations":[{"instrument_id":"FIXA","research_view":"PREFER","rationale":"x","evidence_references":[{"namespace":"ACTIVE_ANCHOR","namespace":"x","evidence_id":"ANCHOR_FIXA"}]}]}',
     ],
 )
 def test_duplicate_keys_at_every_object_level_are_rejected(
@@ -290,7 +359,7 @@ def test_duplicate_keys_at_every_object_level_are_rejected(
         memo._validate_memo_raw(raw, source_binding=source, eligible_instruments=eligible, active_anchor_ids=active_ids)
 
 
-@pytest.mark.parametrize("location", ["top", "binding", "observation", "reference"])
+@pytest.mark.parametrize("location", ["top", "observation", "reference"])
 def test_unknown_fields_are_rejected_at_every_object_level(
     source_context: tuple[Path, str, Path, reader.VerifiedSourceBinding, tuple[reader.EligibleInstrument, ...], tuple[str, ...]],
     location: str,
@@ -299,17 +368,15 @@ def test_unknown_fields_are_rejected_at_every_object_level(
     value = _envelope(source, memo_result="OBSERVATION_ONLY", observations=[_observation()])
     if location == "top":
         value["unknown"] = True
-    elif location == "binding":
-        value["source_binding"]["unknown"] = True
     elif location == "observation":
         value["instrument_observations"][0]["unknown"] = True
     else:
         value["instrument_observations"][0]["evidence_references"][0]["unknown"] = True
-    with pytest.raises(memo.ReplacementMemoContractError, match="MEMO_KEY_CLOSURE_INVALID|MEMO_SOURCE_BINDING_MISMATCH"):
+    with pytest.raises(memo.ReplacementMemoContractError, match="MEMO_KEY_CLOSURE_INVALID"):
         _validate(value, source, eligible, active_ids)
 
 
-@pytest.mark.parametrize("field", ["schema_version", "source_binding", "memo_result", "confidence", "instrument_observations"])
+@pytest.mark.parametrize("field", ["schema_version", "memo_result", "confidence", "instrument_observations"])
 def test_missing_required_top_level_field_is_rejected(
     source_context: tuple[Path, str, Path, reader.VerifiedSourceBinding, tuple[reader.EligibleInstrument, ...], tuple[str, ...]],
     field: str,
@@ -321,7 +388,7 @@ def test_missing_required_top_level_field_is_rejected(
         _validate(value, source, eligible, active_ids)
 
 
-@pytest.mark.parametrize("location,key", [("binding", "as_of"), ("observation", "rationale"), ("reference", "evidence_id")])
+@pytest.mark.parametrize("location,key", [("observation", "rationale"), ("reference", "evidence_id")])
 def test_missing_required_nested_field_is_rejected(
     source_context: tuple[Path, str, Path, reader.VerifiedSourceBinding, tuple[reader.EligibleInstrument, ...], tuple[str, ...]],
     location: str,
@@ -329,13 +396,11 @@ def test_missing_required_nested_field_is_rejected(
 ) -> None:
     _root, _generation_id, _generation, source, eligible, active_ids = source_context
     value = _envelope(source, memo_result="OBSERVATION_ONLY", observations=[_observation()])
-    if location == "binding":
-        value["source_binding"].pop(key)
-    elif location == "observation":
+    if location == "observation":
         value["instrument_observations"][0].pop(key)
     else:
         value["instrument_observations"][0]["evidence_references"][0].pop(key)
-    with pytest.raises(memo.ReplacementMemoContractError, match="MEMO_KEY_CLOSURE_INVALID|MEMO_SOURCE_BINDING_MISMATCH"):
+    with pytest.raises(memo.ReplacementMemoContractError, match="MEMO_KEY_CLOSURE_INVALID"):
         _validate(value, source, eligible, active_ids)
 
 
@@ -349,23 +414,13 @@ def test_oversize_memo_is_rejected_before_json_processing(
         memo._validate_memo_raw(raw, source_binding=source, eligible_instruments=eligible, active_anchor_ids=active_ids)
 
 
-@pytest.mark.parametrize("field", [
-    "r2f1a_generation_id",
-    "replacement_input_manifest_file_sha256",
-    "replacement_input_manifest_canonical_sha256",
-    "evidence_packet_file_sha256",
-    "evidence_packet_canonical_sha256",
-    "analyst_memo_prompt_file_sha256",
-    "as_of",
-])
-def test_every_source_binding_value_is_verified(
+def test_raw_content_cannot_supply_or_override_code_owned_source_binding(
     source_context: tuple[Path, str, Path, reader.VerifiedSourceBinding, tuple[reader.EligibleInstrument, ...], tuple[str, ...]],
-    field: str,
 ) -> None:
     _root, _generation_id, _generation, source, eligible, active_ids = source_context
     value = _envelope(source)
-    value["source_binding"][field] = "0" * 64 if field != "as_of" else "2026-07-11"
-    with pytest.raises(memo.ReplacementMemoContractError, match="MEMO_SOURCE_BINDING_MISMATCH"):
+    value["source_binding"] = source.to_dict()
+    with pytest.raises(memo.ReplacementMemoContractError, match="MEMO_KEY_CLOSURE_INVALID"):
         _validate(value, source, eligible, active_ids)
 
 
@@ -539,7 +594,7 @@ def test_validate_verified_generation_memo_captures_editable_file_and_writes_not
     [
         (b'{"private":"SENTINEL"', "MEMO_JSON_INVALID"),
         (b'{"schema_version":"a","schema_version":"SENTINEL"}', "MEMO_DUPLICATE_KEY"),
-        (b'{"source_binding":{"as_of":"a","as_of":"SENTINEL"}}', "MEMO_DUPLICATE_KEY"),
+        (b'{"instrument_observations":[{"instrument_id":"a","instrument_id":"SENTINEL"}]}', "MEMO_DUPLICATE_KEY"),
     ],
 )
 def test_memo_parser_exceptions_retain_only_bounded_code(
@@ -611,10 +666,10 @@ def test_multi_defect_failure_precedence_is_deterministic(
 ) -> None:
     _root, _generation_id, _generation, source, eligible, active_ids = source_context
 
-    binding_first = _envelope(source, memo_result="NO_TRADE", observations=[_observation()])
-    binding_first["source_binding"]["as_of"] = "2026-07-11"
-    with pytest.raises(memo.ReplacementMemoContractError, match="MEMO_SOURCE_BINDING_MISMATCH"):
-        _validate(binding_first, source, eligible, active_ids)
+    closure_first = _envelope(source, memo_result="NO_TRADE", observations=[_observation()])
+    closure_first["source_binding"] = {"untrusted": True}
+    with pytest.raises(memo.ReplacementMemoContractError, match="MEMO_KEY_CLOSURE_INVALID"):
+        _validate(closure_first, source, eligible, active_ids)
 
     contradiction_first = _envelope(
         source,

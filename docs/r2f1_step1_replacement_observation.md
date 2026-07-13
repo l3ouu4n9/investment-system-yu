@@ -46,15 +46,21 @@ artifacts/current/step1_research/r2f_report_only/
       render_generation_binding.json
 ```
 
-The generation ID is the full lowercase SHA-256 of an explicit content-semantic
-projection: supported schema/profile versions, repository-relative source roles
-and paths, raw and production-normalized source hashes, decision-settings hash,
-`as_of`, active-registry identity, evidence file/canonical hashes, and stable
-authority markers. It excludes device/inode identities, absolute paths, modes,
-filesystem times, process state, temporary/output identities, wall-clock time,
-and memo content. Equivalent clean checkouts therefore produce byte-identical
-manifests, evidence, prompts, bindings, and generation IDs. Different decision-
-relevant source bytes produce a different directory. Existing immutable
+New renders use the explicit `step1_replacement_generation_identity_v2`
+content-semantic projection. It binds supported schema/profile versions,
+repository-relative source roles and paths, raw and production-normalized source
+hashes, decision-settings hash, `as_of`, active-registry identity, evidence
+file/canonical hashes, the closed prompt contract and bounded prompt-projection
+identities, the exact final prompt file SHA-256, the raw memo content schema, and
+stable authority markers. The final prompt is rendered and hashed before the
+generation identity; it contains no generation ID or source/artifact hash, so
+there is no self-reference, placeholder, or prompt preimage. Device/inode
+identities, absolute paths, modes, filesystem times, process state,
+temporary/output identities, wall-clock time, and memo content remain excluded.
+Equivalent clean checkouts therefore produce byte-identical manifests, evidence,
+prompts, bindings, and generation IDs. A decision-relevant source, template,
+renderer, prompt projection, or memo-schema contract change produces a different
+directory. Existing immutable
 generation files are never overwritten. An identical render verifies and reuses
 a completed generation only when its inventory contains exactly the five
 listed entries, all required entries are regular files, its binding and immutable
@@ -65,9 +71,13 @@ or permission pointer is created.
 
 Directory creation and file publication remain relative to the same repository
 descriptor used for source capture. No pathname reopen selects a new repository
-for prompt or output work. The memo template is captured once through that
-descriptor before input processing; prompt construction later uses only the
-captured text and in-memory evidence. Temporary files are created exclusively
+for prompt or output work. The immutable versioned
+`r2f_analyst_memo_content_v2` template is captured once through that descriptor
+before input processing. Its exact UTF-8/LF/no-BOM bytes and terminal newline are
+verified, and its SHA-256 enters the prompt-contract identity. Prompt construction
+later uses only the captured bytes and a closed, bounded in-memory projection.
+Future wording or renderer changes require another versioned profile so historical
+renderers remain explicit. Temporary files are created exclusively
 inside the opened generation directory, written and fsynced through their
 descriptors, and renamed descriptor-relatively.
 
@@ -161,15 +171,29 @@ activation policy.
 
 ## Memo prompt boundary
 
-R2F-1a renders a bounded prompt containing the generation ID, manifest and
-evidence file/canonical hashes, exact `as_of`, allowed ticker universe, and
-bounded evidence IDs. It prohibits permissions, budgets, quantities, orders,
-execution, and universe creation.
+Generation profile v2 renders a closed strict prompt for
+`r2f_analyst_memo_content_v2`. It exposes observation-eligible identifiers only
+from `universe.allowed_buy_tickers`, followed by unseen
+`universe.approved_extended_etf` values with base precedence and an explicit
+`APPROVED_EXTENDED_OBSERVATION_ONLY` label. Reference authority comes only from a
+valid `active_anchor_registry.active_anchors`; the legacy `research_anchors` view
+is not a reference source. The bounded context has no permission, gate, quantity,
+order, readiness, final-safety, or broker field.
 
-R2F-1a does not parse the memo, compile a candidate, validate a candidate, or
-emit coverage/compatibility reports. A future R2F-1b must define and independently
-review an exact hash-bound memo envelope before it may consume the operator-edited
-memo file.
+The model is never asked to echo a generation ID, manifest/evidence/prompt hash,
+or source binding. Deterministic code derives all binding later. Memo `NO_TRADE`
+is a valid qualitative result, not the Sunday weekly runtime state.
+`OBSERVATION_ONLY` remains qualitative and requires valid active-anchor
+references. The prompt explicitly denies universe admission, availability,
+freshness, permission, budget, quantity, order, gate, readiness, final-safety,
+publication, and broker authority.
+
+R2F-1a still does not parse the memo, compile or validate a candidate, or emit a
+derived report. Completed v1 generations remain byte-for-byte immutable with
+their original identity and prompt. They are never migrated or selected by a
+pointer. The R2F-1b one-shot validator verifies v1 immutable completion but
+rejects its prompt profile before reading editable memo content. Strict manual
+rehearsal therefore requires a newly rendered v2 generation.
 
 ## Explicit non-effects
 

@@ -24,7 +24,6 @@ from investment_orchestrator.common.paths import repo_root
 from investment_orchestrator.research.active_research_anchor_registry import (
     SCHEMA_VERSION as BASELINE_REGISTRY_SCHEMA_VERSION,
 )
-from investment_orchestrator.research.analyst_memo import evidence_universe_from_packet
 from investment_orchestrator.research.approvals_inclusive_active_registry import (
     SCHEMA_VERSION as APPROVALS_REGISTRY_SCHEMA_VERSION,
 )
@@ -58,11 +57,19 @@ from investment_orchestrator.workflow.step1a_grounding_compile import (
 )
 
 
-MANIFEST_SCHEMA_VERSION = "step1_replacement_input_manifest_v1"
-RENDER_BINDING_SCHEMA_VERSION = "step1_replacement_render_generation_binding_v1"
-GENERATION_IDENTITY_SCHEMA_VERSION = "step1_replacement_generation_identity_v1"
-COMPATIBILITY_PROFILE = "step1_replacement_render_observation_v1"
+MANIFEST_SCHEMA_VERSION = "step1_replacement_input_manifest_v2"
+RENDER_BINDING_SCHEMA_VERSION = "step1_replacement_render_generation_binding_v2"
+GENERATION_IDENTITY_SCHEMA_VERSION = "step1_replacement_generation_identity_v2"
+COMPATIBILITY_PROFILE = "step1_replacement_render_observation_v2"
 CAPTURE_PROFILE = "retained_repo_and_common_parent_v1"
+PROMPT_CONTRACT_SCHEMA_VERSION = "step1_replacement_prompt_contract_v2"
+PROMPT_TEMPLATE_ID = "r2f_analyst_memo_content_v2"
+PROMPT_RENDERER_PROFILE = "r2f_prompt_renderer_v2"
+RAW_MEMO_SCHEMA_VERSION = "r2f_analyst_memo_content_v2"
+PROMPT_PROJECTION_SCHEMA_VERSION = "r2f_bounded_research_prompt_projection_v2"
+UNIVERSE_PROJECTION_PROFILE = "allowed_buy_then_extended_base_precedence_v1"
+ACTIVE_ANCHOR_PROJECTION_PROFILE = "valid_active_registry_anchor_ids_sorted_v1"
+TEXT_ENCODING_PROFILE = "utf8_lf_no_bom_terminal_newline_v1"
 
 R2F_ROOT_PARTS = ("artifacts", "current", "step1_research", "r2f_report_only")
 GENERATIONS_DIRECTORY = "generations"
@@ -97,7 +104,7 @@ PRECOMMIT_GENERATION_FILENAMES = frozenset(
     {*COMPLETED_GENERATION_FILENAMES, IN_PROGRESS_FILENAME}
 )
 INPUT_PARENT_PATH = "inputs/current"
-MEMO_PROMPT_TEMPLATE_PATH = "prompts/analyst_memo.txt"
+MEMO_PROMPT_TEMPLATE_PATH = "prompts/r2f_analyst_memo_content_v2.txt"
 
 DOMAIN_VALID_STATUS = "DOMAIN_VALID_BUT_NONACTIVATING"
 DOMAIN_INVALID_STATUS = "DOMAIN_INVALID_NO_GENERATION"
@@ -123,6 +130,7 @@ _MANIFEST_KEYS = frozenset(
         "supported_source_versions",
         "evidence_packet",
         "active_registry",
+        "prompt_contract",
         "domain_validation",
         *_AUTHORITY_MARKERS,
     }
@@ -137,6 +145,29 @@ _REGISTRY_RECORD_KEYS = frozenset(
     {"schema_version", "canonical_content_sha256", "selected_source"}
 )
 _DOMAIN_VALIDATION_KEYS = frozenset({"status", "diagnostics"})
+_PROMPT_CONTRACT_PROJECTION_KEYS = frozenset(
+    {
+        "schema_version",
+        "template_id",
+        "template_file_sha256",
+        "renderer_profile",
+        "raw_memo_schema_version",
+        "evidence_projection_profile",
+        "universe_projection_profile",
+        "active_anchor_projection_profile",
+        "text_encoding_profile",
+    }
+)
+_PROMPT_CONTRACT_RECORD_KEYS = frozenset(
+    {
+        "projection",
+        "canonical_content_sha256",
+        "prompt_projection_schema_version",
+        "prompt_projection_canonical_sha256",
+        "analyst_memo_prompt_file_sha256",
+        "raw_memo_schema_version",
+    }
+)
 _BINDING_KEYS = frozenset(
     {
         "schema_version",
@@ -146,7 +177,16 @@ _BINDING_KEYS = frozenset(
         "render_complete",
         "immutable_render_artifacts",
         "operator_editable_inputs",
+        "generation_identity",
         *_AUTHORITY_MARKERS,
+    }
+)
+_GENERATION_IDENTITY_BINDING_KEYS = frozenset(
+    {
+        "schema_version",
+        "prompt_contract_canonical_sha256",
+        "analyst_memo_prompt_file_sha256",
+        "raw_memo_schema_version",
     }
 )
 _IMMUTABLE_BINDING_KEYS = frozenset(
@@ -191,7 +231,7 @@ def replacement_render() -> dict[str, str]:
 
         # Capture the repository prompt through the retained repository identity
         # before the operator-input bundle is exposed to any later processing.
-        prompt_template = _capture_memo_prompt_template(repository_fd)
+        prompt_template_bytes = _capture_memo_prompt_template(repository_fd)
         captured = _capture_inputs(input_parent_fd=input_parent_fd)
         _verify_retained_descriptor_identity(
             repository_fd,
@@ -267,6 +307,24 @@ def replacement_render() -> dict[str, str]:
         }:
             raise ReplacementObservationError("active_registry_schema_unsupported")
 
+        prompt_contract_projection = _prompt_contract_projection(prompt_template_bytes)
+        prompt_projection = _bounded_prompt_projection(
+            evidence_packet=evidence_packet,
+            as_of=as_of,
+        )
+        prompt_bytes = _render_memo_prompt_v2(
+            template_bytes=prompt_template_bytes,
+            prompt_projection=prompt_projection,
+        )
+        prompt_contract = {
+            "projection": prompt_contract_projection,
+            "canonical_content_sha256": _canonical_sha256(prompt_contract_projection),
+            "prompt_projection_schema_version": PROMPT_PROJECTION_SCHEMA_VERSION,
+            "prompt_projection_canonical_sha256": _canonical_sha256(prompt_projection),
+            "analyst_memo_prompt_file_sha256": _sha256(prompt_bytes),
+            "raw_memo_schema_version": RAW_MEMO_SCHEMA_VERSION,
+        }
+
         manifest = _with_authority_markers(
             {
                 "schema_version": MANIFEST_SCHEMA_VERSION,
@@ -297,6 +355,7 @@ def replacement_render() -> dict[str, str]:
                     "canonical_content_sha256": _canonical_sha256(selected_registry),
                     "selected_source": embedded_selection.get("selected_source"),
                 },
+                "prompt_contract": prompt_contract,
                 "domain_validation": {
                     "status": DOMAIN_VALID_STATUS,
                     "diagnostics": domain_diagnostics,
@@ -310,16 +369,6 @@ def replacement_render() -> dict[str, str]:
 
         generation_identity = _semantic_generation_identity(manifest)
         generation_id = _canonical_sha256(generation_identity)
-        prompt_bytes = _render_memo_prompt(
-            template=prompt_template,
-            evidence_packet=evidence_packet,
-            generation_id=generation_id,
-            manifest_file_sha=manifest_file_sha,
-            manifest_canonical_sha=manifest_canonical_sha,
-            evidence_file_sha=evidence_file_sha,
-            evidence_canonical_sha=evidence_canonical_sha,
-            as_of=as_of,
-        ).encode("utf-8")
         memo_raw_bytes = b""
 
         binding = _with_authority_markers(
@@ -329,6 +378,14 @@ def replacement_render() -> dict[str, str]:
                 "generation_id": generation_id,
                 "scope": "IMMUTABLE_RENDER_ARTIFACTS_AND_INITIAL_BLANK_MEMO_ONLY",
                 "render_complete": True,
+                "generation_identity": {
+                    "schema_version": GENERATION_IDENTITY_SCHEMA_VERSION,
+                    "prompt_contract_canonical_sha256": prompt_contract[
+                        "canonical_content_sha256"
+                    ],
+                    "analyst_memo_prompt_file_sha256": _sha256(prompt_bytes),
+                    "raw_memo_schema_version": RAW_MEMO_SCHEMA_VERSION,
+                },
                 "immutable_render_artifacts": {
                     "replacement_input_manifest.json": {
                         "schema_version": MANIFEST_SCHEMA_VERSION,
@@ -502,7 +559,7 @@ def _read_stable_regular_file_at(
             _cleanup_noexcept(_close_fd_noexcept, descriptor)
 
 
-def _capture_memo_prompt_template(repository_fd: int) -> str:
+def _capture_memo_prompt_template(repository_fd: int) -> bytes:
     prompt_directory_fd = _open_source_directory_at(
         repository_fd,
         "prompts",
@@ -511,14 +568,20 @@ def _capture_memo_prompt_template(repository_fd: int) -> str:
     try:
         value = _read_stable_regular_file_at(
             directory_fd=prompt_directory_fd,
-            filename="analyst_memo.txt",
+            filename="r2f_analyst_memo_content_v2.txt",
             source_name="analyst_memo_prompt_template",
         )
-        if not value.strip():
+        if (
+            not value.strip()
+            or value.startswith(b"\xef\xbb\xbf")
+            or b"\r" in value
+            or not value.endswith(b"\n")
+        ):
             raise ReplacementObservationError("analyst_memo_prompt_template_unsupported")
-        return _normalize_production_text_newlines(
-            _decode(value, "analyst_memo_prompt_template")
-        )
+        text = _decode(value, "analyst_memo_prompt_template")
+        if text.count("{{ prompt_projection_json }}") != 1:
+            raise ReplacementObservationError("analyst_memo_prompt_template_unsupported")
+        return value
     finally:
         _cleanup_noexcept(_close_fd_noexcept, prompt_directory_fd)
 
@@ -757,47 +820,124 @@ def _domain_diagnostics(
     return sorted(diagnostics)
 
 
-def _render_memo_prompt(
-    *,
-    template: str,
-    evidence_packet: Mapping[str, Any],
-    generation_id: str,
-    manifest_file_sha: str,
-    manifest_canonical_sha: str,
-    evidence_file_sha: str,
-    evidence_canonical_sha: str,
-    as_of: str,
-) -> str:
-    placeholder = "{{ evidence_packet_json }}"
-    if placeholder not in template:
+def _prompt_contract_projection(template_bytes: bytes) -> dict[str, str]:
+    return {
+        "schema_version": PROMPT_CONTRACT_SCHEMA_VERSION,
+        "template_id": PROMPT_TEMPLATE_ID,
+        "template_file_sha256": _sha256(template_bytes),
+        "renderer_profile": PROMPT_RENDERER_PROFILE,
+        "raw_memo_schema_version": RAW_MEMO_SCHEMA_VERSION,
+        "evidence_projection_profile": PROMPT_PROJECTION_SCHEMA_VERSION,
+        "universe_projection_profile": UNIVERSE_PROJECTION_PROFILE,
+        "active_anchor_projection_profile": ACTIVE_ANCHOR_PROJECTION_PROFILE,
+        "text_encoding_profile": TEXT_ENCODING_PROFILE,
+    }
+
+
+def _bounded_prompt_projection(
+    *, evidence_packet: Mapping[str, Any], as_of: str
+) -> dict[str, Any]:
+    universe = evidence_packet.get("universe")
+    registry = evidence_packet.get("active_anchor_registry")
+    if not isinstance(universe, Mapping) or not isinstance(registry, Mapping):
+        raise ReplacementObservationError("prompt_projection_source_invalid")
+    if registry.get("registry_valid") is not True:
+        raise ReplacementObservationError("prompt_projection_registry_invalid")
+
+    eligible: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for key, category in (
+        ("allowed_buy_tickers", "BASE_EVIDENCE_UNIVERSE"),
+        ("approved_extended_etf", "APPROVED_EXTENDED_OBSERVATION_ONLY"),
+    ):
+        values = universe.get(key)
+        if not isinstance(values, list):
+            raise ReplacementObservationError("prompt_projection_universe_invalid")
+        for instrument_id in values:
+            if not isinstance(instrument_id, str) or not instrument_id or instrument_id in seen:
+                if instrument_id in seen:
+                    continue
+                raise ReplacementObservationError("prompt_projection_universe_invalid")
+            seen.add(instrument_id)
+            eligible.append(
+                {"instrument_id": instrument_id, "universe_category": category}
+            )
+
+    active_rows = registry.get("active_anchors")
+    if not isinstance(active_rows, list):
+        raise ReplacementObservationError("prompt_projection_registry_invalid")
+    active_anchors: list[dict[str, Any]] = []
+    active_ids: set[str] = set()
+    for row in active_rows:
+        if not isinstance(row, Mapping):
+            raise ReplacementObservationError("prompt_projection_registry_invalid")
+        anchor_id = row.get("anchor_id")
+        if not isinstance(anchor_id, str) or not anchor_id or anchor_id in active_ids:
+            raise ReplacementObservationError("prompt_projection_registry_invalid")
+        active_ids.add(anchor_id)
+        active_anchors.append(
+            {
+                "anchor_id": anchor_id,
+                "applicable_tickers": list(row.get("applicable_tickers") or []),
+                "anchor_date_et": row.get("anchor_date_et"),
+                "valid_from": row.get("valid_from"),
+                "valid_until": row.get("valid_until"),
+                "confidence_floor": row.get("confidence_floor"),
+                "summary": row.get("summary"),
+            }
+        )
+    active_anchors.sort(key=lambda row: row["anchor_id"])
+
+    research_context = {
+        "market_metrics": _bounded_availability_context(
+            evidence_packet.get("market_metrics")
+        ),
+        "scheduled_events_deterministic": _bounded_availability_context(
+            evidence_packet.get("scheduled_events_deterministic")
+        ),
+    }
+    return {
+        "schema_version": PROMPT_PROJECTION_SCHEMA_VERSION,
+        "as_of": as_of,
+        "eligible_instruments": eligible,
+        "active_anchors": active_anchors,
+        "research_context": research_context,
+    }
+
+
+def _bounded_availability_context(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ReplacementObservationError("prompt_projection_context_invalid")
+    data_gap = value.get("data_gap")
+    if data_gap is not None and not isinstance(data_gap, str):
+        raise ReplacementObservationError("prompt_projection_context_invalid")
+    return {
+        "available": value.get("available") is True,
+        "data_gap": data_gap,
+    }
+
+
+def _render_memo_prompt_v2(
+    *, template_bytes: bytes, prompt_projection: Mapping[str, Any]
+) -> bytes:
+    if (
+        template_bytes.startswith(b"\xef\xbb\xbf")
+        or b"\r" in template_bytes
+        or not template_bytes.endswith(b"\n")
+    ):
         raise ReplacementObservationError("analyst_memo_prompt_template_unsupported")
-    evidence_json = json.dumps(evidence_packet, ensure_ascii=False, indent=2, sort_keys=True)
-    allowed_tickers = evidence_universe_from_packet(evidence_packet)
-    anchors = evidence_packet.get("research_anchors")
-    rows = anchors.get("anchors") if isinstance(anchors, Mapping) else []
-    evidence_ids = sorted(
-        {
-            row.get("anchor_id")
-            for row in rows
-            if isinstance(row, Mapping)
-            and isinstance(row.get("anchor_id"), str)
-            and row.get("anchor_id")
-        }
+    template = _decode(template_bytes, "analyst_memo_prompt_template")
+    placeholder = "{{ prompt_projection_json }}"
+    if template.count(placeholder) != 1:
+        raise ReplacementObservationError("analyst_memo_prompt_template_unsupported")
+    projection_json = json.dumps(
+        prompt_projection,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
     )
-    binding = (
-        "\n\nR2F-1a IMMUTABLE REPORT-ONLY GENERATION\n"
-        f"- generation_id: {generation_id}\n"
-        f"- replacement_input_manifest_file_sha256: {manifest_file_sha}\n"
-        f"- replacement_input_manifest_canonical_sha256: {manifest_canonical_sha}\n"
-        f"- evidence_packet_file_sha256: {evidence_file_sha}\n"
-        f"- evidence_packet_canonical_sha256: {evidence_canonical_sha}\n"
-        f"- as_of: {as_of}\n"
-        f"- allowed_ticker_universe_json: {json.dumps(allowed_tickers, ensure_ascii=False)}\n"
-        f"- bounded_evidence_ids_json: {json.dumps(evidence_ids, ensure_ascii=False)}\n"
-        "- Prohibited: permissions, budgets, quantities, orders, execution, and universe creation.\n"
-        "- R2F-1a does not parse this memo. R2F-1b will require an exact hash-bound memo envelope.\n"
-    )
-    return template.replace(placeholder, evidence_json) + binding
+    rendered = template.replace(placeholder, projection_json)
+    return rendered.encode("utf-8")
 
 
 def _publish_or_verify_generation(
@@ -1407,6 +1547,8 @@ def _validate_manifest(payload: Any) -> None:
         and registry.get("schema_version") != BASELINE_REGISTRY_SCHEMA_VERSION
     ):
         raise ReplacementObservationError("manifest_registry_source_schema_mismatch")
+    prompt_contract = payload.get("prompt_contract")
+    _validate_prompt_contract_record(prompt_contract)
     domain = payload.get("domain_validation")
     if not isinstance(domain, Mapping) or set(domain) != _DOMAIN_VALIDATION_KEYS:
         raise ReplacementObservationError("manifest_domain_validation_invalid")
@@ -1430,6 +1572,38 @@ def _validate_manifest(payload: Any) -> None:
         or any(item not in allowed_diagnostics for item in diagnostics)
     ):
         raise ReplacementObservationError("manifest_domain_diagnostics_invalid")
+
+
+def _validate_prompt_contract_record(value: Any) -> None:
+    if not isinstance(value, Mapping) or set(value) != _PROMPT_CONTRACT_RECORD_KEYS:
+        raise ReplacementObservationError("manifest_prompt_contract_invalid")
+    projection = value.get("projection")
+    if not isinstance(projection, Mapping) or set(projection) != _PROMPT_CONTRACT_PROJECTION_KEYS:
+        raise ReplacementObservationError("manifest_prompt_contract_projection_invalid")
+    expected = {
+        "schema_version": PROMPT_CONTRACT_SCHEMA_VERSION,
+        "template_id": PROMPT_TEMPLATE_ID,
+        "renderer_profile": PROMPT_RENDERER_PROFILE,
+        "raw_memo_schema_version": RAW_MEMO_SCHEMA_VERSION,
+        "evidence_projection_profile": PROMPT_PROJECTION_SCHEMA_VERSION,
+        "universe_projection_profile": UNIVERSE_PROJECTION_PROFILE,
+        "active_anchor_projection_profile": ACTIVE_ANCHOR_PROJECTION_PROFILE,
+        "text_encoding_profile": TEXT_ENCODING_PROFILE,
+    }
+    for key, expected_value in expected.items():
+        if projection.get(key) != expected_value:
+            raise ReplacementObservationError("manifest_prompt_contract_projection_invalid")
+    if not _is_sha256(projection.get("template_file_sha256")):
+        raise ReplacementObservationError("manifest_prompt_contract_projection_invalid")
+    if value.get("canonical_content_sha256") != _canonical_sha256(projection):
+        raise ReplacementObservationError("manifest_prompt_contract_hash_invalid")
+    if (
+        value.get("prompt_projection_schema_version") != PROMPT_PROJECTION_SCHEMA_VERSION
+        or not _is_sha256(value.get("prompt_projection_canonical_sha256"))
+        or not _is_sha256(value.get("analyst_memo_prompt_file_sha256"))
+        or value.get("raw_memo_schema_version") != RAW_MEMO_SCHEMA_VERSION
+    ):
+        raise ReplacementObservationError("manifest_prompt_contract_invalid")
 
 
 def _semantic_generation_identity(manifest: Mapping[str, Any]) -> dict[str, Any]:
@@ -1463,6 +1637,7 @@ def _semantic_generation_identity(manifest: Mapping[str, Any]) -> dict[str, Any]
         ],
         "active_registry": dict(manifest["active_registry"]),
         "evidence_packet": dict(manifest["evidence_packet"]),
+        "prompt_contract": dict(manifest["prompt_contract"]),
         "authority_markers": dict(_AUTHORITY_MARKERS),
     }
 
@@ -1481,6 +1656,16 @@ def _validate_render_binding(payload: Any, *, expected_generation_id: str) -> No
     if payload.get("render_complete") is not True:
         raise ReplacementObservationError("render_binding_not_complete")
     _validate_authority_markers(payload, "render_binding_authority_markers_invalid")
+    generation_identity = payload.get("generation_identity")
+    if (
+        not isinstance(generation_identity, Mapping)
+        or set(generation_identity) != _GENERATION_IDENTITY_BINDING_KEYS
+        or generation_identity.get("schema_version") != GENERATION_IDENTITY_SCHEMA_VERSION
+        or not _is_sha256(generation_identity.get("prompt_contract_canonical_sha256"))
+        or not _is_sha256(generation_identity.get("analyst_memo_prompt_file_sha256"))
+        or generation_identity.get("raw_memo_schema_version") != RAW_MEMO_SCHEMA_VERSION
+    ):
+        raise ReplacementObservationError("render_binding_generation_identity_invalid")
     immutable = payload.get("immutable_render_artifacts")
     if not isinstance(immutable, Mapping) or set(immutable) != _IMMUTABLE_BINDING_KEYS:
         raise ReplacementObservationError("render_binding_immutable_key_closure_invalid")
@@ -1508,6 +1693,11 @@ def _validate_render_binding(payload: Any, *, expected_generation_id: str) -> No
                 raise ReplacementObservationError("render_binding_canonical_hash_invalid")
         elif record.get("media_type") != "text/plain; charset=utf-8":
             raise ReplacementObservationError("render_binding_artifact_media_type_invalid")
+    prompt_record = immutable["analyst_memo_prompt.txt"]
+    if prompt_record.get("file_sha256") != generation_identity.get(
+        "analyst_memo_prompt_file_sha256"
+    ):
+        raise ReplacementObservationError("render_binding_prompt_identity_mismatch")
     editable = payload.get("operator_editable_inputs")
     if not isinstance(editable, Mapping) or set(editable) != _EDITABLE_BINDING_KEYS:
         raise ReplacementObservationError("render_binding_editable_key_closure_invalid")

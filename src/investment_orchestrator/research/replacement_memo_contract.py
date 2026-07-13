@@ -1,16 +1,14 @@
-"""Strict, pure R2F-1b-a memo-envelope validation.
+"""Strict, pure R2F-1b-a memo-content validation.
 
-R2F-1b-a accepts only a hash-bound JSON envelope for a previously verified
-R2F-1a generation.  It validates structure, source binding, deterministic
-identifier membership, and active-anchor references.  It writes no artifacts
-and has no runtime consumer.
+R2F-1b-a accepts only content-only JSON from a verified v2 generation. It
+validates structure, code-derived binding, deterministic identifier membership,
+and active-anchor references. It writes no artifacts and has no runtime consumer.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date
 import hashlib
 import json
 from pathlib import Path
@@ -34,8 +32,8 @@ __all__ = (
 )
 
 
-RAW_MEMO_SCHEMA_VERSION = "r2f_analyst_memo_envelope_v1"
-VALIDATED_MEMO_SCHEMA_VERSION = "r2f_validated_memo_envelope_v1"
+RAW_MEMO_SCHEMA_VERSION = "r2f_analyst_memo_content_v2"
+VALIDATED_MEMO_SCHEMA_VERSION = "r2f_validated_memo_envelope_v2"
 MAXIMUM_MEMO_BYTES = 65_536
 MAXIMUM_OBSERVATIONS = 32
 MAXIMUM_REFERENCES_PER_OBSERVATION = 8
@@ -49,25 +47,13 @@ RESEARCH_VIEWS = frozenset({"PREFER", "NEUTRAL", "DEPRIORITIZE"})
 ACTIVE_ANCHOR_NAMESPACE = "ACTIVE_ANCHOR"
 
 _RAW_MEMO_KEYS = frozenset(
-    {"schema_version", "source_binding", "memo_result", "confidence", "instrument_observations"}
-)
-_SOURCE_BINDING_KEYS = frozenset(
-    {
-        "r2f1a_generation_id",
-        "replacement_input_manifest_file_sha256",
-        "replacement_input_manifest_canonical_sha256",
-        "evidence_packet_file_sha256",
-        "evidence_packet_canonical_sha256",
-        "analyst_memo_prompt_file_sha256",
-        "as_of",
-    }
+    {"schema_version", "memo_result", "confidence", "instrument_observations"}
 )
 _OBSERVATION_KEYS = frozenset(
     {"instrument_id", "research_view", "rationale", "evidence_references"}
 )
 _REFERENCE_KEYS = frozenset({"namespace", "evidence_id"})
 _IDENTIFIER_RE = re.compile(r"[A-Z][A-Z0-9.-]{0,14}\Z")
-_SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 
 _AUTHORITY_MARKERS = {
     "artifact_role": "NON_AUTHORITATIVE_RESEARCH_OBSERVATION",
@@ -176,7 +162,6 @@ def _validate_memo_raw(
     payload = _parse_json_object(normalized_text)
     normalized_memo = _validate_raw_memo(
         payload,
-        source_binding=source_binding,
         eligible_instruments=eligible_instruments,
         active_anchor_ids=active_anchor_ids,
     )
@@ -269,19 +254,16 @@ def _reject_nonfinite(value: str) -> None:
 def _validate_raw_memo(
     payload: Mapping[str, Any],
     *,
-    source_binding: VerifiedSourceBinding,
     eligible_instruments: tuple[EligibleInstrument, ...],
     active_anchor_ids: tuple[str, ...],
 ) -> dict[str, Any]:
-    # Stable failure precedence: closure/schema, binding, contradictions,
+    # Stable failure precedence: closure/schema, contradictions,
     # universe membership, evidence references, then rationale canonicality.
     if set(payload) != _RAW_MEMO_KEYS:
         raise ReplacementMemoContractError("MEMO_KEY_CLOSURE_INVALID")
     if payload.get("schema_version") != RAW_MEMO_SCHEMA_VERSION:
         raise ReplacementMemoContractError("MEMO_SCHEMA_UNSUPPORTED")
     _validate_nested_key_closure(payload)
-    _validate_source_binding(payload.get("source_binding"), source_binding)
-
     memo_result = payload.get("memo_result")
     confidence = payload.get("confidence")
     observations = payload.get("instrument_observations")
@@ -352,9 +334,6 @@ def _validate_raw_memo(
 
 
 def _validate_nested_key_closure(payload: Mapping[str, Any]) -> None:
-    binding = payload.get("source_binding")
-    if not isinstance(binding, Mapping) or set(binding) != _SOURCE_BINDING_KEYS:
-        raise ReplacementMemoContractError("MEMO_KEY_CLOSURE_INVALID")
     observations = payload.get("instrument_observations")
     if not isinstance(observations, list):
         raise ReplacementMemoContractError("MEMO_SCHEMA_UNSUPPORTED")
@@ -367,30 +346,6 @@ def _validate_nested_key_closure(payload: Mapping[str, Any]) -> None:
         for reference in references:
             if not isinstance(reference, Mapping) or set(reference) != _REFERENCE_KEYS:
                 raise ReplacementMemoContractError("MEMO_KEY_CLOSURE_INVALID")
-
-
-def _validate_source_binding(value: Any, expected: VerifiedSourceBinding) -> None:
-    if not isinstance(value, Mapping) or set(value) != _SOURCE_BINDING_KEYS:
-        raise ReplacementMemoContractError("MEMO_KEY_CLOSURE_INVALID")
-    if value != expected.to_dict():
-        raise ReplacementMemoContractError("MEMO_SOURCE_BINDING_MISMATCH")
-    as_of = value.get("as_of")
-    if not isinstance(as_of, str):
-        raise ReplacementMemoContractError("MEMO_SOURCE_BINDING_MISMATCH")
-    failed = False
-    try:
-        parsed = date.fromisoformat(as_of)
-    except ValueError:
-        failed = True
-        parsed = None
-    if failed:
-        raise ReplacementMemoContractError("MEMO_SOURCE_BINDING_MISMATCH") from None
-    assert parsed is not None
-    if parsed.isoformat() != as_of:
-        raise ReplacementMemoContractError("MEMO_SOURCE_BINDING_MISMATCH")
-    for key, item in value.items():
-        if key != "as_of" and (not isinstance(item, str) or _SHA256_RE.fullmatch(item) is None):
-            raise ReplacementMemoContractError("MEMO_SOURCE_BINDING_MISMATCH")
 
 
 def _validate_observation_structure(value: Any) -> dict[str, Any]:

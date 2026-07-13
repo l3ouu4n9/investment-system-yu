@@ -30,7 +30,10 @@ render_generation_binding.json
 `.render_in_progress`, missing entries, extra entries, symlinks, directories,
 FIFOs, and every other non-regular entry fail closed. The reader verifies the
 R2F-1a manifest, evidence, prompt, render binding, immutable hashes, canonical
-hashes, and semantic generation ID before it captures memo input.
+hashes, and versioned semantic generation ID before it captures memo input.
+Existing v1 generations retain their historical immutable verification contract,
+but memo validation rejects them with `MEMO_PROMPT_PROFILE_UNSUPPORTED` before
+reading editable memo content. Only generation profile v2 proceeds to capture.
 
 The memo raw file is intentionally different: R2F-1a attests only that it was
 blank when rendered. An operator may edit it later. R2F-1b-a requires it to
@@ -59,22 +62,34 @@ result and produces only `SOURCE_GENERATION_CLEANUP_FAILED`; an ambiguously
 failed close is not retried. No handle, context manager, descriptor, directory
 chain, registry entry, or close method escapes the operation.
 
-## Strict raw memo envelope
+## Cycle-free v2 prompt and strict raw memo content
 
-R2F-1b-a accepts only one JSON object with this exact shape:
+Generation profile v2 is acyclic:
+
+```text
+verified frozen sources
++ immutable versioned template
++ bounded prompt projection
+→ exact final prompt bytes and SHA-256
+→ manifest and generation identity v2
+→ generation ID
+→ render binding v2
+```
+
+The prompt contains no generation ID and no manifest, evidence, prompt, or
+source hash. There is no tokenized placeholder, prompt preimage, or model-reported
+source binding. The manifest binds the closed prompt-contract projection,
+template SHA-256, prompt-projection canonical SHA-256, final prompt SHA-256,
+renderer/profile identities, and raw memo schema. The render binding attests the
+same identities. During validation, the reader reopens the versioned template
+descriptor-relatively, verifies it, rebuilds the bounded projection from verified
+evidence, rerenders the prompt, and requires exact byte equality.
+
+R2F-1b-a accepts only one content-only JSON object with this exact shape:
 
 ```json
 {
-  "schema_version": "r2f_analyst_memo_envelope_v1",
-  "source_binding": {
-    "r2f1a_generation_id": "<64 lowercase hex>",
-    "replacement_input_manifest_file_sha256": "<64 lowercase hex>",
-    "replacement_input_manifest_canonical_sha256": "<64 lowercase hex>",
-    "evidence_packet_file_sha256": "<64 lowercase hex>",
-    "evidence_packet_canonical_sha256": "<64 lowercase hex>",
-    "analyst_memo_prompt_file_sha256": "<64 lowercase hex>",
-    "as_of": "YYYY-MM-DD"
-  },
+  "schema_version": "r2f_analyst_memo_content_v2",
   "memo_result": "NO_TRADE",
   "confidence": "LOW",
   "instrument_observations": []
@@ -108,8 +123,11 @@ permission, readiness, final-gate result, or order decision.
 
 ## Deterministic authority boundaries
 
-Every source-binding value is compared with code-derived identities from the
-verified R2F-1a generation. The memo's claimed values are never trusted.
+The raw memo has no source-binding field. Deterministic code constructs binding
+only from the verified generation: generation profile and ID, prompt-contract
+schema/canonical hash, manifest exact/canonical hashes, evidence exact/canonical
+hashes, final prompt hash, frozen `as_of`, and raw/normalized memo hashes. The
+model neither supplies nor echoes any of those values.
 
 Observation identifiers may come only from the verified evidence packet:
 
@@ -129,7 +147,7 @@ supported registry schema and `registry_valid: true`. The legacy
 `research_anchors` diagnostic view is not R2F-1b reference authority.
 
 The resulting in-memory object has schema
-`r2f_validated_memo_envelope_v1` and code-owned markers including:
+`r2f_validated_memo_envelope_v2` and code-owned markers including:
 
 ```json
 {
@@ -144,7 +162,8 @@ The resulting in-memory object has schema
 }
 ```
 
-`VALID` means only that the schema, source binding, identifier membership, and
+`VALID` means only that syntax, schema closure, deterministic source binding,
+identifier membership, and
 evidence references were deterministically verified. It does not attest factual
 truth, freshness, permission, actionability, readiness, gate success, or safety.
 The validated object never copies free-form rationale prose. Each structured
@@ -180,7 +199,7 @@ The public exceptions carry code-owned reasons such as
 `SOURCE_GENERATION_INVALID`, `SOURCE_GENERATION_INCOMPLETE`, `MEMO_TOO_LARGE`,
 `MEMO_BLANK`, `MEMO_UTF8_INVALID`, `MEMO_JSON_INVALID`,
 `MEMO_DUPLICATE_KEY`, `MEMO_SCHEMA_UNSUPPORTED`,
-`MEMO_KEY_CLOSURE_INVALID`, `MEMO_SOURCE_BINDING_MISMATCH`,
+`MEMO_KEY_CLOSURE_INVALID`, `MEMO_PROMPT_PROFILE_UNSUPPORTED`,
 `MEMO_IDENTIFIER_INVALID`, `MEMO_EVIDENCE_REFERENCE_INVALID`, and
 `MEMO_RESULT_CONTRADICTORY`. A cleanup failure is reported only as
 `SOURCE_GENERATION_CLEANUP_FAILED`.
@@ -190,19 +209,19 @@ data, absolute paths, symlink targets, or external contents.
 Public parser exceptions contain only the bounded code in their arguments, have
 no chained cause or context, and retain no raw parser object.
 
-Failure precedence is deterministic: source generation validity; memo capture,
-size, and encoding; JSON syntax/duplicate keys; schema and key closure; source
-binding; structural result contradictions; universe membership; evidence
+Failure precedence is deterministic: source generation/profile validity; memo
+capture, size, and encoding; JSON syntax/duplicate keys; schema and key closure;
+structural result contradictions; universe membership; evidence
 references; then rationale canonicality.
 
-## Prompt mismatch: intentionally unresolved in R2F-1b-a
+## Compatibility boundary
 
-Committed R2F-1a renders the legacy `analyst_memo_v1` prompt. R2F-1b-a rejects
-that legacy shape; it does not add a compatibility parser, modify the prompt, or
-add a manual command. A separate R2F-1b-p prompt-contract amendment is required
-before a manual report rehearsal can ask an LLM for this strict envelope.
-
-Parser acceptance must not be weakened to accommodate the older prompt.
+Existing v1 generation directories remain immutable and readable under their
+historical completion contract. They are not migrated, rewritten, or made
+eligible by editing the memo. The one-shot validator rejects v1 memo validation
+before reading the editable file. Newly rendered v2 generations use the strict
+content-only prompt and validator. No `latest`, `current`, selected-generation,
+or migration pointer exists.
 
 ## What remains blocked
 

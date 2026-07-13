@@ -42,10 +42,28 @@ from investment_orchestrator.research.research_anchors import (
 )
 
 
-MANIFEST_SCHEMA_VERSION = "step1_replacement_input_manifest_v1"
-RENDER_BINDING_SCHEMA_VERSION = "step1_replacement_render_generation_binding_v1"
-GENERATION_IDENTITY_SCHEMA_VERSION = "step1_replacement_generation_identity_v1"
-COMPATIBILITY_PROFILE = "step1_replacement_render_observation_v1"
+V1_MANIFEST_SCHEMA_VERSION = "step1_replacement_input_manifest_v1"
+V1_RENDER_BINDING_SCHEMA_VERSION = "step1_replacement_render_generation_binding_v1"
+V1_GENERATION_IDENTITY_SCHEMA_VERSION = "step1_replacement_generation_identity_v1"
+V1_COMPATIBILITY_PROFILE = "step1_replacement_render_observation_v1"
+V2_MANIFEST_SCHEMA_VERSION = "step1_replacement_input_manifest_v2"
+V2_RENDER_BINDING_SCHEMA_VERSION = "step1_replacement_render_generation_binding_v2"
+V2_GENERATION_IDENTITY_SCHEMA_VERSION = "step1_replacement_generation_identity_v2"
+V2_COMPATIBILITY_PROFILE = "step1_replacement_render_observation_v2"
+PROMPT_CONTRACT_SCHEMA_VERSION = "step1_replacement_prompt_contract_v2"
+PROMPT_TEMPLATE_ID = "r2f_analyst_memo_content_v2"
+PROMPT_TEMPLATE_FILENAME = "r2f_analyst_memo_content_v2.txt"
+PROMPT_RENDERER_PROFILE = "r2f_prompt_renderer_v2"
+RAW_MEMO_SCHEMA_VERSION = "r2f_analyst_memo_content_v2"
+PROMPT_PROJECTION_SCHEMA_VERSION = "r2f_bounded_research_prompt_projection_v2"
+UNIVERSE_PROJECTION_PROFILE = "allowed_buy_then_extended_base_precedence_v1"
+ACTIVE_ANCHOR_PROJECTION_PROFILE = "valid_active_registry_anchor_ids_sorted_v1"
+TEXT_ENCODING_PROFILE = "utf8_lf_no_bom_terminal_newline_v1"
+# Compatibility aliases keep the committed v1 verifier mechanically unchanged.
+MANIFEST_SCHEMA_VERSION = V1_MANIFEST_SCHEMA_VERSION
+RENDER_BINDING_SCHEMA_VERSION = V1_RENDER_BINDING_SCHEMA_VERSION
+GENERATION_IDENTITY_SCHEMA_VERSION = V1_GENERATION_IDENTITY_SCHEMA_VERSION
+COMPATIBILITY_PROFILE = V1_COMPATIBILITY_PROFILE
 CAPTURE_PROFILE = "retained_repo_and_common_parent_v1"
 
 R2F_ROOT_PARTS = ("artifacts", "current", "step1_research", "r2f_report_only")
@@ -99,6 +117,7 @@ _MANIFEST_KEYS = frozenset(
         *AUTHORITY_MARKERS,
     }
 )
+_V2_MANIFEST_KEYS = frozenset({*_MANIFEST_KEYS, "prompt_contract"})
 _INPUT_RECORD_KEYS = frozenset({"path", "file_sha256", "production_text_sha256", "source_version"})
 _EVIDENCE_RECORD_KEYS = frozenset({"schema_version", "file_sha256", "canonical_content_sha256"})
 _REGISTRY_RECORD_KEYS = frozenset({"schema_version", "canonical_content_sha256", "selected_source"})
@@ -113,6 +132,38 @@ _BINDING_KEYS = frozenset(
         "immutable_render_artifacts",
         "operator_editable_inputs",
         *AUTHORITY_MARKERS,
+    }
+)
+_V2_BINDING_KEYS = frozenset({*_BINDING_KEYS, "generation_identity"})
+_PROMPT_CONTRACT_PROJECTION_KEYS = frozenset(
+    {
+        "schema_version",
+        "template_id",
+        "template_file_sha256",
+        "renderer_profile",
+        "raw_memo_schema_version",
+        "evidence_projection_profile",
+        "universe_projection_profile",
+        "active_anchor_projection_profile",
+        "text_encoding_profile",
+    }
+)
+_PROMPT_CONTRACT_RECORD_KEYS = frozenset(
+    {
+        "projection",
+        "canonical_content_sha256",
+        "prompt_projection_schema_version",
+        "prompt_projection_canonical_sha256",
+        "analyst_memo_prompt_file_sha256",
+        "raw_memo_schema_version",
+    }
+)
+_GENERATION_IDENTITY_BINDING_KEYS = frozenset(
+    {
+        "schema_version",
+        "prompt_contract_canonical_sha256",
+        "analyst_memo_prompt_file_sha256",
+        "raw_memo_schema_version",
     }
 )
 _IMMUTABLE_BINDING_KEYS = frozenset({MANIFEST_FILENAME, EVIDENCE_FILENAME, PROMPT_FILENAME})
@@ -172,9 +223,14 @@ class _RegularFileState:
 
 @dataclass(frozen=True)
 class VerifiedSourceBinding:
-    """Code-derived identities that a strict R2F-1b memo must echo exactly."""
+    """Code-derived v2 identities; the raw memo never supplies these values."""
 
-    r2f1a_generation_id: str
+    generation_profile: str
+    generation_identity_schema_version: str
+    generation_id: str
+    prompt_contract_schema_version: str
+    prompt_contract_canonical_sha256: str
+    raw_memo_schema_version: str
     replacement_input_manifest_file_sha256: str
     replacement_input_manifest_canonical_sha256: str
     evidence_packet_file_sha256: str
@@ -184,7 +240,12 @@ class VerifiedSourceBinding:
 
     def to_dict(self) -> dict[str, str]:
         return {
-            "r2f1a_generation_id": self.r2f1a_generation_id,
+            "generation_profile": self.generation_profile,
+            "generation_identity_schema_version": self.generation_identity_schema_version,
+            "generation_id": self.generation_id,
+            "prompt_contract_schema_version": self.prompt_contract_schema_version,
+            "prompt_contract_canonical_sha256": self.prompt_contract_canonical_sha256,
+            "raw_memo_schema_version": self.raw_memo_schema_version,
             "replacement_input_manifest_file_sha256": self.replacement_input_manifest_file_sha256,
             "replacement_input_manifest_canonical_sha256": self.replacement_input_manifest_canonical_sha256,
             "evidence_packet_file_sha256": self.evidence_packet_file_sha256,
@@ -294,11 +355,14 @@ def _validate_generation_memo_operation_at_root(
         generation_fd = parent_fd
         generation_identity = _directory_identity(os.fstat(generation_fd))
         verified = _verify_completed_generation(
+            repository_fd=repository_fd,
             generation_fd=generation_fd,
             generation_id=generation_id,
             owner=owner,
         )
         _verify_directory_chain(chain, "SOURCE_GENERATION_INVALID")
+        if verified["compatibility_profile"] != V2_COMPATIBILITY_PROFILE:
+            raise ReplacementGenerationReaderError("MEMO_PROMPT_PROFILE_UNSUPPORTED")
         memo_bytes = _capture_verified_memo_at(
             generation_fd,
             MEMO_RAW_FILENAME,
@@ -340,6 +404,7 @@ def _validate_generation_memo_operation_at_root(
 
 def _verify_completed_generation(
     *,
+    repository_fd: int,
     generation_fd: int,
     generation_id: str,
     owner: _DescriptorOwner,
@@ -393,13 +458,24 @@ def _verify_completed_generation(
     evidence = _parse_json_object(evidence_bytes, "SOURCE_GENERATION_INVALID")
     binding = _parse_json_object(binding_bytes, "SOURCE_GENERATION_INVALID")
 
-    _validate_manifest(manifest)
-    _validate_evidence_packet(evidence, manifest=manifest)
-    _validate_render_binding(binding, expected_generation_id=generation_id)
+    schema_version = manifest.get("schema_version")
+    if schema_version == V1_MANIFEST_SCHEMA_VERSION:
+        _validate_manifest(manifest)
+        _validate_evidence_packet(evidence, manifest=manifest)
+        _validate_render_binding(binding, expected_generation_id=generation_id)
+        generation_identity = _semantic_generation_identity(manifest)
+        compatibility_profile = V1_COMPATIBILITY_PROFILE
+    elif schema_version == V2_MANIFEST_SCHEMA_VERSION:
+        _validate_manifest_v2(manifest)
+        _validate_evidence_packet(evidence, manifest=manifest)
+        _validate_render_binding_v2(binding, expected_generation_id=generation_id)
+        generation_identity = _semantic_generation_identity_v2(manifest)
+        compatibility_profile = V2_COMPATIBILITY_PROFILE
+    else:
+        raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID")
     if binding_bytes != _json_file_bytes(binding):
         raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID")
 
-    generation_identity = _semantic_generation_identity(manifest)
     if _canonical_sha256(generation_identity) != generation_id:
         raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID")
 
@@ -416,6 +492,26 @@ def _verify_completed_generation(
     ):
         raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID")
 
+    if compatibility_profile == V2_COMPATIBILITY_PROFILE:
+        generation_binding = binding["generation_identity"]
+        prompt_contract = manifest["prompt_contract"]
+        if (
+            generation_binding["prompt_contract_canonical_sha256"]
+            != prompt_contract["canonical_content_sha256"]
+            or generation_binding["analyst_memo_prompt_file_sha256"]
+            != prompt_contract["analyst_memo_prompt_file_sha256"]
+            or generation_binding["raw_memo_schema_version"]
+            != prompt_contract["raw_memo_schema_version"]
+        ):
+            raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID")
+        _verify_prompt_contract_v2(
+            repository_fd=repository_fd,
+            manifest=manifest,
+            evidence=evidence,
+            prompt_bytes=prompt_bytes,
+            owner=owner,
+        )
+
     manifest_evidence = manifest["evidence_packet"]
     if (
         manifest_evidence["file_sha256"] != _sha256(evidence_bytes)
@@ -430,8 +526,22 @@ def _verify_completed_generation(
     if manifest["active_registry"]["canonical_content_sha256"] != _canonical_sha256(registry):
         raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID")
 
+    prompt_contract = manifest.get("prompt_contract")
+    if compatibility_profile != V2_COMPATIBILITY_PROFILE:
+        return {
+            "compatibility_profile": compatibility_profile,
+            "memo_entry_identity": memo_entry_identity,
+        }
+    assert isinstance(prompt_contract, Mapping)
+    projection = prompt_contract["projection"]
+    assert isinstance(projection, Mapping)
     binding_source = VerifiedSourceBinding(
-        r2f1a_generation_id=generation_id,
+        generation_profile=compatibility_profile,
+        generation_identity_schema_version=V2_GENERATION_IDENTITY_SCHEMA_VERSION,
+        generation_id=generation_id,
+        prompt_contract_schema_version=projection["schema_version"],
+        prompt_contract_canonical_sha256=prompt_contract["canonical_content_sha256"],
+        raw_memo_schema_version=prompt_contract["raw_memo_schema_version"],
         replacement_input_manifest_file_sha256=_sha256(manifest_bytes),
         replacement_input_manifest_canonical_sha256=_canonical_sha256(manifest),
         evidence_packet_file_sha256=_sha256(evidence_bytes),
@@ -442,6 +552,7 @@ def _verify_completed_generation(
     eligible = _eligible_instruments(evidence)
     active_anchor_ids = _active_anchor_ids(registry)
     return {
+        "compatibility_profile": compatibility_profile,
         "source_binding": binding_source,
         "eligible_instruments": eligible,
         "active_anchor_ids": active_anchor_ids,
@@ -539,6 +650,53 @@ def _validate_manifest(payload: Any) -> None:
         or any(not isinstance(item, str) for item in diagnostics)
         or diagnostics != sorted(set(diagnostics))
         or any(item not in allowed_diagnostics for item in diagnostics)
+    ):
+        raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID")
+
+
+def _validate_manifest_v2(payload: Any) -> None:
+    if not isinstance(payload, Mapping) or set(payload) != _V2_MANIFEST_KEYS:
+        raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID")
+    if (
+        payload.get("schema_version") != V2_MANIFEST_SCHEMA_VERSION
+        or payload.get("compatibility_profile") != V2_COMPATIBILITY_PROFILE
+    ):
+        raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID")
+    v1_view = dict(payload)
+    prompt_contract = v1_view.pop("prompt_contract")
+    v1_view["schema_version"] = V1_MANIFEST_SCHEMA_VERSION
+    v1_view["compatibility_profile"] = V1_COMPATIBILITY_PROFILE
+    _validate_manifest(v1_view)
+    _validate_prompt_contract_record_v2(prompt_contract)
+
+
+def _validate_prompt_contract_record_v2(value: Any) -> None:
+    if not isinstance(value, Mapping) or set(value) != _PROMPT_CONTRACT_RECORD_KEYS:
+        raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID")
+    projection = value.get("projection")
+    if not isinstance(projection, Mapping) or set(projection) != _PROMPT_CONTRACT_PROJECTION_KEYS:
+        raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID")
+    expected = {
+        "schema_version": PROMPT_CONTRACT_SCHEMA_VERSION,
+        "template_id": PROMPT_TEMPLATE_ID,
+        "renderer_profile": PROMPT_RENDERER_PROFILE,
+        "raw_memo_schema_version": RAW_MEMO_SCHEMA_VERSION,
+        "evidence_projection_profile": PROMPT_PROJECTION_SCHEMA_VERSION,
+        "universe_projection_profile": UNIVERSE_PROJECTION_PROFILE,
+        "active_anchor_projection_profile": ACTIVE_ANCHOR_PROJECTION_PROFILE,
+        "text_encoding_profile": TEXT_ENCODING_PROFILE,
+    }
+    if any(projection.get(key) != expected_value for key, expected_value in expected.items()):
+        raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID")
+    if not _is_sha256(projection.get("template_file_sha256")):
+        raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID")
+    if value.get("canonical_content_sha256") != _canonical_sha256(projection):
+        raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID")
+    if (
+        value.get("prompt_projection_schema_version") != PROMPT_PROJECTION_SCHEMA_VERSION
+        or not _is_sha256(value.get("prompt_projection_canonical_sha256"))
+        or not _is_sha256(value.get("analyst_memo_prompt_file_sha256"))
+        or value.get("raw_memo_schema_version") != RAW_MEMO_SCHEMA_VERSION
     ):
         raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID")
 
@@ -642,6 +800,39 @@ def _validate_render_binding(payload: Any, *, expected_generation_id: str) -> No
         raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID")
 
 
+def _validate_render_binding_v2(payload: Any, *, expected_generation_id: str) -> None:
+    if not isinstance(payload, Mapping) or set(payload) != _V2_BINDING_KEYS:
+        raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID")
+    if (
+        payload.get("schema_version") != V2_RENDER_BINDING_SCHEMA_VERSION
+        or payload.get("compatibility_profile") != V2_COMPATIBILITY_PROFILE
+    ):
+        raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID")
+    v1_view = dict(payload)
+    identity = v1_view.pop("generation_identity")
+    v1_view["schema_version"] = V1_RENDER_BINDING_SCHEMA_VERSION
+    v1_view["compatibility_profile"] = V1_COMPATIBILITY_PROFILE
+    immutable = dict(v1_view["immutable_render_artifacts"])
+    manifest_record = dict(immutable[MANIFEST_FILENAME])
+    manifest_record["schema_version"] = V1_MANIFEST_SCHEMA_VERSION
+    immutable[MANIFEST_FILENAME] = manifest_record
+    v1_view["immutable_render_artifacts"] = immutable
+    _validate_render_binding(v1_view, expected_generation_id=expected_generation_id)
+    if (
+        not isinstance(identity, Mapping)
+        or set(identity) != _GENERATION_IDENTITY_BINDING_KEYS
+        or identity.get("schema_version") != V2_GENERATION_IDENTITY_SCHEMA_VERSION
+        or not _is_sha256(identity.get("prompt_contract_canonical_sha256"))
+        or not _is_sha256(identity.get("analyst_memo_prompt_file_sha256"))
+        or identity.get("raw_memo_schema_version") != RAW_MEMO_SCHEMA_VERSION
+    ):
+        raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID")
+    if identity.get("analyst_memo_prompt_file_sha256") != immutable[PROMPT_FILENAME].get(
+        "file_sha256"
+    ):
+        raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID")
+
+
 def _semantic_generation_identity(manifest: Mapping[str, Any]) -> dict[str, Any]:
     """Independent, content-only reproduction of the committed R2F-1a identity."""
     _validate_manifest(manifest)
@@ -669,6 +860,125 @@ def _semantic_generation_identity(manifest: Mapping[str, Any]) -> dict[str, Any]
         "evidence_packet": dict(manifest["evidence_packet"]),
         "authority_markers": dict(AUTHORITY_MARKERS),
     }
+
+
+def _semantic_generation_identity_v2(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    _validate_manifest_v2(manifest)
+    v1_view = dict(manifest)
+    prompt_contract = v1_view.pop("prompt_contract")
+    v1_view["schema_version"] = V1_MANIFEST_SCHEMA_VERSION
+    v1_view["compatibility_profile"] = V1_COMPATIBILITY_PROFILE
+    identity = _semantic_generation_identity(v1_view)
+    identity["schema_version"] = V2_GENERATION_IDENTITY_SCHEMA_VERSION
+    identity["manifest_schema_version"] = V2_MANIFEST_SCHEMA_VERSION
+    identity["compatibility_profile"] = V2_COMPATIBILITY_PROFILE
+    identity["prompt_contract"] = dict(prompt_contract)
+    return identity
+
+
+def _verify_prompt_contract_v2(
+    *,
+    repository_fd: int,
+    manifest: Mapping[str, Any],
+    evidence: Mapping[str, Any],
+    prompt_bytes: bytes,
+    owner: _DescriptorOwner,
+) -> None:
+    prompt_contract = manifest["prompt_contract"]
+    assert isinstance(prompt_contract, Mapping)
+    projection = prompt_contract["projection"]
+    assert isinstance(projection, Mapping)
+    prompt_directory_fd = _open_directory_at(repository_fd, "prompts", owner=owner)
+    template_bytes = _read_stable_regular_file_at(
+        prompt_directory_fd,
+        PROMPT_TEMPLATE_FILENAME,
+        maximum_bytes=None,
+        too_large_code="SOURCE_GENERATION_INVALID",
+        error_code="SOURCE_GENERATION_INVALID",
+        owner=owner,
+    )
+    if (
+        template_bytes.startswith(b"\xef\xbb\xbf")
+        or b"\r" in template_bytes
+        or not template_bytes.endswith(b"\n")
+        or _sha256(template_bytes) != projection["template_file_sha256"]
+    ):
+        raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID")
+    bounded = _bounded_prompt_projection_v2(evidence=evidence, as_of=manifest["as_of"])
+    if _canonical_sha256(bounded) != prompt_contract["prompt_projection_canonical_sha256"]:
+        raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID")
+    expected_prompt = _render_memo_prompt_v2(template_bytes, bounded)
+    if expected_prompt != prompt_bytes:
+        raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID")
+    if _sha256(prompt_bytes) != prompt_contract["analyst_memo_prompt_file_sha256"]:
+        raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID")
+
+
+def _bounded_prompt_projection_v2(
+    *, evidence: Mapping[str, Any], as_of: str
+) -> dict[str, Any]:
+    eligible = [
+        {
+            "instrument_id": item.instrument_id,
+            "universe_category": item.universe_category,
+        }
+        for item in _eligible_instruments(evidence)
+    ]
+    registry = evidence["active_anchor_registry"]
+    assert isinstance(registry, Mapping)
+    rows = registry["active_anchors"]
+    assert isinstance(rows, list)
+    active_anchors = [
+        {
+            "anchor_id": row.get("anchor_id"),
+            "applicable_tickers": list(row.get("applicable_tickers") or []),
+            "anchor_date_et": row.get("anchor_date_et"),
+            "valid_from": row.get("valid_from"),
+            "valid_until": row.get("valid_until"),
+            "confidence_floor": row.get("confidence_floor"),
+            "summary": row.get("summary"),
+        }
+        for row in rows
+        if isinstance(row, Mapping)
+    ]
+    active_anchors.sort(key=lambda row: row["anchor_id"])
+    return {
+        "schema_version": PROMPT_PROJECTION_SCHEMA_VERSION,
+        "as_of": as_of,
+        "eligible_instruments": eligible,
+        "active_anchors": active_anchors,
+        "research_context": {
+            "market_metrics": _bounded_availability_context_v2(
+                evidence.get("market_metrics")
+            ),
+            "scheduled_events_deterministic": _bounded_availability_context_v2(
+                evidence.get("scheduled_events_deterministic")
+            ),
+        },
+    }
+
+
+def _bounded_availability_context_v2(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID")
+    data_gap = value.get("data_gap")
+    if data_gap is not None and not isinstance(data_gap, str):
+        raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID")
+    return {"available": value.get("available") is True, "data_gap": data_gap}
+
+
+def _render_memo_prompt_v2(template_bytes: bytes, projection: Mapping[str, Any]) -> bytes:
+    failed = False
+    try:
+        template = template_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        failed = True
+        template = ""
+    placeholder = "{{ prompt_projection_json }}"
+    if failed or template.count(placeholder) != 1:
+        raise ReplacementGenerationReaderError("SOURCE_GENERATION_INVALID") from None
+    projection_json = json.dumps(projection, ensure_ascii=False, indent=2, sort_keys=True)
+    return template.replace(placeholder, projection_json).encode("utf-8")
 
 
 def _eligible_instruments(payload: Mapping[str, Any]) -> tuple[EligibleInstrument, ...]:

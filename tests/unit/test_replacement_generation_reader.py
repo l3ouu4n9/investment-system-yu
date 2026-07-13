@@ -75,7 +75,10 @@ ticker_role_fallback:
             sort_keys=False,
         ),
     )
-    _write(root / "prompts/analyst_memo.txt", "MEMO\n{{ evidence_packet_json }}\n")
+    _write(
+        root / "prompts/r2f_analyst_memo_content_v2.txt",
+        (Path(__file__).parents[2] / "prompts/r2f_analyst_memo_content_v2.txt").read_text(),
+    )
 
 
 @pytest.fixture
@@ -97,11 +100,9 @@ def _capture(root: Path, generation_id: str) -> reader._VerifiedMemoInput:
 
 
 def _write_bound_memo(root: Path, generation_id: str, generation: Path) -> bytes:
-    source = _capture(root, generation_id).source_binding
     raw = json.dumps(
         {
-            "schema_version": "r2f_analyst_memo_envelope_v1",
-            "source_binding": source.to_dict(),
+            "schema_version": "r2f_analyst_memo_content_v2",
             "memo_result": "NO_TRADE",
             "confidence": "LOW",
             "instrument_observations": [],
@@ -112,18 +113,109 @@ def _write_bound_memo(root: Path, generation_id: str, generation: Path) -> bytes
     return raw
 
 
+def _replace_with_v1_generation(generation: Path) -> tuple[str, Path]:
+    manifest = json.loads((generation / reader.MANIFEST_FILENAME).read_bytes())
+    manifest.pop("prompt_contract")
+    manifest["schema_version"] = reader.V1_MANIFEST_SCHEMA_VERSION
+    manifest["compatibility_profile"] = reader.V1_COMPATIBILITY_PROFILE
+    manifest_bytes = reader._json_file_bytes(manifest)
+    evidence_bytes = (generation / reader.EVIDENCE_FILENAME).read_bytes()
+    evidence = json.loads(evidence_bytes)
+    prompt_bytes = b"legacy analyst_memo_v1 prompt\n"
+    generation_id = reader._canonical_sha256(reader._semantic_generation_identity(manifest))
+    binding = {
+        "schema_version": reader.V1_RENDER_BINDING_SCHEMA_VERSION,
+        "compatibility_profile": reader.V1_COMPATIBILITY_PROFILE,
+        "generation_id": generation_id,
+        "scope": "IMMUTABLE_RENDER_ARTIFACTS_AND_INITIAL_BLANK_MEMO_ONLY",
+        "render_complete": True,
+        "immutable_render_artifacts": {
+            reader.MANIFEST_FILENAME: {
+                "schema_version": reader.V1_MANIFEST_SCHEMA_VERSION,
+                "file_sha256": reader._sha256(manifest_bytes),
+                "canonical_content_sha256": reader._canonical_sha256(manifest),
+                "mutable_after_render": False,
+            },
+            reader.EVIDENCE_FILENAME: {
+                "schema_version": reader.EVIDENCE_PACKET_SCHEMA_VERSION,
+                "file_sha256": reader._sha256(evidence_bytes),
+                "canonical_content_sha256": reader._canonical_sha256(evidence),
+                "mutable_after_render": False,
+            },
+            reader.PROMPT_FILENAME: {
+                "media_type": "text/plain; charset=utf-8",
+                "file_sha256": reader._sha256(prompt_bytes),
+                "mutable_after_render": False,
+            },
+        },
+        "operator_editable_inputs": {
+            reader.MEMO_RAW_FILENAME: {
+                "media_type": "text/plain; charset=utf-8",
+                "initial_file_sha256": reader._sha256(b""),
+                "initial_state": "BLANK",
+                "operator_editable_after_render": True,
+                "render_witness_attests_initial_bytes_only": True,
+            }
+        },
+        **reader.AUTHORITY_MARKERS,
+    }
+    v1_generation = generation.parent / generation_id
+    generation.rename(v1_generation)
+    (v1_generation / reader.MANIFEST_FILENAME).write_bytes(manifest_bytes)
+    (v1_generation / reader.PROMPT_FILENAME).write_bytes(prompt_bytes)
+    (v1_generation / reader.RENDER_BINDING_FILENAME).write_bytes(reader._json_file_bytes(binding))
+    return generation_id, v1_generation
+
+
 def test_one_shot_reader_returns_only_pure_input_after_cleanup(
     rendered_generation: tuple[Path, str, Path],
 ) -> None:
     root, generation_id, generation = rendered_generation
     raw = _write_bound_memo(root, generation_id, generation)
     value = _capture(root, generation_id)
-    assert value.source_binding.r2f1a_generation_id == generation_id
+    assert value.source_binding.generation_id == generation_id
+    assert value.source_binding.generation_profile == reader.V2_COMPATIBILITY_PROFILE
     assert [item.instrument_id for item in value.eligible_instruments] == ["FIXA", "FIXB", "FIXC"]
     assert value.active_anchor_ids == ("ANCHOR_FIXA",)
     assert value.memo_raw.raw_bytes == raw
     assert not hasattr(value, "close")
     assert not any("fd" in name or "path" in name for name in value.__dataclass_fields__)
+
+
+def test_v1_generation_is_fully_verified_then_rejected_before_editable_memo_read(
+    rendered_generation: tuple[Path, str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, v2_generation_id, generation = rendered_generation
+    v1_generation_id, v1_generation = _replace_with_v1_generation(generation)
+    assert v1_generation_id != v2_generation_id
+    (v1_generation / reader.MEMO_RAW_FILENAME).write_bytes(b"operator legacy memo sentinel")
+    monkeypatch.setattr(
+        reader,
+        "_capture_verified_memo_at",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("memo must not be read")),
+    )
+    with pytest.raises(
+        reader.ReplacementGenerationReaderError,
+        match="MEMO_PROMPT_PROFILE_UNSUPPORTED",
+    ):
+        _capture(root, v1_generation_id)
+
+
+@pytest.mark.parametrize("mutation", ["changed", "symlink"])
+def test_v2_template_is_descriptor_verified_and_rerendered(
+    rendered_generation: tuple[Path, str, Path], mutation: str
+) -> None:
+    root, generation_id, _generation = rendered_generation
+    template = root / "prompts" / reader.PROMPT_TEMPLATE_FILENAME
+    if mutation == "changed":
+        template.write_bytes(template.read_bytes().replace(b"qualitative", b"changed", 1))
+    else:
+        replacement = root / "replacement-template.txt"
+        replacement.write_bytes(template.read_bytes())
+        template.unlink()
+        template.symlink_to(replacement)
+    with pytest.raises(reader.ReplacementGenerationReaderError, match="SOURCE_GENERATION_INVALID"):
+        _capture(root, generation_id)
 
 
 @pytest.mark.parametrize("mutation,code", [

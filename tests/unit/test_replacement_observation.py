@@ -125,7 +125,10 @@ def _setup_repo(root: Path, *, approvals_text: str | None = None, as_of: str = "
         root / "inputs/current/research_anchor_approvals.yaml",
         approvals_text if approvals_text is not None else _approvals(),
     )
-    _write(root / "prompts/analyst_memo.txt", "MEMO\n{{ evidence_packet_json }}\n")
+    _write(
+        root / "prompts/r2f_analyst_memo_content_v2.txt",
+        (Path(__file__).parents[2] / "prompts/r2f_analyst_memo_content_v2.txt").read_text(),
+    )
 
 
 @pytest.fixture
@@ -670,7 +673,10 @@ def test_tampered_completed_binding_hash_fails_without_overwrite(isolated_repo: 
     binding["immutable_render_artifacts"]["analyst_memo_prompt.txt"]["file_sha256"] = "0" * 64
     tampered = r2f._json_file_bytes(binding)
     binding_path.write_bytes(tampered)
-    with pytest.raises(r2f.ReplacementObservationError, match="BINDING_HASH_MISMATCH"):
+    with pytest.raises(
+        r2f.ReplacementObservationError,
+        match="render_binding_prompt_identity_mismatch",
+    ):
         r2f.replacement_render()
     assert binding_path.read_bytes() == tampered
 
@@ -1088,13 +1094,14 @@ def test_prompt_is_hash_bound_and_r2f1a_stops_before_memo_parsing(isolated_repo:
     prompt = (generation / "analyst_memo_prompt.txt").read_text(encoding="utf-8")
     manifest = json.loads(manifest_bytes)
     evidence = json.loads(evidence_bytes)
-    assert result["generation_id"] in prompt
-    assert _sha(manifest_bytes) in prompt
-    assert r2f._canonical_sha256(manifest) in prompt
-    assert _sha(evidence_bytes) in prompt
-    assert r2f._canonical_sha256(evidence) in prompt
-    assert "permissions, budgets, quantities, orders, execution, and universe creation" in prompt
-    assert "R2F-1b will require an exact hash-bound memo envelope" in prompt
+    assert result["generation_id"] not in prompt
+    assert _sha(manifest_bytes) not in prompt
+    assert r2f._canonical_sha256(manifest) not in prompt
+    assert _sha(evidence_bytes) not in prompt
+    assert r2f._canonical_sha256(evidence) not in prompt
+    assert "r2f_analyst_memo_content_v2" in prompt
+    assert "ACTIVE_ANCHOR" in prompt
+    assert "research_anchors" not in prompt
     assert (generation / r2f.MEMO_RAW_FILENAME).read_bytes() == b""
     forbidden = {
         "analyst_memo.json",
@@ -1106,6 +1113,172 @@ def test_prompt_is_hash_bound_and_r2f1a_stops_before_memo_parsing(isolated_repo:
         "replacement_compatibility_report.json",
     }
     assert forbidden.isdisjoint({path.name for path in generation.iterdir()})
+
+
+def test_v2_prompt_contract_is_closed_cycle_free_and_bound_into_generation_identity(
+    isolated_repo: Path,
+) -> None:
+    result = r2f.replacement_render()
+    generation = _generation(result)
+    manifest = _json(generation / "replacement_input_manifest.json")
+    binding = _json(generation / r2f.RENDER_BINDING_FILENAME)
+    prompt_bytes = (generation / "analyst_memo_prompt.txt").read_bytes()
+    contract = manifest["prompt_contract"]
+    projection = contract["projection"]
+    assert set(projection) == r2f._PROMPT_CONTRACT_PROJECTION_KEYS
+    assert projection == r2f._prompt_contract_projection(
+        (isolated_repo / r2f.MEMO_PROMPT_TEMPLATE_PATH).read_bytes()
+    )
+    assert contract["canonical_content_sha256"] == r2f._canonical_sha256(projection)
+    assert contract["analyst_memo_prompt_file_sha256"] == _sha(prompt_bytes)
+    assert contract["raw_memo_schema_version"] == "r2f_analyst_memo_content_v2"
+    assert result["generation_id"] == r2f._canonical_sha256(
+        r2f._semantic_generation_identity(manifest)
+    )
+    assert binding["generation_identity"] == {
+        "schema_version": r2f.GENERATION_IDENTITY_SCHEMA_VERSION,
+        "prompt_contract_canonical_sha256": contract["canonical_content_sha256"],
+        "analyst_memo_prompt_file_sha256": _sha(prompt_bytes),
+        "raw_memo_schema_version": r2f.RAW_MEMO_SCHEMA_VERSION,
+    }
+    prompt = prompt_bytes.decode("utf-8")
+    assert result["generation_id"] not in prompt
+    assert "analyst_memo_v1" not in prompt
+    assert "r2f_analyst_memo_envelope_v1" not in prompt
+    assert "source_binding" not in prompt
+    assert "{{" not in prompt and "}}" not in prompt
+    assert not any(
+        value in prompt
+        for value in (
+            manifest["evidence_packet"]["file_sha256"],
+            manifest["evidence_packet"]["canonical_content_sha256"],
+            contract["canonical_content_sha256"],
+            _sha(prompt_bytes),
+        )
+    )
+
+
+def test_released_v2_template_has_exact_text_profile_and_no_identity_cycle() -> None:
+    template = (Path(__file__).parents[2] / r2f.MEMO_PROMPT_TEMPLATE_PATH).read_bytes()
+    assert not template.startswith(b"\xef\xbb\xbf")
+    assert b"\r" not in template
+    assert template.endswith(b"\n")
+    assert template.count(b"{{ prompt_projection_json }}") == 1
+    for forbidden in (
+        b"generation_id",
+        b"source_binding",
+        b"file_sha256",
+        b"canonical_sha256",
+        b"analyst_memo_v1",
+        b"research_anchors",
+    ):
+        assert forbidden not in template
+
+
+def test_prompt_contract_changes_create_distinct_generation_without_touching_old_one(
+    isolated_repo: Path,
+) -> None:
+    first = r2f.replacement_render()
+    first_generation = _generation(first)
+    before = {path.name: path.read_bytes() for path in first_generation.iterdir()}
+    template = isolated_repo / r2f.MEMO_PROMPT_TEMPLATE_PATH
+    template.write_bytes(template.read_bytes().replace(b"qualitative", b"qualitative bounded", 1))
+    second = r2f.replacement_render()
+    assert second["generation_id"] != first["generation_id"]
+    assert {path.name: path.read_bytes() for path in first_generation.iterdir()} == before
+
+
+def test_renderer_and_raw_schema_contract_changes_are_generation_relevant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "repo"
+    _setup_repo(root)
+    monkeypatch.setattr(r2f, "repo_root", lambda: root)
+    monkeypatch.setattr(r2f, "_today", lambda: date(2026, 7, 12))
+    baseline = r2f.replacement_render()["generation_id"]
+
+    original_renderer = r2f._render_memo_prompt_v2
+    with monkeypatch.context() as context:
+        context.setattr(
+            r2f,
+            "_render_memo_prompt_v2",
+            lambda **kwargs: original_renderer(**kwargs) + b"RENDERER_V2_VARIANT\n",
+        )
+        assert r2f.replacement_render()["generation_id"] != baseline
+
+    template = root / r2f.MEMO_PROMPT_TEMPLATE_PATH
+    template.write_text(
+        template.read_text(encoding="utf-8").replace(
+            "r2f_analyst_memo_content_v2", "r2f_analyst_memo_content_v3"
+        ),
+        encoding="utf-8",
+    )
+    with monkeypatch.context() as context:
+        context.setattr(r2f, "RAW_MEMO_SCHEMA_VERSION", "r2f_analyst_memo_content_v3")
+        assert r2f.replacement_render()["generation_id"] != baseline
+
+
+def test_bounded_prompt_projection_uses_only_v2_universe_and_active_anchor_authority(
+    isolated_repo: Path,
+) -> None:
+    result = r2f.replacement_render()
+    generation = _generation(result)
+    prompt = (generation / "analyst_memo_prompt.txt").read_text(encoding="utf-8")
+    projection = json.loads(prompt.split("Use this bounded research projection only:\n", 1)[1])
+    assert projection["eligible_instruments"] == [
+        {"instrument_id": "FIXA", "universe_category": "BASE_EVIDENCE_UNIVERSE"},
+        {"instrument_id": "FIXB", "universe_category": "BASE_EVIDENCE_UNIVERSE"},
+        {
+            "instrument_id": "FIXC",
+            "universe_category": "APPROVED_EXTENDED_OBSERVATION_ONLY",
+        },
+    ]
+    evidence = _json(generation / "evidence_packet.json")
+    assert [row["anchor_id"] for row in projection["active_anchors"]] == sorted(
+        row["anchor_id"] for row in evidence["active_anchor_registry"]["active_anchors"]
+    )
+    assert "research_anchors" not in projection
+    assert set(projection["research_context"]) == {
+        "market_metrics",
+        "scheduled_events_deterministic",
+    }
+    projected_text = json.dumps(projection, sort_keys=True)
+    for forbidden_field in (
+        "budget_settings",
+        "portfolio_snapshot_summary",
+        "existing_buy_open_orders",
+        "sell_open_orders",
+        "quantity",
+        "broker_authorization",
+        "permission_effect",
+    ):
+        assert forbidden_field not in projected_text
+    assert "NO_TRADE is a valid qualitative result" in prompt
+    assert "If active_anchors is empty, only NO_TRADE is structurally valid" in prompt
+    for instruction in (
+        "Return exactly one JSON object and nothing else",
+        "Do not use a Markdown fence",
+        "Do not add unknown fields",
+        "Do not emit arbitrary tickers",
+        "Deterministic code owns all such decisions",
+    ):
+        assert instruction in prompt
+
+
+def test_v2_manifest_and_binding_reject_unknown_prompt_contract_fields(
+    isolated_repo: Path,
+) -> None:
+    result = r2f.replacement_render()
+    generation = _generation(result)
+    manifest = _json(generation / "replacement_input_manifest.json")
+    manifest["prompt_contract"]["projection"]["unknown"] = True
+    with pytest.raises(r2f.ReplacementObservationError, match="prompt_contract_projection"):
+        r2f._validate_manifest(manifest)
+
+    binding = _json(generation / r2f.RENDER_BINDING_FILENAME)
+    binding["generation_identity"]["unknown"] = True
+    with pytest.raises(r2f.ReplacementObservationError, match="generation_identity"):
+        r2f._validate_render_binding(binding, expected_generation_id=result["generation_id"])
 
 
 def test_every_json_artifact_has_code_owned_authority_markers(isolated_repo: Path) -> None:
@@ -1463,8 +1636,8 @@ def test_repository_replacement_cannot_redirect_prompt_or_generation_writes(
     replacement_root = tmp_path / "replacement-repo"
     _setup_repo(root)
     _write(
-        replacement_root / "prompts/analyst_memo.txt",
-        "REPLACEMENT_PROMPT_SENTINEL\n{{ evidence_packet_json }}\n",
+        replacement_root / "prompts/r2f_analyst_memo_content_v2.txt",
+        "REPLACEMENT_PROMPT_SENTINEL\n{{ prompt_projection_json }}\n",
     )
     original_capture = r2f._capture_inputs
 
@@ -1501,7 +1674,7 @@ def test_prompt_template_is_captured_before_later_path_replacement(
     retained = isolated_repo / "prompts/retained-analyst-memo.txt"
     replacement = isolated_repo / "prompts/replacement-analyst-memo.txt"
     replacement.write_text(
-        "REPLACEMENT_PROMPT_SENTINEL\n{{ evidence_packet_json }}\n",
+        "REPLACEMENT_PROMPT_SENTINEL\n{{ prompt_projection_json }}\n",
         encoding="utf-8",
     )
     original_capture = r2f._capture_inputs
@@ -1515,7 +1688,7 @@ def test_prompt_template_is_captured_before_later_path_replacement(
     monkeypatch.setattr(r2f, "_capture_inputs", capture_then_replace)
     result = r2f.replacement_render()
     prompt = (_generation(result) / "analyst_memo_prompt.txt").read_text(encoding="utf-8")
-    assert prompt.startswith("MEMO\n")
+    assert prompt.startswith("You are producing a strictly report-only qualitative research memo.\n")
     assert "REPLACEMENT_PROMPT_SENTINEL" not in prompt
 
 
