@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 
 from investment_orchestrator.workflow.step1_research import (
@@ -16,6 +17,15 @@ from investment_orchestrator.workflow.step1_research import (
 
 
 _COMMITTED_DISPLAY_FAILURE = object()
+_LOWERCASE_SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def _lowercase_sha256(value: str) -> str:
+    if _LOWERCASE_SHA256_RE.fullmatch(value) is None:
+        raise argparse.ArgumentTypeError(
+            "expected exactly 64 lowercase hexadecimal characters"
+        )
+    return value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -41,13 +51,25 @@ def build_parser() -> argparse.ArgumentParser:
         "replacement-render",
         help="Build the immutable R2F-1a Step 1A render observation (report-only)",
     )
+    report_parser = subparsers.add_parser(
+        "replacement-report",
+        help="manual immutable single-file report-only validated-memo publication",
+        description="manual immutable single-file report-only validated-memo publication",
+    )
+    report_parser.add_argument(
+        "--generation-id",
+        required=True,
+        type=_lowercase_sha256,
+        help="exact lowercase 64-hex v2 generation ID",
+    )
     return parser
 
 
 def _display_committed_replacement_result_noexcept(value: str) -> object | None:
-    """Best-effort observability after R2F-1a publication has committed.
+    """Best-effort observability after explicit replacement publication commits.
 
-    This is deliberately replacement-render-only.  A write may buffer
+    This is deliberately limited to replacement-render and replacement-report.
+    A write may buffer
     successfully and fail only when Python flushes stdout during interpreter
     shutdown, so the write *and* flush must occur in this protected boundary.
     A failed stream can be permanently broken or impossible to redirect safely;
@@ -99,7 +121,24 @@ def main() -> int | object:
 
             result = replacement_render()
             output_text = result["cli_output"]
-            if _display_committed_replacement_result_noexcept(output_text) is _COMMITTED_DISPLAY_FAILURE:
+            if (
+                _display_committed_replacement_result_noexcept(output_text)
+                is _COMMITTED_DISPLAY_FAILURE
+            ):
+                return _COMMITTED_DISPLAY_FAILURE
+            return 0
+
+        if args.command == "replacement-report":
+            # Keep report publication absent from every import path unless the
+            # explicit manual report-only command is selected.
+            from investment_orchestrator.research.replacement_report import replacement_report
+
+            result = replacement_report(args.generation_id)
+            output_text = result["cli_output"]
+            if (
+                _display_committed_replacement_result_noexcept(output_text)
+                is _COMMITTED_DISPLAY_FAILURE
+            ):
                 return _COMMITTED_DISPLAY_FAILURE
             return 0
     except Exception as exc:  # noqa: BLE001
@@ -114,9 +153,10 @@ def _run_process_entrypoint() -> None:
     """Translate only a committed replacement display failure into exit zero."""
     result = main()
     if result is _COMMITTED_DISPLAY_FAILURE:
-        # replacement_render has returned: its marker commit and no-throw
-        # publication cleanup are complete.  Skip interpreter shutdown only to
-        # prevent a permanently failed stdout object from flushing again.
+        # An explicit replacement publisher has returned after its atomic
+        # visibility transition and bounded descriptor closure. Skip interpreter
+        # shutdown only to prevent a permanently failed stdout object from
+        # flushing again.
         os._exit(0)
     raise SystemExit(result)
 

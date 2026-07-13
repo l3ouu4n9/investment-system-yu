@@ -152,13 +152,17 @@ def _sha(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-def test_cli_adds_only_lazy_replacement_render_and_preserves_legacy_dispatch(
+def test_cli_adds_only_explicit_replacement_commands_and_preserves_legacy_dispatch(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     help_text = run_step1.build_parser().format_help()
     assert "replacement-render" in help_text
-    assert "replacement-report" not in help_text
+    assert "replacement-report" in help_text
+    normalized_help = " ".join(help_text.split()).replace("- ", "-")
+    assert "manual immutable single-file report-only validated-memo publication" in (
+        normalized_help
+    )
 
     cases = {
         "render": ("render_step1_prompt", "prompt_path"),
@@ -1302,6 +1306,7 @@ def test_runtime_has_no_r2f_consumer_or_forbidden_downstream_call() -> None:
     allowed_isolated_readers = {
         source_root / "research/replacement_observation.py",
         source_root / "research/replacement_generation_reader.py",
+        source_root / "research/replacement_report.py",
     }
     consumers: list[Path] = []
     for path in source_root.rglob("*.py"):
