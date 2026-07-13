@@ -420,6 +420,31 @@ def build_embedded_active_anchor_registry_selection(
             as_of_date=baseline.get("as_of_date") if isinstance(baseline, Mapping) else None,
             generated_at=generated_at,
         )
+        return build_embedded_active_anchor_registry_selection_from_validations(
+            baseline=baseline,
+            approvals_validation=approvals_validation,
+            revocations_validation=revocations_validation,
+            generated_at=generated_at,
+        )
+    except Exception:  # noqa: BLE001 - evidence packet must fail closed, never raise
+        return _failed_embedded_active_anchor_registry_selection(generated_at=generated_at)
+
+
+def build_embedded_active_anchor_registry_selection_from_validations(
+    *,
+    baseline: Mapping[str, Any],
+    approvals_validation: Mapping[str, Any],
+    revocations_validation: Mapping[str, Any],
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    """Select the production embedded registry from already-captured validations.
+
+    This is the pure policy core shared by the path-based production Step 1A
+    accessor and frozen report-only observers.  Callers own source capture and
+    parsing; approval/revocation merge, readiness, and selection remain exactly
+    the production policy implemented here.
+    """
+    try:
         approvals = build_active_research_anchor_registry_with_approvals(
             baseline=baseline,
             approvals_validation=approvals_validation,
@@ -463,30 +488,34 @@ def build_embedded_active_anchor_registry_selection(
             "readiness": readiness,
         }
     except Exception:  # noqa: BLE001 - evidence packet must fail closed, never raise
-        selected = fail_closed_empty_active_anchor_registry(
-            reason="embedded_registry_selection_internal_error",
-            generated_at=generated_at,
-        )
-        return {
-            "schema_version": EMBEDDED_REGISTRY_SELECTION_SCHEMA_VERSION,
-            "is_llm_generated": False,
-            "report_only": True,
-            "permission_effect": "none",
-            "not_authorization": True,
-            "not_execution_authorization": True,
-            "generated_at": generated_at,
-            "selected_source": SWITCH_TARGET_FAIL_CLOSED,
-            "selected_registry": selected,
-            "baseline_registry": {},
-            "approvals_registry": {},
-            "dual_read_diff": {},
-            "readiness": {
-                "ready": False,
-                "switch_target": SWITCH_TARGET_FAIL_CLOSED,
-                "baseline_fallback_safe": False,
-                "fail_closed_empty_required": True,
-            },
-        }
+        return _failed_embedded_active_anchor_registry_selection(generated_at=generated_at)
+
+
+def _failed_embedded_active_anchor_registry_selection(*, generated_at: str | None) -> dict[str, Any]:
+    selected = fail_closed_empty_active_anchor_registry(
+        reason="embedded_registry_selection_internal_error",
+        generated_at=generated_at,
+    )
+    return {
+        "schema_version": EMBEDDED_REGISTRY_SELECTION_SCHEMA_VERSION,
+        "is_llm_generated": False,
+        "report_only": True,
+        "permission_effect": "none",
+        "not_authorization": True,
+        "not_execution_authorization": True,
+        "generated_at": generated_at,
+        "selected_source": SWITCH_TARGET_FAIL_CLOSED,
+        "selected_registry": selected,
+        "baseline_registry": {},
+        "approvals_registry": {},
+        "dual_read_diff": {},
+        "readiness": {
+            "ready": False,
+            "switch_target": SWITCH_TARGET_FAIL_CLOSED,
+            "baseline_fallback_safe": False,
+            "fail_closed_empty_required": True,
+        },
+    }
 
 
 def fail_closed_empty_active_anchor_registry(

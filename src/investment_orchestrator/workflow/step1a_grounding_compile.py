@@ -12,7 +12,10 @@ import hashlib
 import json
 from typing import Any
 
+import yaml
+
 from investment_orchestrator.research.active_research_anchor_registry import (
+    build_active_research_anchor_registry,
     compile_active_research_anchor_registry,
 )
 from investment_orchestrator.research.approval_registry_dual_read_diff import (
@@ -26,6 +29,7 @@ from investment_orchestrator.research.approvals_inclusive_active_registry import
 )
 from investment_orchestrator.research.evidence_packet import (
     build_embedded_active_anchor_registry_selection,
+    build_embedded_active_anchor_registry_selection_from_validations,
     build_evidence_packet,
     normalize_evidence_packet_for_parity,
 )
@@ -33,12 +37,21 @@ from investment_orchestrator.research.grounding_status_observatory import (
     build_grounding_status_observatory,
 )
 from investment_orchestrator.research.research_anchor_approval_manifest import (
+    build_research_anchor_approvals_validation,
     validate_research_anchor_approvals,
 )
 from investment_orchestrator.research.research_anchor_revocation_manifest import (
+    build_research_anchor_revocations_validation,
     validate_research_anchor_revocations,
 )
-from investment_orchestrator.research.research_anchors import build_research_anchors_summary
+from investment_orchestrator.research.research_anchors import (
+    ANCHORS_MISSING_DATA_GAP,
+    ResearchAnchorsResult,
+    build_research_anchors_summary,
+    normalize_iso_date_value,
+    summarize_research_anchors,
+    validate_research_anchors,
+)
 
 
 SCHEMA_VERSION = "step1a_grounding_compile_bundle_v1"
@@ -444,23 +457,144 @@ def build_step1a_evidence_packet(
     artifact as authority, and reads neither support_signals nor candidates. It
     carries no selection/permission/order authority and cannot authorize a trade.
     """
+    return build_step1a_evidence_packet_from_captured_inputs(
+        strategy_settings=strategy_settings,
+        portfolio_snapshot_text=portfolio_snapshot_text,
+        portfolio_snapshot_path=portfolio_snapshot_path,
+        last_good_available=last_good_available,
+        last_good_metadata=last_good_metadata,
+        research_anchors_text=_read_optional_source_text(research_anchors_path),
+        research_anchors_path=_path_str(research_anchors_path),
+        research_anchor_approvals_text=_read_optional_source_text(research_anchor_approvals_path),
+        research_anchor_approvals_path=_path_str(research_anchor_approvals_path),
+        source_artifacts=source_artifacts,
+        generated_at=generated_at,
+        now_date=now_date,
+        embedded_selection_out=embedded_selection_out,
+    )
+
+
+def build_step1a_evidence_packet_from_captured_inputs(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+    portfolio_snapshot_text: str | None,
+    portfolio_snapshot_path: Any,
+    last_good_available: bool,
+    last_good_metadata: Mapping[str, Any] | None,
+    research_anchors_text: str | None,
+    research_anchors_path: str,
+    research_anchor_approvals_text: str | None,
+    research_anchor_approvals_path: str,
+    source_artifacts: Mapping[str, str] | None = None,
+    generated_at: str | None = None,
+    now_date: str | None = None,
+    embedded_selection_out: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the production Step 1A packet from caller-captured source text.
+
+    This is the byte-capture boundary shared by production's path wrapper and
+    frozen report-only observers.  It duplicates no approval, revocation,
+    readiness, or selection policy: decoded inputs flow through the existing
+    pure validators and the shared embedded-selection core.
+    """
     settings = strategy_settings if isinstance(strategy_settings, Mapping) else None
     as_of = _first_str(now_date, _get(settings, "as_of"))
     allowed_universe = _allowed_buy_universe(settings)
-    embedded_selection = build_embedded_active_anchor_registry_selection(
-        anchors_path=research_anchors_path,
-        approvals_path=research_anchor_approvals_path,
+
+    anchors_present = isinstance(research_anchors_text, str) and bool(research_anchors_text.strip())
+    anchors_sha256 = _sha256_text(research_anchors_text) if anchors_present else None
+    anchors_result: ResearchAnchorsResult | None = None
+    if anchors_present:
+        try:
+            anchors_payload = yaml.safe_load(research_anchors_text)
+        except yaml.YAMLError as exc:
+            anchors_result = ResearchAnchorsResult(
+                present=True,
+                valid=False,
+                schema_version=None,
+                as_of_date=None,
+                anchors=[],
+                errors=[f"research_anchors is not valid YAML: {exc}"],
+                parse_error=str(exc),
+            )
+        else:
+            anchors_result = validate_research_anchors(
+                anchors_payload,
+                allowed_universe=allowed_universe,
+                today=as_of,
+            )
+
+    if anchors_result is None:
+        research_anchors_summary: dict[str, Any] = {
+            "available": False,
+            "path": research_anchors_path,
+            "data_gap": ANCHORS_MISSING_DATA_GAP,
+            "consumed_for_support_acceptance": False,
+            "permission_effect": "none",
+        }
+    else:
+        research_anchors_summary = summarize_research_anchors(
+            anchors_result,
+            path=research_anchors_path,
+        )
+
+    baseline = build_active_research_anchor_registry(
+        anchors_result=anchors_result,
+        source_present=anchors_present,
+        source_sha256=anchors_sha256,
+        source_path=research_anchors_path,
+        as_of_date=(
+            normalize_iso_date_value(as_of)
+            or (anchors_result.as_of_date if anchors_result is not None else None)
+        ),
+        generated_at=generated_at,
+    )
+
+    approvals_present = isinstance(research_anchor_approvals_text, str) and bool(
+        research_anchor_approvals_text.strip()
+    )
+    approvals_sha256 = (
+        _sha256_text(research_anchor_approvals_text) if approvals_present else None
+    )
+    approvals_payload: Any = None
+    approvals_parse_error: str | None = None
+    if approvals_present:
+        try:
+            approvals_payload = yaml.safe_load(research_anchor_approvals_text)
+        except yaml.YAMLError as exc:
+            approvals_parse_error = str(exc)
+
+    baseline_as_of = baseline.get("as_of_date") if isinstance(baseline, Mapping) else None
+    approvals_validation = build_research_anchor_approvals_validation(
+        manifest=approvals_payload,
+        source_present=approvals_present,
+        source_sha256=approvals_sha256,
+        source_path=research_anchor_approvals_path,
         allowed_universe=allowed_universe,
         today=as_of,
+        as_of_date=baseline_as_of if isinstance(baseline_as_of, str) else None,
+        generated_at=generated_at,
+        parse_error=approvals_parse_error,
+    )
+    revocations_validation = build_research_anchor_revocations_validation(
+        manifest=approvals_payload,
+        approvals_validation=approvals_validation,
+        source_present=approvals_present,
+        source_sha256=approvals_sha256,
+        source_path=research_anchor_approvals_path,
+        today=as_of,
+        as_of_date=baseline_as_of if isinstance(baseline_as_of, str) else None,
+        generated_at=generated_at,
+        parse_error=approvals_parse_error,
+    )
+    embedded_selection = build_embedded_active_anchor_registry_selection_from_validations(
+        baseline=baseline,
+        approvals_validation=approvals_validation,
+        revocations_validation=revocations_validation,
         generated_at=generated_at,
     )
     if embedded_selection_out is not None and isinstance(embedded_selection, Mapping):
         embedded_selection_out.update(embedded_selection)
-    research_anchors_summary = build_research_anchors_summary(
-        research_anchors_path,
-        allowed_universe=allowed_universe,
-        today=as_of,
-    )
     return build_evidence_packet(
         strategy_settings=settings,
         portfolio_snapshot_text=portfolio_snapshot_text,
@@ -1330,6 +1464,24 @@ def _source_artifacts(
         "research_anchors": _path_str(research_anchors_path),
         "research_anchor_approvals": _path_str(research_anchor_approvals_path),
     }
+
+
+def _read_optional_source_text(path: Any) -> str | None:
+    """Match the established report-only path wrappers: unreadable means absent."""
+    from investment_orchestrator.common.io import file_exists, read_text
+
+    if path is None or not file_exists(path):
+        return None
+    try:
+        return read_text(path)
+    except Exception:  # noqa: BLE001 - preserve existing fail-closed source behavior
+        return None
+
+
+def _sha256_text(value: str | None) -> str | None:
+    if not isinstance(value, str) or value == "":
+        return None
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _path_str(value: Any) -> str:
