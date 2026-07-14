@@ -211,7 +211,11 @@ def test_accessor_failure_selection_falls_back_with_token(
     def _boom(**_kwargs: Any) -> dict[str, Any]:
         raise RuntimeError("accessor exploded")
 
-    monkeypatch.setattr(step1_research, "build_step1a_evidence_packet", _boom)
+    monkeypatch.setattr(
+        step1_research,
+        "_build_step1a_evidence_packet_from_sanitized_inputs",
+        _boom,
+    )
 
     result = step1_research.parse_step1_output(strategy_settings=_settings())
 
@@ -238,7 +242,7 @@ def test_packet_guard_fallback_forces_selection_fallback(
     """Lineage coupling: a packet-only divergence (the selection captures are
     IDENTICAL) still forces the selection to the legacy capture."""
     _setup_repo(tmp_path, monkeypatch)
-    real_accessor = step1_research.build_step1a_evidence_packet
+    real_accessor = step1_research._build_step1a_evidence_packet_from_sanitized_inputs
 
     def _diff_report_only(**kwargs: Any) -> dict[str, Any]:
         packet = real_accessor(**kwargs)  # populates embedded_selection_out untouched
@@ -248,7 +252,11 @@ def test_packet_guard_fallback_forces_selection_fallback(
         packet["source_artifacts"] = base
         return packet
 
-    monkeypatch.setattr(step1_research, "build_step1a_evidence_packet", _diff_report_only)
+    monkeypatch.setattr(
+        step1_research,
+        "_build_step1a_evidence_packet_from_sanitized_inputs",
+        _diff_report_only,
+    )
 
     result = step1_research.parse_step1_output(strategy_settings=_settings())
 
@@ -378,13 +386,17 @@ def test_empty_legacy_capture_leaves_artifact_unwritten(
 ) -> None:
     """No legacy capture -> nothing written (no unverified Step 1A payload)."""
     _setup_repo(tmp_path, monkeypatch)
-    real_legacy = step1_research.build_evidence_packet_and_selection
+    real_legacy = step1_research._build_evidence_packet_and_selection_from_sanitized_source
 
     def _no_capture(**kwargs: Any) -> dict[str, Any]:
         kwargs.pop("embedded_selection_out", None)  # suppress the capture only
         return real_legacy(**kwargs)
 
-    monkeypatch.setattr(step1_research, "build_evidence_packet_and_selection", _no_capture)
+    monkeypatch.setattr(
+        step1_research,
+        "_build_evidence_packet_and_selection_from_sanitized_source",
+        _no_capture,
+    )
 
     result = step1_research.parse_step1_output(strategy_settings=_settings())
 
@@ -407,7 +419,7 @@ def test_first_step1a_second_fallback_final_status_is_fallback(
     """Invocation 2 overwrites invocation 1: switch status must report the final
     (legacy-fallback) disk bytes, never the first write's step1a provenance."""
     _setup_repo(tmp_path, monkeypatch)
-    real_accessor = step1_research.build_step1a_evidence_packet
+    real_accessor = step1_research._build_step1a_evidence_packet_from_sanitized_inputs
     calls = {"n": 0}
 
     def _second_call_fails(**kwargs: Any) -> dict[str, Any]:
@@ -416,7 +428,11 @@ def test_first_step1a_second_fallback_final_status_is_fallback(
             raise RuntimeError("accessor exploded on the second invocation")
         return real_accessor(**kwargs)
 
-    monkeypatch.setattr(step1_research, "build_step1a_evidence_packet", _second_call_fails)
+    monkeypatch.setattr(
+        step1_research,
+        "_build_step1a_evidence_packet_from_sanitized_inputs",
+        _second_call_fails,
+    )
 
     result = step1_research.parse_step1_output(strategy_settings=_settings())
 
@@ -451,7 +467,7 @@ def test_first_fallback_second_step1a_final_status_is_step1a(
     fallback followed by a clean second write reports step1a — proving the
     switch status describes final disk contents, not first-write provenance."""
     _setup_repo(tmp_path, monkeypatch)
-    real_accessor = step1_research.build_step1a_evidence_packet
+    real_accessor = step1_research._build_step1a_evidence_packet_from_sanitized_inputs
     calls = {"n": 0}
 
     def _first_call_fails(**kwargs: Any) -> dict[str, Any]:
@@ -460,7 +476,11 @@ def test_first_fallback_second_step1a_final_status_is_step1a(
             raise RuntimeError("accessor exploded on the first invocation")
         return real_accessor(**kwargs)
 
-    monkeypatch.setattr(step1_research, "build_step1a_evidence_packet", _first_call_fails)
+    monkeypatch.setattr(
+        step1_research,
+        "_build_step1a_evidence_packet_from_sanitized_inputs",
+        _first_call_fails,
+    )
 
     result = step1_research.parse_step1_output(strategy_settings=_settings())
 

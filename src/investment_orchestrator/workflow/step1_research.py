@@ -51,6 +51,7 @@ from investment_orchestrator.research.actionable_promotion_pointer_preview impor
     write_actionable_promotion_pointer_preview,
 )
 from investment_orchestrator.research.evidence_packet import (
+    _build_evidence_packet_and_selection_from_sanitized_source,
     build_evidence_packet_and_selection,
     compare_embedded_selection_parity,
     compare_evidence_packet_runtime_parity,
@@ -86,24 +87,27 @@ from investment_orchestrator.research.anchor_source_equivalence import (
 from investment_orchestrator.research.research_anchor_candidates import (
     write_research_anchor_candidates,
 )
-from investment_orchestrator.research.research_anchor_approval_manifest import (
-    validate_research_anchor_approvals,
-    write_research_anchor_approvals_validation,
-)
-from investment_orchestrator.research.research_anchor_revocation_manifest import (
-    validate_research_anchor_revocations,
-    write_research_anchor_revocations_validation,
-)
 from investment_orchestrator.research.approvals_inclusive_active_registry import (
+    CapturedResearchAnchorApprovalSource,
+    _ValidatedCapturedResearchAnchorApprovalSource,
+    _build_from_sanitized_source,
+    _build_research_anchor_approval_source_validations_from_sanitized,
+    _sanitize_captured_source,
+    _verified_approval_source_summary,
     build_active_research_anchor_registry_with_approvals,
+    build_research_anchor_approval_source_validations,
+    capture_research_anchor_approval_source,
 )
 from investment_orchestrator.research.approval_registry_dual_read_diff import (
+    _build_approval_registry_dual_read_diff_from_sanitized_source,
     build_approval_registry_dual_read_diff,
 )
 from investment_orchestrator.research.approval_registry_switch_readiness import (
-    write_approval_registry_switch_readiness,
+    _build_approval_registry_switch_readiness_from_sanitized_source,
+    build_approval_registry_switch_readiness_from_captured_source,
 )
 from investment_orchestrator.research.support_signals_dual_ground_diff import (
+    _write_support_signals_dual_ground_diff_from_sanitized_source,
     write_support_signals_dual_ground_diff,
 )
 from investment_orchestrator.state.final_execution_safety_preflight import (
@@ -123,6 +127,14 @@ from investment_orchestrator.state.research_availability import (
     research_freshness_report_to_dict,
 )
 from investment_orchestrator.workflow.step1a_grounding_compile import (
+    _build_step1a_active_research_anchor_registry_with_approvals_from_sanitized_source,
+    _build_step1a_approval_registry_dual_read_diff_from_sanitized_source,
+    _build_step1a_approval_registry_switch_readiness_from_sanitized_source,
+    _build_step1a_evidence_packet_from_sanitized_inputs,
+    _build_step1a_grounding_compile_bundle_from_sanitized_source,
+    _build_step1a_research_anchor_approvals_validation_from_sanitized_source,
+    _build_step1a_research_anchor_revocations_validation_from_sanitized_source,
+    _enforce_workflow_approval_source_identity,
     build_step1a_active_research_anchor_registry,
     build_step1a_active_research_anchor_registry_with_approvals,
     build_step1a_approval_registry_dual_read_diff,
@@ -694,6 +706,16 @@ def parse_step1_output(
         if strategy_settings is not None
         else load_strategy_settings_for_handoff_validation()
     )
+    workflow_approval_source = _sanitize_captured_source(
+        capture_research_anchor_approval_source(
+            current_inputs_dir() / RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME
+        )
+    )
+    (
+        workflow_approval_source_state,
+        workflow_approval_source_sha256,
+        workflow_approval_source_diagnostics_incomplete,
+    ) = _verified_approval_source_summary(workflow_approval_source)
 
     # Report-only layer 0 (R2B/R2G-5c-2, writer switched by S1A-11; embedded
     # selection switched by S1A-12): deterministic evidence packet + guarded
@@ -714,6 +736,7 @@ def parse_step1_output(
         _write_evidence_packet_report_only(
             strategy_settings=handoff_strategy_settings,
             evidence_packet_write_log=evidence_packet_write_log,
+            captured_approval_source=workflow_approval_source,
         )
     )
 
@@ -739,6 +762,7 @@ def parse_step1_output(
     analyst_memo_summary = _parse_analyst_memo_report_only(
         strategy_settings=handoff_strategy_settings,
         evidence_packet_write_log=evidence_packet_write_log,
+        captured_approval_source=workflow_approval_source,
     )
 
     # Report-only layer 0c (R2D): deterministic strict-handoff compiler. Compiles
@@ -750,6 +774,7 @@ def parse_step1_output(
     compiled_handoff_summary = _compile_research_handoff_report_only(
         strategy_settings=handoff_strategy_settings,
         evidence_packet_write_log=evidence_packet_write_log,
+        captured_approval_source=workflow_approval_source,
     )
 
     # Report-only layer 0c2 (R2G-4): advisory research-anchor CANDIDATES. Suggests
@@ -770,7 +795,8 @@ def parse_step1_output(
     # NEW_BUY / ORDER_COMPILATION. operator_completed_anchor_sha256 is the
     # activation-binding hash; candidate_sha256 is audit-only.
     approvals_validation_switch_status = _write_research_anchor_approvals_validation_report_only(
-        strategy_settings=handoff_strategy_settings
+        strategy_settings=handoff_strategy_settings,
+        captured_approval_source=workflow_approval_source,
     )
 
     # Report-only layer 0c3b (R2G-5d-0, switched by S1A-5): operator-REVOCATION
@@ -783,7 +809,8 @@ def parse_step1_output(
     # readiness, is consumed by NOTHING, and cannot affect allowed_actions / add
     # NEW_BUY / ORDER_COMPILATION. Unknown target fails closed (mandatory amendment).
     revocations_validation_switch_status = _write_research_anchor_revocations_validation_report_only(
-        strategy_settings=handoff_strategy_settings
+        strategy_settings=handoff_strategy_settings,
+        captured_approval_source=workflow_approval_source,
     )
 
     # Report-only layer 0c4 (R2G-5b, switched by S1A-6): approvals-inclusive active
@@ -797,7 +824,8 @@ def parse_step1_output(
     # recomputes its own fresh in-memory approvals-inclusive registry.
     with_approvals_switch_status, dual_read_diff_switch_status = (
         _write_approval_registry_dual_read_report_only(
-            strategy_settings=handoff_strategy_settings
+            strategy_settings=handoff_strategy_settings,
+            captured_approval_source=workflow_approval_source,
         )
     )
 
@@ -808,7 +836,8 @@ def parse_step1_output(
     # the actual 5c-2 switch above recomputes readiness from fresh in-memory
     # YAML-derived objects and never reads this JSON.
     readiness_switch_status = _write_approval_registry_switch_readiness_report_only(
-        strategy_settings=handoff_strategy_settings
+        strategy_settings=handoff_strategy_settings,
+        captured_approval_source=workflow_approval_source,
     )
 
     # Report-only layer 0c5b (S1A-3/4/5/6/7/8/11/12): per-artifact switch
@@ -842,14 +871,35 @@ def parse_step1_output(
     # Compares support_signals grounding under the embedded registry vs a freshly
     # compiled approvals-inclusive dry-run view. The artifact itself remains
     # write-only and cannot affect allowed_actions / add NEW_BUY / ORDER_COMPILATION.
-    _write_support_signals_dual_ground_diff_report_only(strategy_settings=handoff_strategy_settings)
+    _write_support_signals_dual_ground_diff_report_only(
+        strategy_settings=handoff_strategy_settings,
+        captured_approval_source=workflow_approval_source,
+    )
+
+    # Authoritative bundle-consistency boundary.  The artifacts above are
+    # diagnostic candidates until this deterministic join succeeds.  On a
+    # mismatch, replace every activation-bearing view with the existing safe
+    # baseline/fail-closed selection and rebuild compiled support from that safe
+    # evidence before actionable preview or promotion can consume it.
+    (
+        workflow_approval_source_identity_mismatch,
+        fail_closed_compiled_handoff_summary,
+    ) = _enforce_complete_step1_workflow_approval_source_identity(
+        approval_source=workflow_approval_source,
+        strategy_settings=handoff_strategy_settings,
+        source_summary_sha256=workflow_approval_source_sha256,
+    )
+    if fail_closed_compiled_handoff_summary is not None:
+        compiled_handoff_summary = fail_closed_compiled_handoff_summary
 
     # Report-only layer 0c7 (R2G-6b): grounding-status observatory. Reads only the
     # already-written Step 1 diagnostic artifacts and writes a single inert summary.
     # Consumed by NOTHING: not readiness, not evidence_packet, not support_signals,
     # not availability, not Step 2/3/4, not gates, not weekly, not broker/live, and
     # never allowed_actions / order readiness / order path.
-    _write_grounding_status_observatory_report_only()
+    _write_grounding_status_observatory_report_only(
+        workflow_identity_mismatch=workflow_approval_source_identity_mismatch
+    )
 
     # Report-only layer 0c8 (S1A-1): Step 1A shadow-run diff. Calls the pure
     # extraction bundle and compares it against the already-written Step 1
@@ -858,7 +908,8 @@ def parse_step1_output(
     # consume NOTHING from this layer. Any failure is recorded best-effort and
     # swallowed.
     step1a_shadow_summary = _write_step1a_grounding_compile_shadow_diff_report_only(
-        strategy_settings=handoff_strategy_settings
+        strategy_settings=handoff_strategy_settings,
+        captured_approval_source=workflow_approval_source,
     )
 
     # Report-only layer 0d (R2E.5b-0): a SEPARATE actionable-handoff preview built
@@ -1109,6 +1160,19 @@ def parse_step1_output(
         ),
         "compiled_research_handoff_mode": compiled_handoff_summary.get("compilation_mode", ""),
         "compiled_research_handoff_valid": compiled_handoff_summary.get("compiled_candidate_valid", ""),
+        "research_anchor_approvals_source_state": workflow_approval_source_state,
+        "research_anchor_approvals_source_sha256": (
+            ""
+            if workflow_approval_source_identity_mismatch
+            else (workflow_approval_source_sha256 or "")
+        ),
+        "workflow_approval_source_identity_mismatch": str(
+            workflow_approval_source_identity_mismatch
+        ),
+        "grounding_diagnostics_incomplete": str(
+            workflow_approval_source_diagnostics_incomplete
+            or workflow_approval_source_identity_mismatch
+        ),
         "grounding_status_observatory_path": str(step1_grounding_status_observatory_path()),
         "step1a_grounding_compile_shadow_diff_path": step1a_shadow_summary.get("path", ""),
         "step1a_grounding_compile_shadow_diff_status": step1a_shadow_summary.get("comparison_status", ""),
@@ -1552,6 +1616,7 @@ def _write_evidence_packet_report_only(
     *,
     strategy_settings: Mapping[str, Any] | None,
     evidence_packet_write_log: list[dict[str, Any]] | None = None,
+    captured_approval_source: _ValidatedCapturedResearchAnchorApprovalSource | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run one guarded evidence-packet + embedded-selection write pass; log statuses.
 
@@ -1569,7 +1634,8 @@ def _write_evidence_packet_report_only(
     ``(evidence_packet_status, embedded_selection_status)`` for THIS invocation.
     """
     packet_status, selection_status = _write_evidence_packet_and_selection_once(
-        strategy_settings=strategy_settings
+        strategy_settings=strategy_settings,
+        captured_approval_source=captured_approval_source,
     )
     if evidence_packet_write_log is not None:
         evidence_packet_write_log.append(
@@ -1584,6 +1650,7 @@ def _write_evidence_packet_report_only(
 def _write_evidence_packet_and_selection_once(
     *,
     strategy_settings: Mapping[str, Any] | None,
+    captured_approval_source: _ValidatedCapturedResearchAnchorApprovalSource | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Write the deterministic evidence packet from the Step 1A source (S1A-11).
 
@@ -1633,6 +1700,14 @@ def _write_evidence_packet_and_selection_once(
         snapshot_path = current_inputs_dir() / "portfolio_snapshot.txt"
         research_anchors_path = current_inputs_dir() / RESEARCH_ANCHORS_INPUT_FILENAME
         approvals_path = current_inputs_dir() / RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME
+        approval_source = (
+            captured_approval_source
+            if type(captured_approval_source)
+            is _ValidatedCapturedResearchAnchorApprovalSource
+            else _sanitize_captured_source(
+                capture_research_anchor_approval_source(approvals_path)
+            )
+        )
         try:
             snapshot_text: str | None = load_portfolio_snapshot_text()
         except Exception:  # noqa: BLE001 - missing snapshot -> DATA_GAP, not crash
@@ -1654,7 +1729,7 @@ def _write_evidence_packet_and_selection_once(
 
         # Legacy/current packet + embedded selection, built in memory (no write
         # yet): the exact bytes today's production writer would produce.
-        legacy_packet = build_evidence_packet_and_selection(
+        legacy_packet = _build_evidence_packet_and_selection_from_sanitized_source(
             strategy_settings=strategy_settings,
             portfolio_snapshot_text=snapshot_text,
             portfolio_snapshot_path=snapshot_path,
@@ -1666,6 +1741,7 @@ def _write_evidence_packet_and_selection_once(
             research_anchors_path=research_anchors_path,
             research_anchor_approvals_path=approvals_path,
             embedded_selection_out=legacy_selection_capture,
+            approval_source=approval_source,
         )
     except Exception as exc:  # noqa: BLE001 - legacy build failed -> preserve swallowed behavior
         # Lower-bound of "both fail": nothing written, nothing on disk changed.
@@ -1678,14 +1754,19 @@ def _write_evidence_packet_and_selection_once(
     # Decide the disk payload: Step 1A only behind the strict guard, else legacy.
     payload = legacy_packet
     try:
-        step1a_candidate = build_step1a_evidence_packet(
+        try:
+            research_anchors_text = read_text(research_anchors_path)
+        except Exception:  # noqa: BLE001 - match Step 1A optional-source behavior
+            research_anchors_text = None
+        step1a_candidate = _build_step1a_evidence_packet_from_sanitized_inputs(
             strategy_settings=strategy_settings,
             portfolio_snapshot_text=snapshot_text,
             portfolio_snapshot_path=snapshot_path,
             last_good_available=last_good.available,
             last_good_metadata=last_good.metadata,
-            research_anchors_path=research_anchors_path,
-            research_anchor_approvals_path=approvals_path,
+            research_anchors_text=research_anchors_text,
+            research_anchors_path=str(research_anchors_path),
+            research_anchor_approvals_path=str(approvals_path),
             source_artifacts=source_artifacts,
             generated_at=generated_at,
             now_date=settings_as_of,
@@ -1695,6 +1776,7 @@ def _write_evidence_packet_and_selection_once(
             # compile, no mid-run input drift, and the out-param provably does
             # not change the candidate bytes or this guard's decision.
             embedded_selection_out=step1a_selection_capture,
+            approval_source=approval_source,
         )
         parity = compare_evidence_packet_runtime_parity(legacy_packet, step1a_candidate)
         guard = _evaluate_step1a_evidence_packet_guard(parity)
@@ -2147,6 +2229,7 @@ def _write_research_anchor_candidates_report_only(
 def _write_research_anchor_approvals_validation_report_only(
     *,
     strategy_settings: Mapping[str, Any] | None,
+    captured_approval_source: _ValidatedCapturedResearchAnchorApprovalSource | None = None,
 ) -> dict[str, Any]:
     """Write the R2G-5a approvals-validation report from the Step 1A source (S1A-4).
 
@@ -2174,10 +2257,11 @@ def _write_research_anchor_approvals_validation_report_only(
     try:
         output_path = step1_research_anchor_approvals_validation_path()
         status["output_path"] = str(output_path)
-        payload = build_step1a_research_anchor_approvals_validation(
+        payload = _build_step1a_research_anchor_approvals_validation_from_sanitized_source(
             strategy_settings=strategy_settings,
-            research_anchor_approvals_path=current_inputs_dir()
-            / RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME,
+            generated_at=None,
+            now_date=None,
+            approval_source=captured_approval_source,
         )
         write_json(output_path, payload)
         status["writer_source"] = "step1a"
@@ -2191,13 +2275,23 @@ def _write_research_anchor_approvals_validation_report_only(
             strategy_settings.get("as_of") if isinstance(strategy_settings, Mapping) else None
         )
         allowed_universe = _allowed_buy_universe_for_anchor_registry(strategy_settings)
-        write_research_anchor_approvals_validation(
-            output_path=step1_research_anchor_approvals_validation_path(),
-            manifest_path=approvals_path,
+        source = (
+            captured_approval_source
+            if type(captured_approval_source)
+            is _ValidatedCapturedResearchAnchorApprovalSource
+            else _sanitize_captured_source(
+                capture_research_anchor_approval_source(approvals_path)
+            )
+        )
+        approvals_validation, _ = _build_research_anchor_approval_source_validations_from_sanitized(
+            approval_source=source,
             allowed_universe=allowed_universe,
             today=settings_as_of,
             as_of_date=settings_as_of if isinstance(settings_as_of, str) else None,
+            generated_at=None,
+            candidate_index=None,
         )
+        write_json(step1_research_anchor_approvals_validation_path(), approvals_validation)
         status["writer_source"] = "legacy_fallback"
     except Exception as exc:  # noqa: BLE001 - report-only: never break Step 1 parse
         status["writer_source"] = "unwritten"
@@ -2208,6 +2302,7 @@ def _write_research_anchor_approvals_validation_report_only(
 def _write_research_anchor_revocations_validation_report_only(
     *,
     strategy_settings: Mapping[str, Any] | None,
+    captured_approval_source: _ValidatedCapturedResearchAnchorApprovalSource | None = None,
 ) -> dict[str, Any]:
     """Write the R2G-5d-0 revocations-validation report from the Step 1A source (S1A-5).
 
@@ -2236,10 +2331,11 @@ def _write_research_anchor_revocations_validation_report_only(
     try:
         output_path = step1_research_anchor_revocations_validation_path()
         status["output_path"] = str(output_path)
-        payload = build_step1a_research_anchor_revocations_validation(
+        payload = _build_step1a_research_anchor_revocations_validation_from_sanitized_source(
             strategy_settings=strategy_settings,
-            research_anchor_approvals_path=current_inputs_dir()
-            / RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME,
+            generated_at=None,
+            now_date=None,
+            approval_source=captured_approval_source,
         )
         write_json(output_path, payload)
         status["writer_source"] = "step1a"
@@ -2253,13 +2349,23 @@ def _write_research_anchor_revocations_validation_report_only(
             strategy_settings.get("as_of") if isinstance(strategy_settings, Mapping) else None
         )
         allowed_universe = _allowed_buy_universe_for_anchor_registry(strategy_settings)
-        write_research_anchor_revocations_validation(
-            output_path=step1_research_anchor_revocations_validation_path(),
-            manifest_path=approvals_path,
+        source = (
+            captured_approval_source
+            if type(captured_approval_source)
+            is _ValidatedCapturedResearchAnchorApprovalSource
+            else _sanitize_captured_source(
+                capture_research_anchor_approval_source(approvals_path)
+            )
+        )
+        _, revocations_validation = _build_research_anchor_approval_source_validations_from_sanitized(
+            approval_source=source,
             allowed_universe=allowed_universe,
             today=settings_as_of,
             as_of_date=settings_as_of if isinstance(settings_as_of, str) else None,
+            generated_at=None,
+            candidate_index=None,
         )
+        write_json(step1_research_anchor_revocations_validation_path(), revocations_validation)
         status["writer_source"] = "legacy_fallback"
     except Exception as exc:  # noqa: BLE001 - report-only: never break Step 1 parse
         status["writer_source"] = "unwritten"
@@ -2270,6 +2376,7 @@ def _write_research_anchor_revocations_validation_report_only(
 def _write_approval_registry_dual_read_report_only(
     *,
     strategy_settings: Mapping[str, Any] | None,
+    captured_approval_source: _ValidatedCapturedResearchAnchorApprovalSource | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Write the R2G-5b approvals-inclusive registry (S1A-6) + dual-read diff (S1A-8, report-only).
 
@@ -2325,6 +2432,14 @@ def _write_approval_registry_dual_read_report_only(
     try:
         anchors_path = current_inputs_dir() / RESEARCH_ANCHORS_INPUT_FILENAME
         approvals_path = current_inputs_dir() / RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME
+        approval_source = (
+            captured_approval_source
+            if type(captured_approval_source)
+            is _ValidatedCapturedResearchAnchorApprovalSource
+            else _sanitize_captured_source(
+                capture_research_anchor_approval_source(approvals_path)
+            )
+        )
         with_approvals_path = step1_active_research_anchor_registry_with_approvals_path()
         diff_path = step1_approval_registry_dual_read_diff_path()
         with_approvals_status["output_path"] = str(with_approvals_path)
@@ -2342,29 +2457,24 @@ def _write_approval_registry_dual_read_report_only(
             allowed_universe=allowed_universe,
             today=settings_as_of,
         )
-        # Approvals: recomputed directly from YAML (not read from the R2G-5a artifact).
-        approvals_validation = validate_research_anchor_approvals(
-            manifest_path=approvals_path,
-            allowed_universe=allowed_universe,
-            today=settings_as_of,
-        )
-        revocations_validation = validate_research_anchor_revocations(
-            manifest_path=approvals_path,
-            allowed_universe=allowed_universe,
-            today=settings_as_of,
-            as_of_date=baseline.get("as_of_date") if isinstance(baseline, Mapping) else None,
-        )
-        with_approvals = build_active_research_anchor_registry_with_approvals(
+        # Approvals: exact source bytes and the independent settings boundary are
+        # revalidated inside the activation call. The persisted R2G-5a mapping is
+        # never an activation input.
+        with_approvals = _build_from_sanitized_source(
             baseline=baseline,
-            approvals_validation=approvals_validation,
-            revocations_validation=revocations_validation,
+            approval_source=approval_source,
+            allowed_universe=allowed_universe,
+            today=settings_as_of,
+            generated_at=None,
+            candidate_index=None,
         )
         # Legacy dual-read diff: always built from the legacy in-memory objects,
         # never from a Step 1A candidate. It is the S1A-8 parity-guard reference
         # and the switched write's fallback payload.
-        legacy_diff = build_approval_registry_dual_read_diff(
+        legacy_diff = _build_approval_registry_dual_read_diff_from_sanitized_source(
             baseline_registry=baseline,
             approvals_registry=with_approvals,
+            approval_source=approval_source,
             baseline_registry_path=str(step1_active_research_anchor_registry_path()),
             approvals_registry_path=str(with_approvals_path),
         )
@@ -2375,10 +2485,12 @@ def _write_approval_registry_dual_read_report_only(
         # the shadow comparison for a switched artifact is step1a-vs-step1a).
         payload = with_approvals
         try:
-            candidate = build_step1a_active_research_anchor_registry_with_approvals(
+            candidate = _build_step1a_active_research_anchor_registry_with_approvals_from_sanitized_source(
                 strategy_settings=strategy_settings,
                 research_anchors_path=anchors_path,
-                research_anchor_approvals_path=approvals_path,
+                generated_at=None,
+                now_date=None,
+                approval_source=approval_source,
             )
             if candidate == with_approvals:
                 payload = candidate
@@ -2406,12 +2518,14 @@ def _write_approval_registry_dual_read_report_only(
         # (they are byte-proven), so this guard essentially always passes.
         diff_payload = legacy_diff
         try:
-            diff_candidate = build_step1a_approval_registry_dual_read_diff(
+            diff_candidate = _build_step1a_approval_registry_dual_read_diff_from_sanitized_source(
                 strategy_settings=strategy_settings,
                 research_anchors_path=anchors_path,
-                research_anchor_approvals_path=approvals_path,
                 baseline_registry_artifact_path=step1_active_research_anchor_registry_path(),
                 approvals_registry_artifact_path=with_approvals_path,
+                generated_at=None,
+                now_date=None,
+                approval_source=approval_source,
             )
             if diff_candidate == legacy_diff:
                 diff_payload = diff_candidate
@@ -2451,6 +2565,7 @@ def _write_approval_registry_dual_read_report_only(
 def _write_approval_registry_switch_readiness_report_only(
     *,
     strategy_settings: Mapping[str, Any] | None,
+    captured_approval_source: _ValidatedCapturedResearchAnchorApprovalSource | None = None,
 ) -> dict[str, Any]:
     """Write the R2G-5c-0 switch-readiness DISK OBSERVER from the Step 1A source (S1A-7).
 
@@ -2492,10 +2607,12 @@ def _write_approval_registry_switch_readiness_report_only(
         approvals_path = current_inputs_dir() / RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME
         output_path = step1_approval_registry_switch_readiness_path()
         status["output_path"] = str(output_path)
-        payload = build_step1a_approval_registry_switch_readiness(
+        payload = _build_step1a_approval_registry_switch_readiness_from_sanitized_source(
             strategy_settings=strategy_settings,
             research_anchors_path=anchors_path,
-            research_anchor_approvals_path=approvals_path,
+            generated_at=None,
+            now_date=None,
+            approval_source=captured_approval_source,
         )
         write_json(output_path, payload)
         status["writer_source"] = "step1a"
@@ -2510,13 +2627,21 @@ def _write_approval_registry_switch_readiness_report_only(
             strategy_settings.get("as_of") if isinstance(strategy_settings, Mapping) else None
         )
         allowed_universe = _allowed_buy_universe_for_anchor_registry(strategy_settings)
-        write_approval_registry_switch_readiness(
-            output_path=step1_approval_registry_switch_readiness_path(),
+        source = (
+            captured_approval_source
+            if type(captured_approval_source)
+            is _ValidatedCapturedResearchAnchorApprovalSource
+            else _sanitize_captured_source(
+                capture_research_anchor_approval_source(approvals_path)
+            )
+        )
+        payload = _build_approval_registry_switch_readiness_from_sanitized_source(
             anchors_path=anchors_path,
-            approvals_path=approvals_path,
+            approval_source=source,
             allowed_universe=allowed_universe,
             today=settings_as_of,
         )
+        write_json(step1_approval_registry_switch_readiness_path(), payload)
         status["writer_source"] = "legacy_fallback"
     except Exception as exc:  # noqa: BLE001 - report-only: never break Step 1 parse
         status["writer_source"] = "unwritten"
@@ -2527,6 +2652,7 @@ def _write_approval_registry_switch_readiness_report_only(
 def _write_support_signals_dual_ground_diff_report_only(
     *,
     strategy_settings: Mapping[str, Any] | None,
+    captured_approval_source: _ValidatedCapturedResearchAnchorApprovalSource | None = None,
 ) -> None:
     """Compile + write the R2G-5c-1 support_signals dual-ground DRY-RUN diff (report-only).
 
@@ -2555,7 +2681,7 @@ def _write_support_signals_dual_ground_diff_report_only(
             strategy_settings.get("as_of") if isinstance(strategy_settings, Mapping) else None
         )
         allowed_universe = _allowed_buy_universe_for_anchor_registry(strategy_settings)
-        write_support_signals_dual_ground_diff(
+        _write_support_signals_dual_ground_diff_from_sanitized_source(
             output_path=step1_support_signals_dual_ground_diff_path(),
             evidence_packet=evidence_packet if isinstance(evidence_packet, Mapping) else None,
             analyst_memo=analyst_memo if isinstance(analyst_memo, Mapping) else None,
@@ -2564,12 +2690,156 @@ def _write_support_signals_dual_ground_diff_report_only(
             approvals_path=approvals_path,
             allowed_universe=allowed_universe,
             today=settings_as_of,
+            approval_source=captured_approval_source,
         )
     except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
         pass
 
 
-def _write_grounding_status_observatory_report_only() -> None:
+def _enforce_complete_step1_workflow_approval_source_identity(
+    *,
+    approval_source: _ValidatedCapturedResearchAnchorApprovalSource,
+    strategy_settings: Mapping[str, Any] | None,
+    source_summary_sha256: str | None,
+) -> tuple[bool, dict[str, Any] | None]:
+    """Fail closed before Step 1 adopts approval-derived grounding.
+
+    Complete Step 1 derives several report artifacts before all identity inputs
+    exist.  This boundary joins those candidates to the one workflow-owned
+    source snapshot.  A mismatch preserves the disagreeing reports as evidence,
+    but replaces every activation-bearing view and recompiles support from the
+    safe evidence packet before any actionable or promotion preview runs.
+    """
+
+    def mapping_at(path: Path) -> dict[str, Any]:
+        value = _read_json_if_exists(path)
+        return dict(value) if isinstance(value, Mapping) else {}
+
+    active_registry = mapping_at(step1_active_research_anchor_registry_path())
+    approvals_validation = mapping_at(
+        step1_research_anchor_approvals_validation_path()
+    )
+    revocations_validation = mapping_at(
+        step1_research_anchor_revocations_validation_path()
+    )
+    approvals_registry_path = (
+        step1_active_research_anchor_registry_with_approvals_path()
+    )
+    approvals_registry_value = _read_json_if_exists(approvals_registry_path)
+    approvals_registry_present = isinstance(approvals_registry_value, Mapping)
+    approvals_registry = (
+        dict(approvals_registry_value) if approvals_registry_present else {}
+    )
+    dual_read_diff_path = step1_approval_registry_dual_read_diff_path()
+    dual_read_diff_value = _read_json_if_exists(dual_read_diff_path)
+    dual_read_diff_present = isinstance(dual_read_diff_value, Mapping)
+    dual_read_diff = (
+        dict(dual_read_diff_value) if dual_read_diff_present else {}
+    )
+    readiness_path = step1_approval_registry_switch_readiness_path()
+    readiness_value = _read_json_if_exists(readiness_path)
+    readiness_present = isinstance(readiness_value, Mapping)
+    readiness = dict(readiness_value) if readiness_present else {}
+    embedded_selection_path = step1_embedded_active_registry_selection_path()
+    embedded_selection_value = _read_json_if_exists(embedded_selection_path)
+    embedded_selection_present = isinstance(embedded_selection_value, Mapping)
+    embedded_selection = (
+        dict(embedded_selection_value) if embedded_selection_present else {}
+    )
+    evidence_packet_path = step1_evidence_packet_path()
+    evidence_packet_value = _read_json_if_exists(evidence_packet_path)
+    evidence_packet_present = isinstance(evidence_packet_value, Mapping)
+    evidence_packet = (
+        dict(evidence_packet_value) if evidence_packet_present else {}
+    )
+    dual_ground_value = _read_json_if_exists(
+        step1_support_signals_dual_ground_diff_path()
+    )
+    dual_ground_diff = (
+        dict(dual_ground_value)
+        if isinstance(dual_ground_value, Mapping)
+        else None
+    )
+    compiled_support_signals_value = _read_json_if_exists(
+        step1_compiled_support_signals_path()
+    )
+    compiled_support_signals = (
+        dict(compiled_support_signals_value)
+        if isinstance(compiled_support_signals_value, Mapping)
+        else None
+    )
+
+    (
+        safe_overlay,
+        safe_diff,
+        safe_readiness,
+        safe_selection,
+        safe_packet,
+        mismatch,
+    ) = _enforce_workflow_approval_source_identity(
+        approval_source=approval_source,
+        active_registry=active_registry,
+        approvals_validation=approvals_validation,
+        revocations_validation=revocations_validation,
+        approvals_registry=approvals_registry,
+        dual_read_diff=dual_read_diff,
+        readiness=readiness,
+        embedded_selection=(
+            embedded_selection if embedded_selection_present else None
+        ),
+        evidence_packet=evidence_packet,
+        dual_ground_diff=dual_ground_diff,
+        compiled_support_signals=compiled_support_signals,
+        source_summary_sha256=source_summary_sha256,
+        generated_at=None,
+    )
+    if not mismatch:
+        return False, None
+
+    # These writes are authoritative for the remainder of this synchronous Step
+    # 1 evaluation.  Failure is not swallowed: continuing with an earlier unsafe
+    # candidate would violate the fail-closed adoption boundary.
+    # Preserve the committed observer-artifact absence contract when an earlier
+    # best-effort writer produced no artifact at all.  Absence still participates
+    # in the join and forces the authoritative evidence/readiness path closed.
+    if approvals_registry_present:
+        write_json(approvals_registry_path, safe_overlay)
+    if dual_read_diff_present:
+        write_json(dual_read_diff_path, safe_diff)
+    if readiness_present:
+        write_json(readiness_path, safe_readiness)
+    if embedded_selection_present:
+        write_json(embedded_selection_path, safe_selection)
+    if evidence_packet_present:
+        write_json(evidence_packet_path, safe_packet)
+
+    analyst_memo = _load_analyst_memo_for_compiler()
+    compiled = write_compiled_research_handoff(
+        candidate_path=step1_compiled_handoff_candidate_path(),
+        validation_path=step1_compiled_handoff_validation_path(),
+        metadata_path=step1_compiled_handoff_metadata_path(),
+        evidence_packet=safe_packet,
+        analyst_memo=analyst_memo,
+        strategy_settings=strategy_settings,
+        evidence_packet_path=str(step1_evidence_packet_path()),
+        analyst_memo_path=(
+            str(step1_analyst_memo_path()) if analyst_memo is not None else None
+        ),
+        support_signals_path=step1_compiled_support_signals_path(),
+    )
+    return True, {
+        "candidate_path": compiled["compiled_research_handoff_candidate_path"],
+        "validation_path": compiled["compiled_research_handoff_validation_path"],
+        "metadata_path": compiled["compiled_research_handoff_metadata_path"],
+        "support_signals_path": compiled.get("compiled_support_signals_path", ""),
+        "compilation_mode": compiled["compilation_mode"],
+        "compiled_candidate_valid": compiled["compiled_candidate_valid"],
+    }
+
+
+def _write_grounding_status_observatory_report_only(
+    *, workflow_identity_mismatch: bool = False
+) -> None:
     """Build + write the R2G-6b grounding-status observatory (report-only).
 
     Uses only already-written Step 1 mappings as diagnostics inputs. It does not
@@ -2585,6 +2855,8 @@ def _write_grounding_status_observatory_report_only() -> None:
         approvals_registry = _read_json_if_exists(step1_active_research_anchor_registry_with_approvals_path())
         approvals_validation = _read_json_if_exists(step1_research_anchor_approvals_validation_path())
         revocations_validation = _read_json_if_exists(step1_research_anchor_revocations_validation_path())
+        dual_read_diff = _read_json_if_exists(step1_approval_registry_dual_read_diff_path())
+        dual_ground_diff = _read_json_if_exists(step1_support_signals_dual_ground_diff_path())
         candidates = _read_json_if_exists(step1_research_anchor_candidates_path())
         support_signals = _read_json_if_exists(step1_compiled_support_signals_path())
 
@@ -2596,9 +2868,33 @@ def _write_grounding_status_observatory_report_only() -> None:
             approvals_registry=approvals_registry if isinstance(approvals_registry, Mapping) else None,
             approvals_validation=approvals_validation if isinstance(approvals_validation, Mapping) else None,
             revocations_validation=revocations_validation if isinstance(revocations_validation, Mapping) else None,
+            dual_read_diff=dual_read_diff if isinstance(dual_read_diff, Mapping) else None,
+            support_signals_dual_ground_diff=dual_ground_diff
+            if isinstance(dual_ground_diff, Mapping)
+            else None,
             candidates=candidates if isinstance(candidates, Mapping) else None,
             support_signals=support_signals if isinstance(support_signals, Mapping) else None,
         )
+        if workflow_identity_mismatch:
+            blockers = [
+                value
+                for value in result.get("blockers", [])
+                if isinstance(value, str)
+            ]
+            if "workflow_approval_source_identity_mismatch" not in blockers:
+                blockers.append("workflow_approval_source_identity_mismatch")
+            diagnostics = (
+                dict(result.get("diagnostics"))
+                if isinstance(result.get("diagnostics"), Mapping)
+                else {}
+            )
+            diagnostics["workflow_approval_source_identity_mismatch"] = True
+            diagnostics["diagnostics_incomplete"] = True
+            result = {
+                **dict(result),
+                "blockers": blockers,
+                "diagnostics": diagnostics,
+            }
         write_json(step1_grounding_status_observatory_path(), result)
     except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
         pass
@@ -2607,6 +2903,7 @@ def _write_grounding_status_observatory_report_only() -> None:
 def _write_step1a_grounding_compile_shadow_diff_report_only(
     *,
     strategy_settings: Mapping[str, Any] | None,
+    captured_approval_source: _ValidatedCapturedResearchAnchorApprovalSource | None = None,
 ) -> dict[str, Any]:
     """Build + write the S1A-1 Step 1A shadow diff (report-only).
 
@@ -2628,7 +2925,7 @@ def _write_step1a_grounding_compile_shadow_diff_report_only(
 
         last_good = read_last_good_research_handoff(step1_state_dir())
         current_artifacts = _read_step1a_shadow_current_artifacts(current_paths)
-        bundle = build_step1a_grounding_compile_bundle(
+        bundle = _build_step1a_grounding_compile_bundle_from_sanitized_source(
             strategy_settings=strategy_settings,
             research_anchors_path=current_inputs_dir() / RESEARCH_ANCHORS_INPUT_FILENAME,
             research_anchor_approvals_path=current_inputs_dir() / RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME,
@@ -2646,6 +2943,7 @@ def _write_step1a_grounding_compile_shadow_diff_report_only(
             optional_compiled_support_signals=current_artifacts.get("compiled_support_signals")
             if isinstance(current_artifacts.get("compiled_support_signals"), Mapping)
             else None,
+            approval_source=captured_approval_source,
         )
         diff = build_step1a_grounding_compile_shadow_diff(
             step1a_bundle=bundle,
@@ -2785,6 +3083,7 @@ def _load_or_build_evidence_packet(
     *,
     strategy_settings: Mapping[str, Any] | None,
     evidence_packet_write_log: list[dict[str, Any]] | None = None,
+    captured_approval_source: _ValidatedCapturedResearchAnchorApprovalSource | None = None,
 ) -> dict[str, Any]:
     """Ensure the deterministic evidence packet is fresh on disk, then return it.
 
@@ -2799,6 +3098,7 @@ def _load_or_build_evidence_packet(
     _write_evidence_packet_report_only(
         strategy_settings=strategy_settings,
         evidence_packet_write_log=evidence_packet_write_log,
+        captured_approval_source=captured_approval_source,
     )
     try:
         return read_json(step1_evidence_packet_path())
@@ -2820,6 +3120,7 @@ def _run_analyst_memo_parse(
     *,
     strategy_settings: Mapping[str, Any] | None,
     evidence_packet_write_log: list[dict[str, Any]] | None = None,
+    captured_approval_source: _ValidatedCapturedResearchAnchorApprovalSource | None = None,
 ) -> dict[str, str] | None:
     """Parse + validate a pasted analyst memo and write its two report-only artifacts.
 
@@ -2840,6 +3141,7 @@ def _run_analyst_memo_parse(
         packet = _load_or_build_evidence_packet(
             strategy_settings=strategy_settings,
             evidence_packet_write_log=evidence_packet_write_log,
+            captured_approval_source=captured_approval_source,
         )
     universe = evidence_universe_from_packet(packet)
 
@@ -2873,6 +3175,7 @@ def _parse_analyst_memo_report_only(
     *,
     strategy_settings: Mapping[str, Any] | None,
     evidence_packet_write_log: list[dict[str, Any]] | None = None,
+    captured_approval_source: _ValidatedCapturedResearchAnchorApprovalSource | None = None,
 ) -> dict[str, Any]:
     """Run the analyst-memo parse defensively as a report-only layer (R2C).
 
@@ -2887,6 +3190,7 @@ def _parse_analyst_memo_report_only(
         result = _run_analyst_memo_parse(
             strategy_settings=strategy_settings,
             evidence_packet_write_log=evidence_packet_write_log,
+            captured_approval_source=captured_approval_source,
         )
         return result if result is not None else absent
     except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
@@ -3080,6 +3384,7 @@ def _run_compile_research_handoff(
     *,
     strategy_settings: Mapping[str, Any] | None,
     evidence_packet_write_log: list[dict[str, Any]] | None = None,
+    captured_approval_source: _ValidatedCapturedResearchAnchorApprovalSource | None = None,
 ) -> dict[str, str]:
     """Compile + validate + write the three report-only R2D artifacts.
 
@@ -3090,6 +3395,7 @@ def _run_compile_research_handoff(
     packet = _load_or_build_evidence_packet(
         strategy_settings=strategy_settings,
         evidence_packet_write_log=evidence_packet_write_log,
+        captured_approval_source=captured_approval_source,
     )
     analyst_memo = _load_analyst_memo_for_compiler()
     result = write_compiled_research_handoff(
@@ -3117,6 +3423,7 @@ def _compile_research_handoff_report_only(
     *,
     strategy_settings: Mapping[str, Any] | None,
     evidence_packet_write_log: list[dict[str, Any]] | None = None,
+    captured_approval_source: _ValidatedCapturedResearchAnchorApprovalSource | None = None,
 ) -> dict[str, Any]:
     """Run the deterministic handoff compiler defensively as a report-only layer (R2D).
 
@@ -3138,6 +3445,7 @@ def _compile_research_handoff_report_only(
         return _run_compile_research_handoff(
             strategy_settings=strategy_settings,
             evidence_packet_write_log=evidence_packet_write_log,
+            captured_approval_source=captured_approval_source,
         )
     except Exception:  # noqa: BLE001 - report-only: never break Step 1 parse
         return empty

@@ -27,6 +27,11 @@ from typing import Any
 
 
 SCHEMA_VERSION = "approval_registry_dual_read_diff_v1"
+APPROVALS_SOURCE_ID = "operator_research_anchor_approvals_yaml"
+REVOCATIONS_SOURCE_ID = "operator_research_anchor_revocations_yaml"
+WORKFLOW_APPROVAL_SOURCE_IDENTITY_MISMATCH = (
+    "workflow_approval_source_identity_mismatch"
+)
 
 _NOTES = (
     "Report-only dual-read diff (R2G-5b). Compares the baseline research_anchors-only active "
@@ -57,6 +62,8 @@ def build_approval_registry_dual_read_diff(
             baseline_registry_path=baseline_registry_path,
             approvals_registry_path=approvals_registry_path,
             generated_at=generated_at,
+            expected_approval_source_sha256=_IDENTITY_NOT_ENFORCED,
+            expected_source_present=None,
         )
     except Exception:  # noqa: BLE001 - report-only diff must never raise
         return _result(
@@ -64,6 +71,7 @@ def build_approval_registry_dual_read_diff(
             approvals_registry_path=approvals_registry_path,
             baseline_registry_sha256=None,
             approvals_registry_sha256=None,
+            approval_source_sha256=None,
             as_of_date=None,
             baseline_active_ids=[],
             approvals_active_ids=[],
@@ -86,6 +94,8 @@ def _build(
     baseline_registry_path: str | None,
     approvals_registry_path: str | None,
     generated_at: str | None,
+    expected_approval_source_sha256: object,
+    expected_source_present: bool | None,
 ) -> dict[str, Any]:
     baseline_active = [r for r in _as_list(baseline_registry.get("active_anchors")) if isinstance(r, Mapping)]
     approvals_active = [r for r in _as_list(approvals_registry.get("active_anchors")) if isinstance(r, Mapping)]
@@ -115,6 +125,19 @@ def _build(
     duplicate_blockers = [d for d in _as_list(approvals_registry.get("duplicate_blockers")) if isinstance(d, Mapping)]
     registry_blockers = [b for b in _as_list(approvals_registry.get("registry_blockers")) if isinstance(b, str)]
 
+    identity_consistent = _approval_source_identity_consistent(
+        approvals_registry,
+        expected_approval_source_sha256=expected_approval_source_sha256,
+        expected_source_present=expected_source_present,
+    )
+    if not identity_consistent:
+        # An additions list is the first artifact-level representation of overlay
+        # adoption.  Never publish approval additions when the combined-source
+        # identity does not join to the workflow-owned snapshot.
+        added = []
+        if WORKFLOW_APPROVAL_SOURCE_IDENTITY_MISMATCH not in registry_blockers:
+            registry_blockers.append(WORKFLOW_APPROVAL_SOURCE_IDENTITY_MISMATCH)
+
     warnings: list[str] = []
     if approvals_registry.get("registry_valid") is not True:
         warnings.append(
@@ -134,6 +157,7 @@ def _build(
         approvals_registry_path=approvals_registry_path,
         baseline_registry_sha256=_sha256_of(baseline_registry),
         approvals_registry_sha256=_sha256_of(approvals_registry),
+        approval_source_sha256=_source_sha(approvals_registry, APPROVALS_SOURCE_ID),
         as_of_date=as_of_date if isinstance(as_of_date, str) else None,
         baseline_active_ids=sorted(baseline_ids),
         approvals_active_ids=sorted(approvals_ids),
@@ -142,11 +166,67 @@ def _build(
         changed=changed,
         duplicate_blockers=duplicate_blockers,
         registry_valid_baseline=baseline_registry.get("registry_valid") is True,
-        registry_valid_with_approvals=approvals_registry.get("registry_valid") is True,
+        registry_valid_with_approvals=(
+            approvals_registry.get("registry_valid") is True and identity_consistent
+        ),
         blockers=registry_blockers,
         warnings=warnings,
         generated_at=generated_at,
     )
+
+
+_IDENTITY_NOT_ENFORCED = object()
+
+
+def _build_approval_registry_dual_read_diff_from_sanitized_source(
+    *,
+    baseline_registry: Mapping[str, Any],
+    approvals_registry: Mapping[str, Any],
+    approval_source: Any,
+    baseline_registry_path: str | None = None,
+    approvals_registry_path: str | None = None,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    """Build a diff joined to one invariant-checked private workflow snapshot."""
+    from investment_orchestrator.research.approvals_inclusive_active_registry import (
+        _verified_approval_source_sha256,
+        _verified_approval_source_validation_present,
+    )
+
+    try:
+        return _build(
+            baseline_registry=baseline_registry,
+            approvals_registry=approvals_registry,
+            baseline_registry_path=baseline_registry_path,
+            approvals_registry_path=approvals_registry_path,
+            generated_at=generated_at,
+            expected_approval_source_sha256=_verified_approval_source_sha256(
+                approval_source
+            ),
+            expected_source_present=_verified_approval_source_validation_present(
+                approval_source
+            ),
+        )
+    except Exception:  # noqa: BLE001 - report-only diff must fail closed
+        return _result(
+            baseline_registry_path=baseline_registry_path,
+            approvals_registry_path=approvals_registry_path,
+            baseline_registry_sha256=None,
+            approvals_registry_sha256=None,
+            approval_source_sha256=None,
+            as_of_date=None,
+            baseline_active_ids=[],
+            approvals_active_ids=[],
+            added=[],
+            removed=[],
+            changed=[],
+            duplicate_blockers=[],
+            registry_valid_baseline=False,
+            registry_valid_with_approvals=False,
+            blockers=[WORKFLOW_APPROVAL_SOURCE_IDENTITY_MISMATCH],
+            warnings=[],
+            generated_at=generated_at,
+        )
 
 
 def write_approval_registry_dual_read_diff(
@@ -185,6 +265,7 @@ def _result(
     approvals_registry_path: str | None,
     baseline_registry_sha256: str | None,
     approvals_registry_sha256: str | None,
+    approval_source_sha256: str | None,
     as_of_date: str | None,
     baseline_active_ids: list[str],
     approvals_active_ids: list[str],
@@ -211,6 +292,7 @@ def _result(
         "approvals_registry_path": approvals_registry_path,
         "baseline_registry_sha256": baseline_registry_sha256,
         "approvals_registry_sha256": approvals_registry_sha256,
+        "approval_source_sha256": approval_source_sha256,
         "baseline_active_anchor_ids": baseline_active_ids,
         "approvals_inclusive_active_anchor_ids": approvals_active_ids,
         "added_by_approvals": added,
@@ -254,3 +336,47 @@ def _sha256_of(value: Any) -> str | None:
     except (TypeError, ValueError):
         return None
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _source_sha(registry: Mapping[str, Any], source_id: str) -> str | None:
+    for entry in _as_list(registry.get("source_manifest")):
+        if isinstance(entry, Mapping) and entry.get("source_id") == source_id:
+            value = entry.get("sha256")
+            return value if isinstance(value, str) and value else None
+    return None
+
+
+def _source_present(registry: Mapping[str, Any], source_id: str) -> bool | None:
+    for entry in _as_list(registry.get("source_manifest")):
+        if isinstance(entry, Mapping) and entry.get("source_id") == source_id:
+            return entry.get("present") if type(entry.get("present")) is bool else None
+    return None
+
+
+def _approval_source_identity_consistent(
+    registry: Mapping[str, Any],
+    *,
+    expected_approval_source_sha256: object,
+    expected_source_present: bool | None,
+) -> bool:
+    """Join approval and revocation identities, optionally to workflow input."""
+    approval_sha = _source_sha(registry, APPROVALS_SOURCE_ID)
+    revocation_sha = _source_sha(registry, REVOCATIONS_SOURCE_ID)
+    approval_present = _source_present(registry, APPROVALS_SOURCE_ID)
+    revocation_present = _source_present(registry, REVOCATIONS_SOURCE_ID)
+    if approval_present is None or revocation_present is None:
+        return False
+    if approval_present != revocation_present or approval_sha != revocation_sha:
+        return False
+    if expected_approval_source_sha256 is _IDENTITY_NOT_ENFORCED:
+        return True
+    if type(expected_source_present) is not bool:
+        return False
+    if approval_present != expected_source_present:
+        return False
+    expected_sha = (
+        expected_approval_source_sha256
+        if type(expected_approval_source_sha256) is str
+        else None
+    )
+    return approval_sha == expected_sha

@@ -8,15 +8,28 @@ NOT consumed for support acceptance and never change permissions.
 from __future__ import annotations
 
 from datetime import date, datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 from investment_orchestrator.research.research_anchors import (
     ANCHOR_TYPES,
     ANCHORS_MISSING_DATA_GAP,
+    RESEARCH_ANCHOR_NOT_YET_VALID,
+    RESEARCH_ANCHOR_REGISTRY_AS_OF_DATE_INVALID,
+    RESEARCH_ANCHOR_REGISTRY_AS_OF_DATE_MISSING,
+    RESEARCH_ANCHOR_REGISTRY_FUTURE_DATED,
+    RESEARCH_ANCHOR_STRUCTURAL_THEME_FUTURE_DATED,
+    RESEARCH_ANCHOR_TRUSTED_DATE_INVALID,
+    RESEARCH_ANCHOR_TRUSTED_DATE_MISSING,
+    RESEARCH_ANCHOR_VALIDATION_CONTEXT_INVALID,
     SCHEMA_VERSION,
+    SCHEDULED_EVENT_ANCHOR_TYPES,
+    _ValidationContext,
+    _validate_research_anchors,
     build_research_anchors_summary,
     load_research_anchors,
     normalize_iso_date_value,
@@ -27,6 +40,10 @@ from investment_orchestrator.research.research_anchors import (
 
 ALLOWED = ["QQQ", "VOO", "VTI", "VT", "SMH", "IGV"]
 TODAY = "2026-06-30"
+
+
+class _UnrelatedValidationContext(Enum):
+    COMPLETE_REGISTRY = "complete_registry"
 
 
 def anchor(**overrides: Any) -> dict[str, Any]:
@@ -143,6 +160,186 @@ def test_invalid_date_fails() -> None:
     assert any("anchor_date_et" in p for p in result.anchors[0]["problems"])
 
 
+def test_registry_as_of_equal_today_is_valid() -> None:
+    result = _validate(payload(as_of_date=TODAY))
+    assert result.valid is True
+    assert result.as_of_date == TODAY
+
+
+def test_complete_registry_missing_as_of_key_is_invalid() -> None:
+    registry = payload()
+    registry.pop("as_of_date")
+    result = _validate(registry)
+    assert result.valid is False
+    assert result.as_of_date is None
+    assert RESEARCH_ANCHOR_REGISTRY_AS_OF_DATE_MISSING in result.errors
+
+
+def test_complete_registry_null_as_of_is_invalid() -> None:
+    result = _validate(payload(as_of_date=None))
+    assert result.valid is False
+    assert result.as_of_date is None
+    assert RESEARCH_ANCHOR_REGISTRY_AS_OF_DATE_MISSING in result.errors
+
+
+def test_complete_registry_empty_as_of_is_invalid() -> None:
+    result = _validate(payload(as_of_date=""))
+    assert result.valid is False
+    assert result.as_of_date is None
+    assert RESEARCH_ANCHOR_REGISTRY_AS_OF_DATE_INVALID in result.errors
+
+
+def test_future_registry_as_of_is_invalid() -> None:
+    result = _validate(payload(as_of_date="2026-07-01"))
+    assert result.valid is False
+    assert RESEARCH_ANCHOR_REGISTRY_FUTURE_DATED in result.errors
+
+
+def test_malformed_registry_as_of_is_invalid_without_coercion() -> None:
+    result = _validate(payload(as_of_date="2026-06-30T00:00:00+00:00"))
+    assert result.valid is False
+    assert result.as_of_date is None
+    assert RESEARCH_ANCHOR_REGISTRY_AS_OF_DATE_INVALID in result.errors
+
+
+@pytest.mark.parametrize(
+    ("context", "expects_registry_date"),
+    [
+        (_ValidationContext.COMPLETE_REGISTRY, True),
+        (_ValidationContext.SINGLE_ANCHOR_WRAPPER, False),
+        (_ValidationContext.APPROVAL_ENTRY, False),
+        (_ValidationContext.REVOCATION_ENTRY, False),
+    ],
+)
+def test_all_closed_validation_contexts_use_their_fixed_contract(
+    context: _ValidationContext,
+    expects_registry_date: bool,
+) -> None:
+    wrapper = payload()
+    wrapper.pop("as_of_date")
+    result = _validate_research_anchors(
+        wrapper,
+        allowed_universe=ALLOWED,
+        today=TODAY,
+        context=context,
+    )
+
+    assert result.valid is (not expects_registry_date)
+    assert (
+        RESEARCH_ANCHOR_REGISTRY_AS_OF_DATE_MISSING in result.errors
+    ) is expects_registry_date
+    assert result.anchors[0]["usable"] is True
+
+
+@pytest.mark.parametrize(
+    "context",
+    [
+        "unknown_context",
+        None,
+        7,
+        _UnrelatedValidationContext.COMPLETE_REGISTRY,
+    ],
+)
+def test_non_owned_validation_context_fails_closed(context: Any) -> None:
+    result = _validate_research_anchors(
+        payload(),
+        allowed_universe=ALLOWED,
+        today=TODAY,
+        context=context,
+    )
+
+    assert result.valid is False
+    assert result.anchors == []
+    assert result.errors == [RESEARCH_ANCHOR_VALIDATION_CONTEXT_INVALID]
+
+
+def test_payload_cannot_select_weaker_validation_context() -> None:
+    registry = payload(validation_context="single_anchor_wrapper")
+    registry.pop("as_of_date")
+    result = validate_research_anchors(
+        registry,
+        allowed_universe=ALLOWED,
+        today=TODAY,
+    )
+
+    assert result.valid is False
+    assert RESEARCH_ANCHOR_REGISTRY_AS_OF_DATE_MISSING in result.errors
+
+
+_ABSENT_AS_OF = object()
+
+
+@pytest.mark.parametrize(
+    ("trusted_today", "trusted_reason"),
+    [
+        (TODAY, None),
+        (None, RESEARCH_ANCHOR_TRUSTED_DATE_MISSING),
+        ("not-a-date", RESEARCH_ANCHOR_TRUSTED_DATE_INVALID),
+        ("2026-06-30T00:00:00+00:00", RESEARCH_ANCHOR_TRUSTED_DATE_INVALID),
+        (12345, RESEARCH_ANCHOR_TRUSTED_DATE_INVALID),
+    ],
+)
+@pytest.mark.parametrize(
+    ("registry_as_of", "registry_reason"),
+    [
+        ("2026-06-29", None),
+        (TODAY, None),
+        ("2026-07-01", RESEARCH_ANCHOR_REGISTRY_FUTURE_DATED),
+        (_ABSENT_AS_OF, RESEARCH_ANCHOR_REGISTRY_AS_OF_DATE_MISSING),
+        (None, RESEARCH_ANCHOR_REGISTRY_AS_OF_DATE_MISSING),
+        ("not-a-date", RESEARCH_ANCHOR_REGISTRY_AS_OF_DATE_INVALID),
+    ],
+)
+def test_complete_registry_requires_valid_trusted_boundary_matrix(
+    trusted_today: Any,
+    trusted_reason: str | None,
+    registry_as_of: Any,
+    registry_reason: str | None,
+) -> None:
+    registry = payload()
+    if registry_as_of is _ABSENT_AS_OF:
+        registry.pop("as_of_date")
+    else:
+        registry["as_of_date"] = registry_as_of
+
+    result = validate_research_anchors(
+        registry,
+        allowed_universe=ALLOWED,
+        today=trusted_today,
+    )
+
+    expected_valid = trusted_reason is None and registry_reason is None
+    assert result.valid is expected_valid
+    if trusted_reason is not None:
+        assert trusted_reason in result.errors
+    if registry_reason is not None and not (
+        registry_reason == RESEARCH_ANCHOR_REGISTRY_FUTURE_DATED
+        and trusted_reason is not None
+    ):
+        assert registry_reason in result.errors
+
+
+@pytest.mark.parametrize(
+    "trusted_today",
+    [
+        TODAY,
+        date(2026, 6, 30),
+        datetime(2026, 6, 30, 12, 0, 0),
+        "20260630",
+        "2026-W27-2",
+    ],
+)
+def test_complete_registry_preserves_accepted_trusted_date_forms(
+    trusted_today: Any,
+) -> None:
+    result = validate_research_anchors(
+        payload(as_of_date=TODAY),
+        allowed_universe=ALLOWED,
+        today=trusted_today,
+    )
+    assert result.valid is True
+
+
 # --- date normalization (R2E.5a-date-normalization) --------------------------
 
 
@@ -161,6 +358,7 @@ def test_normalize_iso_date_value_datetime_object() -> None:
 def test_normalize_iso_date_value_invalid_string_returns_none() -> None:
     assert normalize_iso_date_value("2026-13-40") is None
     assert normalize_iso_date_value("not-a-date") is None
+    assert normalize_iso_date_value("2026-06-30T00:00:00+00:00") is None
 
 
 def test_normalize_iso_date_value_missing_or_wrong_type_returns_none() -> None:
@@ -269,6 +467,244 @@ def test_empty_applicable_tickers_fails() -> None:
 
 
 # --- staleness ---------------------------------------------------------------
+
+
+def test_valid_from_equal_today_is_valid_and_usable() -> None:
+    result = _validate(payload(anchors=[anchor(valid_from=TODAY)]))
+    assert result.valid is True
+    assert result.anchors[0]["valid"] is True
+    assert result.anchors[0]["usable"] is True
+
+
+def test_future_valid_from_is_invalid_and_never_usable() -> None:
+    result = _validate(
+        payload(anchors=[anchor(valid_from="2026-07-01", blocks_if_stale=False)])
+    )
+    evaluated = result.anchors[0]
+    assert result.valid is False
+    assert evaluated["valid"] is False
+    assert evaluated["stale"] is False
+    assert evaluated["usable"] is False
+    assert RESEARCH_ANCHOR_NOT_YET_VALID in evaluated["problems"]
+
+
+def test_future_structural_theme_review_date_is_invalid() -> None:
+    result = _validate(payload(anchors=[anchor(anchor_date_et="2026-07-01")]))
+    evaluated = result.anchors[0]
+    assert evaluated["valid"] is False
+    assert evaluated["usable"] is False
+    assert RESEARCH_ANCHOR_STRUCTURAL_THEME_FUTURE_DATED in evaluated["problems"]
+
+
+@pytest.mark.parametrize("blocks_if_stale", [True, False])
+@pytest.mark.parametrize("anchor_type", sorted(SCHEDULED_EVENT_ANCHOR_TYPES))
+def test_scheduled_future_event_is_valid_inside_current_activation_window(
+    anchor_type: str,
+    blocks_if_stale: bool,
+) -> None:
+    result = _validate(
+        payload(
+            anchors=[
+                anchor(
+                    anchor_type=anchor_type,
+                    anchor_date_et="2026-07-20",
+                    valid_from="2026-06-15",
+                    valid_until="2026-07-31",
+                    blocks_if_stale=blocks_if_stale,
+                )
+            ]
+        )
+    )
+    assert result.valid is True
+    assert result.anchors[0]["valid"] is True
+    assert result.anchors[0]["usable"] is True
+
+
+@pytest.mark.parametrize("blocks_if_stale", [True, False])
+@pytest.mark.parametrize("anchor_type", sorted(SCHEDULED_EVENT_ANCHOR_TYPES))
+@pytest.mark.parametrize(
+    ("valid_from", "valid_until"),
+    [
+        (TODAY, "2026-07-31"),
+        ("2026-06-01", TODAY),
+    ],
+)
+def test_scheduled_future_event_activation_window_boundaries_are_inclusive(
+    anchor_type: str,
+    blocks_if_stale: bool,
+    valid_from: str,
+    valid_until: str,
+) -> None:
+    result = _validate(
+        payload(
+            anchors=[
+                anchor(
+                    anchor_type=anchor_type,
+                    anchor_date_et="2026-07-20",
+                    valid_from=valid_from,
+                    valid_until=valid_until,
+                    blocks_if_stale=blocks_if_stale,
+                )
+            ]
+        )
+    )
+
+    assert result.valid is True
+    assert result.anchors[0]["stale"] is False
+    assert result.anchors[0]["usable"] is True
+
+
+@pytest.mark.parametrize("blocks_if_stale", [True, False])
+@pytest.mark.parametrize("anchor_type", sorted(SCHEDULED_EVENT_ANCHOR_TYPES))
+def test_scheduled_future_event_with_future_activation_is_invalid(
+    anchor_type: str,
+    blocks_if_stale: bool,
+) -> None:
+    result = _validate(
+        payload(
+            anchors=[
+                anchor(
+                    anchor_type=anchor_type,
+                    anchor_date_et="2026-07-20",
+                    valid_from="2026-07-01",
+                    valid_until="2026-07-31",
+                    blocks_if_stale=blocks_if_stale,
+                )
+            ]
+        )
+    )
+    evaluated = result.anchors[0]
+    assert evaluated["valid"] is False
+    assert evaluated["usable"] is False
+    assert RESEARCH_ANCHOR_NOT_YET_VALID in evaluated["problems"]
+
+
+@pytest.mark.parametrize("blocks_if_stale", [True, False])
+@pytest.mark.parametrize("anchor_type", sorted(SCHEDULED_EVENT_ANCHOR_TYPES))
+def test_scheduled_future_event_past_valid_until_is_stale_and_unusable(
+    anchor_type: str,
+    blocks_if_stale: bool,
+) -> None:
+    result = _validate(
+        payload(
+            anchors=[
+                anchor(
+                    anchor_type=anchor_type,
+                    anchor_date_et="2026-07-20",
+                    valid_from="2026-06-01",
+                    valid_until="2026-06-29",
+                    blocks_if_stale=blocks_if_stale,
+                )
+            ]
+        )
+    )
+    evaluated = result.anchors[0]
+    assert evaluated["valid"] is True
+    assert evaluated["stale"] is True
+    assert evaluated["usable"] is False
+
+
+@pytest.mark.parametrize("blocks_if_stale", [True, False])
+@pytest.mark.parametrize("anchor_type", sorted(SCHEDULED_EVENT_ANCHOR_TYPES))
+def test_scheduled_past_event_past_valid_until_is_stale_and_unusable(
+    anchor_type: str,
+    blocks_if_stale: bool,
+) -> None:
+    result = _validate(
+        payload(
+            anchors=[
+                anchor(
+                    anchor_type=anchor_type,
+                    anchor_date_et="2026-06-20",
+                    valid_from="2026-06-01",
+                    valid_until="2026-06-29",
+                    blocks_if_stale=blocks_if_stale,
+                )
+            ]
+        )
+    )
+    evaluated = result.anchors[0]
+    assert evaluated["valid"] is True
+    assert evaluated["stale"] is True
+    assert evaluated["usable"] is False
+
+
+def test_unsupported_future_event_type_is_invalid() -> None:
+    result = _validate(
+        payload(
+            anchors=[
+                anchor(
+                    anchor_type="scheduled_theme_event",
+                    anchor_date_et="2026-07-20",
+                )
+            ]
+        )
+    )
+    evaluated = result.anchors[0]
+    assert evaluated["valid"] is False
+    assert evaluated["usable"] is False
+    assert any("anchor_type must be one of" in problem for problem in evaluated["problems"])
+
+
+@pytest.mark.parametrize("anchor_type", sorted(SCHEDULED_EVENT_ANCHOR_TYPES))
+@pytest.mark.parametrize("blocks_if_stale", [True, False])
+@pytest.mark.parametrize(
+    ("as_of_date", "expected_reason"),
+    [
+        (None, RESEARCH_ANCHOR_REGISTRY_AS_OF_DATE_MISSING),
+        ("", RESEARCH_ANCHOR_REGISTRY_AS_OF_DATE_INVALID),
+        ("not-a-date", RESEARCH_ANCHOR_REGISTRY_AS_OF_DATE_INVALID),
+        ("2026-07-01", RESEARCH_ANCHOR_REGISTRY_FUTURE_DATED),
+    ],
+)
+def test_future_scheduled_event_never_overrides_invalid_registry_date(
+    anchor_type: str,
+    blocks_if_stale: bool,
+    as_of_date: Any,
+    expected_reason: str,
+) -> None:
+    result = _validate(
+        payload(
+            as_of_date=as_of_date,
+            anchors=[
+                anchor(
+                    anchor_type=anchor_type,
+                    anchor_date_et="2026-07-20",
+                    valid_from="2026-06-01",
+                    valid_until="2026-07-31",
+                    blocks_if_stale=blocks_if_stale,
+                )
+            ],
+        )
+    )
+    assert result.valid is False
+    assert expected_reason in result.errors
+
+
+@pytest.mark.parametrize("blocks_if_stale", [True, False])
+@pytest.mark.parametrize("anchor_type", sorted(SCHEDULED_EVENT_ANCHOR_TYPES))
+def test_future_scheduled_event_requires_complete_registry_trusted_date(
+    anchor_type: str,
+    blocks_if_stale: bool,
+) -> None:
+    result = validate_research_anchors(
+        payload(
+            anchors=[
+                anchor(
+                    anchor_type=anchor_type,
+                    anchor_date_et="2026-07-20",
+                    valid_from="2026-06-01",
+                    valid_until="2026-07-31",
+                    blocks_if_stale=blocks_if_stale,
+                )
+            ]
+        ),
+        allowed_universe=ALLOWED,
+        today=None,
+    )
+
+    assert result.valid is False
+    assert RESEARCH_ANCHOR_TRUSTED_DATE_MISSING in result.errors
 
 
 def test_stale_anchor_flagged_not_usable() -> None:

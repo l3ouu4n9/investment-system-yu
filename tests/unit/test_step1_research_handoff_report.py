@@ -569,6 +569,36 @@ def test_step1_valid_candidate_writes_availability_artifacts_strict_fresh(
     assert freshness["handoff_age_days"] == 1
 
 
+def test_step1_future_valid_candidate_writes_manual_review_decision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = read_json_fixture("minimal_valid_research_handoff.json")  # as_of 2026-06-21
+    result = parse_with_tmp_repo(
+        tmp_path,
+        monkeypatch,
+        marked_research_json(payload),
+        strategy_settings=settings_with_as_of("2026-06-20"),
+    )
+
+    decision = json.loads(
+        Path(result["research_degraded_mode_decision_path"]).read_text(encoding="utf-8")
+    )
+    freshness = json.loads(
+        Path(result["research_freshness_report_path"]).read_text(encoding="utf-8")
+    )
+    assert result["research_availability_state"] == "MANUAL_REVIEW_REQUIRED"
+    assert result["research_availability_fresh"] == "False"
+    assert decision["state"] == "MANUAL_REVIEW_REQUIRED"
+    assert decision["allowed_actions"] == ["HOLD", "NO_TRADE"]
+    assert "SELL" in decision["blocked_actions"]
+    assert "NEW_BUY" in decision["blocked_actions"]
+    assert "ORDER_COMPILATION" in decision["blocked_actions"]
+    assert "current_handoff_future_dated" in decision["blocker_reasons"]
+    assert freshness["handoff_age_days"] == -1
+    assert freshness["stale_label"] == "future_dated"
+
+
 def test_step1_invalid_raw_candidate_with_compiled_handoff_is_strict_fresh_evidence_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -25,6 +25,20 @@ from investment_orchestrator.research.active_research_anchor_registry import (
     STATUS_INVALID,
     compile_active_research_anchor_registry,
 )
+from investment_orchestrator.research.actionable_promotion_eligibility import (
+    BLOCKER_INVALID_RESEARCH_ANCHORS,
+    BLOCKER_NO_VALID_RESEARCH_ANCHOR,
+    evaluate_actionable_handoff_promotion_eligibility,
+)
+from investment_orchestrator.research.research_anchors import (
+    RESEARCH_ANCHOR_TRUSTED_DATE_INVALID,
+    RESEARCH_ANCHOR_TRUSTED_DATE_MISSING,
+    build_research_anchors_summary,
+)
+from investment_orchestrator.research.support_signals import (
+    REASON_MISSING_VALID_ANCHOR_SOURCE,
+    build_compiled_support_signals,
+)
 
 UNIVERSE = ["QQQ", "VOO", "VTI", "SMH"]
 TODAY = "2026-06-28"
@@ -52,25 +66,35 @@ def _anchor(
     anchor_id: str = "AI_CAPEX_2026H2",
     *,
     ticker: str = "QQQ",
+    anchor_type: str = "structural_theme",
+    anchor_date_et: str = "2026-06-15",
+    valid_from: str = "2026-06-01",
     valid_until: str = "2026-07-31",
     confidence: str = "medium",
 ) -> str:
     return (
         f"  - anchor_id: {anchor_id}\n"
-        "    anchor_type: structural_theme\n"
+        f"    anchor_type: {anchor_type}\n"
         f"    applicable_tickers: [{ticker}]\n"
-        '    anchor_date_et: "2026-06-15"\n'
-        '    valid_from: "2026-06-01"\n'
+        f'    anchor_date_et: "{anchor_date_et}"\n'
+        f'    valid_from: "{valid_from}"\n'
         f'    valid_until: "{valid_until}"\n'
         "    source_type: operator\n"
         f"    confidence_floor: {confidence}\n"
     )
 
 
-def _yaml(*anchor_blocks: str, is_llm: bool = False, schema: str = "research_anchors_v1") -> str:
+def _yaml(
+    *anchor_blocks: str,
+    is_llm: bool = False,
+    schema: str = "research_anchors_v1",
+    as_of_date: str = TODAY,
+    include_as_of_date: bool = True,
+) -> str:
+    as_of_line = f'as_of_date: "{as_of_date}"\n' if include_as_of_date else ""
     head = (
         f"schema_version: {schema}\n"
-        f'as_of_date: "{TODAY}"\n'
+        f"{as_of_line}"
         f"is_llm_generated: {'true' if is_llm else 'false'}\n"
         "anchors:\n"
     )
@@ -83,7 +107,7 @@ def _write(tmp_path: Any, text: str) -> Any:
     return path
 
 
-def _compile(tmp_path: Any, text: str, *, today: str | None = TODAY, universe: Any = UNIVERSE):
+def _compile(tmp_path: Any, text: str, *, today: Any = TODAY, universe: Any = UNIVERSE):
     return compile_active_research_anchor_registry(
         anchors_path=_write(tmp_path, text), allowed_universe=universe, today=today
     )
@@ -228,6 +252,90 @@ def test_stale_expired_anchor_not_active(tmp_path: Any) -> None:
     assert any(e["event"] == "anchor_expired" for e in r["audit_trail"])
 
 
+def test_expired_future_scheduled_event_cannot_be_usable_or_groundable(
+    tmp_path: Any,
+) -> None:
+    scheduled = _anchor(
+        anchor_type="scheduled_macro_event",
+        anchor_date_et="2026-07-20",
+        valid_from="2026-06-01",
+        valid_until="2026-06-27",
+    ) + "    blocks_if_stale: false\n"
+    source = _yaml(scheduled)
+    path = _write(tmp_path, source)
+    summary = build_research_anchors_summary(
+        path,
+        allowed_universe=UNIVERSE,
+        today=TODAY,
+    )
+    registry = compile_active_research_anchor_registry(
+        anchors_path=path,
+        allowed_universe=UNIVERSE,
+        today=TODAY,
+    )
+
+    assert summary["valid"] is True
+    assert summary["anchors"][0]["valid"] is True
+    assert summary["anchors"][0]["stale"] is True
+    assert summary["anchors"][0]["usable"] is False
+    assert summary["valid_anchor_count"] == 0
+    assert registry["active_anchors"] == []
+    assert registry["counts"]["expired"] == 1
+
+    packet = {
+        "schema_version": "evidence_packet_v1",
+        "is_llm_generated": False,
+        "universe": {
+            "core_universe": ["QQQ"],
+            "satellite_universe": [],
+            "approved_extended_etf": [],
+            "allowed_buy_tickers": ["QQQ"],
+        },
+        "research_anchors": summary,
+        "active_anchor_registry": registry,
+    }
+    memo = {
+        "schema_version": "analyst_memo_v1",
+        "is_llm_generated": True,
+        "as_of_date": TODAY,
+        "regime_view": "constructive",
+        "confidence": "medium",
+        "ticker_relative_view": [
+            {
+                "ticker": "QQQ",
+                "stance": "prefer",
+                "rationale_12m_plus": "scheduled event thesis",
+                "anchor_id_refs": ["AI_CAPEX_2026H2"],
+            }
+        ],
+        "avoid_or_deprioritize": [],
+        "data_gaps": [],
+        "source_notes": [
+            {"claim": "reviewed", "source": "operator", "source_quality": "official"}
+        ],
+    }
+    signals = build_compiled_support_signals(
+        evidence_packet=packet,
+        analyst_memo=memo,
+        compilation_mode="evidence_plus_memo",
+    )
+    assert signals["accepted_support_signals"] == []
+    assert REASON_MISSING_VALID_ANCHOR_SOURCE in signals["global_blockers"]
+
+    promotion = evaluate_actionable_handoff_promotion_eligibility(
+        evidence_packet=packet,
+        compiled_support_signals=signals,
+        actionable_preview=None,
+        actionable_candidate=None,
+        actionable_candidate_validation=None,
+        actionable_candidate_metadata=None,
+        strategy_settings=None,
+        today=TODAY,
+    )
+    assert promotion["eligible_for_promotion"] is False
+    assert BLOCKER_NO_VALID_RESEARCH_ANCHOR in promotion["promotion_blockers"]
+
+
 def test_duplicate_anchor_id_fails_closed(tmp_path: Any) -> None:
     r = _compile(tmp_path, _yaml(_anchor("DUP", ticker="QQQ"), _anchor("DUP", ticker="VOO")))
     assert r["registry_valid"] is False
@@ -280,6 +388,114 @@ def test_valid_from_after_valid_until_not_active(tmp_path: Any) -> None:
     r = _compile(tmp_path, _yaml(bad))
     assert r["counts"]["active"] == 0
     assert r["counts"]["invalid"] == 1
+
+
+def test_future_registry_as_of_fails_closed_with_zero_active(tmp_path: Any) -> None:
+    r = _compile(tmp_path, _yaml(_anchor(), as_of_date="2026-07-01"))
+    assert r["registry_valid"] is False
+    assert r["active_anchors"] == []
+    assert r["counts"]["invalid"] == 1
+
+
+def test_complete_registry_invalid_trusted_boundary_fails_closed_with_zero_active(
+    tmp_path: Any,
+) -> None:
+    for trusted_today, expected_reason in (
+        (None, RESEARCH_ANCHOR_TRUSTED_DATE_MISSING),
+        ("not-a-date", RESEARCH_ANCHOR_TRUSTED_DATE_INVALID),
+        (12345, RESEARCH_ANCHOR_TRUSTED_DATE_INVALID),
+    ):
+        registry = _compile(
+            tmp_path,
+            _yaml(_anchor()),
+            today=trusted_today,
+        )
+        assert registry["registry_valid"] is False
+        assert registry["active_anchors"] == []
+        assert registry["counts"]["active"] == 0
+        assert expected_reason in registry["source_manifest"][0]["problems"]
+
+
+def test_missing_registry_as_of_blocks_active_grounding_and_promotion(tmp_path: Any) -> None:
+    source = _yaml(_anchor(), include_as_of_date=False)
+    path = _write(tmp_path, source)
+    summary = build_research_anchors_summary(
+        path,
+        allowed_universe=UNIVERSE,
+        today=TODAY,
+    )
+    registry = compile_active_research_anchor_registry(
+        anchors_path=path,
+        allowed_universe=UNIVERSE,
+        today=TODAY,
+    )
+
+    assert summary["valid"] is False
+    assert "research_anchor_registry_as_of_date_missing" in summary["errors"]
+    assert registry["registry_valid"] is False
+    assert registry["active_anchors"] == []
+    assert registry["counts"]["active"] == 0
+
+    packet = {
+        "schema_version": "evidence_packet_v1",
+        "is_llm_generated": False,
+        "universe": {
+            "core_universe": ["QQQ"],
+            "satellite_universe": [],
+            "approved_extended_etf": [],
+            "allowed_buy_tickers": ["QQQ"],
+        },
+        "research_anchors": summary,
+        "active_anchor_registry": registry,
+    }
+    memo = {
+        "schema_version": "analyst_memo_v1",
+        "is_llm_generated": True,
+        "as_of_date": TODAY,
+        "regime_view": "constructive",
+        "confidence": "medium",
+        "ticker_relative_view": [
+            {
+                "ticker": "QQQ",
+                "stance": "prefer",
+                "rationale_12m_plus": "anchored thesis",
+                "anchor_id_refs": ["AI_CAPEX_2026H2"],
+            }
+        ],
+        "avoid_or_deprioritize": [],
+        "data_gaps": [],
+        "source_notes": [
+            {"claim": "reviewed", "source": "operator", "source_quality": "official"}
+        ],
+    }
+    signals = build_compiled_support_signals(
+        evidence_packet=packet,
+        analyst_memo=memo,
+        compilation_mode="evidence_plus_memo",
+    )
+    assert signals["accepted_support_signals"] == []
+    assert REASON_MISSING_VALID_ANCHOR_SOURCE in signals["global_blockers"]
+
+    promotion = evaluate_actionable_handoff_promotion_eligibility(
+        evidence_packet=packet,
+        compiled_support_signals=signals,
+        actionable_preview=None,
+        actionable_candidate=None,
+        actionable_candidate_validation=None,
+        actionable_candidate_metadata=None,
+        strategy_settings=None,
+        today=TODAY,
+    )
+    assert promotion["eligible_for_promotion"] is False
+    assert BLOCKER_INVALID_RESEARCH_ANCHORS in promotion["promotion_blockers"]
+
+
+def test_not_yet_valid_anchor_is_invalid_not_active(tmp_path: Any) -> None:
+    r = _compile(tmp_path, _yaml(_anchor(valid_from="2026-07-01")))
+    assert r["registry_valid"] is True
+    assert r["active_anchors"] == []
+    assert r["counts"]["invalid"] == 1
+    assert "research_anchor_not_yet_valid" in r["inactive_anchors"][0]["validation"]["problems"]
 
 
 def test_mixed_valid_and_invalid_only_valid_active(tmp_path: Any) -> None:

@@ -44,6 +44,10 @@ DUAL_READ_DIFF_SCHEMA = "approval_registry_dual_read_diff_v1"
 
 APPROVALS_SOURCE_ID = "operator_research_anchor_approvals_yaml"
 BASELINE_SOURCE_ID = "operator_research_anchors_yaml"
+REVOCATIONS_SOURCE_ID = "operator_research_anchor_revocations_yaml"
+WORKFLOW_APPROVAL_SOURCE_IDENTITY_MISMATCH = (
+    "workflow_approval_source_identity_mismatch"
+)
 
 ALLOWED_APPROVAL_TYPES = ("operator_authored", "operator_approved_candidate")
 
@@ -232,6 +236,16 @@ def _evaluate(
         _source_hash_matches(appr, BASELINE_SOURCE_ID, current_research_anchors_sha256),
         detail=_hash_detail(_source_sha(appr, BASELINE_SOURCE_ID), current_research_anchors_sha256),
     )
+    a_workflow_identity = c.add(
+        WORKFLOW_APPROVAL_SOURCE_IDENTITY_MISMATCH,
+        "approval validation, revocation validation, registry, and diff use one source identity",
+        _workflow_approval_source_identity_consistent(
+            approvals_registry=appr,
+            dual_read_diff=diff,
+            expected_sha256=current_research_anchor_approvals_sha256,
+            expected_present=approvals_source_present,
+        ),
+    )
     # Structural attestation: readiness recomputes validation from YAML (via the
     # R2G-5b compiler) and never reads the R2G-5a validation artifact.
     c.add(
@@ -312,7 +326,8 @@ def _evaluate(
     approvals_specific_ok = all(
         (
             a_present, a_schema, a_markers, a_not_embedded, a_not_in_ep, d_present, d_hashes,
-            a_appr_srchash, a_anchors_srchash, a_no_dup, a_no_reg_block, a_reg_valid, a_no_cross,
+            a_appr_srchash, a_anchors_srchash, a_workflow_identity,
+            a_no_dup, a_no_reg_block, a_reg_valid, a_no_cross,
             a_has_hash, a_hash_match, a_cat, a_stype, a_atype, a_no_grant, a_no_order,
         )
     )
@@ -364,39 +379,90 @@ def build_approval_registry_switch_readiness(
     approvals overlay, so readiness evaluates the same revocation-aware registry
     that the embedded evidence-packet selector can safely consume. Never raises.
     """
+    from investment_orchestrator.research.approvals_inclusive_active_registry import (
+        capture_research_anchor_approval_source,
+    )
+
+    return build_approval_registry_switch_readiness_from_captured_source(
+        anchors_path=anchors_path,
+        approval_source=capture_research_anchor_approval_source(approvals_path),
+        allowed_universe=allowed_universe,
+        today=today,
+        generated_at=generated_at,
+    )
+
+
+def build_approval_registry_switch_readiness_from_captured_source(
+    *,
+    anchors_path: Any,
+    approval_source: Any,
+    allowed_universe: Any,
+    today: Any = None,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    """Evaluate readiness from one caller-owned immutable approval snapshot."""
+    from investment_orchestrator.research.approvals_inclusive_active_registry import (
+        _sanitize_captured_source,
+    )
+
+    return _build_approval_registry_switch_readiness_from_sanitized_source(
+        anchors_path=anchors_path,
+        approval_source=_sanitize_captured_source(approval_source),
+        allowed_universe=allowed_universe,
+        today=today,
+        generated_at=generated_at,
+    )
+
+
+def _build_approval_registry_switch_readiness_from_sanitized_source(
+    *,
+    anchors_path: Any,
+    approval_source: Any,
+    allowed_universe: Any,
+    today: Any = None,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    """Evaluate readiness from one already-sanitized workflow snapshot."""
     from investment_orchestrator.research.active_research_anchor_registry import (
         compile_active_research_anchor_registry,
     )
     from investment_orchestrator.research.approvals_inclusive_active_registry import (
-        compile_active_research_anchor_registry_with_approvals,
+        _build_from_sanitized_source,
+        _verified_approval_source_sha256,
+        _verified_approval_source_validation_present,
     )
     from investment_orchestrator.research.approval_registry_dual_read_diff import (
-        build_approval_registry_dual_read_diff,
+        _build_approval_registry_dual_read_diff_from_sanitized_source,
     )
 
     try:
         baseline = compile_active_research_anchor_registry(
             anchors_path=anchors_path, allowed_universe=allowed_universe, today=today
         )
-        approvals = compile_active_research_anchor_registry_with_approvals(
-            anchors_path=anchors_path,
-            approvals_path=approvals_path,
+        approvals = _build_from_sanitized_source(
+            baseline=baseline,
+            approval_source=approval_source,
             allowed_universe=allowed_universe,
             today=today,
-            apply_revocations=True,
+            generated_at=None,
+            candidate_index=None,
         )
-        diff = build_approval_registry_dual_read_diff(
-            baseline_registry=baseline, approvals_registry=approvals
+        diff = _build_approval_registry_dual_read_diff_from_sanitized_source(
+            baseline_registry=baseline,
+            approvals_registry=approvals,
+            approval_source=approval_source,
         )
-        anchors_text = _read_text_or_none(anchors_path)
-        approvals_text = _read_text_or_none(approvals_path)
         return evaluate_approval_registry_switch_readiness(
             baseline_registry=baseline,
             approvals_registry=approvals,
             dual_read_diff=diff,
-            current_research_anchors_sha256=_sha256_of_text(anchors_text),
-            current_research_anchor_approvals_sha256=_sha256_of_text(approvals_text),
-            approvals_source_present=approvals_text is not None and approvals_text.strip() != "",
+            current_research_anchors_sha256=_source_sha(baseline, BASELINE_SOURCE_ID),
+            current_research_anchor_approvals_sha256=(
+                _verified_approval_source_sha256(approval_source)
+            ),
+            approvals_source_present=(
+                _verified_approval_source_validation_present(approval_source)
+            ),
             as_of_date=baseline.get("as_of_date") if isinstance(baseline, Mapping) else None,
             generated_at=generated_at,
         )
@@ -533,6 +599,48 @@ def _source_sha(registry: Mapping[str, Any] | None, source_id: str) -> str | Non
     return None
 
 
+def _source_present(registry: Mapping[str, Any] | None, source_id: str) -> bool | None:
+    if not isinstance(registry, Mapping):
+        return None
+    for entry in _as_list(registry.get("source_manifest")):
+        if isinstance(entry, Mapping) and entry.get("source_id") == source_id:
+            value = entry.get("present")
+            return value if type(value) is bool else None
+    return None
+
+
+def _workflow_approval_source_identity_consistent(
+    *,
+    approvals_registry: Mapping[str, Any] | None,
+    dual_read_diff: Mapping[str, Any] | None,
+    expected_sha256: str | None,
+    expected_present: bool,
+) -> bool:
+    """Require every activation-bearing combined-source identity to join."""
+    if not isinstance(approvals_registry, Mapping) or not isinstance(
+        dual_read_diff, Mapping
+    ):
+        return False
+    approval_present = _source_present(approvals_registry, APPROVALS_SOURCE_ID)
+    revocation_present = _source_present(
+        approvals_registry, REVOCATIONS_SOURCE_ID
+    )
+    approval_sha = _source_sha(approvals_registry, APPROVALS_SOURCE_ID)
+    revocation_sha = _source_sha(approvals_registry, REVOCATIONS_SOURCE_ID)
+    diff_sha = dual_read_diff.get("approval_source_sha256")
+    normalized_diff_sha = diff_sha if isinstance(diff_sha, str) else None
+    return bool(
+        type(expected_present) is bool
+        and approval_present is expected_present
+        and revocation_present is expected_present
+        and approval_sha == expected_sha256
+        and revocation_sha == expected_sha256
+        and normalized_diff_sha == expected_sha256
+        and WORKFLOW_APPROVAL_SOURCE_IDENTITY_MISMATCH
+        not in _as_list(dual_read_diff.get("blockers"))
+    )
+
+
 def _source_hash_matches(registry: Mapping[str, Any] | None, source_id: str, current_sha: str | None) -> bool:
     recorded = _source_sha(registry, source_id)
     return recorded is not None and current_sha is not None and recorded == current_sha
@@ -623,20 +731,3 @@ def _sha256_of(value: Any) -> str | None:
     except (TypeError, ValueError):
         return None
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
-
-
-def _sha256_of_text(value: str | None) -> str | None:
-    if not isinstance(value, str) or value == "":
-        return None
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def _read_text_or_none(path: Any) -> str | None:
-    from investment_orchestrator.common.io import file_exists, read_text
-
-    if path is None or not file_exists(path):
-        return None
-    try:
-        return read_text(path)
-    except Exception:  # noqa: BLE001 - unreadable file treated as absent
-        return None

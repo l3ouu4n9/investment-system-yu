@@ -431,6 +431,9 @@ def _result(
         "explanations": explanations,
         "registry_valid_baseline": bool(readiness.get("registry_valid_baseline")),
         "registry_valid_with_approvals": bool(readiness.get("registry_valid_with_approvals")),
+        "approval_source_sha256": _source_field(
+            approvals_registry, APPROVALS_SOURCE_ID, "sha256"
+        ),
         "duplicate_blockers": _as_list(approvals_registry.get("duplicate_blockers"))
         if isinstance(approvals_registry, Mapping)
         else [],
@@ -466,6 +469,7 @@ def write_support_signals_dual_ground_diff(
     allowed_universe: Any,
     today: Any = None,
     generated_at: str | None = None,
+    captured_approval_source: Any = None,
 ) -> dict[str, Any]:
     """Recompute the revocation-aware approvals-inclusive registry + diff fresh.
 
@@ -474,38 +478,92 @@ def write_support_signals_dual_ground_diff(
     already-embedded ``evidence_packet.active_anchor_registry`` and never reads
     revocation files or artifacts directly.
     """
-    from investment_orchestrator.common.io import write_json
     from investment_orchestrator.research.approvals_inclusive_active_registry import (
-        compile_active_research_anchor_registry_with_approvals,
-    )
-    from investment_orchestrator.research.approval_registry_dual_read_diff import (
-        build_approval_registry_dual_read_diff,
+        _sanitize_captured_source,
+        capture_research_anchor_approval_source,
     )
 
-    approvals_registry = compile_active_research_anchor_registry_with_approvals(
+    public_source = (
+        captured_approval_source
+        if captured_approval_source is not None
+        else capture_research_anchor_approval_source(approvals_path)
+    )
+    return _write_support_signals_dual_ground_diff_from_sanitized_source(
+        output_path=output_path,
+        evidence_packet=evidence_packet,
+        analyst_memo=analyst_memo,
+        compilation_mode=compilation_mode,
         anchors_path=anchors_path,
         approvals_path=approvals_path,
         allowed_universe=allowed_universe,
         today=today,
-        apply_revocations=True,
+        generated_at=generated_at,
+        approval_source=_sanitize_captured_source(public_source),
+    )
+
+
+def _write_support_signals_dual_ground_diff_from_sanitized_source(
+    *,
+    output_path: Any,
+    evidence_packet: Mapping[str, Any] | None,
+    analyst_memo: Mapping[str, Any] | None,
+    compilation_mode: str,
+    anchors_path: Any,
+    approvals_path: Any,
+    allowed_universe: Any,
+    today: Any = None,
+    generated_at: str | None = None,
+    approval_source: Any,
+) -> dict[str, Any]:
+    """Write the observer from the workflow's one private raw snapshot."""
+    from investment_orchestrator.common.io import write_json
+    from investment_orchestrator.research.active_research_anchor_registry import (
+        compile_active_research_anchor_registry,
+    )
+    from investment_orchestrator.research.approvals_inclusive_active_registry import (
+        _build_from_sanitized_source,
+        _verified_approval_source_sha256,
+        _verified_approval_source_validation_present,
+    )
+    from investment_orchestrator.research.approval_registry_dual_read_diff import (
+        _build_approval_registry_dual_read_diff_from_sanitized_source,
+    )
+
+    compiled_baseline = compile_active_research_anchor_registry(
+        anchors_path=anchors_path,
+        allowed_universe=allowed_universe,
+        today=today,
+    )
+    approvals_registry = _build_from_sanitized_source(
+        baseline=compiled_baseline,
+        approval_source=approval_source,
+        allowed_universe=allowed_universe,
+        today=today,
+        generated_at=None,
+        candidate_index=None,
     )
     packet = evidence_packet if isinstance(evidence_packet, Mapping) else {}
     baseline_registry = packet.get("active_anchor_registry")
-    diff = build_approval_registry_dual_read_diff(
+    diff = _build_approval_registry_dual_read_diff_from_sanitized_source(
         baseline_registry=baseline_registry if isinstance(baseline_registry, Mapping) else {},
         approvals_registry=approvals_registry,
+        approval_source=approval_source,
     )
-    anchors_text = _read_text_or_none(anchors_path)
-    approvals_text = _read_text_or_none(approvals_path)
     payload = build_support_signals_dual_ground_diff(
         evidence_packet=packet,
         analyst_memo=analyst_memo,
         compilation_mode=compilation_mode,
         approvals_registry=approvals_registry,
         dual_read_diff=diff,
-        current_research_anchors_sha256=_sha256_of_text(anchors_text),
-        current_research_anchor_approvals_sha256=_sha256_of_text(approvals_text),
-        approvals_source_present=approvals_text is not None and approvals_text.strip() != "",
+        current_research_anchors_sha256=_source_field(
+            compiled_baseline, BASELINE_SOURCE_ID, "sha256"
+        ),
+        current_research_anchor_approvals_sha256=(
+            _verified_approval_source_sha256(approval_source)
+        ),
+        approvals_source_present=(
+            _verified_approval_source_validation_present(approval_source)
+        ),
         as_of_date=today if isinstance(today, str) else None,
         generated_at=generated_at,
     )
@@ -553,6 +611,15 @@ def _as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def _source_field(registry: Any, source_id: str, field: str) -> Any:
+    if not isinstance(registry, Mapping):
+        return None
+    for entry in _as_list(registry.get("source_manifest")):
+        if isinstance(entry, Mapping) and entry.get("source_id") == source_id:
+            return entry.get(field)
+    return None
+
+
 def _sha256_of(value: Any) -> str | None:
     if value is None:
         return None
@@ -561,23 +628,6 @@ def _sha256_of(value: Any) -> str | None:
     except (TypeError, ValueError):
         return None
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
-
-
-def _sha256_of_text(value: str | None) -> str | None:
-    if not isinstance(value, str) or value == "":
-        return None
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def _read_text_or_none(path: Any) -> str | None:
-    from investment_orchestrator.common.io import file_exists, read_text
-
-    if path is None or not file_exists(path):
-        return None
-    try:
-        return read_text(path)
-    except Exception:  # noqa: BLE001 - unreadable file treated as absent
-        return None
 
 
 def _internal_error_failure(exc: Exception) -> dict[str, str]:

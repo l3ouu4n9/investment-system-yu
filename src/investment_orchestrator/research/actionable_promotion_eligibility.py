@@ -74,6 +74,7 @@ BLOCKER_OUT_OF_UNIVERSE_ACTIONABLE_TICKER = "out_of_universe_actionable_ticker"
 BLOCKER_BLOCKING_DATA_GAP_ON_ACTIONABLE_ROW = "blocking_data_gap_on_actionable_row"
 BLOCKER_MISSING_PRIMARY_ANCHOR = "missing_primary_anchor"
 BLOCKER_STALE_REFERENCED_ANCHOR = "stale_referenced_anchor"
+BLOCKER_FUTURE_REFERENCED_ANCHOR = "future_referenced_anchor"
 BLOCKER_HASH_CHAIN_MISMATCH = "hash_chain_mismatch"
 BLOCKER_STRATEGY_SETTINGS_HASH_MISMATCH = "strategy_settings_hash_mismatch"
 BLOCKER_UNIVERSE_MISMATCH = "universe_mismatch"
@@ -98,6 +99,7 @@ PROMOTION_BLOCKER_REASON_CODES = (
     BLOCKER_BLOCKING_DATA_GAP_ON_ACTIONABLE_ROW,
     BLOCKER_MISSING_PRIMARY_ANCHOR,
     BLOCKER_STALE_REFERENCED_ANCHOR,
+    BLOCKER_FUTURE_REFERENCED_ANCHOR,
     BLOCKER_HASH_CHAIN_MISMATCH,
     BLOCKER_STRATEGY_SETTINGS_HASH_MISMATCH,
     BLOCKER_UNIVERSE_MISMATCH,
@@ -313,7 +315,7 @@ def evaluate_actionable_handoff_promotion_eligibility(
     )
 
     anchors_by_id = _anchors_by_id(anchors_summary)
-    anchor_problems, earliest_valid_until = _referenced_anchor_freshness(
+    anchor_problems, future_anchor_problems, earliest_valid_until = _referenced_anchor_freshness(
         actionable_rows, anchors_by_id=anchors_by_id, today=today_date
     )
     check(
@@ -321,6 +323,12 @@ def evaluate_actionable_handoff_promotion_eligibility(
         row_count > 0 and not anchor_problems,
         problems=anchor_problems,
         earliest_anchor_valid_until=earliest_valid_until,
+        today=today_iso,
+    )
+    check(
+        "referenced_anchors_not_future_dated",
+        not future_anchor_problems,
+        problems=future_anchor_problems,
         today=today_iso,
     )
 
@@ -461,6 +469,7 @@ _CHECK_FAILURE_REASON: dict[str, str] = {
     "no_blocking_data_gap_on_actionable_rows": BLOCKER_BLOCKING_DATA_GAP_ON_ACTIONABLE_ROW,
     "primary_anchor_fields_present": BLOCKER_MISSING_PRIMARY_ANCHOR,
     "referenced_anchors_fresh": BLOCKER_STALE_REFERENCED_ANCHOR,
+    "referenced_anchors_not_future_dated": BLOCKER_FUTURE_REFERENCED_ANCHOR,
     "hash_chain_valid": BLOCKER_HASH_CHAIN_MISMATCH,
     "strategy_settings_hash_match": BLOCKER_STRATEGY_SETTINGS_HASH_MISMATCH,
     "universe_match": BLOCKER_UNIVERSE_MISMATCH,
@@ -631,13 +640,16 @@ def _referenced_anchor_freshness(
     *,
     anchors_by_id: Mapping[str, Mapping[str, Any]],
     today: date | None,
-) -> tuple[list[str], str | None]:
+) -> tuple[list[str], list[str], str | None]:
     """Re-check every anchor cited by a promoted row; return (problems, earliest valid_until).
 
     Fail closed: an unresolvable ref, a missing ``valid_until``, a stale/unusable
-    summary flag, or (when ``today`` is known) ``valid_until < today`` is a problem.
+    summary flag, a not-yet-active ``valid_from``, or (when ``today`` is known)
+    ``valid_until < today`` is a problem. Future activation has its own bounded
+    blocker code so it cannot be confused with ordinary expiry.
     """
     problems: list[str] = []
+    future_problems: list[str] = []
     valid_until_dates: list[date] = []
     for entry in actionable_rows:
         ticker = entry["ticker"]
@@ -651,7 +663,20 @@ def _referenced_anchor_freshness(
             if anchor is None:
                 problems.append(f"{ticker}: referenced anchor {ref!r} not found in evidence packet.")
                 continue
-            if anchor.get("valid") is not True or anchor.get("usable") is not True or anchor.get("stale") is True:
+            valid_from_iso = normalize_iso_date_value(anchor.get("valid_from"))
+            if valid_from_iso is None:
+                problems.append(f"{ticker}: referenced anchor {ref!r} has no valid_from date.")
+                continue
+            valid_from = date.fromisoformat(valid_from_iso)
+            if today is not None and valid_from > today:
+                future_problems.append(
+                    f"{ticker}: referenced anchor {ref!r} activates {valid_from_iso} > today."
+                )
+            if (
+                anchor.get("valid") is not True
+                or anchor.get("usable") is not True
+                or anchor.get("stale") is True
+            ):
                 problems.append(f"{ticker}: referenced anchor {ref!r} is stale or not usable.")
                 continue
             valid_until_iso = normalize_iso_date_value(anchor.get("valid_until"))
@@ -665,9 +690,10 @@ def _referenced_anchor_freshness(
                 )
                 continue
             valid_until_dates.append(valid_until)
-    if problems or not valid_until_dates:
-        return problems, min(valid_until_dates).isoformat() if valid_until_dates else None
-    return [], min(valid_until_dates).isoformat()
+    earliest = min(valid_until_dates).isoformat() if valid_until_dates else None
+    if problems or future_problems or not valid_until_dates:
+        return problems, future_problems, earliest
+    return [], [], earliest
 
 
 def _verify_hash_chain(

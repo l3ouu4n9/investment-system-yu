@@ -12,6 +12,8 @@ import hashlib
 import json
 from typing import Any
 
+import yaml
+
 from investment_orchestrator.research.active_research_anchor_registry import (
     build_active_research_anchor_registry,
 )
@@ -39,6 +41,7 @@ UNIVERSE = ["QQQ", "VOO", "SMH"]
 AS_OF = "2026-07-04"
 ANCHORS_SHA = "current_research_anchors_sha256_value"
 APPROVALS_SHA = "current_research_anchor_approvals_sha256_value"
+_AUTO = object()
 
 _ORDER_SHAPED_KEYS = frozenset(
     {
@@ -62,7 +65,7 @@ def _anchor(anchor_id: str = "AI_CAPEX", **overrides: Any) -> dict[str, Any]:
 
 def _baseline(anchors: list[dict[str, Any]] | None = None, *, source_sha: str = ANCHORS_SHA,
               valid_override: bool | None = None) -> dict[str, Any]:
-    payload = {"schema_version": "research_anchors_v1", "is_llm_generated": False,
+    payload = {"schema_version": "research_anchors_v1", "as_of_date": AS_OF, "is_llm_generated": False,
                "anchors": anchors if anchors is not None else [_anchor("VOO_T", applicable_tickers=["VOO"])]}
     result = validate_research_anchors(payload, allowed_universe=UNIVERSE, today=AS_OF)
     return build_active_research_anchor_registry(
@@ -98,20 +101,31 @@ def _approvals_registry(approvals: list[dict[str, Any]], *, baseline: dict[str, 
     manifest = {"schema_version": "research_anchor_approvals_v1", "is_llm_generated": False,
                 "as_of_date": AS_OF, "approvals": approvals}
     manifest.update(manifest_overrides)
-    val = build_research_anchor_approvals_validation(
-        manifest=manifest if present else None, source_present=present,
-        source_sha256=source_sha if present else None,
-        source_path="inputs/current/research_anchor_approvals.yaml",
-        allowed_universe=UNIVERSE, today=AS_OF, candidate_index=candidate_index,
+    source_text = yaml.safe_dump(manifest, sort_keys=False) if present else None
+    return build_active_research_anchor_registry_with_approvals(
+        baseline=base,
+        approval_source_text=source_text,
+        approval_source_path="inputs/current/research_anchor_approvals.yaml",
+        allowed_universe=UNIVERSE,
+        today=AS_OF,
+        candidate_index=candidate_index,
     )
-    return build_active_research_anchor_registry_with_approvals(baseline=base, approvals_validation=val)
 
 
 def _evaluate(*, baseline: dict[str, Any] | None, approvals_reg: dict[str, Any] | None,
               diff: dict[str, Any] | None = "auto", anchors_sha: str | None = ANCHORS_SHA,
-              approvals_sha: str | None = APPROVALS_SHA, approvals_present: bool = True) -> dict[str, Any]:
+              approvals_sha: Any = _AUTO, approvals_present: bool = True) -> dict[str, Any]:
     if diff == "auto":
         diff = build_approval_registry_dual_read_diff(baseline_registry=baseline or {}, approvals_registry=approvals_reg or {})
+    if approvals_sha is _AUTO:
+        approvals_sha = next(
+            (
+                row.get("sha256")
+                for row in (approvals_reg or {}).get("source_manifest", [])
+                if row.get("source_id") == "operator_research_anchor_approvals_yaml"
+            ),
+            None,
+        )
     return evaluate_approval_registry_switch_readiness(
         baseline_registry=baseline, approvals_registry=approvals_reg, dual_read_diff=diff,
         current_research_anchors_sha256=anchors_sha,
@@ -165,6 +179,29 @@ def test_happy_path_ready_approvals_inclusive() -> None:
     assert r["registry_valid_baseline"] is True
     assert r["registry_valid_with_approvals"] is True
     assert "AI_CAPEX" in r["added_by_approvals"]
+
+
+def test_source_identity_mismatch_fails_before_approvals_selection() -> None:
+    base = _baseline()
+    approvals = _approvals_registry([_approval()], baseline=base)
+    diff = build_approval_registry_dual_read_diff(
+        baseline_registry=base,
+        approvals_registry=approvals,
+    )
+    mismatched_diff = {**diff, "approval_source_sha256": "f" * 64}
+
+    result = _evaluate(
+        baseline=base,
+        approvals_reg=approvals,
+        diff=mismatched_diff,
+    )
+
+    assert result["ready"] is False
+    assert result["switch_target"] == SWITCH_TARGET_BASELINE
+    assert _cond(result, "workflow_approval_source_identity_mismatch") is False
+    assert "workflow_approval_source_identity_mismatch" in result[
+        "failed_conditions"
+    ]
 
 
 def test_markers_and_non_consumption_fields() -> None:
@@ -459,12 +496,11 @@ def test_json_serializable() -> None:
     assert json.loads(json.dumps(r))["schema_version"] == SCHEMA_VERSION
 
 
-# --- forbidden-key approval is inactive -> registry_valid stays true, still ready
-def test_forbidden_key_approval_inactive_still_ready() -> None:
+# --- unknown nested fields invalidate the closed combined source
+def test_unknown_operator_anchor_field_fails_combined_source_closed() -> None:
     base = _baseline()
-    # a forbidden-key approval fails validation -> not active -> not merged -> registry stays valid
     wa = _approvals_registry([_approval(_anchor("BAD", order_intent="buy"))], baseline=base)
-    assert wa["registry_valid"] is True  # invalid approval is simply not activated
+    assert wa["registry_valid"] is False
     r = _evaluate(baseline=base, approvals_reg=wa)
-    assert r["ready"] is True
+    assert r["ready"] is False
     assert "BAD" not in [a["anchor_id"] for a in wa["active_anchors"]]

@@ -160,6 +160,12 @@ _PROMOTED_STEP3_SOURCE_ARTIFACT = "research_handoff_candidate_effective.json"
 # age > stale_days        -> too_old (manual review)
 DEFAULT_STALE_POLICY: dict[str, int] = {"fresh_days": 8, "stale_days": 16}
 
+# Signed-date invariant reason codes. A negative age means the source is dated
+# after the trusted evaluation boundary; it is never fresh and is never clamped.
+CURRENT_HANDOFF_FUTURE_DATED = "current_handoff_future_dated"
+LAST_GOOD_HANDOFF_FUTURE_DATED = "last_good_handoff_future_dated"
+COMPILED_HANDOFF_FUTURE_DATED = "compiled_handoff_future_dated"
+
 
 @dataclass(frozen=True)
 class ResearchAvailabilityResult:
@@ -315,7 +321,9 @@ def evaluate_research_availability(
     compiled_handoff_valid = _validation_is_valid(compiled_candidate_validation)
     compiled_age_days = _age_days(now_date, compiled_source_as_of_date)
     compiled_handoff_fresh = (
-        compiled_handoff_valid and compiled_age_days is not None and compiled_age_days <= fresh_days
+        compiled_handoff_valid
+        and compiled_age_days is not None
+        and 0 <= compiled_age_days <= fresh_days
     )
     compilation_mode = (
         _str_or_none(compiled_metadata.get("compilation_mode"))
@@ -336,6 +344,21 @@ def evaluate_research_availability(
         if isinstance(compiled_source_artifacts, Mapping)
         else {}
     )
+    compiled_handoff_future_dated = (
+        compiled_handoff_valid
+        and compiled_age_days is not None
+        and compiled_age_days < 0
+    )
+    if compiled_handoff_future_dated:
+        # The token is a final-state blocker only when compiled evidence would
+        # otherwise be eligible to replace the raw/fallback state. When valid
+        # raw evidence independently controls the state, retain its state and
+        # actions and record the ignored compiled-source defect diagnostically.
+        if not handoff_valid and state in _EVIDENCE_ONLY_REPLACEABLE:
+            blocker_reasons.append(COMPILED_HANDOFF_FUTURE_DATED)
+            state = MANUAL_REVIEW_REQUIRED
+        else:
+            non_blocker_reasons.append(COMPILED_HANDOFF_FUTURE_DATED)
     if (
         not handoff_valid
         and compiled_handoff_valid
@@ -713,6 +736,9 @@ def _classify_current_valid(
     blocker_reasons: list[str],
     non_blocker_reasons: list[str],
 ) -> str:
+    if age is not None and age < 0:
+        blocker_reasons.append(CURRENT_HANDOFF_FUTURE_DATED)
+        return MANUAL_REVIEW_REQUIRED
     if age is not None and age > stale_days:
         blocker_reasons.append(
             f"current strict handoff is valid but too old ({age}d > {stale_days}d); manual review required."
@@ -745,6 +771,9 @@ def _classify_fallback(
     non_blocker_reasons: list[str],
 ) -> str:
     if last_good_available:
+        if last_good_age_days is not None and last_good_age_days < 0:
+            blocker_reasons.append(LAST_GOOD_HANDOFF_FUTURE_DATED)
+            return MANUAL_REVIEW_REQUIRED
         if last_good_age_days is not None and last_good_age_days > stale_days:
             blocker_reasons.append(
                 f"no fresh valid handoff and last-known-good is too old "
@@ -936,6 +965,8 @@ def _age_days(now_date: Any, as_of_date: Any) -> int | None:
 def _stale_label(age: int | None, fresh_days: int, stale_days: int) -> str:
     if age is None:
         return "unknown"
+    if age < 0:
+        return "future_dated"
     if age <= fresh_days:
         return "fresh"
     if age <= stale_days:

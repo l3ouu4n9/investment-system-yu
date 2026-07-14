@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import yaml
+
 from investment_orchestrator.research.active_research_anchor_registry import (
     build_active_research_anchor_registry,
     compile_active_research_anchor_registry,
@@ -23,7 +25,7 @@ from investment_orchestrator.research.research_anchor_revocation_manifest import
     build_research_anchor_revocations_validation,
 )
 from investment_orchestrator.research.approvals_inclusive_active_registry import (
-    build_active_research_anchor_registry_with_approvals,
+    build_active_research_anchor_registry_with_approvals as _build_approvals_registry,
     compile_active_research_anchor_registry_with_approvals,
 )
 from investment_orchestrator.research.approval_registry_dual_read_diff import (
@@ -43,6 +45,12 @@ _ORDER_SHAPED_KEYS = frozenset(
 )
 
 
+class _SourceBackedValidation(dict[str, Any]):
+    def __init__(self, payload: dict[str, Any], source_text: str | None) -> None:
+        super().__init__(payload)
+        self.source_text = source_text
+
+
 def _anchor(anchor_id: str = "AI_CAPEX_2026H2", **overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "anchor_id": anchor_id, "anchor_type": "structural_theme",
@@ -55,7 +63,12 @@ def _anchor(anchor_id: str = "AI_CAPEX_2026H2", **overrides: Any) -> dict[str, A
 
 
 def _baseline(anchors: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    payload = {"schema_version": "research_anchors_v1", "is_llm_generated": False, "anchors": anchors or []}
+    payload = {
+        "schema_version": "research_anchors_v1",
+        "as_of_date": AS_OF,
+        "is_llm_generated": False,
+        "anchors": anchors or [],
+    }
     result = validate_research_anchors(payload, allowed_universe=UNIVERSE, today=AS_OF)
     return build_active_research_anchor_registry(
         anchors_result=result, source_present=bool(anchors), source_sha256="b" if anchors else None,
@@ -63,15 +76,17 @@ def _baseline(anchors: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     )
 
 
-def _validation(approvals: list[dict[str, Any]], *, present: bool = True) -> dict[str, Any]:
+def _validation(approvals: list[dict[str, Any]], *, present: bool = True) -> _SourceBackedValidation:
     manifest = {"schema_version": "research_anchor_approvals_v1", "is_llm_generated": False,
                 "as_of_date": AS_OF, "approvals": approvals}
-    return build_research_anchor_approvals_validation(
+    source_text = yaml.safe_dump(manifest, sort_keys=False) if present else None
+    payload = build_research_anchor_approvals_validation(
         manifest=manifest if present else None, source_present=present,
         source_sha256="a" if present else None,
         source_path="inputs/current/research_anchor_approvals.yaml",
         allowed_universe=UNIVERSE, today=AS_OF,
     )
+    return _SourceBackedValidation(payload, source_text)
 
 
 def _approval(anchor: dict[str, Any] | None = None, *, approval_id: str = "APR-1") -> dict[str, Any]:
@@ -94,7 +109,7 @@ def _revocation(anchor: dict[str, Any] | None = None, *, revocation_id: str = "R
     }
 
 
-def _revocations_validation(revocations: Any, approvals: list[dict[str, Any]]) -> dict[str, Any]:
+def _revocations_validation(revocations: Any, approvals: list[dict[str, Any]]) -> _SourceBackedValidation:
     manifest = {
         "schema_version": "research_anchor_approvals_v1",
         "is_llm_generated": False,
@@ -102,7 +117,8 @@ def _revocations_validation(revocations: Any, approvals: list[dict[str, Any]]) -
         "approvals": approvals,
         "revocations": revocations,
     }
-    return build_research_anchor_revocations_validation(
+    source_text = yaml.safe_dump(manifest, sort_keys=False)
+    payload = build_research_anchor_revocations_validation(
         manifest=manifest,
         approvals_validation=_validation(approvals),
         source_present=True,
@@ -110,6 +126,23 @@ def _revocations_validation(revocations: Any, approvals: list[dict[str, Any]]) -
         source_path="inputs/current/research_anchor_approvals.yaml",
         today=AS_OF,
         as_of_date=AS_OF,
+    )
+    return _SourceBackedValidation(payload, source_text)
+
+
+def build_active_research_anchor_registry_with_approvals(
+    *,
+    baseline: dict[str, Any],
+    approvals_validation: _SourceBackedValidation,
+    revocations_validation: _SourceBackedValidation | None = None,
+) -> dict[str, Any]:
+    source = revocations_validation or approvals_validation
+    return _build_approvals_registry(
+        baseline=baseline,
+        approval_source_text=source.source_text,
+        approval_source_path="inputs/current/research_anchor_approvals.yaml",
+        allowed_universe=UNIVERSE,
+        today=AS_OF,
     )
 
 
@@ -322,7 +355,7 @@ def test_compile_from_disk(tmp_path: Any) -> None:
     assert sorted(x["anchor_id"] for x in baseline["active_anchors"]) == ["VOO_T"]
 
 
-def test_compile_from_disk_can_apply_revocations_for_standalone_report(tmp_path: Any) -> None:
+def test_compile_from_disk_mandatorily_applies_revocations(tmp_path: Any) -> None:
     anchors = tmp_path / "research_anchors.yaml"
     anchors.write_text(
         "schema_version: research_anchors_v1\nis_llm_generated: false\nas_of_date: \"2026-07-04\"\n"
@@ -349,20 +382,11 @@ def test_compile_from_disk_can_apply_revocations_for_standalone_report(tmp_path:
         "    revoked_by: \"operator\"\n"
     )
 
-    default_reg = compile_active_research_anchor_registry_with_approvals(
-        anchors_path=anchors, approvals_path=approvals, allowed_universe=UNIVERSE, today=AS_OF
-    )
-    assert sorted(x["anchor_id"] for x in default_reg["active_anchors"]) == [
-        "AI_CAPEX_2026H2",
-        "VOO_T",
-    ]
-
     standalone_reg = compile_active_research_anchor_registry_with_approvals(
         anchors_path=anchors,
         approvals_path=approvals,
         allowed_universe=UNIVERSE,
         today=AS_OF,
-        apply_revocations=True,
     )
     assert sorted(x["anchor_id"] for x in standalone_reg["active_anchors"]) == ["VOO_T"]
     assert standalone_reg["counts"]["revoked"] == 1

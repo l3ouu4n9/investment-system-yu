@@ -256,6 +256,20 @@ A deterministic evaluator (never the LLM) emits a single permission object. Exam
 **Hard rule:** when research is missing / invalid / stale beyond fresh, the deterministic default
 is **NO_TRADE / HOLD — never NEW_BUY**. No order-generating action is ever default-allowed.
 
+Freshness uses signed calendar-day age at the existing trusted `now_date` / strategy `as_of`
+boundary. Age zero remains eligible for the normal fresh policy; a source date after that boundary
+has negative age, is labelled `future_dated`, and requires manual review. Negative age is never
+clamped to zero or treated as fresh. The same invariant applies independently to the current raw
+handoff, last-known-good handoff, and compiled handoff; existing `fresh_days` / `stale_days`
+thresholds are unchanged.
+
+A valid future-dated compiled handoff is always recorded as
+`compiled_handoff_future_dated` and is never fresh or eligible for compiled fallback/promotion. When an
+independently valid raw handoff controls `STRICT_FRESH` or `STRICT_STALE`, the token is a source diagnostic
+in `non_blocker_reasons`; it does not contradict or change that raw-derived state or its permissions. When
+future compiled evidence would otherwise replace an invalid raw/fallback result, the same token is a blocker
+and the result is `MANUAL_REVIEW_REQUIRED`.
+
 ---
 
 ## 9. Proposed artifacts

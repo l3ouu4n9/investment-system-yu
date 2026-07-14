@@ -25,6 +25,7 @@ from investment_orchestrator.research.actionable_promotion_eligibility import (
     BLOCKER_CANDIDATE_EXCEEDS_MAX_NEW_TICKERS,
     BLOCKER_CANDIDATE_VALIDATION_FAILED,
     BLOCKER_EXTENDED_ETF_ENABLED,
+    BLOCKER_FUTURE_REFERENCED_ANCHOR,
     BLOCKER_HASH_CHAIN_MISMATCH,
     BLOCKER_INVALID_RESEARCH_ANCHORS,
     BLOCKER_MAX_NEW_TICKERS_CAP_MISSING_OR_ZERO,
@@ -512,6 +513,20 @@ def test_anchor_expired_relative_to_later_today_blocks() -> None:
     result = evaluate(inputs, today="2026-08-01")
     assert result["eligible_for_promotion"] is False
     assert BLOCKER_STALE_REFERENCED_ANCHOR in result["promotion_blockers"]
+
+
+def test_future_referenced_anchor_blocks_independently_of_summary_flags() -> None:
+    inputs = chain()
+    referenced = inputs["evidence_packet"]["research_anchors"]["anchors"][0]
+    assert referenced["valid"] is True and referenced["usable"] is True
+    referenced["valid_from"] = "2026-06-29"
+
+    result = evaluate(inputs)
+    checks = {check["check_id"]: check for check in result["checks"]}
+    assert result["eligible_for_promotion"] is False
+    assert BLOCKER_FUTURE_REFERENCED_ANCHOR in result["promotion_blockers"]
+    assert checks["referenced_anchors_not_future_dated"]["passed"] is False
+    assert "2026-06-29" in checks["referenced_anchors_not_future_dated"]["details"]["problems"][0]
 
 
 # --- fail-closed: hash chain / settings ----------------------------------------------

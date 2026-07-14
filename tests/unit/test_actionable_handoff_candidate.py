@@ -380,7 +380,7 @@ def test_unquoted_yaml_anchor_dates_produce_actionable_candidate(tmp_path: Path)
         encoding="utf-8",
     )
     anchors_summary = build_research_anchors_summary(
-        anchors_path, allowed_universe=["QQQ", "VOO", "SMH"], today="2026-06-28"
+        anchors_path, allowed_universe=["QQQ", "VOO", "SMH"], today="2026-06-30"
     )
     assert anchors_summary["available"] is True
     assert anchors_summary["valid"] is True

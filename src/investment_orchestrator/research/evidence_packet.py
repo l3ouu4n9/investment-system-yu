@@ -32,6 +32,7 @@ from investment_orchestrator.research.active_research_anchor_registry import (
     compile_active_research_anchor_registry,
 )
 from investment_orchestrator.research.approval_registry_dual_read_diff import (
+    _build_approval_registry_dual_read_diff_from_sanitized_source,
     build_approval_registry_dual_read_diff,
 )
 from investment_orchestrator.research.approval_registry_switch_readiness import (
@@ -42,13 +43,15 @@ from investment_orchestrator.research.approval_registry_switch_readiness import 
     evaluate_approval_registry_switch_readiness,
 )
 from investment_orchestrator.research.approvals_inclusive_active_registry import (
+    CapturedResearchAnchorApprovalSource,
+    _ValidatedCapturedResearchAnchorApprovalSource,
+    _build_from_sanitized_source,
+    _sanitize_captured_source,
+    _verified_approval_source_sha256,
+    _verified_approval_source_validation_present,
     build_active_research_anchor_registry_with_approvals,
-)
-from investment_orchestrator.research.research_anchor_approval_manifest import (
-    validate_research_anchor_approvals,
-)
-from investment_orchestrator.research.research_anchor_revocation_manifest import (
-    validate_research_anchor_revocations,
+    capture_research_anchor_approval_source,
+    capture_research_anchor_approval_source_text,
 )
 from investment_orchestrator.research.research_anchors import (
     ANCHORS_MISSING_DATA_GAP,
@@ -406,54 +409,72 @@ def build_embedded_active_anchor_registry_selection(
             today=today,
             generated_at=generated_at,
         )
-        approvals_validation = validate_research_anchor_approvals(
-            manifest_path=approvals_path,
-            allowed_universe=allowed_universe,
-            today=today,
-            as_of_date=baseline.get("as_of_date") if isinstance(baseline, Mapping) else None,
-            generated_at=generated_at,
-        )
-        revocations_validation = validate_research_anchor_revocations(
-            manifest_path=approvals_path,
-            allowed_universe=allowed_universe,
-            today=today,
-            as_of_date=baseline.get("as_of_date") if isinstance(baseline, Mapping) else None,
-            generated_at=generated_at,
-        )
-        return build_embedded_active_anchor_registry_selection_from_validations(
+        return build_embedded_active_anchor_registry_selection_from_source(
             baseline=baseline,
-            approvals_validation=approvals_validation,
-            revocations_validation=revocations_validation,
+            approval_source_text=capture_research_anchor_approval_source(approvals_path),
+            approval_source_path=str(approvals_path) if approvals_path is not None else None,
+            allowed_universe=allowed_universe,
+            today=today,
             generated_at=generated_at,
         )
     except Exception:  # noqa: BLE001 - evidence packet must fail closed, never raise
         return _failed_embedded_active_anchor_registry_selection(generated_at=generated_at)
 
 
-def build_embedded_active_anchor_registry_selection_from_validations(
+def build_embedded_active_anchor_registry_selection_from_source(
     *,
     baseline: Mapping[str, Any],
-    approvals_validation: Mapping[str, Any],
-    revocations_validation: Mapping[str, Any],
+    approval_source_text: Any,
+    approval_source_path: str | None,
+    allowed_universe: Any,
+    today: Any,
     generated_at: str | None = None,
 ) -> dict[str, Any]:
-    """Select the production embedded registry from already-captured validations.
+    """Revalidate one captured approval source and select the embedded registry.
 
-    This is the pure policy core shared by the path-based production Step 1A
-    accessor and frozen report-only observers.  Callers own source capture and
-    parsing; approval/revocation merge, readiness, and selection remain exactly
-    the production policy implemented here.
+    Callers own exact source capture. Approval and revocation validation happen
+    inside the activation call from these bytes and the independent trusted date;
+    no persisted or caller-supplied validation mapping can authorize activation.
     """
-    try:
-        approvals = build_active_research_anchor_registry_with_approvals(
-            baseline=baseline,
-            approvals_validation=approvals_validation,
-            revocations_validation=revocations_validation,
-            generated_at=generated_at,
+    captured_source = (
+        approval_source_text
+        if type(approval_source_text) is CapturedResearchAnchorApprovalSource
+        else capture_research_anchor_approval_source_text(
+            approval_source_text,
+            source_path=approval_source_path,
         )
-        diff = build_approval_registry_dual_read_diff(
+    )
+    return _build_embedded_active_anchor_registry_selection_from_sanitized_source(
+        baseline=baseline,
+        approval_source=_sanitize_captured_source(captured_source),
+        allowed_universe=allowed_universe,
+        today=today,
+        generated_at=generated_at,
+    )
+
+
+def _build_embedded_active_anchor_registry_selection_from_sanitized_source(
+    *,
+    baseline: Mapping[str, Any],
+    approval_source: _ValidatedCapturedResearchAnchorApprovalSource,
+    allowed_universe: Any,
+    today: Any,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    """Select from one workflow-owned private approval-source snapshot."""
+    try:
+        approvals = _build_from_sanitized_source(
+            baseline=baseline,
+            approval_source=approval_source,
+            allowed_universe=allowed_universe,
+            today=today,
+            generated_at=generated_at,
+            candidate_index=None,
+        )
+        diff = _build_approval_registry_dual_read_diff_from_sanitized_source(
             baseline_registry=baseline,
             approvals_registry=approvals,
+            approval_source=approval_source,
             generated_at=generated_at,
         )
         readiness = evaluate_approval_registry_switch_readiness(
@@ -461,8 +482,12 @@ def build_embedded_active_anchor_registry_selection_from_validations(
             approvals_registry=approvals,
             dual_read_diff=diff,
             current_research_anchors_sha256=_source_sha(baseline, BASELINE_ANCHOR_SOURCE_ID),
-            current_research_anchor_approvals_sha256=_source_sha(approvals, APPROVALS_SOURCE_ID),
-            approvals_source_present=_source_present(approvals, APPROVALS_SOURCE_ID),
+            current_research_anchor_approvals_sha256=(
+                _verified_approval_source_sha256(approval_source)
+            ),
+            approvals_source_present=(
+                _verified_approval_source_validation_present(approval_source)
+            ),
             as_of_date=baseline.get("as_of_date") if isinstance(baseline, Mapping) else None,
             generated_at=generated_at,
         )
@@ -598,6 +623,7 @@ def build_evidence_packet_and_selection(
     research_anchors_path: str | Path | None = None,
     research_anchor_approvals_path: str | Path | None = None,
     embedded_selection_out: dict[str, Any] | None = None,
+    captured_approval_source: CapturedResearchAnchorApprovalSource | None = None,
 ) -> dict[str, Any]:
     """Build the evidence packet (and capture the embedded selection) in memory.
 
@@ -617,6 +643,45 @@ def build_evidence_packet_and_selection(
     selection witness. It changes no selection/packet/permission/gate/order-path
     behavior.
     """
+    captured_source = (
+        captured_approval_source
+        if captured_approval_source is not None
+        else capture_research_anchor_approval_source(
+            research_anchor_approvals_path
+        )
+    )
+    return _build_evidence_packet_and_selection_from_sanitized_source(
+        strategy_settings=strategy_settings,
+        portfolio_snapshot_text=portfolio_snapshot_text,
+        portfolio_snapshot_path=portfolio_snapshot_path,
+        last_good_available=last_good_available,
+        last_good_metadata=last_good_metadata,
+        now_date=now_date,
+        generated_at=generated_at,
+        source_artifacts=source_artifacts,
+        research_anchors_path=research_anchors_path,
+        research_anchor_approvals_path=research_anchor_approvals_path,
+        embedded_selection_out=embedded_selection_out,
+        approval_source=_sanitize_captured_source(captured_source),
+    )
+
+
+def _build_evidence_packet_and_selection_from_sanitized_source(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+    portfolio_snapshot_text: str | None,
+    portfolio_snapshot_path: str | Path | None = None,
+    last_good_available: bool = False,
+    last_good_metadata: Mapping[str, Any] | None = None,
+    now_date: str | None = None,
+    generated_at: str | None = None,
+    source_artifacts: Mapping[str, str] | None = None,
+    research_anchors_path: str | Path | None = None,
+    research_anchor_approvals_path: str | Path | None = None,
+    embedded_selection_out: dict[str, Any] | None = None,
+    approval_source: _ValidatedCapturedResearchAnchorApprovalSource,
+) -> dict[str, Any]:
+    """Build evidence using one private workflow snapshot without resanitizing."""
     anchors_summary = None
     active_anchor_registry = None
     if research_anchors_path is not None:
@@ -629,9 +694,15 @@ def build_evidence_packet_and_selection(
         # R2G-5c-2: select the embedded grounding registry from the same fresh
         # in-memory compile that readiness evaluates. No on-disk registry,
         # readiness, or dry-run diff JSON is read as switch authority.
-        selection = build_embedded_active_anchor_registry_selection(
+        baseline = compile_active_research_anchor_registry(
             anchors_path=research_anchors_path,
-            approvals_path=research_anchor_approvals_path,
+            allowed_universe=allowed_universe,
+            today=now_date,
+            generated_at=generated_at,
+        )
+        selection = _build_embedded_active_anchor_registry_selection_from_sanitized_source(
+            baseline=baseline,
+            approval_source=approval_source,
             allowed_universe=allowed_universe,
             today=now_date,
             generated_at=generated_at,
@@ -667,6 +738,7 @@ def write_evidence_packet(
     research_anchor_approvals_path: str | Path | None = None,
     now: datetime | None = None,
     embedded_selection_out: dict[str, Any] | None = None,
+    captured_approval_source: CapturedResearchAnchorApprovalSource | None = None,
 ) -> dict[str, Any]:
     """Build the evidence packet and write it as JSON. Returns the packet mapping.
 
@@ -697,6 +769,7 @@ def write_evidence_packet(
         research_anchors_path=research_anchors_path,
         research_anchor_approvals_path=research_anchor_approvals_path,
         embedded_selection_out=embedded_selection_out,
+        captured_approval_source=captured_approval_source,
     )
     write_json(output_path, packet)
     return packet

@@ -13,6 +13,7 @@ import json
 from typing import Any
 
 from investment_orchestrator.research.research_anchor_approval_manifest import (
+    YAML_MERGE_NOT_ALLOWED,
     build_research_anchor_approvals_validation,
     compute_operator_completed_anchor_sha256 as sha,
 )
@@ -357,6 +358,28 @@ def test_malformed_yaml_fails_closed(tmp_path: Any) -> None:
     assert r["source_present"] is True
     assert r["source_valid"] is False
     assert any("malformed_yaml" in b for b in r["blockers"])
+
+
+def test_combined_source_merge_policy_is_shared_by_revocation_disk_validator(
+    tmp_path: Any,
+) -> None:
+    path = tmp_path / "research_anchor_approvals.yaml"
+    path.write_text(
+        "defaults: &defaults {schema_version: research_anchor_approvals_v1, "
+        "is_llm_generated: false, approvals: [], revocations: []}\n"
+        "<<: *defaults\n",
+        encoding="utf-8",
+    )
+
+    result = validate_research_anchor_revocations(
+        manifest_path=path,
+        allowed_universe=UNIVERSE,
+        today=AS_OF,
+    )
+
+    assert result["source_valid"] is False
+    assert result["revocations_valid"] is False
+    assert YAML_MERGE_NOT_ALLOWED in json.dumps(result["blockers"])
 
 
 def test_disk_loader_missing_file_benign(tmp_path: Any) -> None:

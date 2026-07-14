@@ -33,11 +33,9 @@ from investment_orchestrator.research.approvals_inclusive_active_registry import
 )
 from investment_orchestrator.research.research_anchor_approval_manifest import (
     compute_operator_completed_anchor_sha256 as sha,
-    validate_research_anchor_approvals,
     write_research_anchor_approvals_validation,
 )
 from investment_orchestrator.research.research_anchor_revocation_manifest import (
-    validate_research_anchor_revocations,
     write_research_anchor_revocations_validation,
 )
 from investment_orchestrator.workflow import step1_research
@@ -451,29 +449,28 @@ def test_bundle_report_variant_uses_accessor_and_overlay_untouched() -> None:
     import investment_orchestrator.workflow.step1a_grounding_compile as step1a
 
     src = inspect.getsource(step1a._build)
-    assert "build_step1a_research_anchor_approvals_validation(" in src
-    assert "build_step1a_research_anchor_revocations_validation(" in src
+    assert "_build_step1a_research_anchor_approvals_validation_from_sanitized_source(" in src
+    assert "_build_step1a_research_anchor_revocations_validation_from_sanitized_source(" in src
     # S1A-6: the OVERLAY lineage moved verbatim into the with-approvals accessor,
     # so _build now contains no raw overlay-validator call at all.
-    assert "build_step1a_active_research_anchor_registry_with_approvals(" in src
+    assert "_build_step1a_active_research_anchor_registry_with_approvals_from_sanitized_source(" in src
     assert src.count("validate_research_anchor_approvals(") == 0
     assert src.count("validate_research_anchor_revocations(") == 0
 
     overlay_src = inspect.getsource(
-        step1a.build_step1a_active_research_anchor_registry_with_approvals
+        step1a._build_step1a_active_research_anchor_registry_with_approvals_from_sanitized_source
     )
-    # The Step 1 dual-read writer's overlay flavor, preserved exactly inside the
-    # accessor: baseline via the S1A-3 accessor; ONE overlay approvals validation
-    # WITHOUT as_of_date (the settings-anchored S1A-4 REPORT accessor is not
-    # reused); ONE overlay revocations validation keeping the baseline-coupled
-    # as-of binding (the settings-anchored S1A-5 REPORT accessor is not reused).
+    # The overlay activation boundary receives only the exact operator source
+    # bytes plus the independently supplied trusted date. It performs fresh
+    # approval and revocation validation internally and never accepts the
+    # persisted S1A-4/S1A-5 report mappings as activation inputs.
     assert "build_step1a_active_research_anchor_registry(" in overlay_src
-    assert overlay_src.count("validate_research_anchor_approvals(") == 1
-    assert overlay_src.count("validate_research_anchor_revocations(") == 1
-    approvals_call_args = overlay_src.split("validate_research_anchor_approvals(")[-1].split(")")[0]
-    assert "as_of_date" not in approvals_call_args
-    revocations_call_args = overlay_src.split("validate_research_anchor_revocations(")[-1]
-    assert 'as_of_date=baseline.get("as_of_date")' in revocations_call_args
+    assert overlay_src.count("_build_from_sanitized_source(") == 1
+    assert "approval_source=approval_source" in overlay_src
+    assert "today=as_of" in overlay_src
+    assert "apply_revocations" not in overlay_src
+    assert "approvals_validation=" not in overlay_src
+    assert "revocations_validation=" not in overlay_src
     # The never-raise compile helper is deliberately NOT used: the accessor must
     # raise so the switched writer can fall back to the legacy payload.
     code_only = overlay_src.replace(
@@ -520,7 +517,9 @@ def test_approvals_accessor_failure_falls_back_independently(
         raise RuntimeError("approvals accessor exploded")
 
     monkeypatch.setattr(
-        step1_research, "build_step1a_research_anchor_approvals_validation", broken_accessor
+        step1_research,
+        "_build_step1a_research_anchor_approvals_validation_from_sanitized_source",
+        broken_accessor,
     )
 
     result = step1_research.parse_step1_output(strategy_settings=_settings())
@@ -564,10 +563,14 @@ def test_approvals_double_failure_preserves_swallowed_behavior(
         raise RuntimeError("legacy approvals writer exploded")
 
     monkeypatch.setattr(
-        step1_research, "build_step1a_research_anchor_approvals_validation", broken_accessor
+        step1_research,
+        "_build_step1a_research_anchor_approvals_validation_from_sanitized_source",
+        broken_accessor,
     )
     monkeypatch.setattr(
-        step1_research, "write_research_anchor_approvals_validation", broken_legacy
+        step1_research,
+        "_build_research_anchor_approval_source_validations_from_sanitized",
+        broken_legacy,
     )
 
     result = step1_research.parse_step1_output(strategy_settings=_settings())
@@ -817,7 +820,9 @@ def test_revocations_accessor_failure_falls_back_independently(
         raise RuntimeError("revocations accessor exploded")
 
     monkeypatch.setattr(
-        step1_research, "build_step1a_research_anchor_revocations_validation", broken_accessor
+        step1_research,
+        "_build_step1a_research_anchor_revocations_validation_from_sanitized_source",
+        broken_accessor,
     )
 
     result = step1_research.parse_step1_output(strategy_settings=_settings())
@@ -866,10 +871,14 @@ def test_revocations_double_failure_preserves_swallowed_behavior(
         raise RuntimeError("legacy revocations writer exploded")
 
     monkeypatch.setattr(
-        step1_research, "build_step1a_research_anchor_revocations_validation", broken_accessor
+        step1_research,
+        "_build_step1a_research_anchor_revocations_validation_from_sanitized_source",
+        broken_accessor,
     )
     monkeypatch.setattr(
-        step1_research, "write_research_anchor_revocations_validation", broken_legacy
+        step1_research,
+        "_build_research_anchor_approval_source_validations_from_sanitized",
+        broken_legacy,
     )
 
     result = step1_research.parse_step1_output(strategy_settings=_settings())
@@ -912,9 +921,9 @@ def _legacy_with_approvals_compile(
 ) -> dict[str, Any]:
     """Replicate the legacy Step 1 dual-read writer's overlay derivation verbatim.
 
-    Baseline compile, overlay approvals validation WITHOUT ``as_of_date``, overlay
-    revocations validation with the baseline-coupled ``as_of_date``, then the
-    shared with-approvals builder — the exact lineage
+    Baseline compile, then exact approval-source bytes plus the independently
+    supplied trusted date enter the shared with-approvals activation boundary —
+    the exact lineage
     ``_write_approval_registry_dual_read_report_only`` retains for the dual-read
     diff and as the switched write's fallback payload.
     """
@@ -925,21 +934,14 @@ def _legacy_with_approvals_compile(
         allowed_universe=allowed_universe,
         today=settings_as_of,
     )
-    approvals_validation = validate_research_anchor_approvals(
-        manifest_path=approvals_path,
-        allowed_universe=allowed_universe,
-        today=settings_as_of,
-    )
-    revocations_validation = validate_research_anchor_revocations(
-        manifest_path=approvals_path,
-        allowed_universe=allowed_universe,
-        today=settings_as_of,
-        as_of_date=baseline.get("as_of_date") if isinstance(baseline, dict) else None,
-    )
     return build_active_research_anchor_registry_with_approvals(
         baseline=baseline,
-        approvals_validation=approvals_validation,
-        revocations_validation=revocations_validation,
+        approval_source_text=(
+            approvals_path.read_text(encoding="utf-8") if approvals_path.exists() else None
+        ),
+        approval_source_path=str(approvals_path),
+        allowed_universe=allowed_universe,
+        today=settings_as_of,
     )
 
 
@@ -1254,7 +1256,7 @@ def test_with_approvals_accessor_failure_falls_back_independently(
 
     monkeypatch.setattr(
         step1_research,
-        "build_step1a_active_research_anchor_registry_with_approvals",
+        "_build_step1a_active_research_anchor_registry_with_approvals_from_sanitized_source",
         broken_accessor,
     )
 
@@ -1302,7 +1304,9 @@ def test_with_approvals_parity_mismatch_falls_back_to_legacy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _setup_repo(tmp_path, monkeypatch)
-    original = step1_research.build_step1a_active_research_anchor_registry_with_approvals
+    original = (
+        step1_research._build_step1a_active_research_anchor_registry_with_approvals_from_sanitized_source
+    )
 
     def mutated_accessor(**kwargs: Any) -> dict[str, Any]:
         payload = original(**kwargs)
@@ -1311,7 +1315,7 @@ def test_with_approvals_parity_mismatch_falls_back_to_legacy(
 
     monkeypatch.setattr(
         step1_research,
-        "build_step1a_active_research_anchor_registry_with_approvals",
+        "_build_step1a_active_research_anchor_registry_with_approvals_from_sanitized_source",
         mutated_accessor,
     )
 
@@ -1499,11 +1503,15 @@ def test_bundle_readiness_uses_accessor() -> None:
     src = inspect.getsource(step1a._build)
     # S1A-7: the readiness payload moved behind the shared accessor, so _build
     # contains no raw readiness-builder call at all.
-    assert "build_step1a_approval_registry_switch_readiness(" in src
+    assert "_build_step1a_approval_registry_switch_readiness_from_sanitized_source(" in src
     assert src.count("build_approval_registry_switch_readiness(") == 0
 
-    accessor_src = inspect.getsource(step1a.build_step1a_approval_registry_switch_readiness)
-    assert accessor_src.count("build_approval_registry_switch_readiness(") == 1
+    accessor_src = inspect.getsource(
+        step1a._build_step1a_approval_registry_switch_readiness_from_sanitized_source
+    )
+    assert accessor_src.count(
+        "_build_approval_registry_switch_readiness_from_sanitized_source("
+    ) == 1
 
 
 def test_parse_writes_readiness_from_step1a_source(
@@ -1554,7 +1562,9 @@ def test_readiness_accessor_failure_falls_back_independently(
         raise RuntimeError("readiness accessor exploded")
 
     monkeypatch.setattr(
-        step1_research, "build_step1a_approval_registry_switch_readiness", broken_accessor
+        step1_research,
+        "_build_step1a_approval_registry_switch_readiness_from_sanitized_source",
+        broken_accessor,
     )
 
     result = step1_research.parse_step1_output(strategy_settings=_settings())
@@ -1603,10 +1613,14 @@ def test_readiness_double_failure_preserves_swallowed_behavior(
         raise RuntimeError("legacy readiness writer exploded")
 
     monkeypatch.setattr(
-        step1_research, "build_step1a_approval_registry_switch_readiness", broken_accessor
+        step1_research,
+        "_build_step1a_approval_registry_switch_readiness_from_sanitized_source",
+        broken_accessor,
     )
     monkeypatch.setattr(
-        step1_research, "write_approval_registry_switch_readiness", broken_legacy
+        step1_research,
+        "_build_approval_registry_switch_readiness_from_sanitized_source",
+        broken_legacy,
     )
 
     result = step1_research.parse_step1_output(strategy_settings=_settings())
@@ -1759,11 +1773,15 @@ def test_bundle_dual_read_diff_uses_accessor() -> None:
     src = inspect.getsource(step1a._build)
     # S1A-8: the diff moved behind the shared accessor, so _build has no raw
     # dual-read-diff builder call at all.
-    assert "build_step1a_approval_registry_dual_read_diff(" in src
+    assert "_build_step1a_approval_registry_dual_read_diff_from_sanitized_source(" in src
     assert src.count("build_approval_registry_dual_read_diff(") == 0
 
-    accessor_src = inspect.getsource(step1a.build_step1a_approval_registry_dual_read_diff)
-    assert accessor_src.count("build_approval_registry_dual_read_diff(") == 1
+    accessor_src = inspect.getsource(
+        step1a._build_step1a_approval_registry_dual_read_diff_from_sanitized_source
+    )
+    assert accessor_src.count(
+        "_build_approval_registry_dual_read_diff_from_sanitized_source("
+    ) == 1
     # The never-raise compile helper must NOT be used — the accessor composes the
     # already-proven S1A-3 and S1A-6 accessors so failures raise into the guard.
     # The docstring names the helper only to say it is deliberately avoided, so
@@ -1773,7 +1791,10 @@ def test_bundle_dual_read_diff_uses_accessor() -> None:
     )
     assert "compile_active_research_anchor_registry_with_approvals" not in code_only
     assert "build_step1a_active_research_anchor_registry(" in accessor_src
-    assert "build_step1a_active_research_anchor_registry_with_approvals(" in accessor_src
+    assert (
+        "_build_step1a_active_research_anchor_registry_with_approvals_from_sanitized_source("
+        in accessor_src
+    )
 
 
 def test_dual_read_diff_accessor_failure_falls_back_independently(
@@ -1786,7 +1807,9 @@ def test_dual_read_diff_accessor_failure_falls_back_independently(
         raise RuntimeError("dual-read diff accessor exploded")
 
     monkeypatch.setattr(
-        step1_research, "build_step1a_approval_registry_dual_read_diff", broken_accessor
+        step1_research,
+        "_build_step1a_approval_registry_dual_read_diff_from_sanitized_source",
+        broken_accessor,
     )
 
     result = step1_research.parse_step1_output(strategy_settings=_settings())
@@ -1829,7 +1852,9 @@ def test_dual_read_diff_parity_mismatch_falls_back_to_legacy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _setup_repo(tmp_path, monkeypatch)
-    original = step1_research.build_step1a_approval_registry_dual_read_diff
+    original = (
+        step1_research._build_step1a_approval_registry_dual_read_diff_from_sanitized_source
+    )
 
     def mutated_accessor(**kwargs: Any) -> dict[str, Any]:
         payload = original(**kwargs)
@@ -1837,7 +1862,9 @@ def test_dual_read_diff_parity_mismatch_falls_back_to_legacy(
         return payload
 
     monkeypatch.setattr(
-        step1_research, "build_step1a_approval_registry_dual_read_diff", mutated_accessor
+        step1_research,
+        "_build_step1a_approval_registry_dual_read_diff_from_sanitized_source",
+        mutated_accessor,
     )
 
     result = step1_research.parse_step1_output(strategy_settings=_settings())
@@ -1955,22 +1982,22 @@ def test_reader_invariance_between_step1a_and_legacy_fallback_runs(
                 )
                 mp.setattr(
                     step1_research,
-                    "build_step1a_research_anchor_approvals_validation",
+                    "_build_step1a_research_anchor_approvals_validation_from_sanitized_source",
                     broken_accessor,
                 )
                 mp.setattr(
                     step1_research,
-                    "build_step1a_research_anchor_revocations_validation",
+                    "_build_step1a_research_anchor_revocations_validation_from_sanitized_source",
                     broken_accessor,
                 )
                 mp.setattr(
                     step1_research,
-                    "build_step1a_active_research_anchor_registry_with_approvals",
+                    "_build_step1a_active_research_anchor_registry_with_approvals_from_sanitized_source",
                     broken_accessor,
                 )
                 mp.setattr(
                     step1_research,
-                    "build_step1a_approval_registry_switch_readiness",
+                    "_build_step1a_approval_registry_switch_readiness_from_sanitized_source",
                     broken_accessor,
                 )
             step1_research.parse_step1_output(strategy_settings=_settings())

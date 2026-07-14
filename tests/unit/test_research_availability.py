@@ -13,7 +13,10 @@ from investment_orchestrator.state.last_good_research_handoff import (
     strategy_settings_hash,
 )
 from investment_orchestrator.state.research_availability import (
+    COMPILED_HANDOFF_FUTURE_DATED,
+    CURRENT_HANDOFF_FUTURE_DATED,
     DEFAULT_STALE_POLICY,
+    LAST_GOOD_HANDOFF_FUTURE_DATED,
     evaluate_research_availability,
     research_availability_result_to_dict,
     research_degraded_mode_decision_to_dict,
@@ -244,6 +247,84 @@ def test_valid_but_too_old_requires_manual_review() -> None:
         now_date=NOW,
     )
     assert result.state == "MANUAL_REVIEW_REQUIRED"
+
+
+def test_future_current_handoff_requires_manual_review_without_actionability() -> None:
+    s = settings()
+    for future_date, expected_age in (("2026-06-23", -1), ("2026-07-02", -10)):
+        result = evaluate_research_availability(
+            candidate_validation=valid_result(s),
+            candidate=valid_candidate(),
+            strategy_settings=s,
+            source_as_of_date=future_date,
+            now_date=NOW,
+        )
+        assert result.handoff_age_days == expected_age
+        assert result.stale_label == "future_dated"
+        assert result.state == "MANUAL_REVIEW_REQUIRED"
+        assert result.manual_review_required is True
+        assert result.fresh_research_available is False
+        assert result.allowed_actions == ["HOLD", "NO_TRADE"]
+        assert result.blocked_actions == [
+            "SELL",
+            "NEW_BUY",
+            "ROTATION",
+            "REBALANCE",
+            "EXTENDED_ETF_ADMISSION",
+            "ORDER_COMPILATION",
+        ]
+        assert CURRENT_HANDOFF_FUTURE_DATED in result.blocker_reasons
+
+
+def test_future_last_good_requires_manual_review_and_is_not_usable() -> None:
+    s = settings()
+    result = evaluate_research_availability(
+        candidate_validation=invalid_result(),
+        candidate=valid_candidate(),
+        strategy_settings=s,
+        source_as_of_date=NOW,
+        now_date=NOW,
+        last_good_handoff=valid_candidate(),
+        last_good_metadata=last_good_metadata(as_of="2026-06-23", strategy_settings=s),
+    )
+    assert result.last_good_age_days == -1
+    assert result.stale_label == "future_dated"
+    assert result.state == "MANUAL_REVIEW_REQUIRED"
+    assert result.last_good_usable is False
+    assert result.allowed_actions == ["HOLD", "NO_TRADE"]
+    assert LAST_GOOD_HANDOFF_FUTURE_DATED in result.blocker_reasons
+
+
+def test_missing_malformed_and_offset_dates_remain_nonfresh() -> None:
+    s = settings()
+    for source_date in (None, "not-a-date", "2026-06-22T00:00:00+00:00"):
+        result = evaluate_research_availability(
+            candidate_validation=valid_result(s),
+            candidate=valid_candidate(),
+            strategy_settings=s,
+            source_as_of_date=source_date,
+            now_date=NOW,
+        )
+        assert result.handoff_age_days is None
+        assert result.stale_label == "unknown"
+        assert result.state == "STRICT_STALE"
+        assert "NEW_BUY" not in result.allowed_actions
+        assert "ORDER_COMPILATION" not in result.allowed_actions
+
+
+def test_currently_accepted_iso_date_forms_remain_fresh_at_boundary() -> None:
+    s = settings()
+    for source_date in (NOW, "20260622", "2026-W26-1"):
+        result = evaluate_research_availability(
+            candidate_validation=valid_result(s),
+            candidate=valid_candidate(),
+            strategy_settings=s,
+            source_as_of_date=source_date,
+            now_date=NOW,
+        )
+        assert result.handoff_age_days == 0
+        assert result.state == "STRICT_FRESH"
+        assert result.stale_label == "fresh"
 
 
 # --- safety invariants -------------------------------------------------------
@@ -702,6 +783,7 @@ def evaluate_with_pending_pointer(
     effective: dict[str, Any] | None = None,
     validation: dict[str, Any] | None = None,
     compiled_support_signals: dict[str, Any] | None = None,
+    compiled_as_of: str | None = NOW,
 ) -> Any:
     effective = effective if effective is not None else effective_handoff()
     pointer = pointer if pointer is not None else pending_pointer(effective)
@@ -710,6 +792,7 @@ def evaluate_with_pending_pointer(
         candidate_validation=invalid_result(),
         compiled_candidate_validation=COMPILED_VALID,
         compiled_metadata=compiled_meta("evidence_plus_memo", present=True, valid=True),
+        compiled_as_of=compiled_as_of,
         compiled_support_signals=compiled_support_signals or accepted_signals(),
         promoted_pointer=pointer,
         promoted_effective_handoff=effective,
@@ -754,6 +837,17 @@ def test_valid_pending_pointer_upgrades_to_pending_gates_hold_no_trade_only() ->
         "order_compilation_requires_future_gate_pr",
     ):
         assert reason in result.blocker_reasons
+
+
+def test_future_compiled_handoff_cannot_support_promoted_actionable_state() -> None:
+    result = evaluate_with_pending_pointer(compiled_as_of="2026-06-23")
+    assert result.state == "MANUAL_REVIEW_REQUIRED"
+    assert result.compiled_handoff_fresh is False
+    assert result.promoted_pointer_valid is True
+    assert result.promoted_step2_decision_only is False
+    assert result.promoted_step3_audit_only is False
+    assert result.allowed_actions == ["HOLD", "NO_TRADE"]
+    assert COMPILED_HANDOFF_FUTURE_DATED in result.blocker_reasons
 
 
 def test_pending_gates_state_serializes_diagnostics() -> None:
@@ -909,6 +1003,112 @@ def test_compiled_stale_does_not_relabel() -> None:
         compiled_as_of="2026-05-01",  # age > fresh_days
     )
     assert result.state == "INVALID_CONTRACT"
+
+
+def test_future_compiled_handoff_requires_manual_review_and_cannot_upgrade() -> None:
+    result = evaluate_with_compiled(
+        candidate_validation=invalid_result(),
+        compiled_candidate_validation=COMPILED_VALID,
+        compiled_metadata=compiled_meta("evidence_plus_memo", present=True, valid=True),
+        compiled_as_of="2026-06-23",
+        compiled_support_signals=accepted_signals(),
+    )
+    assert result.state == "MANUAL_REVIEW_REQUIRED"
+    assert result.compiled_handoff_fresh is False
+    assert result.grounded_memo_support_present is False
+    assert result.promoted_step2_decision_only is False
+    assert result.allowed_actions == ["HOLD", "NO_TRADE"]
+    assert COMPILED_HANDOFF_FUTURE_DATED in result.blocker_reasons
+    assert COMPILED_HANDOFF_FUTURE_DATED not in result.non_blocker_reasons
+    assert (
+        result.blocker_reasons + result.non_blocker_reasons
+    ).count(COMPILED_HANDOFF_FUTURE_DATED) == 1
+    availability = research_availability_result_to_dict(result)
+    decision = research_degraded_mode_decision_to_dict(result)
+    assert COMPILED_HANDOFF_FUTURE_DATED in availability["blocker_reasons"]
+    assert COMPILED_HANDOFF_FUTURE_DATED in decision["blocker_reasons"]
+
+
+def test_future_compiled_handoff_is_diagnostic_when_fresh_raw_controls_state() -> None:
+    s = settings()
+    result = evaluate_research_availability(
+        candidate_validation=valid_result(s),
+        candidate=valid_candidate(),
+        strategy_settings=s,
+        source_as_of_date=NOW,
+        now_date=NOW,
+        compiled_candidate_validation=COMPILED_VALID,
+        compiled_metadata=compiled_meta("evidence_plus_memo", present=True, valid=True),
+        compiled_source_as_of_date="2026-06-23",
+        compiled_support_signals=accepted_signals(),
+    )
+
+    assert result.state == "STRICT_FRESH"
+    assert result.allowed_actions == [
+        "HOLD",
+        "NO_TRADE",
+        "SELL",
+        "NEW_BUY",
+        "ROTATION",
+        "REBALANCE",
+        "EXTENDED_ETF_ADMISSION",
+        "ORDER_COMPILATION",
+    ]
+    assert result.compiled_handoff_fresh is False
+    assert result.grounded_memo_support_present is False
+    assert COMPILED_HANDOFF_FUTURE_DATED not in result.blocker_reasons
+    assert COMPILED_HANDOFF_FUTURE_DATED in result.non_blocker_reasons
+    assert (
+        result.blocker_reasons + result.non_blocker_reasons
+    ).count(COMPILED_HANDOFF_FUTURE_DATED) == 1
+    availability = research_availability_result_to_dict(result)
+    decision = research_degraded_mode_decision_to_dict(result)
+    assert COMPILED_HANDOFF_FUTURE_DATED in availability["non_blocker_reasons"]
+    assert COMPILED_HANDOFF_FUTURE_DATED in decision["non_blocker_reasons"]
+
+
+def test_future_compiled_handoff_is_diagnostic_when_stale_raw_controls_state() -> None:
+    s = settings()
+    result = evaluate_research_availability(
+        candidate_validation=valid_result(s),
+        candidate=valid_candidate(),
+        strategy_settings=s,
+        source_as_of_date="2026-06-13",  # age 9: first existing stale day
+        now_date=NOW,
+        compiled_candidate_validation=COMPILED_VALID,
+        compiled_metadata=compiled_meta("evidence_plus_memo", present=True, valid=True),
+        compiled_source_as_of_date="2026-06-23",
+        compiled_support_signals=accepted_signals(),
+    )
+
+    assert result.state == "STRICT_STALE"
+    assert result.allowed_actions == ["HOLD", "NO_TRADE", "SELL"]
+    assert result.compiled_handoff_fresh is False
+    assert result.grounded_memo_support_present is False
+    assert COMPILED_HANDOFF_FUTURE_DATED not in result.blocker_reasons
+    assert COMPILED_HANDOFF_FUTURE_DATED in result.non_blocker_reasons
+    assert (
+        result.blocker_reasons + result.non_blocker_reasons
+    ).count(COMPILED_HANDOFF_FUTURE_DATED) == 1
+
+
+def test_present_compiled_handoff_has_no_future_diagnostic() -> None:
+    s = settings()
+    result = evaluate_research_availability(
+        candidate_validation=valid_result(s),
+        candidate=valid_candidate(),
+        strategy_settings=s,
+        source_as_of_date=NOW,
+        now_date=NOW,
+        compiled_candidate_validation=COMPILED_VALID,
+        compiled_metadata=compiled_meta("evidence_plus_memo", present=True, valid=True),
+        compiled_source_as_of_date=NOW,
+    )
+
+    assert result.state == "STRICT_FRESH"
+    assert result.compiled_handoff_fresh is True
+    assert COMPILED_HANDOFF_FUTURE_DATED not in result.blocker_reasons
+    assert COMPILED_HANDOFF_FUTURE_DATED not in result.non_blocker_reasons
 
 
 def test_compiled_preferred_over_usable_last_good_but_still_hold_no_trade() -> None:

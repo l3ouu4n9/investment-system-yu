@@ -41,7 +41,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from collections import Counter
-import hashlib
 import json
 from typing import Any
 
@@ -55,7 +54,10 @@ from investment_orchestrator.research.research_anchors import (
 )
 from investment_orchestrator.research.research_anchor_approval_manifest import (
     MANIFEST_SCHEMA_VERSION as APPROVALS_MANIFEST_SCHEMA_VERSION,
+    ResearchAnchorApprovalYamlPolicyError,
     build_research_anchor_approvals_validation,
+    load_research_anchor_approval_yaml,
+    read_research_anchor_approval_source,
 )
 
 
@@ -475,17 +477,20 @@ def validate_research_anchor_revocations(
     generated_at: str | None = None,
 ) -> dict[str, Any]:
     """Read the shared approvals YAML once, then validate its revocations (never raises)."""
-    source_text = _read_text_or_none(manifest_path)
-    source_present = source_text is not None and source_text.strip() != ""
-    source_sha256 = _sha256_of_text(source_text) if source_present else None
+    source_present, source_text, source_sha256, parse_error = (
+        read_research_anchor_approval_source(manifest_path)
+    )
 
     manifest: Any = None
-    parse_error: str | None = None
-    if source_present:
+    if source_present and parse_error is None and source_text is not None:
         try:
-            manifest = yaml.safe_load(source_text)
-        except yaml.YAMLError as exc:
-            parse_error = str(exc)
+            manifest = load_research_anchor_approval_yaml(source_text)
+        except ResearchAnchorApprovalYamlPolicyError as exc:
+            parse_error = exc.reason
+        except yaml.constructor.ConstructorError:
+            parse_error = "approval_source_yaml_duplicate_key"
+        except yaml.YAMLError:
+            parse_error = "approval_source_yaml_invalid"
 
     approvals_validation = build_research_anchor_approvals_validation(
         manifest=manifest,
@@ -699,20 +704,3 @@ def _iter_string_values(obj: Any):
             yield from _iter_string_values(item)
     elif isinstance(obj, str):
         yield obj
-
-
-def _sha256_of_text(value: str | None) -> str | None:
-    if not isinstance(value, str) or value == "":
-        return None
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def _read_text_or_none(path: Any) -> str | None:
-    from investment_orchestrator.common.io import file_exists, read_text
-
-    if path is None or not file_exists(path):
-        return None
-    try:
-        return read_text(path)
-    except Exception:  # noqa: BLE001 - unreadable file treated as absent
-        return None

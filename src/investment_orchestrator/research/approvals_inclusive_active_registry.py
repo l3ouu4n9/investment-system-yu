@@ -20,6 +20,11 @@ validator functions):
 * ``operator_completed_anchor_sha256`` is the ONLY activation-binding hash. A
   mismatched / missing hash, or any mutation of ``operator_completed_anchor``,
   makes the approval inactive.
+* approval activation also requires the compiler's independent explicit
+  ``today`` boundary. The boundary is normalized locally and the exact approval
+  source bytes are revalidated in the same call. A missing or invalid boundary
+  blocks every otherwise eligible approval before it can enter ``active_anchors``;
+  the approval manifest's own date is never a substitute.
 * the anchor must pass the existing ``validate_research_anchors`` (never
   loosened; no new ``source_type``; an approved anchor's intrinsic
   ``source_type`` stays ``"operator"``), be fresh/usable, and carry an
@@ -45,9 +50,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from collections import Counter, defaultdict
+from dataclasses import dataclass
+from enum import Enum
 import hashlib
 import json
+from pathlib import Path
 from typing import Any
+
+import yaml
 
 from investment_orchestrator.research.active_research_anchor_registry import (
     OPERATOR_SOURCE_CATEGORY,
@@ -57,13 +67,20 @@ from investment_orchestrator.research.active_research_anchor_registry import (
     compile_active_research_anchor_registry,
 )
 from investment_orchestrator.research.research_anchor_approval_manifest import (
-    validate_research_anchor_approvals,
+    ResearchAnchorApprovalYamlPolicyError,
+    build_research_anchor_approvals_validation,
+    load_research_anchor_approval_yaml,
+)
+from investment_orchestrator.research.research_anchors import (
+    RESEARCH_ANCHOR_TRUSTED_DATE_INVALID,
+    RESEARCH_ANCHOR_TRUSTED_DATE_MISSING,
+    normalize_iso_date_value,
 )
 from investment_orchestrator.research.research_anchor_revocation_manifest import (
     BIND_RESOLVED,
     STATUS_VALID_ACTIVE as REVOCATION_STATUS_VALID_ACTIVE,
     STATUS_VALID_PENDING_FUTURE as REVOCATION_STATUS_VALID_PENDING_FUTURE,
-    validate_research_anchor_revocations,
+    build_research_anchor_revocations_validation,
 )
 
 
@@ -85,8 +102,74 @@ BLOCKER_DUPLICATE_ACROSS_SOURCES = "duplicate_anchor_id_across_sources"
 BLOCKER_DUPLICATE_WITHIN_APPROVALS = "duplicate_anchor_id_within_approvals"
 BLOCKER_REVOCATIONS_INVALID = "revocations_manifest_invalid"
 BLOCKER_DUPLICATE_TARGET_REVOCATION = "duplicate_target_revocation"
+WORKFLOW_APPROVAL_SOURCE_IDENTITY_MISMATCH = (
+    "workflow_approval_source_identity_mismatch"
+)
 
 STATUS_REVOKED = "revoked"
+
+
+class ApprovalSourceState(str, Enum):
+    """Closed filesystem state for one combined approval/revocation snapshot."""
+
+    ABSENT = "absent"
+    PRESENT = "present"
+    READ_ERROR = "read_error"
+
+
+CAPTURE_INVALID = "approval_source_capture_invalid"
+_APPROVAL_SOURCE_TEXT_INVALID = "approval_source_text_invalid"
+_APPROVAL_SOURCE_UTF8_DECODE_ERROR = "approval_source_utf8_decode_error"
+_APPROVAL_SOURCE_READ_ERROR = "approval_source_read_error"
+_CODE_OWNED_CAPTURE_ERRORS = frozenset(
+    {
+        CAPTURE_INVALID,
+        _APPROVAL_SOURCE_TEXT_INVALID,
+        _APPROVAL_SOURCE_UTF8_DECODE_ERROR,
+        _APPROVAL_SOURCE_READ_ERROR,
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class CapturedResearchAnchorApprovalSource:
+    """One immutable byte snapshot shared by every workflow derivation.
+
+    ``source_path`` is diagnostic provenance only.  Authority comes exclusively
+    from ``source_bytes`` captured in one read and their SHA-256.  A zero-byte or
+    whitespace-only file is PRESENT; only FileNotFoundError is ABSENT.
+    """
+
+    source_state: ApprovalSourceState
+    source_path: str | None
+    source_bytes: bytes | None
+    source_text: str | None
+    source_sha256: str | None
+    read_error: str | None
+
+    def __post_init__(self) -> None:
+        """Reject contradictory caller construction before it reaches a consumer.
+
+        A blank PRESENT snapshot is representable because it records that a file
+        existed; the activation-boundary invariant below rejects it as invalid
+        input. Every other state/field contradiction is rejected immediately.
+        """
+        reason = _captured_source_invariant_error(self, allow_blank_present=True)
+        if reason is not None:
+            raise ValueError(reason)
+
+
+@dataclass(frozen=True, slots=True)
+class _ValidatedCapturedResearchAnchorApprovalSource:
+    """Code-owned one-read projection used by validation and activation only."""
+
+    source_state: ApprovalSourceState
+    source_path: str | None
+    source_bytes: bytes
+    source_text: str
+    source_sha256: str | None
+    read_error: str | None
+
 
 _NOTES = (
     "Report-only approvals-inclusive active anchor registry (R2G-5b). This is a "
@@ -100,10 +183,10 @@ _NOTES = (
     "research_anchor_approvals.yaml; the "
     "R2G-5a validation artifact and its would_activate flag are NEVER read as authority. "
     "operator_completed_anchor_sha256 is the only activation-binding hash; candidate_sha256 / "
-    "candidate_link_status are audit-only with zero activation authority. When the standalone "
-    "report writer supplies freshly validated revocations, valid active approval_anchor "
-    "revocations move only approval-derived anchors to inactive status=revoked in this "
-    "standalone artifact; invalid revocation state fails the approvals overlay closed. "
+    "candidate_link_status are audit-only with zero activation authority. Revocations are "
+    "always freshly validated from those same captured source bytes and enforced before any "
+    "approval-derived anchor can become active; invalid revocation state fails the approvals "
+    "overlay closed. "
     "Cross-source duplicate anchor_id fails closed (no silent precedence). It never authorizes "
     "a trade and adds no NEW_BUY / ORDER_COMPILATION (permission_effect=none, "
     "not_authorization=true)."
@@ -113,26 +196,39 @@ _NOTES = (
 def build_active_research_anchor_registry_with_approvals(
     *,
     baseline: Mapping[str, Any],
-    approvals_validation: Mapping[str, Any],
-    revocations_validation: Mapping[str, Any] | None = None,
+    approval_source_text: Any,
+    approval_source_path: str | None,
+    allowed_universe: Any,
+    today: Any,
     generated_at: str | None = None,
+    candidate_index: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Merge a baseline registry with recomputed operator approvals (pure; never raises).
+    """Revalidate one exact approval source, then build its active overlay.
 
     ``baseline`` is the output of ``active_research_anchor_registry`` (the same
     baseline compiler used by the evidence-packet embedded registry selector).
-    ``approvals_validation`` is the R2G-5a validation dict, RECOMPUTED from the
-    approvals YAML (not read from the report artifact). ``revocations_validation``
-    is optional and must likewise be freshly derived in-memory from the approvals
-    YAML; on-disk revocation artifacts are never read as authority. This function
-    never mutates ``baseline``.
+    Activation accepts only the raw operator source text plus an independently
+    supplied trusted ``today`` boundary. It never accepts the persisted R2G-5a
+    validation mapping as input. Approval and revocation validation results are
+    freshly derived as local values from these exact bytes on every call. This
+    function never mutates ``baseline``.
     """
     try:
-        return _build(
+        captured_source = (
+            approval_source_text
+            if type(approval_source_text) is CapturedResearchAnchorApprovalSource
+            else capture_research_anchor_approval_source_text(
+                approval_source_text,
+                source_path=approval_source_path,
+            )
+        )
+        return _build_from_captured_source(
             baseline=baseline,
-            approvals_validation=approvals_validation,
-            revocations_validation=revocations_validation,
+            approval_source=captured_source,
+            allowed_universe=allowed_universe,
+            today=today,
             generated_at=generated_at,
+            candidate_index=candidate_index,
         )
     except Exception:  # noqa: BLE001 - report-only builder must never raise
         # Fail closed: surface the baseline registry unchanged, with zero approvals merged.
@@ -173,13 +269,124 @@ def build_active_research_anchor_registry_with_approvals(
         }
 
 
-def _build(
+def build_research_anchor_approval_source_validations(
+    *,
+    approval_source: CapturedResearchAnchorApprovalSource,
+    allowed_universe: Any,
+    today: Any,
+    as_of_date: str | None = None,
+    generated_at: str | None = None,
+    candidate_index: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Build both report-only validations from one immutable source snapshot."""
+    sanitized_source = _sanitize_captured_source(approval_source)
+    return _build_research_anchor_approval_source_validations_from_sanitized(
+        approval_source=sanitized_source,
+        allowed_universe=allowed_universe,
+        today=today,
+        as_of_date=as_of_date,
+        generated_at=generated_at,
+        candidate_index=candidate_index,
+    )
+
+
+def _build_research_anchor_approval_source_validations_from_sanitized(
+    *,
+    approval_source: _ValidatedCapturedResearchAnchorApprovalSource,
+    allowed_universe: Any,
+    today: Any,
+    as_of_date: str | None,
+    generated_at: str | None,
+    candidate_index: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Build both validation reports from the already detached private value."""
+    source = _decode_approval_source(
+        _validated_or_invalid_sanitized_source(approval_source)
+    )
+    approvals_validation = build_research_anchor_approvals_validation(
+        manifest=source["manifest"],
+        source_present=source["present"],
+        source_sha256=source["sha256"],
+        source_path=source["path"],
+        allowed_universe=allowed_universe,
+        today=today,
+        as_of_date=as_of_date,
+        generated_at=generated_at,
+        candidate_index=candidate_index,
+        parse_error=source["parse_error"],
+    )
+    revocations_validation = build_research_anchor_revocations_validation(
+        manifest=source["manifest"],
+        approvals_validation=approvals_validation,
+        source_present=source["present"],
+        source_sha256=source["sha256"],
+        source_path=source["path"],
+        today=today,
+        as_of_date=as_of_date,
+        generated_at=generated_at,
+        parse_error=source["parse_error"],
+    )
+    return approvals_validation, revocations_validation
+
+
+def _build_from_captured_source(
     *,
     baseline: Mapping[str, Any],
-    approvals_validation: Mapping[str, Any],
-    revocations_validation: Mapping[str, Any] | None,
+    approval_source: CapturedResearchAnchorApprovalSource,
+    allowed_universe: Any,
+    today: Any,
     generated_at: str | None,
+    candidate_index: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
+    """Validate one captured combined source, enforce revocations, then merge.
+
+    This is deliberately not a validation-result merge API. Approval and
+    revocation validation mappings are local values derived from the exact same
+    captured source text during this call and cannot be supplied by callers.
+    """
+    sanitized_source = _sanitize_captured_source(approval_source)
+    return _build_from_sanitized_source(
+        baseline=baseline,
+        approval_source=sanitized_source,
+        allowed_universe=allowed_universe,
+        today=today,
+        generated_at=generated_at,
+        candidate_index=candidate_index,
+    )
+
+
+def _build_from_sanitized_source(
+    *,
+    baseline: Mapping[str, Any],
+    approval_source: _ValidatedCapturedResearchAnchorApprovalSource,
+    allowed_universe: Any,
+    today: Any,
+    generated_at: str | None,
+    candidate_index: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Freshly validate and merge one already detached workflow snapshot.
+
+    This is the sole merge core used by workflow-owned snapshot paths.  The
+    private value carries raw input only: approval and revocation validity,
+    temporal eligibility, and active rows are recomputed locally on every call.
+    A forged or contradictory private value is replaced with the code-owned
+    invalid capture before parsing.
+    """
+    sanitized_source = _validated_or_invalid_sanitized_source(approval_source)
+    trusted_today, trusted_date_reason = _trusted_activation_date(today)
+    baseline_as_of = baseline.get("as_of_date")
+    approvals_validation, revocations_validation = (
+        _build_research_anchor_approval_source_validations_from_sanitized(
+            approval_source=sanitized_source,
+            allowed_universe=allowed_universe,
+            today=trusted_today,
+            as_of_date=baseline_as_of if isinstance(baseline_as_of, str) else None,
+            generated_at=generated_at,
+            candidate_index=candidate_index,
+        )
+    )
+    trusted_date_valid = trusted_date_reason is None
+
     baseline_active = [dict(r) for r in _as_list(baseline.get("active_anchors")) if isinstance(r, Mapping)]
     baseline_inactive = [dict(r) for r in _as_list(baseline.get("inactive_anchors")) if isinstance(r, Mapping)]
     baseline_valid = baseline.get("registry_valid") is True
@@ -217,7 +424,108 @@ def _build(
     cross_source_dupes = {aid for aid in approval_anchor_ids if aid in baseline_all_ids}
     conflicting = within_approvals_dupes | cross_source_dupes
     approvals_manifest_invalid = approvals_present and not approvals_source_valid
-    revocation_state = _revocation_overlay_state(revocations_validation)
+    activation_requested = any(eligible for _, _, eligible, _ in pending)
+    trusted_date_invalid = activation_requested and not trusted_date_valid
+    # Convert only the revocation result produced immediately above into local
+    # merge decisions. There is intentionally no module-level result-to-merge
+    # helper that a caller could invoke with a fabricated validation mapping.
+    revocation_results = [
+        r
+        for r in _as_list(revocations_validation.get("revocation_results"))
+        if isinstance(r, Mapping)
+    ]
+    revocation_validation_blockers = [
+        b
+        for b in _as_list(revocations_validation.get("blockers"))
+        if isinstance(b, str)
+    ]
+    revocation_problems = _revocation_validation_problems(
+        revocations_validation, revocation_results
+    )
+    revocation_blockers: list[str] = []
+    revocations_source_present = revocations_validation.get("source_present") is True
+    revocations_source_valid = revocations_validation.get("source_valid") is True
+    revocations_valid = revocations_validation.get("revocations_valid") is True
+    revocations_overlay_invalid = bool(
+        revocations_source_present
+        and (not revocations_source_valid or not revocations_valid)
+    )
+    if revocations_overlay_invalid:
+        revocation_blockers.append(BLOCKER_REVOCATIONS_INVALID)
+        _extend_unique(revocation_blockers, revocation_validation_blockers)
+
+    revocations_by_target: dict[
+        tuple[str | None, str | None, str | None], list[Mapping[str, Any]]
+    ] = defaultdict(list)
+    for result in revocation_results:
+        if (
+            result.get("target_binding_status") == BIND_RESOLVED
+            and result.get("status")
+            in (
+                REVOCATION_STATUS_VALID_ACTIVE,
+                REVOCATION_STATUS_VALID_PENDING_FUTURE,
+            )
+        ):
+            revocations_by_target[_revocation_target_key(result)].append(result)
+
+    duplicate_revocation_targets = {
+        key: rows for key, rows in revocations_by_target.items() if len(rows) > 1
+    }
+    if duplicate_revocation_targets:
+        revocations_overlay_invalid = True
+        _extend_unique(
+            revocation_blockers,
+            [BLOCKER_REVOCATIONS_INVALID, BLOCKER_DUPLICATE_TARGET_REVOCATION],
+        )
+        for key, rows in sorted(
+            duplicate_revocation_targets.items(),
+            key=lambda item: _target_sort_key(item[0]),
+        ):
+            revocation_problems.append(
+                {
+                    "reason": BLOCKER_DUPLICATE_TARGET_REVOCATION,
+                    "approval_id": key[0],
+                    "anchor_id": key[1],
+                    "operator_completed_anchor_sha256": key[2],
+                    "revocation_ids": sorted(
+                        str(r.get("revocation_id"))
+                        for r in rows
+                        if isinstance(r.get("revocation_id"), str)
+                    ),
+                }
+            )
+
+    active_revocations_by_target: dict[
+        tuple[str | None, str | None, str | None], Mapping[str, Any]
+    ] = {}
+    pending_revocations_by_target: dict[
+        tuple[str | None, str | None, str | None], list[Mapping[str, Any]]
+    ] = defaultdict(list)
+    if not revocations_overlay_invalid:
+        for result in revocation_results:
+            key = _revocation_target_key(result)
+            if result.get("status") == REVOCATION_STATUS_VALID_ACTIVE:
+                active_revocations_by_target[key] = result
+            elif result.get("status") == REVOCATION_STATUS_VALID_PENDING_FUTURE:
+                pending_revocations_by_target[key].append(result)
+
+    revocation_state = {
+        "overlay_invalid": revocations_overlay_invalid,
+        "blockers": (
+            revocation_blockers or [BLOCKER_REVOCATIONS_INVALID]
+            if revocations_overlay_invalid
+            else []
+        ),
+        "problems": revocation_problems,
+        "active_by_target": (
+            {} if revocations_overlay_invalid else active_revocations_by_target
+        ),
+        "pending_by_target": (
+            {}
+            if revocations_overlay_invalid
+            else dict(pending_revocations_by_target)
+        ),
+    }
     revocations_overlay_invalid = revocation_state["overlay_invalid"]
     active_revocations_by_target = revocation_state["active_by_target"]
     pending_revocations_by_target = revocation_state["pending_by_target"]
@@ -256,6 +564,7 @@ def _build(
         activate = (
             eligible
             and baseline_valid
+            and trusted_date_valid
             and (aid not in conflicting)
             and not revocations_overlay_invalid
         )
@@ -306,6 +615,8 @@ def _build(
                 within_approvals_dupes=within_approvals_dupes,
                 approvals_manifest_invalid=approvals_manifest_invalid,
                 baseline_valid=baseline_valid,
+                trusted_date_invalid=trusted_date_invalid,
+                trusted_date_reason=trusted_date_reason,
                 revocations_overlay_invalid=revocations_overlay_invalid,
             )
             final_inactive.append({**identity, "status": status, "reason": reason, "validation": validation})
@@ -340,6 +651,11 @@ def _build(
         )
     if approvals_manifest_invalid:
         registry_blockers.append(BLOCKER_APPROVALS_MANIFEST_INVALID)
+    if trusted_date_invalid:
+        _extend_unique(
+            registry_blockers,
+            [trusted_date_reason or RESEARCH_ANCHOR_TRUSTED_DATE_INVALID],
+        )
     if revocations_overlay_invalid:
         _extend_unique(registry_blockers, revocation_state["blockers"])
 
@@ -348,6 +664,7 @@ def _build(
         and not approvals_manifest_invalid
         and not cross_source_dupes
         and not within_approvals_dupes
+        and not trusted_date_invalid
         and not revocations_overlay_invalid
     )
 
@@ -410,7 +727,6 @@ def compile_active_research_anchor_registry_with_approvals(
     today: Any = None,
     generated_at: str | None = None,
     candidate_index: Mapping[str, Any] | None = None,
-    apply_revocations: bool = False,
 ) -> dict[str, Any]:
     """Compile the baseline registry and merge recomputed approvals (never raises).
 
@@ -426,33 +742,22 @@ def compile_active_research_anchor_registry_with_approvals(
             today=today,
             generated_at=generated_at,
         )
-        approvals_validation = validate_research_anchor_approvals(
-            manifest_path=approvals_path,
-            allowed_universe=allowed_universe,
-            today=today,
-            candidate_index=candidate_index,
-        )
-        revocations_validation = (
-            validate_research_anchor_revocations(
-                manifest_path=approvals_path,
-                allowed_universe=allowed_universe,
-                today=today,
-                as_of_date=baseline.get("as_of_date") if isinstance(baseline, Mapping) else None,
-                generated_at=generated_at,
-            )
-            if apply_revocations
-            else None
-        )
         return build_active_research_anchor_registry_with_approvals(
             baseline=baseline,
-            approvals_validation=approvals_validation,
-            revocations_validation=revocations_validation,
+            approval_source_text=capture_research_anchor_approval_source(approvals_path),
+            approval_source_path=str(approvals_path) if approvals_path is not None else None,
+            allowed_universe=allowed_universe,
+            today=today,
             generated_at=generated_at,
+            candidate_index=candidate_index,
         )
     except Exception:  # noqa: BLE001 - report-only: never break the reporting flow
         return build_active_research_anchor_registry_with_approvals(
             baseline={"registry_valid": False, "active_anchors": [], "inactive_anchors": []},
-            approvals_validation={"source_present": False, "source_valid": False, "approval_results": []},
+            approval_source_text=None,
+            approval_source_path=str(approvals_path) if approvals_path is not None else None,
+            allowed_universe=allowed_universe,
+            today=today,
             generated_at=generated_at,
         )
 
@@ -477,7 +782,6 @@ def write_active_research_anchor_registry_with_approvals(
         today=today,
         generated_at=generated_at,
         candidate_index=candidate_index,
-        apply_revocations=True,
     )
     write_json(output_path, registry)
     return {
@@ -572,95 +876,6 @@ def _approval_inactive_no_anchor(ar: Mapping[str, Any], validation: Mapping[str,
     }
 
 
-def _revocation_overlay_state(
-    revocations_validation: Mapping[str, Any] | None,
-) -> dict[str, Any]:
-    """Convert freshly derived revocation validation into overlay decisions.
-
-    The on-disk validation artifact remains report-only. This function only accepts
-    the in-memory validation dict supplied by the standalone registry report path.
-    """
-    empty = {
-        "overlay_invalid": False,
-        "blockers": [],
-        "problems": [],
-        "active_by_target": {},
-        "pending_by_target": {},
-    }
-    if not isinstance(revocations_validation, Mapping):
-        return empty
-
-    revocation_results = [
-        r for r in _as_list(revocations_validation.get("revocation_results")) if isinstance(r, Mapping)
-    ]
-    validation_blockers = [
-        b for b in _as_list(revocations_validation.get("blockers")) if isinstance(b, str)
-    ]
-    problems = _revocation_validation_problems(revocations_validation, revocation_results)
-    blockers: list[str] = []
-
-    source_present = revocations_validation.get("source_present") is True
-    source_valid = revocations_validation.get("source_valid") is True
-    revocations_valid = revocations_validation.get("revocations_valid") is True
-    overlay_invalid = bool(source_present and (not source_valid or not revocations_valid))
-    if overlay_invalid:
-        blockers.append(BLOCKER_REVOCATIONS_INVALID)
-        _extend_unique(blockers, validation_blockers)
-
-    target_results: dict[tuple[str | None, str | None, str | None], list[Mapping[str, Any]]] = defaultdict(list)
-    for result in revocation_results:
-        if (
-            result.get("target_binding_status") == BIND_RESOLVED
-            and result.get("status") in (REVOCATION_STATUS_VALID_ACTIVE, REVOCATION_STATUS_VALID_PENDING_FUTURE)
-        ):
-            target_results[_revocation_target_key(result)].append(result)
-
-    duplicate_targets = {
-        key: rows for key, rows in target_results.items() if len(rows) > 1
-    }
-    if duplicate_targets:
-        overlay_invalid = True
-        _extend_unique(blockers, [BLOCKER_REVOCATIONS_INVALID, BLOCKER_DUPLICATE_TARGET_REVOCATION])
-        for key, rows in sorted(duplicate_targets.items(), key=lambda item: _target_sort_key(item[0])):
-            problems.append(
-                {
-                    "reason": BLOCKER_DUPLICATE_TARGET_REVOCATION,
-                    "approval_id": key[0],
-                    "anchor_id": key[1],
-                    "operator_completed_anchor_sha256": key[2],
-                    "revocation_ids": sorted(
-                        str(r.get("revocation_id")) for r in rows if isinstance(r.get("revocation_id"), str)
-                    ),
-                }
-            )
-
-    if overlay_invalid:
-        return {
-            "overlay_invalid": True,
-            "blockers": blockers or [BLOCKER_REVOCATIONS_INVALID],
-            "problems": problems,
-            "active_by_target": {},
-            "pending_by_target": {},
-        }
-
-    active_by_target: dict[tuple[str | None, str | None, str | None], Mapping[str, Any]] = {}
-    pending_by_target: dict[tuple[str | None, str | None, str | None], list[Mapping[str, Any]]] = defaultdict(list)
-    for result in revocation_results:
-        key = _revocation_target_key(result)
-        if result.get("status") == REVOCATION_STATUS_VALID_ACTIVE:
-            active_by_target[key] = result
-        elif result.get("status") == REVOCATION_STATUS_VALID_PENDING_FUTURE:
-            pending_by_target[key].append(result)
-
-    return {
-        "overlay_invalid": False,
-        "blockers": [],
-        "problems": problems,
-        "active_by_target": active_by_target,
-        "pending_by_target": dict(pending_by_target),
-    }
-
-
 def _revocation_validation_problems(
     revocations_validation: Mapping[str, Any],
     revocation_results: list[Mapping[str, Any]],
@@ -742,6 +957,8 @@ def _inactive_status_reason(
     within_approvals_dupes: set[str],
     approvals_manifest_invalid: bool,
     baseline_valid: bool,
+    trusted_date_invalid: bool,
+    trusted_date_reason: str | None,
     revocations_overlay_invalid: bool,
 ) -> tuple[str, str]:
     if aid in cross_source_dupes:
@@ -750,6 +967,8 @@ def _inactive_status_reason(
         return STATUS_INVALID, "duplicate_anchor_id_within_approvals; excluded (fail closed)."
     if approvals_manifest_invalid:
         return STATUS_INVALID, "approvals manifest invalid; approval not trusted (fail closed)."
+    if trusted_date_invalid:
+        return STATUS_INVALID, trusted_date_reason or RESEARCH_ANCHOR_TRUSTED_DATE_INVALID
     if revocations_overlay_invalid:
         return STATUS_INVALID, "revocation manifest invalid; approvals overlay not trusted (fail closed)."
     if not baseline_valid:
@@ -826,6 +1045,388 @@ def _revocations_source_entry(revocations_validation: Mapping[str, Any]) -> dict
 
 
 # --- helpers -----------------------------------------------------------------
+
+
+def _trusted_activation_date(today: Any) -> tuple[str | None, str | None]:
+    """Normalize the code-owned activation boundary without any fallback."""
+    if today is None:
+        return None, RESEARCH_ANCHOR_TRUSTED_DATE_MISSING
+    normalized = normalize_iso_date_value(today)
+    if normalized is None:
+        return None, RESEARCH_ANCHOR_TRUSTED_DATE_INVALID
+    return normalized, None
+
+
+def _captured_source_invariant_error(
+    source: Any,
+    *,
+    allow_blank_present: bool = False,
+) -> str | None:
+    """Snapshot public fields once, then validate only the code-owned copy."""
+    _, reason = _snapshot_captured_source_once(
+        source,
+        allow_blank_present=allow_blank_present,
+    )
+    return reason
+
+
+def _snapshot_captured_source_once(
+    source: Any,
+    *,
+    allow_blank_present: bool = False,
+) -> tuple[_ValidatedCapturedResearchAnchorApprovalSource, str | None]:
+    """Read each public field exactly once and return an immutable local value."""
+    if type(source) is not CapturedResearchAnchorApprovalSource:
+        return _invalid_captured_source_snapshot(), CAPTURE_INVALID
+    try:
+        (
+            source_state,
+            source_path,
+            source_bytes,
+            source_text,
+            source_sha256,
+            read_error,
+        ) = (
+            source.source_state,
+            source.source_path,
+            source.source_bytes,
+            source.source_text,
+            source.source_sha256,
+            source.read_error,
+        )
+    except Exception:  # noqa: BLE001 - an attribute read cannot become authority
+        return _invalid_captured_source_snapshot(), CAPTURE_INVALID
+
+    snapshot = _ValidatedCapturedResearchAnchorApprovalSource(
+        source_state=source_state,
+        source_path=source_path,
+        source_bytes=source_bytes,
+        source_text=source_text,
+        source_sha256=source_sha256,
+        read_error=read_error,
+    )
+    reason = _validated_captured_source_invariant_error(
+        snapshot,
+        allow_blank_present=allow_blank_present,
+    )
+    if reason is not None:
+        safe_path = source_path if type(source_path) is str else None
+        return _invalid_captured_source_snapshot(safe_path), reason
+    return snapshot, None
+
+
+def _validated_captured_source_invariant_error(
+    source: _ValidatedCapturedResearchAnchorApprovalSource,
+    *,
+    allow_blank_present: bool = False,
+) -> str | None:
+    """Validate only a private, one-read projection of the public object."""
+    if type(source) is not _ValidatedCapturedResearchAnchorApprovalSource:
+        return CAPTURE_INVALID
+    if type(source.source_state) is not ApprovalSourceState:
+        return CAPTURE_INVALID
+    if source.source_path is not None and type(source.source_path) is not str:
+        return CAPTURE_INVALID
+
+    if source.source_state is ApprovalSourceState.ABSENT:
+        if (
+            type(source.source_bytes) is not bytes
+            or source.source_bytes != b""
+            or type(source.source_text) is not str
+            or source.source_text != ""
+            or source.source_sha256 is not None
+            or source.read_error is not None
+        ):
+            return CAPTURE_INVALID
+        return None
+
+    if source.source_state is ApprovalSourceState.READ_ERROR:
+        if (
+            type(source.source_bytes) is not bytes
+            or source.source_bytes != b""
+            or type(source.source_text) is not str
+            or source.source_text != ""
+            or source.source_sha256 is not None
+            or type(source.read_error) is not str
+            or source.read_error not in _CODE_OWNED_CAPTURE_ERRORS
+        ):
+            return CAPTURE_INVALID
+        return None
+
+    if source.source_state is not ApprovalSourceState.PRESENT:
+        return CAPTURE_INVALID
+    if (
+        source.read_error is not None
+        or type(source.source_bytes) is not bytes
+        or type(source.source_text) is not str
+        or type(source.source_sha256) is not str
+        or (not allow_blank_present and not source.source_bytes)
+    ):
+        return CAPTURE_INVALID
+    try:
+        decoded = source.source_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return CAPTURE_INVALID
+    if decoded != source.source_text:
+        return CAPTURE_INVALID
+    if hashlib.sha256(source.source_bytes).hexdigest() != source.source_sha256:
+        return CAPTURE_INVALID
+    if not allow_blank_present and not source.source_text.strip():
+        return CAPTURE_INVALID
+    return None
+
+
+def _invalid_captured_source_snapshot(
+    source_path: str | None = None,
+) -> _ValidatedCapturedResearchAnchorApprovalSource:
+    """Create the sole internal representation of a rejected public capture."""
+    return _ValidatedCapturedResearchAnchorApprovalSource(
+        source_state=ApprovalSourceState.READ_ERROR,
+        source_path=source_path,
+        source_bytes=b"",
+        source_text="",
+        source_sha256=None,
+        read_error=CAPTURE_INVALID,
+    )
+
+
+def _sanitize_captured_source(
+    source: Any,
+) -> _ValidatedCapturedResearchAnchorApprovalSource:
+    """Return a private snapshot detached from the caller-controlled object."""
+    # Preserve a verified PRESENT identity for a blank existing file so reporting
+    # can distinguish it from absence. ``_decode_approval_source`` still rejects
+    # the blank payload before YAML construction or activation.
+    snapshot, _ = _snapshot_captured_source_once(
+        source,
+        allow_blank_present=True,
+    )
+    return snapshot
+
+
+def _validated_or_invalid_sanitized_source(
+    source: Any,
+) -> _ValidatedCapturedResearchAnchorApprovalSource:
+    """Return an invariant-checked private snapshot without touching public input.
+
+    Internal workflow paths may share this exact frozen value across derivations.
+    Rechecking its primitive invariant is cheap defense in depth and never
+    re-enters the caller-controlled public capture boundary.
+    """
+    if (
+        type(source) is not _ValidatedCapturedResearchAnchorApprovalSource
+        or _validated_captured_source_invariant_error(
+            source,
+            allow_blank_present=True,
+        )
+        is not None
+    ):
+        return _invalid_captured_source_snapshot()
+    return source
+
+
+def _verified_approval_source_sha256(
+    source: Any,
+) -> str | None:
+    """Return only the identity verified by the private snapshot invariant."""
+    snapshot = _validated_or_invalid_sanitized_source(source)
+    return (
+        snapshot.source_sha256
+        if snapshot.source_state is ApprovalSourceState.PRESENT
+        else None
+    )
+
+
+def _verified_approval_source_present(source: Any) -> bool:
+    """Report PRESENT only for a fully invariant-checked private snapshot."""
+    snapshot = _validated_or_invalid_sanitized_source(source)
+    return snapshot.source_state is ApprovalSourceState.PRESENT
+
+
+def _verified_approval_source_validation_present(source: Any) -> bool:
+    """Match validation-artifact presence semantics (read errors are present)."""
+    snapshot = _validated_or_invalid_sanitized_source(source)
+    return snapshot.source_state is not ApprovalSourceState.ABSENT
+
+
+def _verified_approval_source_summary(
+    source: Any,
+) -> tuple[str, str | None, bool]:
+    """Return reporting fields from the private snapshot, never public input."""
+    snapshot = _validated_or_invalid_sanitized_source(source)
+    if snapshot.source_state is ApprovalSourceState.ABSENT:
+        return ApprovalSourceState.ABSENT.value, None, False
+    if snapshot.source_state is ApprovalSourceState.PRESENT:
+        return ApprovalSourceState.PRESENT.value, snapshot.source_sha256, False
+    return ApprovalSourceState.READ_ERROR.value, None, True
+
+
+def _decode_approval_source(
+    source: _ValidatedCapturedResearchAnchorApprovalSource,
+) -> dict[str, Any]:
+    """Decode only bytes from the validated private snapshot."""
+    if (
+        _validated_captured_source_invariant_error(
+            source,
+            allow_blank_present=True,
+        )
+        is not None
+    ):
+        return {
+            "manifest": None,
+            "present": True,
+            "sha256": None,
+            "path": None,
+            "parse_error": CAPTURE_INVALID,
+        }
+    if source.source_state is ApprovalSourceState.ABSENT:
+        return {
+            "manifest": None,
+            "present": False,
+            "sha256": None,
+            "path": source.source_path,
+            "parse_error": None,
+        }
+    if source.source_state is ApprovalSourceState.READ_ERROR:
+        return {
+            "manifest": None,
+            "present": True,
+            "sha256": None,
+            "path": source.source_path,
+            "parse_error": source.read_error,
+        }
+    if not source.source_text.strip():
+        return {
+            "manifest": None,
+            "present": True,
+            "sha256": source.source_sha256,
+            "path": source.source_path,
+            "parse_error": CAPTURE_INVALID,
+        }
+    try:
+        parser_text = source.source_bytes.decode("utf-8")
+        manifest = load_research_anchor_approval_yaml(parser_text)
+    except ResearchAnchorApprovalYamlPolicyError as exc:
+        return {
+            "manifest": None,
+            "present": True,
+            "sha256": source.source_sha256,
+            "path": source.source_path,
+            "parse_error": exc.reason,
+        }
+    except yaml.constructor.ConstructorError:
+        return {
+            "manifest": None,
+            "present": True,
+            "sha256": source.source_sha256,
+            "path": source.source_path,
+            "parse_error": "approval_source_yaml_duplicate_key",
+        }
+    except yaml.YAMLError:
+        return {
+            "manifest": None,
+            "present": True,
+            "sha256": source.source_sha256,
+            "path": source.source_path,
+            "parse_error": "approval_source_yaml_invalid",
+        }
+    return {
+        "manifest": manifest,
+        "present": True,
+        "sha256": source.source_sha256,
+        "path": source.source_path,
+        "parse_error": None,
+    }
+
+
+def capture_research_anchor_approval_source_text(
+    source_text: Any,
+    *,
+    source_path: str | None,
+) -> CapturedResearchAnchorApprovalSource:
+    """Wrap caller-captured raw text in the same closed snapshot contract."""
+    if source_text is None:
+        return CapturedResearchAnchorApprovalSource(
+            source_state=ApprovalSourceState.ABSENT,
+            source_path=source_path,
+            source_bytes=b"",
+            source_text="",
+            source_sha256=None,
+            read_error=None,
+        )
+    if not isinstance(source_text, str):
+        return CapturedResearchAnchorApprovalSource(
+            source_state=ApprovalSourceState.READ_ERROR,
+            source_path=source_path,
+            source_bytes=b"",
+            source_text="",
+            source_sha256=None,
+            read_error=_APPROVAL_SOURCE_TEXT_INVALID,
+        )
+    source_bytes = source_text.encode("utf-8")
+    return CapturedResearchAnchorApprovalSource(
+        source_state=ApprovalSourceState.PRESENT,
+        source_path=source_path,
+        source_bytes=source_bytes,
+        source_text=source_text,
+        source_sha256=hashlib.sha256(source_bytes).hexdigest(),
+        read_error=None,
+    )
+
+
+def capture_research_anchor_approval_source(
+    path: Any,
+) -> CapturedResearchAnchorApprovalSource:
+    """Capture the optional combined approval/revocation source exactly once.
+
+    Only a genuinely absent file represents the fixed no-source policy. Other
+    path or read failures propagate to the caller's fail-closed boundary instead
+    of being misclassified as an empty source.
+    """
+    source_path = str(path) if path is not None else None
+    if path is None:
+        return capture_research_anchor_approval_source_text(
+            None,
+            source_path=source_path,
+        )
+    try:
+        source_text = Path(path).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return capture_research_anchor_approval_source_text(
+            None,
+            source_path=source_path,
+        )
+    except UnicodeDecodeError:
+        return CapturedResearchAnchorApprovalSource(
+            source_state=ApprovalSourceState.READ_ERROR,
+            source_path=source_path,
+            source_bytes=b"",
+            source_text="",
+            source_sha256=None,
+            read_error=_APPROVAL_SOURCE_UTF8_DECODE_ERROR,
+        )
+    except OSError:
+        return CapturedResearchAnchorApprovalSource(
+            source_state=ApprovalSourceState.READ_ERROR,
+            source_path=source_path,
+            source_bytes=b"",
+            source_text="",
+            source_sha256=None,
+            read_error=_APPROVAL_SOURCE_READ_ERROR,
+        )
+    # ``Path.read_text`` performs the repository's established universal-newline
+    # normalization. These encoded bytes are the exact immutable parser input,
+    # so hashing, YAML parsing, validation, and activation all share one identity.
+    source_bytes = source_text.encode("utf-8")
+    source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    return CapturedResearchAnchorApprovalSource(
+        source_state=ApprovalSourceState.PRESENT,
+        source_path=source_path,
+        source_bytes=source_bytes,
+        source_text=source_text,
+        source_sha256=source_sha256,
+        read_error=None,
+    )
 
 
 def _as_list(value: Any) -> list[Any]:

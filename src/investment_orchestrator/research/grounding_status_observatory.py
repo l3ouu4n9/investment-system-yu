@@ -51,6 +51,8 @@ def build_grounding_status_observatory(
     approvals_registry: Mapping[str, Any] | None = None,
     approvals_validation: Mapping[str, Any] | None = None,
     revocations_validation: Mapping[str, Any] | None = None,
+    dual_read_diff: Mapping[str, Any] | None = None,
+    support_signals_dual_ground_diff: Mapping[str, Any] | None = None,
     candidates: Mapping[str, Any] | None = None,
     support_signals: Mapping[str, Any] | None = None,
     generated_at: str | None = None,
@@ -70,6 +72,8 @@ def build_grounding_status_observatory(
             approvals_registry=approvals_registry,
             approvals_validation=approvals_validation,
             revocations_validation=revocations_validation,
+            dual_read_diff=dual_read_diff,
+            support_signals_dual_ground_diff=support_signals_dual_ground_diff,
             candidates=candidates,
             support_signals=support_signals,
             generated_at=generated_at,
@@ -91,6 +95,8 @@ def build_grounding_status_observatory(
                 "diagnostics_incomplete": True,
                 "input_problems": [{"input": "builder", "problem": "internal_error", "detail": str(exc)}],
                 "evidence_observer_registry_mismatch": None,
+                "workflow_approval_source_identity_mismatch": None,
+                "approval_source_sha256_values": [],
                 "unknown_schema_sources": [],
                 "partial_data": True,
             },
@@ -106,6 +112,8 @@ def _build(
     approvals_registry: Mapping[str, Any] | None,
     approvals_validation: Mapping[str, Any] | None,
     revocations_validation: Mapping[str, Any] | None,
+    dual_read_diff: Mapping[str, Any] | None,
+    support_signals_dual_ground_diff: Mapping[str, Any] | None,
     candidates: Mapping[str, Any] | None,
     support_signals: Mapping[str, Any] | None,
     generated_at: str | None,
@@ -121,6 +129,12 @@ def _build(
     appr_reg = _mapping_or_none(approvals_registry, "approvals_registry", input_problems)
     approvals_val = _mapping_or_none(approvals_validation, "approvals_validation", input_problems)
     revocations_val = _mapping_or_none(revocations_validation, "revocations_validation", input_problems)
+    dual_diff = dual_read_diff if isinstance(dual_read_diff, Mapping) else None
+    dual_ground_diff = (
+        support_signals_dual_ground_diff
+        if isinstance(support_signals_dual_ground_diff, Mapping)
+        else None
+    )
     candidates_artifact = _mapping_or_none(candidates, "candidates", input_problems)
     support = _mapping_or_none(support_signals, "support_signals", input_problems)
 
@@ -203,6 +217,38 @@ def _build(
     if evidence_observer_mismatch:
         warnings.append("evidence_packet_registry_mismatch_observer_registry")
 
+    approval_source_hashes = {
+        value
+        for value in (
+            _str_or_none(_get(approvals_val, "source_sha256")),
+            _str_or_none(_get(revocations_val, "source_sha256")),
+            _str_or_none(_source_entry(appr_reg, _APPROVALS_SOURCE_ID).get("sha256")),
+            _str_or_none(_source_entry(appr_reg, _REVOCATIONS_SOURCE_ID).get("sha256")),
+            _str_or_none(_get(dual_diff, "approval_source_sha256")),
+            _str_or_none(_get(dual_ground_diff, "approval_source_sha256")),
+            _str_or_none(
+                _get(
+                    readiness_map,
+                    "source_hashes",
+                    "research_anchor_approvals_yaml",
+                    "approvals_source_manifest",
+                )
+            ),
+            (
+                _str_or_none(
+                    _source_entry(selected_registry, _APPROVALS_SOURCE_ID).get("sha256")
+                )
+                if _selected_source(selection, readiness_map) == "approvals_inclusive"
+                else None
+            ),
+        )
+        if value is not None
+    }
+    workflow_source_mismatch = len(approval_source_hashes) > 1
+    blockers: list[str] = []
+    if workflow_source_mismatch:
+        blockers.append("workflow_approval_source_identity_mismatch")
+
     as_of_date = _first_str(
         _get(selected_registry, "as_of_date"),
         _get(packet, "strategy_settings_summary", "as_of"),
@@ -211,7 +257,7 @@ def _build(
         _get(appr_reg, "as_of_date"),
     )
 
-    diagnostics_incomplete = bool(input_problems or warnings)
+    diagnostics_incomplete = bool(input_problems or warnings or blockers)
     selected_summary = _selected_registry_summary(
         selected_registry=selected_registry,
         selected_registry_source=selected_registry_source,
@@ -231,12 +277,14 @@ def _build(
         revocations_summary=_revocations_summary(revocations_val, appr_reg),
         candidates_summary=_candidates_summary(candidates_artifact),
         support_grounding_summary=_support_grounding_summary(support, selected_registry),
-        blockers=[],
+        blockers=blockers,
         warnings=warnings,
         diagnostics={
             "diagnostics_incomplete": diagnostics_incomplete,
             "input_problems": input_problems,
             "evidence_observer_registry_mismatch": evidence_observer_mismatch,
+            "workflow_approval_source_identity_mismatch": workflow_source_mismatch,
+            "approval_source_sha256_values": sorted(approval_source_hashes),
             "unknown_schema_sources": unknown_schema_sources,
             "partial_data": diagnostics_incomplete,
             "selected_registry_source": selected_registry_source if selected_registry is not None else None,

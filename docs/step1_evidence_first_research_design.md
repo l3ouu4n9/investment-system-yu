@@ -803,8 +803,15 @@ string internally.
   extended ETF (extended admission stays separately gated).
 - **Deterministic only** — `is_llm_generated:false` and `source_type: operator` in v1; an LLM-authored
   anchor is rejected.
-- **Stale ⇒ non-supporting** — when `now_date` is outside `[valid_from, valid_until]` (or `as_of_date` is
-  itself stale), a `blocks_if_stale` anchor cannot support acceptance.
+- **Outside the validity window ⇒ non-supporting** — `valid_from > now_date` is not-yet-valid and always
+  invalid/unusable; `valid_until < now_date` retains the existing stale/`blocks_if_stale` behavior. A
+  complete registry requires a present, parseable trusted `now_date`; a missing or malformed trusted
+  boundary fails closed, and registry `as_of_date > now_date` is invalid. A structural-theme `anchor_date_et` is its evidence
+  review date and cannot be future-dated. A `scheduled_*_event` may carry a future event date only while
+  `valid_from <= now_date <= valid_until`; the future event date never overrides a future `valid_from`
+  or an expired `valid_until`. Every expired scheduled event is unusable even when
+  `blocks_if_stale:false`; non-scheduled anchors retain the existing flag behavior.
+  These are calendar-date comparisons with zero tolerance and no timezone coercion.
 - **Referenceable** — `anchor_id` must be the token that support signals and compiled-handoff refs point at;
   a ref to a missing/stale/non-applicable anchor never accepts.
 
@@ -842,8 +849,8 @@ watch-only until those PRs land.
 ### 19.7 Proposed tests (for future implementation)
 
 - `research_anchors.yaml` valid parse; malformed / wrong `schema_version` rejected;
-- a stale anchor (now outside `[valid_from, valid_until]`, `blocks_if_stale=true`) does not support
-  acceptance;
+- a not-yet-valid anchor (`valid_from > now`) is invalid/unusable, and a stale anchor
+  (`valid_until < now`, `blocks_if_stale=true`) does not support acceptance;
 - an anchor whose `applicable_tickers` includes an out-of-universe (or extended-ETF, v1) ticker is rejected;
 - a memo that references a **missing** `anchor_id` is rejected (memo cannot invent anchors);
 - an anchor that applies to the ticker + fresh + confidence-floor-met ⇒ candidate accepted;
@@ -915,8 +922,43 @@ stays `STRICT_FRESH_EVIDENCE_ONLY` (HOLD / NO_TRADE); anchors are **not yet cons
   ISO string, so `2026-06-15` and `"2026-06-15"` are equivalent); an unparseable or ambiguous non-ISO string
   still fails validation; duplicate `anchor_id` fails; forbidden budget/`cap`/`allocation` keys and any
   `final_action`/`order_intent`/order/execution-authorization key (or `NEW_BUY`/`ORDER_COMPILATION`/`BUY_ORDER`
-  scalar token) are rejected recursively. **Stale** anchors (`valid_until < today`, `blocks_if_stale`) are
-  flagged `stale:true` / `usable:false` and excluded from `valid_anchor_count` — they never crash the build.
+  scalar token) are rejected recursively. A complete registry requires a present, parseable `as_of_date`;
+  a missing value emits `research_anchor_registry_as_of_date_missing`, and a future value invalidates the
+  registry. Date-less approval and single-anchor proposal wrappers use their closed entry-level validation
+  contracts and do not become active registries without a later code-owned activation boundary. The
+  approvals-inclusive activation boundary accepts the exact raw operator approval-source bytes plus an
+  independently supplied trusted `today`, normalizes that date under the same date rules, and freshly
+  validates approvals and revocations inside the activation call. Revocation enforcement is mandatory:
+  the single captured combined source is used for both validations, a present malformed revocation section
+  fails the overlay closed, and no activation entrypoint exposes a revocation-disable policy or accepts a
+  caller-supplied validation result. The persisted
+  `research_anchor_approvals_validation_v1` mapping remains report-only and is never an activation input;
+  it carries no trusted-date attestation or activation capability. Missing or invalid trusted dates block
+  every approval-derived activation even when the baseline registry source is absent and represented as
+  valid-empty. Manifest dates, approval timestamps, and anchor dates never substitute for the trusted
+  boundary;
+  one Step 1/Step 1A evaluation captures the combined approval/revocation file once. The established
+  projection is `Path.read_text(encoding="utf-8")` universal-newline-normalized text, re-encoded as UTF-8;
+  those exact parser bytes are SHA-256-bound and reused for validation, overlay, diff, readiness, evidence,
+  and observatory derivations. Only `FileNotFoundError` is the valid-empty `ABSENT` state; an existing blank
+  file is `PRESENT` and invalid, while read/decode failures are `READ_ERROR` and fail closed. The combined
+  source consumer requires the exact code-owned capture type, reads each primitive field once into a private
+  immutable snapshot, and uses only that snapshot for hashing, parsing, validation, activation, and Step 1A
+  source reporting. Each complete Step 1 or Step 1A evaluation performs that public-capture sanitization
+  exactly once; internal derivations receive the private raw snapshot directly and never convert it back to
+  the public capture type. Before approval additions, readiness, or approvals-inclusive evidence can be
+  adopted, their source identities must join to that snapshot; a mismatch clears additions, disables
+  readiness, falls back to the safe baseline (or fail-closed empty registry), and marks diagnostics
+  incomplete. Subclasses, proxies, contradictory fields, and unknown read-error reason tokens become
+  `approval_source_capture_invalid`; read-error reasons are restricted to the fixed values emitted by the
+  code-owned capture factories. The combined
+  manifest has closed top-level, approval-entry, revocation-entry, and operator-completed-anchor field sets;
+  unknown or duplicate YAML keys invalidate the source before activation, and YAML anchors, aliases, and
+  merge keys are rejected from the source language before construction;
+  not-yet-valid anchors (`valid_from > today`) and future-dated structural-theme review dates are
+  invalid/unusable. **Stale** anchors (`valid_until < today`, `blocks_if_stale`) are flagged `stale:true` /
+  `usable:false` and excluded from `valid_anchor_count` — they never crash the build. Scheduled-event dates
+  may be future only when their validated activation window includes today.
 - **Evidence-packet integration (report-only):** `evidence_packet.json` gains a required `research_anchors`
   section — `available`, `path`, `schema_version`, `as_of_date`, `valid`, `anchor_count`,
   `valid_anchor_count`, `stale_anchor_count`, `invalid_anchor_count`, `anchors[]`, `errors[]`,
@@ -1391,7 +1433,9 @@ posture stays `STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE` / `STRICT_FRESH_EVIDEN
   present and `> 0`); extended ETF sleeve disabled and no extended ticker promoted; every promoted ticker in
   the base allowed universe; no DATA_GAP marker on any promoted row; `primary_anchor_event_id` /
   `primary_anchor_date_et` / event-or-theme refs present on every promoted row; every referenced anchor
-  resolves in the packet, is valid/usable/not stale, and (re-checked at eligibility time) `valid_until ≥ today`.
+  resolves in the packet, is valid/usable/not stale, and (re-checked at eligibility time)
+  `valid_from <= today <= valid_until`; a future `valid_from` emits the bounded
+  `future_referenced_anchor` blocker independently of upstream registry filtering.
   **C. hash chain** — the candidate metadata's recorded `sha256` for the evidence packet / support signals /
   preview are recomputed and must match (fail closed on missing metadata / hash / object); the active-base ref
   is verified when both sides are available, otherwise recorded as unverified (`match: null`); the current

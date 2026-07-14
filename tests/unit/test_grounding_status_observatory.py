@@ -11,6 +11,8 @@ import inspect
 import json
 from typing import Any
 
+import yaml
+
 from investment_orchestrator.research.active_research_anchor_registry import (
     build_active_research_anchor_registry,
 )
@@ -50,6 +52,12 @@ UNIVERSE = ["QQQ", "VOO", "SMH"]
 ANCHORS_SHA = "anchors-sha"
 APPROVALS_SHA = "approvals-sha"
 
+
+class _SourceBackedValidation(dict[str, Any]):
+    def __init__(self, payload: dict[str, Any], source_text: str) -> None:
+        super().__init__(payload)
+        self.source_text = source_text
+
 _ORDER_SHAPED_KEYS = frozenset(
     {
         "account",
@@ -87,7 +95,12 @@ def _anchor(anchor_id: str = "AI_CAPEX_2026H2", ticker: str = "QQQ", **overrides
 
 
 def _baseline(anchors: list[dict[str, Any]] | None = None, *, source_sha: str = ANCHORS_SHA) -> dict[str, Any]:
-    payload = {"schema_version": "research_anchors_v1", "is_llm_generated": False, "anchors": anchors or []}
+    payload = {
+        "schema_version": "research_anchors_v1",
+        "as_of_date": AS_OF,
+        "is_llm_generated": False,
+        "anchors": anchors or [],
+    }
     result = validate_research_anchors(payload, allowed_universe=UNIVERSE, today=AS_OF)
     return build_active_research_anchor_registry(
         anchors_result=result,
@@ -109,7 +122,9 @@ def _approval(anchor: dict[str, Any] | None = None, *, approval_id: str = "APR-1
     }
 
 
-def _approvals_validation(approvals: list[dict[str, Any]], **manifest_overrides: Any) -> dict[str, Any]:
+def _approvals_validation(
+    approvals: list[dict[str, Any]], **manifest_overrides: Any
+) -> _SourceBackedValidation:
     manifest = {
         "schema_version": "research_anchor_approvals_v1",
         "is_llm_generated": False,
@@ -117,7 +132,8 @@ def _approvals_validation(approvals: list[dict[str, Any]], **manifest_overrides:
         "approvals": approvals,
     }
     manifest.update(manifest_overrides)
-    return build_research_anchor_approvals_validation(
+    source_text = yaml.safe_dump(manifest, sort_keys=False)
+    payload = build_research_anchor_approvals_validation(
         manifest=manifest,
         source_present=True,
         source_sha256=APPROVALS_SHA,
@@ -125,6 +141,7 @@ def _approvals_validation(approvals: list[dict[str, Any]], **manifest_overrides:
         allowed_universe=UNIVERSE,
         today=AS_OF,
     )
+    return _SourceBackedValidation(payload, source_text)
 
 
 def _revocation(anchor: dict[str, Any] | None = None, **overrides: Any) -> dict[str, Any]:
@@ -147,7 +164,7 @@ def _revocations_validation(
     revocations: Any,
     approvals: list[dict[str, Any]],
     **manifest_overrides: Any,
-) -> dict[str, Any]:
+) -> _SourceBackedValidation:
     manifest = {
         "schema_version": "research_anchor_approvals_v1",
         "is_llm_generated": False,
@@ -156,7 +173,8 @@ def _revocations_validation(
         "revocations": revocations,
     }
     manifest.update(manifest_overrides)
-    return build_research_anchor_revocations_validation(
+    source_text = yaml.safe_dump(manifest, sort_keys=False)
+    payload = build_research_anchor_revocations_validation(
         manifest=manifest,
         approvals_validation=_approvals_validation(approvals),
         source_present=True,
@@ -164,6 +182,22 @@ def _revocations_validation(
         source_path="inputs/current/research_anchor_approvals.yaml",
         today=AS_OF,
         as_of_date=AS_OF,
+    )
+    return _SourceBackedValidation(payload, source_text)
+
+
+def _activate(
+    baseline: dict[str, Any],
+    approvals_validation: _SourceBackedValidation,
+    revocations_validation: _SourceBackedValidation | None = None,
+) -> dict[str, Any]:
+    source = revocations_validation or approvals_validation
+    return build_active_research_anchor_registry_with_approvals(
+        baseline=baseline,
+        approval_source_text=source.source_text,
+        approval_source_path="inputs/current/research_anchor_approvals.yaml",
+        allowed_universe=UNIVERSE,
+        today=AS_OF,
     )
 
 
@@ -200,12 +234,20 @@ def _selection(
     selected_source: str = "approvals_inclusive",
 ) -> dict[str, Any]:
     diff = build_approval_registry_dual_read_diff(baseline_registry=baseline, approvals_registry=approvals_registry)
+    approvals_sha = next(
+        (
+            row.get("sha256")
+            for row in approvals_registry.get("source_manifest", [])
+            if row.get("source_id") == "operator_research_anchor_approvals_yaml"
+        ),
+        None,
+    )
     readiness = evaluate_approval_registry_switch_readiness(
         baseline_registry=baseline,
         approvals_registry=approvals_registry,
         dual_read_diff=diff,
         current_research_anchors_sha256=ANCHORS_SHA,
-        current_research_anchor_approvals_sha256=APPROVALS_SHA,
+        current_research_anchor_approvals_sha256=approvals_sha,
         approvals_source_present=True,
         as_of_date=AS_OF,
     )
@@ -250,8 +292,8 @@ def _observatory(
     *,
     baseline: dict[str, Any] | None = None,
     approvals_registry: dict[str, Any] | None = None,
-    approvals_validation: dict[str, Any] | None = None,
-    revocations_validation: dict[str, Any] | None = None,
+    approvals_validation: _SourceBackedValidation | None = None,
+    revocations_validation: _SourceBackedValidation | None = None,
     selected_source: str = "approvals_inclusive",
     selected_registry: dict[str, Any] | None = None,
     support_anchor_id: str = "AI_CAPEX_2026H2",
@@ -259,11 +301,7 @@ def _observatory(
     base = baseline or _baseline([_anchor("VOO_BASE", "VOO")])
     approval = _approval()
     approvals_val = approvals_validation or _approvals_validation([approval])
-    appr = approvals_registry or build_active_research_anchor_registry_with_approvals(
-        baseline=base,
-        approvals_validation=approvals_val,
-        revocations_validation=revocations_validation,
-    )
+    appr = approvals_registry or _activate(base, approvals_val, revocations_validation)
     selection = _selection(baseline=base, approvals_registry=appr, selected_source=selected_source)
     registry = selected_registry or selection["selected_registry"]
     packet = _packet(registry)
@@ -363,11 +401,7 @@ def test_baseline_fallback_summary() -> None:
     base = _baseline([_anchor("BASE_QQQ")])
     rev_val = _revocations_validation([_revocation(approval_id="APR-UNKNOWN")], [approval])
     appr_val = _approvals_validation([approval])
-    appr = build_active_research_anchor_registry_with_approvals(
-        baseline=base,
-        approvals_validation=appr_val,
-        revocations_validation=rev_val,
-    )
+    appr = _activate(base, appr_val, rev_val)
     result = _observatory(
         baseline=base,
         approvals_registry=appr,
@@ -387,11 +421,7 @@ def test_fail_closed_empty_summary() -> None:
     approval = _approval()
     rev_val = _revocations_validation([_revocation(approval_id="APR-UNKNOWN")], [approval])
     appr_val = _approvals_validation([approval])
-    appr = build_active_research_anchor_registry_with_approvals(
-        baseline=base,
-        approvals_validation=appr_val,
-        revocations_validation=rev_val,
-    )
+    appr = _activate(base, appr_val, rev_val)
     result = _observatory(
         baseline=base,
         approvals_registry=appr,
@@ -421,11 +451,7 @@ def test_invalid_revocation_fallback_summary() -> None:
     approval = _approval()
     rev_val = _revocations_validation([_revocation(operator_completed_anchor_sha256="0" * 64)], [approval])
     appr_val = _approvals_validation([approval])
-    appr = build_active_research_anchor_registry_with_approvals(
-        baseline=_baseline([_anchor("BASE_QQQ")]),
-        approvals_validation=appr_val,
-        revocations_validation=rev_val,
-    )
+    appr = _activate(_baseline([_anchor("BASE_QQQ")]), appr_val, rev_val)
     result = _observatory(
         approvals_registry=appr,
         approvals_validation=appr_val,
@@ -496,11 +522,17 @@ def test_unknown_schema_produces_diagnostics() -> None:
     assert "unknown_schema_source_unusable_for_diagnostics" in result["warnings"]
 
 
-def test_evidence_observer_mismatch_warns_only() -> None:
+def test_evidence_observer_mismatch_warns_only_when_source_identity_matches() -> None:
     base = _baseline([_anchor("VOO_BASE", "VOO")])
     approval = _approval()
     appr_val = _approvals_validation([approval])
-    appr = build_active_research_anchor_registry_with_approvals(baseline=base, approvals_validation=appr_val)
+    appr = _activate(base, appr_val)
+    appr_val = dict(appr_val)
+    appr_val["source_sha256"] = next(
+        entry["sha256"]
+        for entry in appr["source_manifest"]
+        if entry["source_id"] == "operator_research_anchor_approvals_yaml"
+    )
     selection = _selection(baseline=base, approvals_registry=appr, selected_source="approvals_inclusive")
     packet = _packet(base)
     result = build_grounding_status_observatory(
@@ -514,6 +546,60 @@ def test_evidence_observer_mismatch_warns_only() -> None:
     assert result["diagnostics"]["evidence_observer_registry_mismatch"] is True
     assert "evidence_packet_registry_mismatch_observer_registry" in result["warnings"]
     assert result["blockers"] == []
+    assert result["diagnostics"]["diagnostics_incomplete"] is True
+
+
+def test_approval_source_identity_mismatch_is_bundle_consistency_blocker() -> None:
+    base = _baseline([_anchor("VOO_BASE", "VOO")])
+    approval = _approval()
+    appr_val = _approvals_validation([approval])
+    appr = _activate(base, appr_val)
+    mutated_validation = dict(appr_val)
+    mutated_validation["source_sha256"] = "f" * 64
+    selection = _selection(
+        baseline=base,
+        approvals_registry=appr,
+        selected_source="approvals_inclusive",
+    )
+    result = build_grounding_status_observatory(
+        evidence_packet=_packet(appr),
+        embedded_registry_selection=selection,
+        readiness=selection["readiness"],
+        baseline_registry=base,
+        approvals_registry=appr,
+        approvals_validation=mutated_validation,
+    )
+
+    assert result["blockers"] == ["workflow_approval_source_identity_mismatch"]
+    assert result["diagnostics"]["workflow_approval_source_identity_mismatch"] is True
+    assert result["diagnostics"]["diagnostics_incomplete"] is True
+
+
+def test_dual_ground_source_identity_mismatch_is_bundle_consistency_blocker() -> None:
+    base = _baseline([_anchor("VOO_BASE", "VOO")])
+    approval = _approval()
+    appr_val = _approvals_validation([approval])
+    appr = _activate(base, appr_val)
+    selection = _selection(
+        baseline=base,
+        approvals_registry=appr,
+        selected_source="approvals_inclusive",
+    )
+    result = build_grounding_status_observatory(
+        evidence_packet=_packet(appr),
+        embedded_registry_selection=selection,
+        readiness=selection["readiness"],
+        baseline_registry=base,
+        approvals_registry=appr,
+        approvals_validation=appr_val,
+        support_signals_dual_ground_diff={
+            "approval_source_sha256": "f" * 64,
+        },
+    )
+
+    assert result["blockers"] == ["workflow_approval_source_identity_mismatch"]
+    assert result["diagnostics"]["workflow_approval_source_identity_mismatch"] is True
+    assert result["diagnostics"]["diagnostics_incomplete"] is True
 
 
 def test_no_new_buy_or_order_compilation_strings() -> None:

@@ -249,7 +249,11 @@ def test_accessor_failure_falls_back_to_legacy(
     def _boom(**_kwargs: Any) -> dict[str, Any]:
         raise RuntimeError("accessor exploded")
 
-    monkeypatch.setattr(step1_research, "build_step1a_evidence_packet", _boom)
+    monkeypatch.setattr(
+        step1_research,
+        "_build_step1a_evidence_packet_from_sanitized_inputs",
+        _boom,
+    )
 
     result = step1_research.parse_step1_output(strategy_settings=_settings())
 
@@ -273,7 +277,7 @@ def test_runtime_subtree_mismatch_falls_back_to_legacy(
 ) -> None:
     """A mutated active_anchor_registry (same count) -> parity_mismatch fallback."""
     _setup_repo(tmp_path, monkeypatch)
-    real_accessor = step1_research.build_step1a_evidence_packet
+    real_accessor = step1_research._build_step1a_evidence_packet_from_sanitized_inputs
 
     def _mutated(**kwargs: Any) -> dict[str, Any]:
         packet = real_accessor(**kwargs)
@@ -288,7 +292,11 @@ def test_runtime_subtree_mismatch_falls_back_to_legacy(
                 registry["registry_valid"] = not registry.get("registry_valid", True)
         return packet
 
-    monkeypatch.setattr(step1_research, "build_step1a_evidence_packet", _mutated)
+    monkeypatch.setattr(
+        step1_research,
+        "_build_step1a_evidence_packet_from_sanitized_inputs",
+        _mutated,
+    )
 
     result = step1_research.parse_step1_output(strategy_settings=_settings())
 
@@ -311,7 +319,7 @@ def test_unknown_runtime_timestamp_falls_back_to_legacy(
 ) -> None:
     """A non-generated_at ISO datetime in the runtime subtree fails closed."""
     _setup_repo(tmp_path, monkeypatch)
-    real_accessor = step1_research.build_step1a_evidence_packet
+    real_accessor = step1_research._build_step1a_evidence_packet_from_sanitized_inputs
 
     def _inject_timestamp(**kwargs: Any) -> dict[str, Any]:
         packet = real_accessor(**kwargs)
@@ -320,7 +328,11 @@ def test_unknown_runtime_timestamp_falls_back_to_legacy(
             registry["injected_runtime_timestamp"] = "2026-01-02T03:04:05+00:00"
         return packet
 
-    monkeypatch.setattr(step1_research, "build_step1a_evidence_packet", _inject_timestamp)
+    monkeypatch.setattr(
+        step1_research,
+        "_build_step1a_evidence_packet_from_sanitized_inputs",
+        _inject_timestamp,
+    )
 
     result = step1_research.parse_step1_output(strategy_settings=_settings())
 
@@ -380,7 +392,7 @@ def test_report_only_difference_falls_back_to_legacy(
 ) -> None:
     """A report-only-only divergence still falls back (conservative policy)."""
     _setup_repo(tmp_path, monkeypatch)
-    real_accessor = step1_research.build_step1a_evidence_packet
+    real_accessor = step1_research._build_step1a_evidence_packet_from_sanitized_inputs
 
     def _diff_report_only(**kwargs: Any) -> dict[str, Any]:
         packet = real_accessor(**kwargs)
@@ -390,7 +402,11 @@ def test_report_only_difference_falls_back_to_legacy(
         packet["source_artifacts"] = base
         return packet
 
-    monkeypatch.setattr(step1_research, "build_step1a_evidence_packet", _diff_report_only)
+    monkeypatch.setattr(
+        step1_research,
+        "_build_step1a_evidence_packet_from_sanitized_inputs",
+        _diff_report_only,
+    )
 
     result = step1_research.parse_step1_output(strategy_settings=_settings())
 
@@ -419,7 +435,11 @@ def test_accessor_and_write_failure_records_unwritten(
     def _boom(**_kwargs: Any) -> dict[str, Any]:
         raise RuntimeError("accessor exploded")
 
-    monkeypatch.setattr(step1_research, "build_step1a_evidence_packet", _boom)
+    monkeypatch.setattr(
+        step1_research,
+        "_build_step1a_evidence_packet_from_sanitized_inputs",
+        _boom,
+    )
 
     # Fail ONLY the evidence_packet write; every other writer keeps working so the
     # rest of the parse behaves normally.
@@ -466,7 +486,7 @@ def test_compiled_support_signals_unchanged_legacy_vs_step1a(
     stamp), and the packet fields support_signals consumes — ``universe`` and
     ``active_anchor_registry`` — must be equivalent.
     """
-    real_accessor = step1_research.build_step1a_evidence_packet
+    real_accessor = step1_research._build_step1a_evidence_packet_from_sanitized_inputs
 
     # Run A: force the legacy/current payload onto disk.
     legacy_root = tmp_path / "legacy_run"
@@ -475,14 +495,22 @@ def test_compiled_support_signals_unchanged_legacy_vs_step1a(
     def _boom(**_kwargs: Any) -> dict[str, Any]:
         raise RuntimeError("force legacy fallback")
 
-    monkeypatch.setattr(step1_research, "build_step1a_evidence_packet", _boom)
+    monkeypatch.setattr(
+        step1_research,
+        "_build_step1a_evidence_packet_from_sanitized_inputs",
+        _boom,
+    )
     result_a = step1_research.parse_step1_output(strategy_settings=_settings())
     assert result_a["evidence_packet_writer_source"] == "legacy_fallback"
     support_a = _read(step1_research.step1_compiled_support_signals_path())
     packet_a = _read(step1_research.step1_evidence_packet_path())
 
     # Run B: clean guard-pass run in a fresh repo with identical inputs.
-    monkeypatch.setattr(step1_research, "build_step1a_evidence_packet", real_accessor)
+    monkeypatch.setattr(
+        step1_research,
+        "_build_step1a_evidence_packet_from_sanitized_inputs",
+        real_accessor,
+    )
     step1a_root = tmp_path / "step1a_run"
     _setup_repo(step1a_root, monkeypatch)
     result_b = step1_research.parse_step1_output(strategy_settings=_settings())

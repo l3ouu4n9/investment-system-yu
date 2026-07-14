@@ -309,7 +309,7 @@ def test_evidence_packet_comparison_strengthened_catches_embedded_registry_misma
     would have false-passed (same anchor count, different content_sha256).
     """
     _setup_repo(tmp_path, monkeypatch)
-    original = step1_research.build_step1a_grounding_compile_bundle
+    original = step1_research._build_step1a_grounding_compile_bundle_from_sanitized_source
 
     def mismatched_bundle(**kwargs: Any) -> dict[str, Any]:
         bundle = original(**kwargs)
@@ -327,7 +327,11 @@ def test_evidence_packet_comparison_strengthened_catches_embedded_registry_misma
                 registry["registry_valid"] = not registry.get("registry_valid", True)
         return bundle
 
-    monkeypatch.setattr(step1_research, "build_step1a_grounding_compile_bundle", mismatched_bundle)
+    monkeypatch.setattr(
+        step1_research,
+        "_build_step1a_grounding_compile_bundle_from_sanitized_source",
+        mismatched_bundle,
+    )
 
     result = step1_research.parse_step1_output(strategy_settings=_settings())
 
@@ -384,7 +388,7 @@ def test_shadow_mismatch_is_diagnostic_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _setup_repo(tmp_path, monkeypatch)
-    original = step1_research.build_step1a_grounding_compile_bundle
+    original = step1_research._build_step1a_grounding_compile_bundle_from_sanitized_source
 
     def mismatched_bundle(**kwargs: Any) -> dict[str, Any]:
         bundle = original(**kwargs)
@@ -392,7 +396,11 @@ def test_shadow_mismatch_is_diagnostic_only(
         registry["registry_valid"] = False
         return bundle
 
-    monkeypatch.setattr(step1_research, "build_step1a_grounding_compile_bundle", mismatched_bundle)
+    monkeypatch.setattr(
+        step1_research,
+        "_build_step1a_grounding_compile_bundle_from_sanitized_source",
+        mismatched_bundle,
+    )
 
     result = step1_research.parse_step1_output(strategy_settings=_settings())
 
@@ -422,7 +430,11 @@ def test_shadow_run_exception_is_swallowed_and_recorded(
     def broken_bundle(**_kwargs: Any) -> dict[str, Any]:
         raise RuntimeError("shadow bundle failed")
 
-    monkeypatch.setattr(step1_research, "build_step1a_grounding_compile_bundle", broken_bundle)
+    monkeypatch.setattr(
+        step1_research,
+        "_build_step1a_grounding_compile_bundle_from_sanitized_source",
+        broken_bundle,
+    )
 
     result = step1_research.parse_step1_output(strategy_settings=_settings())
 

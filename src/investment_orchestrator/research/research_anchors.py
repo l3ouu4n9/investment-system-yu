@@ -25,6 +25,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from enum import Enum
 from typing import Any, Iterator
 
 import yaml
@@ -37,6 +38,13 @@ ANCHOR_TYPES = (
     "scheduled_macro_event",
     "scheduled_earnings_event",
     "scheduled_rebalance_event",
+)
+SCHEDULED_EVENT_ANCHOR_TYPES = frozenset(
+    {
+        "scheduled_macro_event",
+        "scheduled_earnings_event",
+        "scheduled_rebalance_event",
+    }
 )
 SOURCE_TYPES = ("operator",)
 CONFIDENCE_VALUES = ("low", "medium", "high")
@@ -91,6 +99,17 @@ ANCHORS_MISSING_DATA_GAP = (
     "support signals stay qualitative_support_only)."
 )
 
+RESEARCH_ANCHOR_REGISTRY_AS_OF_DATE_INVALID = "research_anchor_registry_as_of_date_invalid"
+RESEARCH_ANCHOR_REGISTRY_AS_OF_DATE_MISSING = "research_anchor_registry_as_of_date_missing"
+RESEARCH_ANCHOR_REGISTRY_FUTURE_DATED = "research_anchor_registry_future_dated"
+RESEARCH_ANCHOR_TRUSTED_DATE_INVALID = "research_anchor_trusted_date_invalid"
+RESEARCH_ANCHOR_TRUSTED_DATE_MISSING = "research_anchor_trusted_date_missing"
+RESEARCH_ANCHOR_VALIDATION_CONTEXT_INVALID = "research_anchor_validation_context_invalid"
+RESEARCH_ANCHOR_NOT_YET_VALID = "research_anchor_not_yet_valid"
+RESEARCH_ANCHOR_STRUCTURAL_THEME_FUTURE_DATED = (
+    "research_anchor_structural_theme_future_dated"
+)
+
 
 @dataclass(frozen=True)
 class ResearchAnchorsResult:
@@ -105,6 +124,15 @@ class ResearchAnchorsResult:
     parse_error: str | None = None
 
 
+class _ValidationContext(Enum):
+    """Closed, code-owned contexts for the shared anchor-shape validator."""
+
+    COMPLETE_REGISTRY = "complete_registry"
+    SINGLE_ANCHOR_WRAPPER = "single_anchor_wrapper"
+    APPROVAL_ENTRY = "approval_entry"
+    REVOCATION_ENTRY = "revocation_entry"
+
+
 # --- parse + validate (pure; never raises) -----------------------------------
 
 
@@ -114,15 +142,80 @@ def validate_research_anchors(
     allowed_universe: Any,
     today: Any = None,
 ) -> ResearchAnchorsResult:
-    """Validate a decoded research-anchors payload (pure; never raises).
+    """Validate a decoded complete research-anchor registry (pure; never raises).
 
     ``allowed_universe`` is the deterministic base buy universe
     (``allowed_buy_tickers``); an anchor may only apply to in-universe tickers. In
     v1, extended-only tickers (not in the base universe) are therefore rejected.
+    A complete registry must carry its own ``as_of_date`` and receive a trusted
+    ``today`` boundary; single-entry wrappers use one of the separate code-owned
+    entrypoints below.
     """
+    return _validate_research_anchors(
+        payload,
+        allowed_universe=allowed_universe,
+        today=today,
+        context=_ValidationContext.COMPLETE_REGISTRY,
+    )
+
+
+def validate_research_anchor_entry(
+    payload: Any,
+    *,
+    allowed_universe: Any,
+    today: Any = None,
+) -> ResearchAnchorsResult:
+    """Validate a synthetic single-anchor wrapper, not a complete registry."""
+    return _validate_research_anchors(
+        payload,
+        allowed_universe=allowed_universe,
+        today=today,
+        context=_ValidationContext.SINGLE_ANCHOR_WRAPPER,
+    )
+
+
+def validate_research_anchor_approval_entry(
+    payload: Any,
+    *,
+    allowed_universe: Any,
+    today: Any = None,
+) -> ResearchAnchorsResult:
+    """Validate an approval's completed-anchor wrapper, not a registry."""
+    return _validate_research_anchors(
+        payload,
+        allowed_universe=allowed_universe,
+        today=today,
+        context=_ValidationContext.APPROVAL_ENTRY,
+    )
+
+
+def _validate_research_anchors(
+    payload: Any,
+    *,
+    allowed_universe: Any,
+    today: Any,
+    context: _ValidationContext,
+) -> ResearchAnchorsResult:
+    """Shared implementation selected only by fixed, code-owned entrypoints."""
+    if not isinstance(context, _ValidationContext):
+        return ResearchAnchorsResult(
+            present=True,
+            valid=False,
+            schema_version=None,
+            as_of_date=None,
+            anchors=[],
+            errors=[RESEARCH_ANCHOR_VALIDATION_CONTEXT_INVALID],
+        )
+
     universe = _normalize_ticker_set(allowed_universe)
     today_date = _to_date(today)
     errors: list[str] = []
+
+    if context is _ValidationContext.COMPLETE_REGISTRY:
+        if today is None:
+            errors.append(RESEARCH_ANCHOR_TRUSTED_DATE_MISSING)
+        elif today_date is None:
+            errors.append(RESEARCH_ANCHOR_TRUSTED_DATE_INVALID)
 
     if not isinstance(payload, Mapping):
         return ResearchAnchorsResult(
@@ -131,7 +224,7 @@ def validate_research_anchors(
             schema_version=None,
             as_of_date=None,
             anchors=[],
-            errors=["research_anchors top-level must be a mapping/object."],
+            errors=[*errors, "research_anchors top-level must be a mapping/object."],
         )
 
     schema_version = payload.get("schema_version")
@@ -141,7 +234,15 @@ def validate_research_anchors(
     if payload.get("is_llm_generated") is not False:
         errors.append("is_llm_generated must be exactly false (anchors are operator-authored).")
 
-    as_of_date = normalize_iso_date_value(payload.get("as_of_date"))
+    raw_as_of_date = payload.get("as_of_date")
+    as_of_date = normalize_iso_date_value(raw_as_of_date)
+    if context is _ValidationContext.COMPLETE_REGISTRY and raw_as_of_date is None:
+        errors.append(RESEARCH_ANCHOR_REGISTRY_AS_OF_DATE_MISSING)
+    elif raw_as_of_date is not None and as_of_date is None:
+        errors.append(RESEARCH_ANCHOR_REGISTRY_AS_OF_DATE_INVALID)
+    elif as_of_date is not None and today_date is not None:
+        if date.fromisoformat(as_of_date) > today_date:
+            errors.append(RESEARCH_ANCHOR_REGISTRY_FUTURE_DATED)
 
     # Forbidden keys / tokens anywhere (defense in depth; anchors never authorize).
     for raw_key in _iter_keys(payload):
@@ -246,6 +347,21 @@ def _evaluate_anchor(
             problems.append(f"{label} must be an ISO date (YYYY-MM-DD); got {raw!r}.")
     if valid_from is not None and valid_until is not None and valid_from > valid_until:
         problems.append("valid_from must not be after valid_until.")
+    if valid_from is not None and today is not None and valid_from > today:
+        problems.append(RESEARCH_ANCHOR_NOT_YET_VALID)
+    # A structural-theme anchor's anchor_date_et is its evidence as-of/review
+    # date and therefore cannot be in the future. Scheduled-event anchors are
+    # intentionally different: their event date may be future when their
+    # activation window already includes today. The valid_from rule above still
+    # applies to every anchor type.
+    if (
+        anchor_type in ANCHOR_TYPES
+        and anchor_type not in SCHEDULED_EVENT_ANCHOR_TYPES
+        and anchor_date is not None
+        and today is not None
+        and anchor_date > today
+    ):
+        problems.append(RESEARCH_ANCHOR_STRUCTURAL_THEME_FUTURE_DATED)
 
     blocks_if_stale = anchor.get("blocks_if_stale", True)
     if not isinstance(blocks_if_stale, bool):
@@ -253,7 +369,12 @@ def _evaluate_anchor(
 
     stale = bool(today is not None and valid_until is not None and valid_until < today)
     valid = not problems
-    usable = valid and not (stale and blocks_if_stale)
+    scheduled_event_requires_current_window = anchor_type in SCHEDULED_EVENT_ANCHOR_TYPES
+    # ``blocks_if_stale`` retains its historical behavior for every other stale
+    # anchor. It cannot extend the activation window of a scheduled event.
+    usable = valid and not (
+        stale and (blocks_if_stale or scheduled_event_requires_current_window)
+    )
 
     return {
         "anchor_id": anchor_id,

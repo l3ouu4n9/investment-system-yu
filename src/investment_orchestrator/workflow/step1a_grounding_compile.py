@@ -19,30 +19,42 @@ from investment_orchestrator.research.active_research_anchor_registry import (
     compile_active_research_anchor_registry,
 )
 from investment_orchestrator.research.approval_registry_dual_read_diff import (
+    _build_approval_registry_dual_read_diff_from_sanitized_source,
     build_approval_registry_dual_read_diff,
 )
 from investment_orchestrator.research.approval_registry_switch_readiness import (
-    build_approval_registry_switch_readiness,
+    APPROVALS_SOURCE_ID,
+    REVOCATIONS_SOURCE_ID,
+    SWITCH_TARGET_APPROVALS,
+    SWITCH_TARGET_BASELINE,
+    SWITCH_TARGET_FAIL_CLOSED,
+    WORKFLOW_APPROVAL_SOURCE_IDENTITY_MISMATCH,
+    _build_approval_registry_switch_readiness_from_sanitized_source,
+    build_approval_registry_switch_readiness_from_captured_source,
+    evaluate_approval_registry_switch_readiness,
 )
 from investment_orchestrator.research.approvals_inclusive_active_registry import (
+    CapturedResearchAnchorApprovalSource,
+    _ValidatedCapturedResearchAnchorApprovalSource,
+    _build_from_sanitized_source,
+    _build_research_anchor_approval_source_validations_from_sanitized,
+    _sanitize_captured_source,
+    _verified_approval_source_summary,
     build_active_research_anchor_registry_with_approvals,
+    build_research_anchor_approval_source_validations,
+    capture_research_anchor_approval_source,
+    capture_research_anchor_approval_source_text,
 )
 from investment_orchestrator.research.evidence_packet import (
+    _build_embedded_active_anchor_registry_selection_from_sanitized_source,
     build_embedded_active_anchor_registry_selection,
-    build_embedded_active_anchor_registry_selection_from_validations,
+    build_embedded_active_anchor_registry_selection_from_source,
     build_evidence_packet,
+    fail_closed_empty_active_anchor_registry,
     normalize_evidence_packet_for_parity,
 )
 from investment_orchestrator.research.grounding_status_observatory import (
     build_grounding_status_observatory,
-)
-from investment_orchestrator.research.research_anchor_approval_manifest import (
-    build_research_anchor_approvals_validation,
-    validate_research_anchor_approvals,
-)
-from investment_orchestrator.research.research_anchor_revocation_manifest import (
-    build_research_anchor_revocations_validation,
-    validate_research_anchor_revocations,
 )
 from investment_orchestrator.research.research_anchors import (
     ANCHORS_MISSING_DATA_GAP,
@@ -56,6 +68,7 @@ from investment_orchestrator.research.research_anchors import (
 
 SCHEMA_VERSION = "step1a_grounding_compile_bundle_v1"
 SHADOW_DIFF_SCHEMA_VERSION = "step1a_grounding_compile_shadow_diff_v1"
+_IDENTITY_NOT_PROVIDED = object()
 
 _ARTIFACT_KEYS = (
     "active_research_anchor_registry",
@@ -128,6 +141,7 @@ def build_step1a_grounding_compile_bundle(
     optional_compiled_support_signals: Mapping[str, Any] | None = None,
     generated_at: str | None = None,
     now_date: str | None = None,
+    captured_approval_source: CapturedResearchAnchorApprovalSource | None = None,
 ) -> dict[str, Any]:
     """Build deterministic Step 1A payloads without writing or wiring them.
 
@@ -135,6 +149,50 @@ def build_step1a_grounding_compile_bundle(
     helpers for registry/readiness/approval/revocation/evidence policy and does
     not import or invoke any LLM or order-path code.
     """
+    approval_source = _sanitized_approval_source(
+        research_anchor_approvals_path,
+        captured_approval_source,
+    )
+    return _build_step1a_grounding_compile_bundle_from_sanitized_source(
+        strategy_settings=strategy_settings,
+        research_anchors_path=research_anchors_path,
+        research_anchor_approvals_path=research_anchor_approvals_path,
+        portfolio_snapshot_text=portfolio_snapshot_text,
+        portfolio_snapshot_path=portfolio_snapshot_path,
+        last_good_available=last_good_available,
+        last_good_metadata=last_good_metadata,
+        strategy_settings_path=strategy_settings_path,
+        last_good_metadata_path=last_good_metadata_path,
+        active_registry_artifact_path=active_registry_artifact_path,
+        approvals_registry_artifact_path=approvals_registry_artifact_path,
+        optional_research_anchor_candidates=optional_research_anchor_candidates,
+        optional_compiled_support_signals=optional_compiled_support_signals,
+        generated_at=generated_at,
+        now_date=now_date,
+        approval_source=approval_source,
+    )
+
+
+def _build_step1a_grounding_compile_bundle_from_sanitized_source(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+    research_anchors_path: Any,
+    research_anchor_approvals_path: Any,
+    portfolio_snapshot_text: str | None = None,
+    portfolio_snapshot_path: Any = None,
+    last_good_available: bool = False,
+    last_good_metadata: Mapping[str, Any] | None = None,
+    strategy_settings_path: Any = None,
+    last_good_metadata_path: Any = None,
+    active_registry_artifact_path: Any = None,
+    approvals_registry_artifact_path: Any = None,
+    optional_research_anchor_candidates: Mapping[str, Any] | None = None,
+    optional_compiled_support_signals: Mapping[str, Any] | None = None,
+    generated_at: str | None = None,
+    now_date: str | None = None,
+    approval_source: _ValidatedCapturedResearchAnchorApprovalSource,
+) -> dict[str, Any]:
+    """Build a complete bundle from one workflow-owned private snapshot."""
     try:
         return _build(
             strategy_settings=strategy_settings,
@@ -152,6 +210,7 @@ def build_step1a_grounding_compile_bundle(
             optional_compiled_support_signals=optional_compiled_support_signals,
             generated_at=generated_at,
             now_date=now_date,
+            approval_source=approval_source,
         )
     except Exception as exc:  # noqa: BLE001 - extraction bundle must fail closed
         return _result(
@@ -201,6 +260,7 @@ def build_step1a_research_anchor_approvals_validation(
     research_anchor_approvals_path: Any,
     generated_at: str | None = None,
     now_date: str | None = None,
+    captured_approval_source: CapturedResearchAnchorApprovalSource | None = None,
 ) -> dict[str, Any]:
     """Build the Step 1A standalone approvals-validation report payload (S1A-4).
 
@@ -215,15 +275,37 @@ def build_step1a_research_anchor_approvals_validation(
     writes nothing, and carries no activation/selection/permission/order
     authority (``would_activate`` stays report-only).
     """
+    return _build_step1a_research_anchor_approvals_validation_from_sanitized_source(
+        strategy_settings=strategy_settings,
+        generated_at=generated_at,
+        now_date=now_date,
+        approval_source=_sanitized_approval_source(
+            research_anchor_approvals_path,
+            captured_approval_source,
+        ),
+    )
+
+
+def _build_step1a_research_anchor_approvals_validation_from_sanitized_source(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+    generated_at: str | None,
+    now_date: str | None,
+    approval_source: _ValidatedCapturedResearchAnchorApprovalSource,
+) -> dict[str, Any]:
     settings = strategy_settings if isinstance(strategy_settings, Mapping) else None
     as_of = _first_str(now_date, _get(settings, "as_of"))
-    return validate_research_anchor_approvals(
-        manifest_path=research_anchor_approvals_path,
+    approvals_validation, _ = (
+        _build_research_anchor_approval_source_validations_from_sanitized(
+        approval_source=approval_source,
         allowed_universe=_allowed_buy_universe(settings),
         today=as_of,
         as_of_date=as_of,
         generated_at=generated_at,
+        candidate_index=None,
+        )
     )
+    return approvals_validation
 
 
 def build_step1a_research_anchor_revocations_validation(
@@ -232,6 +314,7 @@ def build_step1a_research_anchor_revocations_validation(
     research_anchor_approvals_path: Any,
     generated_at: str | None = None,
     now_date: str | None = None,
+    captured_approval_source: CapturedResearchAnchorApprovalSource | None = None,
 ) -> dict[str, Any]:
     """Build the Step 1A standalone revocations-validation report payload (S1A-5).
 
@@ -250,15 +333,37 @@ def build_step1a_research_anchor_revocations_validation(
     validator has no candidate-binding surface; ``reason`` stays
     non-authoritative).
     """
+    return _build_step1a_research_anchor_revocations_validation_from_sanitized_source(
+        strategy_settings=strategy_settings,
+        generated_at=generated_at,
+        now_date=now_date,
+        approval_source=_sanitized_approval_source(
+            research_anchor_approvals_path,
+            captured_approval_source,
+        ),
+    )
+
+
+def _build_step1a_research_anchor_revocations_validation_from_sanitized_source(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+    generated_at: str | None,
+    now_date: str | None,
+    approval_source: _ValidatedCapturedResearchAnchorApprovalSource,
+) -> dict[str, Any]:
     settings = strategy_settings if isinstance(strategy_settings, Mapping) else None
     as_of = _first_str(now_date, _get(settings, "as_of"))
-    return validate_research_anchor_revocations(
-        manifest_path=research_anchor_approvals_path,
+    _, revocations_validation = (
+        _build_research_anchor_approval_source_validations_from_sanitized(
+        approval_source=approval_source,
         allowed_universe=_allowed_buy_universe(settings),
         today=as_of,
         as_of_date=as_of,
         generated_at=generated_at,
+        candidate_index=None,
+        )
     )
+    return revocations_validation
 
 
 def build_step1a_active_research_anchor_registry_with_approvals(
@@ -268,17 +373,18 @@ def build_step1a_active_research_anchor_registry_with_approvals(
     research_anchor_approvals_path: Any,
     generated_at: str | None = None,
     now_date: str | None = None,
+    captured_approval_source: CapturedResearchAnchorApprovalSource | None = None,
 ) -> dict[str, Any]:
     """Build the Step 1A approvals-inclusive registry payload (S1A-6).
 
     Narrow accessor for the fourth artifact switch — the first OVERLAY-lineage
     switch. It is the SAME derivation the full Step 1A bundle uses (``_build``
     calls this function) and replicates the Step 1 dual-read writer's overlay
-    flavor exactly: the baseline comes from the S1A-3 accessor, the overlay
-    approvals validation passes NO ``as_of_date`` (the settings-anchored S1A-4
-    REPORT accessor must not be reused here), and the overlay revocations
-    validation keeps the baseline-coupled ``as_of_date`` (the settings-anchored
-    S1A-5 REPORT accessor must not be reused either). It deliberately does NOT
+    flavor exactly: the baseline comes from the S1A-3 accessor, while exact
+    operator approval-source bytes and an independently supplied trusted date
+    enter the code-owned activation boundary. That boundary freshly validates
+    approvals and revocations; the settings-anchored S1A-4/S1A-5 REPORT
+    mappings are never activation inputs. It deliberately does NOT
     delegate to ``compile_active_research_anchor_registry_with_approvals``:
     that helper's never-raise/fail-closed shell would turn accessor bugs into
     degraded payloads recorded as a "step1a" success instead of raising so the
@@ -292,6 +398,26 @@ def build_step1a_active_research_anchor_registry_with_approvals(
     writes nothing, applies revocations only inside the returned report-only
     payload, and carries no selection/permission/order authority.
     """
+    return _build_step1a_active_research_anchor_registry_with_approvals_from_sanitized_source(
+        strategy_settings=strategy_settings,
+        research_anchors_path=research_anchors_path,
+        generated_at=generated_at,
+        now_date=now_date,
+        approval_source=_sanitized_approval_source(
+            research_anchor_approvals_path,
+            captured_approval_source,
+        ),
+    )
+
+
+def _build_step1a_active_research_anchor_registry_with_approvals_from_sanitized_source(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+    research_anchors_path: Any,
+    generated_at: str | None,
+    now_date: str | None,
+    approval_source: _ValidatedCapturedResearchAnchorApprovalSource,
+) -> dict[str, Any]:
     settings = strategy_settings if isinstance(strategy_settings, Mapping) else None
     as_of = _first_str(now_date, _get(settings, "as_of"))
     allowed_universe = _allowed_buy_universe(settings)
@@ -301,24 +427,13 @@ def build_step1a_active_research_anchor_registry_with_approvals(
         generated_at=generated_at,
         now_date=as_of,
     )
-    overlay_approvals_validation = validate_research_anchor_approvals(
-        manifest_path=research_anchor_approvals_path,
-        allowed_universe=allowed_universe,
-        today=as_of,
-        generated_at=generated_at,
-    )
-    overlay_revocations_validation = validate_research_anchor_revocations(
-        manifest_path=research_anchor_approvals_path,
-        allowed_universe=allowed_universe,
-        today=as_of,
-        as_of_date=baseline.get("as_of_date") if isinstance(baseline, Mapping) else None,
-        generated_at=generated_at,
-    )
-    return build_active_research_anchor_registry_with_approvals(
+    return _build_from_sanitized_source(
         baseline=baseline,
-        approvals_validation=overlay_approvals_validation,
-        revocations_validation=overlay_revocations_validation,
+        approval_source=approval_source,
+        allowed_universe=allowed_universe,
+        today=as_of,
         generated_at=generated_at,
+        candidate_index=None,
     )
 
 
@@ -329,6 +444,7 @@ def build_step1a_approval_registry_switch_readiness(
     research_anchor_approvals_path: Any,
     generated_at: str | None = None,
     now_date: str | None = None,
+    captured_approval_source: CapturedResearchAnchorApprovalSource | None = None,
 ) -> dict[str, Any]:
     """Build the Step 1A switch-readiness DISK OBSERVER payload (S1A-7).
 
@@ -348,10 +464,30 @@ def build_step1a_approval_registry_switch_readiness(
     YAML files via the shared builder, writes nothing, and carries no
     selection/permission/order authority.
     """
+    return _build_step1a_approval_registry_switch_readiness_from_sanitized_source(
+        strategy_settings=strategy_settings,
+        research_anchors_path=research_anchors_path,
+        generated_at=generated_at,
+        now_date=now_date,
+        approval_source=_sanitized_approval_source(
+            research_anchor_approvals_path,
+            captured_approval_source,
+        ),
+    )
+
+
+def _build_step1a_approval_registry_switch_readiness_from_sanitized_source(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+    research_anchors_path: Any,
+    generated_at: str | None,
+    now_date: str | None,
+    approval_source: _ValidatedCapturedResearchAnchorApprovalSource,
+) -> dict[str, Any]:
     settings = strategy_settings if isinstance(strategy_settings, Mapping) else None
-    return build_approval_registry_switch_readiness(
+    return _build_approval_registry_switch_readiness_from_sanitized_source(
         anchors_path=research_anchors_path,
-        approvals_path=research_anchor_approvals_path,
+        approval_source=approval_source,
         allowed_universe=_allowed_buy_universe(settings),
         today=_first_str(now_date, _get(settings, "as_of")),
         generated_at=generated_at,
@@ -367,6 +503,7 @@ def build_step1a_approval_registry_dual_read_diff(
     approvals_registry_artifact_path: Any = None,
     generated_at: str | None = None,
     now_date: str | None = None,
+    captured_approval_source: CapturedResearchAnchorApprovalSource | None = None,
 ) -> dict[str, Any]:
     """Build the Step 1A dual-read diff DISK OBSERVER payload (S1A-8).
 
@@ -390,6 +527,30 @@ def build_step1a_approval_registry_dual_read_diff(
     accessors/builder, writes nothing, and carries no selection/permission/order
     authority.
     """
+    return _build_step1a_approval_registry_dual_read_diff_from_sanitized_source(
+        strategy_settings=strategy_settings,
+        research_anchors_path=research_anchors_path,
+        baseline_registry_artifact_path=baseline_registry_artifact_path,
+        approvals_registry_artifact_path=approvals_registry_artifact_path,
+        generated_at=generated_at,
+        now_date=now_date,
+        approval_source=_sanitized_approval_source(
+            research_anchor_approvals_path,
+            captured_approval_source,
+        ),
+    )
+
+
+def _build_step1a_approval_registry_dual_read_diff_from_sanitized_source(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+    research_anchors_path: Any,
+    baseline_registry_artifact_path: Any,
+    approvals_registry_artifact_path: Any,
+    generated_at: str | None,
+    now_date: str | None,
+    approval_source: _ValidatedCapturedResearchAnchorApprovalSource,
+) -> dict[str, Any]:
     settings = strategy_settings if isinstance(strategy_settings, Mapping) else None
     as_of = _first_str(now_date, _get(settings, "as_of"))
     baseline = build_step1a_active_research_anchor_registry(
@@ -398,16 +559,17 @@ def build_step1a_approval_registry_dual_read_diff(
         generated_at=generated_at,
         now_date=as_of,
     )
-    approvals_registry = build_step1a_active_research_anchor_registry_with_approvals(
+    approvals_registry = _build_step1a_active_research_anchor_registry_with_approvals_from_sanitized_source(
         strategy_settings=settings,
         research_anchors_path=research_anchors_path,
-        research_anchor_approvals_path=research_anchor_approvals_path,
         generated_at=generated_at,
         now_date=as_of,
+        approval_source=approval_source,
     )
-    return build_approval_registry_dual_read_diff(
+    return _build_approval_registry_dual_read_diff_from_sanitized_source(
         baseline_registry=baseline,
         approvals_registry=approvals_registry,
+        approval_source=approval_source,
         baseline_registry_path=_path_str(baseline_registry_artifact_path),
         approvals_registry_path=_path_str(approvals_registry_artifact_path),
         generated_at=generated_at,
@@ -427,6 +589,7 @@ def build_step1a_evidence_packet(
     generated_at: str | None = None,
     now_date: str | None = None,
     embedded_selection_out: dict[str, Any] | None = None,
+    captured_approval_source: CapturedResearchAnchorApprovalSource | None = None,
 ) -> dict[str, Any]:
     """Build the Step 1A deterministic evidence packet payload (S1A-11).
 
@@ -457,7 +620,7 @@ def build_step1a_evidence_packet(
     artifact as authority, and reads neither support_signals nor candidates. It
     carries no selection/permission/order authority and cannot authorize a trade.
     """
-    return build_step1a_evidence_packet_from_captured_inputs(
+    return _build_step1a_evidence_packet_from_sanitized_inputs(
         strategy_settings=strategy_settings,
         portfolio_snapshot_text=portfolio_snapshot_text,
         portfolio_snapshot_path=portfolio_snapshot_path,
@@ -465,12 +628,15 @@ def build_step1a_evidence_packet(
         last_good_metadata=last_good_metadata,
         research_anchors_text=_read_optional_source_text(research_anchors_path),
         research_anchors_path=_path_str(research_anchors_path),
-        research_anchor_approvals_text=_read_optional_source_text(research_anchor_approvals_path),
         research_anchor_approvals_path=_path_str(research_anchor_approvals_path),
         source_artifacts=source_artifacts,
         generated_at=generated_at,
         now_date=now_date,
         embedded_selection_out=embedded_selection_out,
+        approval_source=_sanitized_approval_source(
+            research_anchor_approvals_path,
+            captured_approval_source,
+        ),
     )
 
 
@@ -489,6 +655,7 @@ def build_step1a_evidence_packet_from_captured_inputs(
     generated_at: str | None = None,
     now_date: str | None = None,
     embedded_selection_out: dict[str, Any] | None = None,
+    captured_approval_source: CapturedResearchAnchorApprovalSource | None = None,
 ) -> dict[str, Any]:
     """Build the production Step 1A packet from caller-captured source text.
 
@@ -497,6 +664,48 @@ def build_step1a_evidence_packet_from_captured_inputs(
     readiness, or selection policy: decoded inputs flow through the existing
     pure validators and the shared embedded-selection core.
     """
+    public_source = (
+        captured_approval_source
+        if captured_approval_source is not None
+        else capture_research_anchor_approval_source_text(
+            research_anchor_approvals_text,
+            source_path=research_anchor_approvals_path,
+        )
+    )
+    return _build_step1a_evidence_packet_from_sanitized_inputs(
+        strategy_settings=strategy_settings,
+        portfolio_snapshot_text=portfolio_snapshot_text,
+        portfolio_snapshot_path=portfolio_snapshot_path,
+        last_good_available=last_good_available,
+        last_good_metadata=last_good_metadata,
+        research_anchors_text=research_anchors_text,
+        research_anchors_path=research_anchors_path,
+        research_anchor_approvals_path=research_anchor_approvals_path,
+        source_artifacts=source_artifacts,
+        generated_at=generated_at,
+        now_date=now_date,
+        embedded_selection_out=embedded_selection_out,
+        approval_source=_sanitize_captured_source(public_source),
+    )
+
+
+def _build_step1a_evidence_packet_from_sanitized_inputs(
+    *,
+    strategy_settings: Mapping[str, Any] | None,
+    portfolio_snapshot_text: str | None,
+    portfolio_snapshot_path: Any,
+    last_good_available: bool,
+    last_good_metadata: Mapping[str, Any] | None,
+    research_anchors_text: str | None,
+    research_anchors_path: str,
+    research_anchor_approvals_path: str,
+    source_artifacts: Mapping[str, str] | None,
+    generated_at: str | None,
+    now_date: str | None,
+    embedded_selection_out: dict[str, Any] | None,
+    approval_source: _ValidatedCapturedResearchAnchorApprovalSource,
+) -> dict[str, Any]:
+    """Build the packet from the workflow's one private approval snapshot."""
     settings = strategy_settings if isinstance(strategy_settings, Mapping) else None
     as_of = _first_str(now_date, _get(settings, "as_of"))
     allowed_universe = _allowed_buy_universe(settings)
@@ -550,47 +759,22 @@ def build_step1a_evidence_packet_from_captured_inputs(
         generated_at=generated_at,
     )
 
-    approvals_present = isinstance(research_anchor_approvals_text, str) and bool(
-        research_anchor_approvals_text.strip()
-    )
-    approvals_sha256 = (
-        _sha256_text(research_anchor_approvals_text) if approvals_present else None
-    )
-    approvals_payload: Any = None
-    approvals_parse_error: str | None = None
-    if approvals_present:
-        try:
-            approvals_payload = yaml.safe_load(research_anchor_approvals_text)
-        except yaml.YAMLError as exc:
-            approvals_parse_error = str(exc)
-
     baseline_as_of = baseline.get("as_of_date") if isinstance(baseline, Mapping) else None
-    approvals_validation = build_research_anchor_approvals_validation(
-        manifest=approvals_payload,
-        source_present=approvals_present,
-        source_sha256=approvals_sha256,
-        source_path=research_anchor_approvals_path,
+    approvals_validation, revocations_validation = (
+        _build_research_anchor_approval_source_validations_from_sanitized(
+        approval_source=approval_source,
         allowed_universe=allowed_universe,
         today=as_of,
         as_of_date=baseline_as_of if isinstance(baseline_as_of, str) else None,
         generated_at=generated_at,
-        parse_error=approvals_parse_error,
+        candidate_index=None,
+        )
     )
-    revocations_validation = build_research_anchor_revocations_validation(
-        manifest=approvals_payload,
-        approvals_validation=approvals_validation,
-        source_present=approvals_present,
-        source_sha256=approvals_sha256,
-        source_path=research_anchor_approvals_path,
-        today=as_of,
-        as_of_date=baseline_as_of if isinstance(baseline_as_of, str) else None,
-        generated_at=generated_at,
-        parse_error=approvals_parse_error,
-    )
-    embedded_selection = build_embedded_active_anchor_registry_selection_from_validations(
+    embedded_selection = _build_embedded_active_anchor_registry_selection_from_sanitized_source(
         baseline=baseline,
-        approvals_validation=approvals_validation,
-        revocations_validation=revocations_validation,
+        approval_source=approval_source,
+        allowed_universe=allowed_universe,
+        today=as_of,
         generated_at=generated_at,
     )
     if embedded_selection_out is not None and isinstance(embedded_selection, Mapping):
@@ -680,11 +864,11 @@ def _build(
     optional_compiled_support_signals: Mapping[str, Any] | None,
     generated_at: str | None,
     now_date: str | None,
+    approval_source: _ValidatedCapturedResearchAnchorApprovalSource,
 ) -> dict[str, Any]:
     settings = strategy_settings if isinstance(strategy_settings, Mapping) else None
     settings_as_of = _first_str(now_date, _get(settings, "as_of"))
     allowed_universe = _allowed_buy_universe(settings)
-
     # S1A-3: the bundle and the switched production writer share this single
     # accessor so the two can never drift.
     active_registry = build_step1a_active_research_anchor_registry(
@@ -696,21 +880,21 @@ def _build(
     # S1A-4: the REPORT variant is shared with the switched production writer via
     # this single accessor. The overlay variant stays separate on purpose — it
     # feeds the with-approvals registry inside the S1A-6 accessor below.
-    approvals_validation = build_step1a_research_anchor_approvals_validation(
+    approvals_validation = _build_step1a_research_anchor_approvals_validation_from_sanitized_source(
         strategy_settings=settings,
-        research_anchor_approvals_path=research_anchor_approvals_path,
         generated_at=generated_at,
         now_date=settings_as_of,
+        approval_source=approval_source,
     )
     # S1A-5: the settings-anchored REPORT variant is shared with the switched
     # production writer via this single accessor. The overlay variant stays
     # separate on purpose — it is baseline-coupled and feeds the with-approvals
     # registry inside the S1A-6 accessor below.
-    revocations_validation = build_step1a_research_anchor_revocations_validation(
+    revocations_validation = _build_step1a_research_anchor_revocations_validation_from_sanitized_source(
         strategy_settings=settings,
-        research_anchor_approvals_path=research_anchor_approvals_path,
         generated_at=generated_at,
         now_date=settings_as_of,
+        approval_source=approval_source,
     )
 
     # S1A-6: the approvals-inclusive registry payload is shared with the switched
@@ -718,35 +902,35 @@ def _build(
     # accessor derives its own baseline via the S1A-3 accessor (byte-identical to
     # active_registry above) and preserves the Step 1 dual-read writer's overlay
     # flavor: approvals validated WITHOUT as_of_date, revocations baseline-coupled.
-    approvals_registry = build_step1a_active_research_anchor_registry_with_approvals(
+    approvals_registry = _build_step1a_active_research_anchor_registry_with_approvals_from_sanitized_source(
         strategy_settings=settings,
         research_anchors_path=research_anchors_path,
-        research_anchor_approvals_path=research_anchor_approvals_path,
         generated_at=generated_at,
         now_date=settings_as_of,
+        approval_source=approval_source,
     )
     # S1A-8: the dual-read diff payload is shared with the switched production
     # writer via this single accessor so the two can never drift. The accessor
     # re-derives its own S1A-3 baseline and S1A-6 with-approvals (byte-identical
     # to active_registry / approvals_registry above) and diffs them.
-    dual_read_diff = build_step1a_approval_registry_dual_read_diff(
+    dual_read_diff = _build_step1a_approval_registry_dual_read_diff_from_sanitized_source(
         strategy_settings=settings,
         research_anchors_path=research_anchors_path,
-        research_anchor_approvals_path=research_anchor_approvals_path,
         baseline_registry_artifact_path=active_registry_artifact_path,
         approvals_registry_artifact_path=approvals_registry_artifact_path,
         generated_at=generated_at,
         now_date=settings_as_of,
+        approval_source=approval_source,
     )
     # S1A-7: the switch-readiness disk-observer payload is shared with the
     # switched production writer via this single accessor so the two can never
     # drift. Runtime readiness stays an in-memory recompute elsewhere.
-    readiness = build_step1a_approval_registry_switch_readiness(
+    readiness = _build_step1a_approval_registry_switch_readiness_from_sanitized_source(
         strategy_settings=settings,
         research_anchors_path=research_anchors_path,
-        research_anchor_approvals_path=research_anchor_approvals_path,
         generated_at=generated_at,
         now_date=settings_as_of,
+        approval_source=approval_source,
     )
 
     # S1A-11: the evidence_packet payload is shared with the switched production
@@ -755,14 +939,15 @@ def _build(
     # here) and embeds the selected registry; the out-param lets the bundle keep
     # producing the embedded-selection artifact from that exact selection.
     step1a_embedded_selection: dict[str, Any] = {}
-    evidence_packet = build_step1a_evidence_packet(
+    evidence_packet = _build_step1a_evidence_packet_from_sanitized_inputs(
         strategy_settings=settings,
         portfolio_snapshot_text=portfolio_snapshot_text,
         portfolio_snapshot_path=portfolio_snapshot_path,
         last_good_available=last_good_available,
         last_good_metadata=last_good_metadata,
-        research_anchors_path=research_anchors_path,
-        research_anchor_approvals_path=research_anchor_approvals_path,
+        research_anchors_text=_read_optional_source_text(research_anchors_path),
+        research_anchors_path=_path_str(research_anchors_path),
+        research_anchor_approvals_path=_path_str(research_anchor_approvals_path),
         source_artifacts=_source_artifacts(
             strategy_settings_path=strategy_settings_path,
             portfolio_snapshot_path=portfolio_snapshot_path,
@@ -773,12 +958,41 @@ def _build(
         generated_at=generated_at,
         now_date=settings_as_of,
         embedded_selection_out=step1a_embedded_selection,
+        approval_source=approval_source,
     )
-    embedded_selection = step1a_embedded_selection or build_embedded_active_anchor_registry_selection(
-        anchors_path=research_anchors_path,
-        approvals_path=research_anchor_approvals_path,
-        allowed_universe=allowed_universe,
-        today=settings_as_of,
+    embedded_selection = step1a_embedded_selection or (
+        _build_embedded_active_anchor_registry_selection_from_sanitized_source(
+            baseline=active_registry,
+            approval_source=approval_source,
+            allowed_universe=allowed_universe,
+            today=settings_as_of,
+            generated_at=generated_at,
+        )
+    )
+
+    (
+        approvals_registry,
+        dual_read_diff,
+        readiness,
+        embedded_selection,
+        evidence_packet,
+        workflow_identity_mismatch,
+    ) = _enforce_workflow_approval_source_identity(
+        approval_source=approval_source,
+        active_registry=active_registry,
+        approvals_validation=approvals_validation,
+        revocations_validation=revocations_validation,
+        approvals_registry=approvals_registry,
+        dual_read_diff=dual_read_diff,
+        readiness=readiness,
+        embedded_selection=embedded_selection,
+        evidence_packet=evidence_packet,
+        compiled_support_signals=(
+            optional_compiled_support_signals
+            if isinstance(optional_compiled_support_signals, Mapping)
+            else None
+        ),
+        source_summary_sha256=_verified_approval_source_summary(approval_source)[1],
         generated_at=generated_at,
     )
 
@@ -793,6 +1007,7 @@ def _build(
         approvals_registry=approvals_registry if isinstance(approvals_registry, Mapping) else None,
         approvals_validation=approvals_validation if isinstance(approvals_validation, Mapping) else None,
         revocations_validation=revocations_validation if isinstance(revocations_validation, Mapping) else None,
+        dual_read_diff=dual_read_diff if isinstance(dual_read_diff, Mapping) else None,
         candidates=optional_research_anchor_candidates
         if isinstance(optional_research_anchor_candidates, Mapping)
         else None,
@@ -813,6 +1028,9 @@ def _build(
         "evidence_packet": evidence_packet,
         "grounding_status_observatory": observatory,
     }
+    source_state, source_sha256, source_diagnostics_incomplete = (
+        _verified_approval_source_summary(approval_source)
+    )
     return _result(
         artifacts=artifacts,
         source_summary={
@@ -820,10 +1038,17 @@ def _build(
             "as_of_date": settings_as_of,
             "research_anchors_path": _path_str(research_anchors_path),
             "research_anchor_approvals_path": _path_str(research_anchor_approvals_path),
+            "research_anchor_approvals_source_state": source_state,
+            "research_anchor_approvals_source_sha256": source_sha256,
             "portfolio_snapshot_path": _path_str(portfolio_snapshot_path),
         },
         diagnostics={
-            "diagnostics_incomplete": False,
+            "diagnostics_incomplete": (
+                source_diagnostics_incomplete or workflow_identity_mismatch
+            ),
+            "workflow_approval_source_identity_mismatch": (
+                workflow_identity_mismatch
+            ),
             "files_written": [],
             "production_wiring_added": False,
             "llm_calls_made": False,
@@ -1476,6 +1701,369 @@ def _read_optional_source_text(path: Any) -> str | None:
         return read_text(path)
     except Exception:  # noqa: BLE001 - preserve existing fail-closed source behavior
         return None
+
+
+def _sanitized_approval_source(
+    path: Any,
+    source: CapturedResearchAnchorApprovalSource | None,
+) -> _ValidatedCapturedResearchAnchorApprovalSource:
+    """Own the single public-capture sanitization for one standalone call."""
+    public_source = (
+        capture_research_anchor_approval_source(path) if source is None else source
+    )
+    return _sanitize_captured_source(public_source)
+
+
+def _validated_approval_source_summary(
+    approvals_validation: Mapping[str, Any] | None,
+) -> tuple[str, str | None, bool]:
+    """Report only source identity emitted by the closed validation boundary."""
+    validation = approvals_validation if isinstance(approvals_validation, Mapping) else {}
+    source_present = validation.get("source_present")
+    source_sha256 = validation.get("source_sha256")
+    if source_present is False:
+        return "absent", None, False
+    if source_present is True and type(source_sha256) is str:
+        return "present", source_sha256, False
+    return "read_error", None, True
+
+
+def _enforce_workflow_approval_source_identity(
+    *,
+    approval_source: _ValidatedCapturedResearchAnchorApprovalSource,
+    active_registry: Mapping[str, Any],
+    approvals_validation: Mapping[str, Any],
+    revocations_validation: Mapping[str, Any],
+    approvals_registry: Mapping[str, Any],
+    dual_read_diff: Mapping[str, Any],
+    readiness: Mapping[str, Any],
+    embedded_selection: Mapping[str, Any] | None,
+    evidence_packet: Mapping[str, Any],
+    dual_ground_diff: Mapping[str, Any] | None = None,
+    compiled_support_signals: Mapping[str, Any] | None = None,
+    source_summary_sha256: object = _IDENTITY_NOT_PROVIDED,
+    generated_at: str | None,
+) -> tuple[
+    dict[str, Any],
+    dict[str, Any],
+    dict[str, Any],
+    dict[str, Any],
+    dict[str, Any],
+    bool,
+]:
+    """Join activation-bearing artifacts to the one workflow source identity.
+
+    This runs before the bundle can expose readiness or an embedded overlay.  It
+    is deliberately independent of the report-only grounding observatory.
+    """
+    expected_sha = _verified_approval_source_summary(approval_source)[1]
+    mismatch = _workflow_approval_source_identity_mismatch(
+        expected_sha=expected_sha,
+        approvals_validation=approvals_validation,
+        revocations_validation=revocations_validation,
+        approvals_registry=approvals_registry,
+        dual_read_diff=dual_read_diff,
+        readiness=readiness,
+        embedded_selection=embedded_selection,
+        evidence_packet=evidence_packet,
+        dual_ground_diff=dual_ground_diff,
+        compiled_support_signals=compiled_support_signals,
+        source_summary_sha256=source_summary_sha256,
+    )
+    if not mismatch:
+        return (
+            dict(approvals_registry),
+            dict(dual_read_diff),
+            dict(readiness),
+            dict(embedded_selection) if isinstance(embedded_selection, Mapping) else {},
+            dict(evidence_packet),
+            False,
+        )
+
+    safe_overlay = _approval_overlay_rejected_for_identity_mismatch(
+        approvals_registry
+    )
+    safe_diff = dict(dual_read_diff)
+    safe_diff["added_by_approvals"] = []
+    safe_diff["registry_valid_with_approvals"] = False
+    safe_diff["blockers"] = _append_unique_string(
+        safe_diff.get("blockers"),
+        WORKFLOW_APPROVAL_SOURCE_IDENTITY_MISMATCH,
+    )
+    safe_readiness = evaluate_approval_registry_switch_readiness(
+        baseline_registry=active_registry,
+        approvals_registry=safe_overlay,
+        dual_read_diff=safe_diff,
+        current_research_anchors_sha256=_registry_source_sha(
+            active_registry,
+            "operator_research_anchors_yaml",
+        ),
+        current_research_anchor_approvals_sha256=expected_sha,
+        approvals_source_present=(
+            approvals_validation.get("source_present") is True
+        ),
+        as_of_date=active_registry.get("as_of_date")
+        if isinstance(active_registry.get("as_of_date"), str)
+        else None,
+        generated_at=generated_at,
+    )
+    if (
+        safe_readiness.get("switch_target") == SWITCH_TARGET_BASELINE
+        and safe_readiness.get("baseline_fallback_safe") is True
+    ):
+        selected = dict(active_registry)
+        selected_source = SWITCH_TARGET_BASELINE
+    else:
+        selected = fail_closed_empty_active_anchor_registry(
+            reason=WORKFLOW_APPROVAL_SOURCE_IDENTITY_MISMATCH,
+            generated_at=generated_at,
+        )
+        selected_source = SWITCH_TARGET_FAIL_CLOSED
+    safe_selection = {
+        **(
+            dict(embedded_selection)
+            if isinstance(embedded_selection, Mapping)
+            else {}
+        ),
+        "selected_source": selected_source,
+        "selected_registry": selected,
+        "approvals_registry": safe_overlay,
+        "dual_read_diff": safe_diff,
+        "readiness": safe_readiness,
+    }
+    safe_packet = {**dict(evidence_packet), "active_anchor_registry": selected}
+    return (
+        safe_overlay,
+        safe_diff,
+        safe_readiness,
+        safe_selection,
+        safe_packet,
+        True,
+    )
+
+
+def _workflow_approval_source_identity_mismatch(
+    *,
+    expected_sha: str | None,
+    approvals_validation: Mapping[str, Any],
+    revocations_validation: Mapping[str, Any],
+    approvals_registry: Mapping[str, Any],
+    dual_read_diff: Mapping[str, Any],
+    readiness: Mapping[str, Any],
+    embedded_selection: Mapping[str, Any] | None,
+    evidence_packet: Mapping[str, Any],
+    dual_ground_diff: Mapping[str, Any] | None,
+    compiled_support_signals: Mapping[str, Any] | None = None,
+    source_summary_sha256: object,
+) -> bool:
+    """Pure source-identity join shared by Step 1 and the Step 1A bundle.
+
+    Missing identities are acceptable only for the committed no-source or
+    optional-report cases.  Once a source is present, every activation-bearing
+    artifact must carry the same identity; an approvals-inclusive selection also
+    requires its selected and packet registries to carry that identity.
+    """
+    source_hashes = readiness.get("source_hashes")
+    readiness_approval_hash = None
+    if isinstance(source_hashes, Mapping):
+        approvals_hashes = source_hashes.get("research_anchor_approvals_yaml")
+        if isinstance(approvals_hashes, Mapping):
+            value = approvals_hashes.get("approvals_source_manifest")
+            readiness_approval_hash = value if isinstance(value, str) else None
+
+    embedded = embedded_selection if isinstance(embedded_selection, Mapping) else None
+    embedded_approvals = embedded.get("approvals_registry") if embedded is not None else None
+    embedded_diff = embedded.get("dual_read_diff") if embedded is not None else None
+    embedded_readiness = embedded.get("readiness") if embedded is not None else None
+    embedded_readiness_sha = None
+    if isinstance(embedded_readiness, Mapping):
+        embedded_hashes = embedded_readiness.get("source_hashes")
+        if isinstance(embedded_hashes, Mapping):
+            approval_hashes = embedded_hashes.get(
+                "research_anchor_approvals_yaml"
+            )
+            if isinstance(approval_hashes, Mapping):
+                value = approval_hashes.get("approvals_source_manifest")
+                embedded_readiness_sha = value if isinstance(value, str) else None
+
+    required_identities: list[str | None] = [
+        _string_or_none(approvals_validation.get("source_sha256")),
+        _string_or_none(revocations_validation.get("source_sha256")),
+        _registry_source_sha(approvals_registry, APPROVALS_SOURCE_ID),
+        _registry_source_sha(approvals_registry, REVOCATIONS_SOURCE_ID),
+        _string_or_none(dual_read_diff.get("approval_source_sha256")),
+        readiness_approval_hash,
+    ]
+    if embedded is not None:
+        required_identities.extend(
+            [
+                _registry_source_sha(
+                    embedded_approvals
+                    if isinstance(embedded_approvals, Mapping)
+                    else {},
+                    APPROVALS_SOURCE_ID,
+                ),
+                _registry_source_sha(
+                    embedded_approvals
+                    if isinstance(embedded_approvals, Mapping)
+                    else {},
+                    REVOCATIONS_SOURCE_ID,
+                ),
+                _string_or_none(
+                    embedded_diff.get("approval_source_sha256")
+                    if isinstance(embedded_diff, Mapping)
+                    else None
+                ),
+                embedded_readiness_sha,
+            ]
+        )
+    if dual_ground_diff is not None:
+        required_identities.append(
+            _string_or_none(dual_ground_diff.get("approval_source_sha256"))
+        )
+    if source_summary_sha256 is not _IDENTITY_NOT_PROVIDED:
+        required_identities.append(_string_or_none(source_summary_sha256))
+
+    mismatch = any(value != expected_sha for value in required_identities)
+
+    selected_registry = embedded.get("selected_registry") if embedded is not None else None
+    selected_identity = _registry_source_sha(
+        selected_registry if isinstance(selected_registry, Mapping) else {},
+        APPROVALS_SOURCE_ID,
+    )
+    selected_revocation_identity = _registry_source_sha(
+        selected_registry if isinstance(selected_registry, Mapping) else {},
+        REVOCATIONS_SOURCE_ID,
+    )
+    # A target/selection label alone is not approval-derived grounding.  The
+    # committed no-source policy may select a valid-empty approvals-inclusive
+    # view that contains only baseline rows and therefore has no source identity
+    # to attest.  Actual approval membership is carried by the row provenance.
+    selected_registry_claims_approval_grounding = (
+        _registry_claims_approval_grounding(selected_registry)
+    )
+    if selected_registry_claims_approval_grounding:
+        if (
+            selected_identity != expected_sha
+            or selected_revocation_identity != expected_sha
+        ):
+            mismatch = True
+    elif (
+        selected_identity is not None and selected_identity != expected_sha
+    ) or (
+        selected_revocation_identity is not None
+        and selected_revocation_identity != expected_sha
+    ):
+        mismatch = True
+    packet_registry = evidence_packet.get("active_anchor_registry")
+    packet_identity = _registry_source_sha(
+        packet_registry if isinstance(packet_registry, Mapping) else {},
+        APPROVALS_SOURCE_ID,
+    )
+    packet_revocation_identity = _registry_source_sha(
+        packet_registry if isinstance(packet_registry, Mapping) else {},
+        REVOCATIONS_SOURCE_ID,
+    )
+    packet_claims_approval_grounding = _registry_claims_approval_grounding(
+        packet_registry
+    )
+
+    approval_grounding_claimed = (
+        _get(_get(approvals_registry, "counts"), "approved_active") not in (None, 0)
+        or bool(_as_list(dual_read_diff.get("added_by_approvals")))
+        or selected_registry_claims_approval_grounding
+        or packet_claims_approval_grounding
+        or _support_signals_claim_approval_grounding(compiled_support_signals)
+    )
+
+    # The evidence registry is the grounding input consumed by support signals.
+    # Once any artifact claims approval-derived grounding, both identities are
+    # mandatory even when the optional embedded-selection report is absent.
+    if approval_grounding_claimed:
+        if (
+            packet_identity != expected_sha
+            or packet_revocation_identity != expected_sha
+        ):
+            mismatch = True
+    elif (
+        packet_identity is not None and packet_identity != expected_sha
+    ) or (
+        packet_revocation_identity is not None
+        and packet_revocation_identity != expected_sha
+    ):
+        mismatch = True
+
+    if approval_grounding_claimed and expected_sha is None:
+        mismatch = True
+    return mismatch
+
+
+def _registry_claims_approval_grounding(registry: Any) -> bool:
+    """Recognize approval-derived active rows from deterministic provenance."""
+    if not isinstance(registry, Mapping):
+        return False
+    return any(
+        isinstance(row, Mapping)
+        and row.get("source_id") == APPROVALS_SOURCE_ID
+        for row in _as_list(registry.get("active_anchors"))
+    )
+
+
+def _support_signals_claim_approval_grounding(
+    support_signals: Mapping[str, Any] | None,
+) -> bool:
+    """Recognize accepted approval support only from its provenance field."""
+    if not isinstance(support_signals, Mapping):
+        return False
+    return any(
+        isinstance(row, Mapping)
+        and isinstance(row.get("approval_type"), str)
+        and bool(row.get("approval_type"))
+        for row in _as_list(support_signals.get("accepted_support_signals"))
+    )
+
+
+def _approval_overlay_rejected_for_identity_mismatch(
+    registry: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Remove approval-derived actives and mark the overlay invalid."""
+    active = [
+        dict(row)
+        for row in _as_list(registry.get("active_anchors"))
+        if isinstance(row, Mapping)
+        and row.get("source_id") != APPROVALS_SOURCE_ID
+    ]
+    counts = dict(registry.get("counts") or {})
+    counts["active"] = len(active)
+    counts["approved_active"] = 0
+    return {
+        **dict(registry),
+        "active_anchors": active,
+        "counts": counts,
+        "registry_valid": False,
+        "registry_blockers": _append_unique_string(
+            registry.get("registry_blockers"),
+            WORKFLOW_APPROVAL_SOURCE_IDENTITY_MISMATCH,
+        ),
+    }
+
+
+def _append_unique_string(value: Any, item: str) -> list[str]:
+    values = [entry for entry in _as_list(value) if isinstance(entry, str)]
+    if item not in values:
+        values.append(item)
+    return values
+
+
+def _registry_source_sha(registry: Mapping[str, Any], source_id: str) -> str | None:
+    for entry in _as_list(registry.get("source_manifest")):
+        if isinstance(entry, Mapping) and entry.get("source_id") == source_id:
+            return _string_or_none(entry.get("sha256"))
+    return None
+
+
+def _string_or_none(value: Any) -> str | None:
+    return value if isinstance(value, str) else None
 
 
 def _sha256_text(value: str | None) -> str | None:

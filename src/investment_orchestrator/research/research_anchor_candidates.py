@@ -34,7 +34,7 @@ from investment_orchestrator.research.research_anchors import (
     FORBIDDEN_ACTION_VALUE_TOKENS,
     FORBIDDEN_KEY_SUBSTRINGS,
     FORBIDDEN_KEYS,
-    validate_research_anchors,
+    validate_research_anchor_entry,
 )
 
 
@@ -250,7 +250,7 @@ def _evaluate_proposed_anchor(
         "is_llm_generated": False,
         "anchors": [dict(proposed_anchor)],
     }
-    result = validate_research_anchors(payload, allowed_universe=allowed_universe)
+    result = validate_research_anchor_entry(payload, allowed_universe=allowed_universe)
     if not result.anchors:
         return False, list(result.errors) or ["no_anchor_evaluated"]
     evaluated = result.anchors[0]

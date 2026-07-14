@@ -24,6 +24,9 @@ from investment_orchestrator.research.research_anchor_approval_manifest import (
     STATUS_REJECTED,
     STATUS_VALID_REPORT_ONLY,
     VALIDATION_SCHEMA_VERSION,
+    YAML_ALIAS_NOT_ALLOWED,
+    YAML_ANCHOR_NOT_ALLOWED,
+    YAML_MERGE_NOT_ALLOWED,
     build_research_anchor_approvals_validation,
     compute_operator_completed_anchor_sha256,
     validate_research_anchor_approvals,
@@ -171,6 +174,39 @@ def test_required_top_level_fields_present() -> None:
         "notes",
     ):
         assert key in r
+
+
+def test_v1_validation_schema_is_closed_and_has_no_activation_attestation() -> None:
+    r = _build(_manifest([_approval()]))
+    assert set(r) == {
+        "schema_version",
+        "is_llm_generated",
+        "report_only",
+        "permission_effect",
+        "not_authorization",
+        "not_execution_authorization",
+        "generated_at",
+        "as_of_date",
+        "source_path",
+        "source_sha256",
+        "source_present",
+        "source_valid",
+        "manifest_errors",
+        "manifest_warnings",
+        "approval_results",
+        "counts",
+        "consumed_by_support_signals",
+        "consumed_by_active_registry",
+        "consumed_by_compiler",
+        "consumed_by_promotion_eligibility",
+        "consumed_by_availability",
+        "consumed_by_gates",
+        "consumed_by_step2",
+        "consumed_by_step4",
+        "cannot_affect_allowed_actions",
+        "notes",
+    }
+    assert not any(key.startswith("activation_trusted_date") for key in r)
 
 
 def test_json_serializable() -> None:
@@ -465,6 +501,29 @@ def test_non_iso_date_rejected() -> None:
     assert ar["would_activate"] is False
 
 
+def test_future_valid_from_rejected_as_not_yet_valid() -> None:
+    r = _build(
+        _manifest([_approval(completed=_completed_anchor(valid_from="2026-07-05"))])
+    )
+    ar = r["approval_results"][0]
+    assert ar["validation_valid"] is False
+    assert ar["would_activate"] is False
+    assert any("research_anchor_not_yet_valid" in error for error in ar["approval_errors"])
+
+
+def test_future_structural_theme_review_date_rejected() -> None:
+    r = _build(
+        _manifest([_approval(completed=_completed_anchor(anchor_date_et="2026-07-05"))])
+    )
+    ar = r["approval_results"][0]
+    assert ar["validation_valid"] is False
+    assert ar["would_activate"] is False
+    assert any(
+        "research_anchor_structural_theme_future_dated" in error
+        for error in ar["approval_errors"]
+    )
+
+
 # --- 13. stale / expired ------------------------------------------------------
 
 
@@ -598,3 +657,110 @@ def test_operator_anchor_sha_is_activation_binding() -> None:
     # Changing ANY field changes the binding hash -> mismatch -> no activation.
     mutated = _completed_anchor(summary="different")
     assert compute_operator_completed_anchor_sha256(mutated) != expected
+
+
+def test_combined_manifest_unknown_top_level_field_fails_closed() -> None:
+    result = _build(_manifest([_approval()], unknown_top_level="x"))
+
+    assert result["source_valid"] is False
+    assert result["counts"]["would_activate"] == 0
+    assert "research_anchor_approval_manifest_unknown_field" in result["manifest_errors"]
+
+
+def test_combined_manifest_unknown_approval_field_fails_closed() -> None:
+    approval = _approval()
+    approval["unknown_approval_field"] = "x"
+    result = _build(_manifest([approval]))
+
+    assert result["source_valid"] is False
+    assert result["counts"]["would_activate"] == 0
+    assert "research_anchor_approval_entry_unknown_field" in result["manifest_errors"]
+    assert "research_anchor_approval_entry_unknown_field" in result["approval_results"][0][
+        "approval_errors"
+    ]
+
+
+def test_combined_manifest_unknown_completed_anchor_field_fails_closed() -> None:
+    completed = _completed_anchor(unknown_anchor_field="x")
+    result = _build(_manifest([_approval(completed=completed)]))
+
+    assert result["source_valid"] is False
+    assert result["counts"]["would_activate"] == 0
+    assert (
+        "research_anchor_operator_completed_anchor_unknown_field"
+        in result["manifest_errors"]
+    )
+
+
+def test_documented_approval_and_anchor_optional_fields_remain_accepted() -> None:
+    completed = _completed_anchor(
+        summary="reviewed",
+        source_note="operator source",
+        blocks_if_stale=True,
+    )
+    approval = _approval(completed=completed, candidate_id="CAND-1", candidate_sha256="abc")
+    approval.update(
+        {
+            "operator_note": "reviewed",
+            "approved_by": "operator",
+            "approved_at": "2026-07-04T12:00:00Z",
+        }
+    )
+    result = _build(_manifest([approval], revocations=[]))
+
+    assert result["source_valid"] is True
+    assert result["counts"]["would_activate"] == 1
+
+
+def test_duplicate_yaml_key_is_rejected_by_disk_validator(tmp_path: Any) -> None:
+    path = tmp_path / "research_anchor_approvals.yaml"
+    path.write_text(
+        "schema_version: research_anchor_approvals_v1\n"
+        "is_llm_generated: false\n"
+        "as_of_date: '2026-07-04'\n"
+        "approvals: []\n"
+        "approvals: []\n",
+        encoding="utf-8",
+    )
+    result = validate_research_anchor_approvals(
+        manifest_path=path,
+        allowed_universe=UNIVERSE,
+        today=AS_OF,
+    )
+
+    assert result["source_present"] is True
+    assert result["source_valid"] is False
+    assert any(
+        "approval_source_yaml_duplicate_key" in value
+        for value in result["manifest_errors"]
+    )
+
+
+def test_yaml_graph_and_merge_features_are_rejected_by_disk_validator(
+    tmp_path: Any,
+) -> None:
+    cases = {
+        YAML_ANCHOR_NOT_ALLOWED: (
+            "schema_version: &schema research_anchor_approvals_v1\n"
+            "is_llm_generated: false\napprovals: []\n"
+        ),
+        YAML_ALIAS_NOT_ALLOWED: (
+            "schema_version: &schema research_anchor_approvals_v1\n"
+            "is_llm_generated: false\napprovals: []\ncopy: *schema\n"
+        ),
+        YAML_MERGE_NOT_ALLOWED: (
+            "defaults: &defaults {schema_version: research_anchor_approvals_v1, "
+            "is_llm_generated: false, approvals: []}\n<<: *defaults\n"
+        ),
+    }
+    path = tmp_path / "research_anchor_approvals.yaml"
+    for expected_reason, source_text in cases.items():
+        path.write_text(source_text, encoding="utf-8")
+        result = validate_research_anchor_approvals(
+            manifest_path=path,
+            allowed_universe=UNIVERSE,
+            today=AS_OF,
+        )
+        assert result["source_present"] is True
+        assert result["source_valid"] is False
+        assert expected_reason in json.dumps(result["manifest_errors"])

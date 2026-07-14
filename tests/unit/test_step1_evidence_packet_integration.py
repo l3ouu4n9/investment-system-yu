@@ -92,7 +92,11 @@ def test_evidence_packet_failure_does_not_break_parse(
     def boom(*args: Any, **kwargs: Any) -> None:
         raise RuntimeError("simulated evidence packet failure")
 
-    monkeypatch.setattr(step1_research, "build_evidence_packet_and_selection", boom)
+    monkeypatch.setattr(
+        step1_research,
+        "_build_evidence_packet_and_selection_from_sanitized_source",
+        boom,
+    )
     result = _run(tmp_path, monkeypatch)
 
     assert Path(result["research_output_path"]).exists()

@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import yaml
+
 import investment_orchestrator.research.support_signals_dual_ground_diff as dual_module
 from investment_orchestrator.research.active_research_anchor_registry import (
     build_active_research_anchor_registry,
@@ -60,7 +62,12 @@ def _anchor(anchor_id: str, ticker: str = "QQQ", **overrides: Any) -> dict[str, 
 
 def _baseline_registry(anchors: list[dict[str, Any]], *, source_sha: str = ANCHORS_SHA) -> dict[str, Any]:
     result = validate_research_anchors(
-        {"schema_version": "research_anchors_v1", "is_llm_generated": False, "anchors": anchors},
+        {
+            "schema_version": "research_anchors_v1",
+            "as_of_date": AS_OF,
+            "is_llm_generated": False,
+            "anchors": anchors,
+        },
         allowed_universe=UNIVERSE, today=AS_OF,
     )
     return build_active_research_anchor_registry(
@@ -75,13 +82,15 @@ def _approvals_registry(approvals: list[dict[str, Any]], baseline: dict[str, Any
     manifest = {"schema_version": "research_anchor_approvals_v1", "is_llm_generated": False,
                 "as_of_date": AS_OF, "approvals": approvals}
     manifest.update(manifest_overrides)
-    val = build_research_anchor_approvals_validation(
-        manifest=manifest if present else None, source_present=present,
-        source_sha256=source_sha if present else None,
-        source_path="inputs/current/research_anchor_approvals.yaml",
-        allowed_universe=UNIVERSE, today=AS_OF, candidate_index=candidate_index,
+    source_text = yaml.safe_dump(manifest, sort_keys=False) if present else None
+    return build_active_research_anchor_registry_with_approvals(
+        baseline=baseline,
+        approval_source_text=source_text,
+        approval_source_path="inputs/current/research_anchor_approvals.yaml",
+        allowed_universe=UNIVERSE,
+        today=AS_OF,
+        candidate_index=candidate_index,
     )
-    return build_active_research_anchor_registry_with_approvals(baseline=baseline, approvals_validation=val)
 
 
 def _approval(anchor: dict[str, Any], *, approval_id: str = "APR-1", hash_override: str | None = None,
@@ -130,6 +139,15 @@ def _run(*, baseline: dict[str, Any], approvals_reg: dict[str, Any], memo: dict[
          anchors_sha: str = ANCHORS_SHA, approvals_sha: str = APPROVALS_SHA,
          present: bool = True, mode: str = "evidence_plus_memo") -> dict[str, Any]:
     diff = build_approval_registry_dual_read_diff(baseline_registry=baseline, approvals_registry=approvals_reg)
+    if approvals_sha == APPROVALS_SHA:
+        approvals_sha = next(
+            (
+                row.get("sha256")
+                for row in approvals_reg.get("source_manifest", [])
+                if row.get("source_id") == "operator_research_anchor_approvals_yaml"
+            ),
+            None,
+        )
     return build_support_signals_dual_ground_diff(
         evidence_packet=_packet(baseline), analyst_memo=memo, compilation_mode=mode,
         approvals_registry=approvals_reg, dual_read_diff=diff,
@@ -476,10 +494,15 @@ def test_baseline_object_not_mutated() -> None:
     packet = _packet(base)
     before = json.dumps(packet, sort_keys=True)
     diff = build_approval_registry_dual_read_diff(baseline_registry=base, approvals_registry=wa)
+    approvals_sha = next(
+        row.get("sha256")
+        for row in wa["source_manifest"]
+        if row.get("source_id") == "operator_research_anchor_approvals_yaml"
+    )
     build_support_signals_dual_ground_diff(
         evidence_packet=packet, analyst_memo=_memo([_row("QQQ", "QQQ_A")]),
         compilation_mode="evidence_plus_memo", approvals_registry=wa, dual_read_diff=diff,
-        current_research_anchors_sha256=ANCHORS_SHA, current_research_anchor_approvals_sha256=APPROVALS_SHA,
+        current_research_anchors_sha256=ANCHORS_SHA, current_research_anchor_approvals_sha256=approvals_sha,
         approvals_source_present=True,
     )
     assert json.dumps(packet, sort_keys=True) == before  # dry-run never mutates the packet

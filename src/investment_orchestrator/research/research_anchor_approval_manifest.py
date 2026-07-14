@@ -41,19 +41,66 @@ from collections.abc import Mapping
 from collections import Counter
 import hashlib
 import json
+from pathlib import Path
 from typing import Any
 
 import yaml
 
 from investment_orchestrator.research.research_anchors import (
     normalize_iso_date_value,
-    validate_research_anchors,
+    validate_research_anchor_approval_entry,
 )
 
 
 # Manifest (input) schema and the validation (output) artifact schema.
 MANIFEST_SCHEMA_VERSION = "research_anchor_approvals_v1"
 VALIDATION_SCHEMA_VERSION = "research_anchor_approvals_validation_v1"
+
+# Closed input schemas.  The three audit-only approval fields at the end of the
+# approval allowlist are documented operator annotations; none participates in
+# activation.  ``revocations`` is part of the combined source document and is
+# validated independently by research_anchor_revocation_manifest.
+MANIFEST_ALLOWED_FIELDS = frozenset(
+    {"schema_version", "is_llm_generated", "as_of_date", "approvals", "revocations"}
+)
+APPROVAL_ALLOWED_FIELDS = frozenset(
+    {
+        "approval_id",
+        "decision",
+        "candidate_id",
+        "candidate_sha256",
+        "operator_completed_anchor",
+        "operator_completed_anchor_sha256",
+        "operator_note",
+        "approved_by",
+        "approved_at",
+    }
+)
+OPERATOR_COMPLETED_ANCHOR_ALLOWED_FIELDS = frozenset(
+    {
+        "anchor_id",
+        "anchor_type",
+        "applicable_tickers",
+        "anchor_date_et",
+        "valid_from",
+        "valid_until",
+        "source_type",
+        "confidence_floor",
+        "summary",
+        "source_note",
+        "blocks_if_stale",
+    }
+)
+
+MANIFEST_UNKNOWN_FIELD = "research_anchor_approval_manifest_unknown_field"
+APPROVAL_UNKNOWN_FIELD = "research_anchor_approval_entry_unknown_field"
+OPERATOR_COMPLETED_ANCHOR_UNKNOWN_FIELD = (
+    "research_anchor_operator_completed_anchor_unknown_field"
+)
+YAML_ANCHOR_NOT_ALLOWED = "research_anchor_yaml_anchor_not_allowed"
+YAML_ALIAS_NOT_ALLOWED = "research_anchor_yaml_alias_not_allowed"
+YAML_MERGE_NOT_ALLOWED = "research_anchor_yaml_merge_not_allowed"
+_YAML_MERGE_TAG = "tag:yaml.org,2002:merge"
 
 # The single activation-binding hash field. candidate_sha256 is audit-only.
 ACTIVATION_BINDING_HASH_FIELD = "operator_completed_anchor_sha256"
@@ -93,6 +140,116 @@ _NOTES = (
     "This artifact never authorizes a trade, adds no NEW_BUY / ORDER_COMPILATION, and "
     "cannot affect allowed_actions (permission_effect=none, not_authorization=true)."
 )
+
+
+class ResearchAnchorApprovalYamlPolicyError(yaml.YAMLError):
+    """Bounded source-language rejection raised before YAML construction."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+class _UniqueKeySafeLoader(yaml.SafeLoader):
+    """Safe combined-manifest loader with deterministic duplicate rejection."""
+
+
+def _consume_yaml_event_node(
+    events: list[yaml.events.Event],
+    index: int,
+) -> tuple[int, bool]:
+    """Consume one event-stream node and report whether it contains a merge key."""
+    event = events[index]
+    if isinstance(event, (yaml.events.ScalarEvent, yaml.events.AliasEvent)):
+        return index + 1, False
+    if isinstance(event, yaml.events.SequenceStartEvent):
+        index += 1
+        merge_found = False
+        while not isinstance(events[index], yaml.events.SequenceEndEvent):
+            index, child_merge = _consume_yaml_event_node(events, index)
+            merge_found = merge_found or child_merge
+        return index + 1, merge_found
+    if isinstance(event, yaml.events.MappingStartEvent):
+        index += 1
+        merge_found = False
+        while not isinstance(events[index], yaml.events.MappingEndEvent):
+            key_event = events[index]
+            if isinstance(key_event, yaml.events.ScalarEvent) and (
+                key_event.value == "<<" or key_event.tag == _YAML_MERGE_TAG
+            ):
+                merge_found = True
+            index, key_merge = _consume_yaml_event_node(events, index)
+            index, value_merge = _consume_yaml_event_node(events, index)
+            merge_found = merge_found or key_merge or value_merge
+        return index + 1, merge_found
+    raise yaml.YAMLError("unexpected YAML event while validating source policy")
+
+
+def _validate_research_anchor_yaml_source_policy(source_text: str) -> None:
+    """Reject merge syntax and all YAML graph references before construction."""
+    events = list(yaml.parse(source_text, Loader=yaml.SafeLoader))
+    merge_found = False
+    index = 0
+    while index < len(events):
+        if isinstance(events[index], yaml.events.DocumentStartEvent):
+            index += 1
+            if index < len(events) and not isinstance(
+                events[index], yaml.events.DocumentEndEvent
+            ):
+                index, document_merge = _consume_yaml_event_node(events, index)
+                merge_found = merge_found or document_merge
+            continue
+        index += 1
+
+    if merge_found:
+        raise ResearchAnchorApprovalYamlPolicyError(YAML_MERGE_NOT_ALLOWED)
+    if any(isinstance(event, yaml.events.AliasEvent) for event in events):
+        raise ResearchAnchorApprovalYamlPolicyError(YAML_ALIAS_NOT_ALLOWED)
+    if any(
+        not isinstance(event, yaml.events.AliasEvent)
+        and getattr(event, "anchor", None) is not None
+        for event in events
+    ):
+        raise ResearchAnchorApprovalYamlPolicyError(YAML_ANCHOR_NOT_ALLOWED)
+
+
+def _construct_unique_mapping(
+    loader: _UniqueKeySafeLoader, node: yaml.nodes.MappingNode, deep: bool = False
+) -> dict[Any, Any]:
+    loader.flatten_mapping(node)
+    mapping: dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        try:
+            duplicate = key in mapping
+        except TypeError as exc:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                "found an unhashable key",
+                key_node.start_mark,
+            ) from exc
+        if duplicate:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                "found a duplicate key",
+                key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_UniqueKeySafeLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_unique_mapping,
+)
+
+
+def load_research_anchor_approval_yaml(source_text: str) -> Any:
+    """Parse the closed combined source language with no graph/merge features."""
+    _validate_research_anchor_yaml_source_policy(source_text)
+    return yaml.load(source_text, Loader=_UniqueKeySafeLoader)
 
 
 def compute_operator_completed_anchor_sha256(operator_completed_anchor: Any) -> str | None:
@@ -203,6 +360,9 @@ def _build(
             generated_at=generated_at,
         )
 
+    if any(key not in MANIFEST_ALLOWED_FIELDS for key in manifest):
+        manifest_errors.append(MANIFEST_UNKNOWN_FIELD)
+
     schema_version = manifest.get("schema_version")
     if schema_version != MANIFEST_SCHEMA_VERSION:
         manifest_errors.append(
@@ -235,6 +395,19 @@ def _build(
             as_of_date=resolved_as_of,
             generated_at=generated_at,
         )
+
+    for approval in approvals_value:
+        if not isinstance(approval, Mapping):
+            continue
+        if any(key not in APPROVAL_ALLOWED_FIELDS for key in approval):
+            if APPROVAL_UNKNOWN_FIELD not in manifest_errors:
+                manifest_errors.append(APPROVAL_UNKNOWN_FIELD)
+        completed = approval.get("operator_completed_anchor")
+        if isinstance(completed, Mapping) and any(
+            key not in OPERATOR_COMPLETED_ANCHOR_ALLOWED_FIELDS for key in completed
+        ):
+            if OPERATOR_COMPLETED_ANCHOR_UNKNOWN_FIELD not in manifest_errors:
+                manifest_errors.append(OPERATOR_COMPLETED_ANCHOR_UNKNOWN_FIELD)
 
     # Duplicate detection across the whole manifest (fail-closed diagnostics).
     duplicate_approval_ids = _duplicate_strings(
@@ -320,6 +493,9 @@ def _evaluate_approval(
             status=STATUS_REJECTED,
         )
 
+    if any(key not in APPROVAL_ALLOWED_FIELDS for key in approval):
+        approval_errors.append(APPROVAL_UNKNOWN_FIELD)
+
     approval_id = _string_of(approval.get("approval_id"))
     if approval_id is None:
         approval_errors.append("approval_id is required (non-empty string).")
@@ -352,6 +528,10 @@ def _evaluate_approval(
         if not isinstance(completed, Mapping):
             approval_errors.append("operator_completed_anchor is required for an approve decision.")
         else:
+            if any(
+                key not in OPERATOR_COMPLETED_ANCHOR_ALLOWED_FIELDS for key in completed
+            ):
+                approval_errors.append(OPERATOR_COMPLETED_ANCHOR_UNKNOWN_FIELD)
             recomputed_hash = _sha256_of(completed)
             declared = _string_of(declared_hash)
             if declared is None:
@@ -441,7 +621,11 @@ def _validate_completed_anchor(
         "is_llm_generated": False,
         "anchors": [dict(completed)],
     }
-    result = validate_research_anchors(payload, allowed_universe=allowed_universe, today=today)
+    result = validate_research_anchor_approval_entry(
+        payload,
+        allowed_universe=allowed_universe,
+        today=today,
+    )
     evaluated = result.anchors[0] if result.anchors else None
     file_errors = list(result.errors)
     if evaluated is None:
@@ -641,17 +825,20 @@ def validate_research_anchor_approvals(
     candidate_index: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Read + validate the approval manifest YAML from disk (never raises)."""
-    source_text = _read_text_or_none(manifest_path)
-    source_present = source_text is not None and source_text.strip() != ""
-    source_sha256 = _sha256_of_text(source_text) if source_present else None
+    source_present, source_text, source_sha256, parse_error = (
+        read_research_anchor_approval_source(manifest_path)
+    )
 
     manifest: Any = None
-    parse_error: str | None = None
-    if source_present:
+    if source_present and parse_error is None and source_text is not None:
         try:
-            manifest = yaml.safe_load(source_text)
-        except yaml.YAMLError as exc:
-            parse_error = str(exc)
+            manifest = load_research_anchor_approval_yaml(source_text)
+        except ResearchAnchorApprovalYamlPolicyError as exc:
+            parse_error = exc.reason
+        except yaml.constructor.ConstructorError:
+            parse_error = "approval_source_yaml_duplicate_key"
+        except yaml.YAMLError:
+            parse_error = "approval_source_yaml_invalid"
 
     return build_research_anchor_approvals_validation(
         manifest=manifest,
@@ -728,18 +915,20 @@ def _sha256_of(value: Any) -> str | None:
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
-def _sha256_of_text(value: str | None) -> str | None:
-    if not isinstance(value, str) or value == "":
-        return None
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def _read_text_or_none(path: Any) -> str | None:
-    from investment_orchestrator.common.io import file_exists, read_text
-
-    if path is None or not file_exists(path):
-        return None
+def read_research_anchor_approval_source(
+    path: Any,
+) -> tuple[bool, str | None, str | None, str | None]:
+    """Read one path once; blank is present and non-absence failures are errors."""
+    if path is None:
+        return False, None, None, None
     try:
-        return read_text(path)
-    except Exception:  # noqa: BLE001 - unreadable file treated as absent
-        return None
+        source_text = Path(path).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return False, None, None, None
+    except UnicodeDecodeError:
+        return True, None, None, "approval_source_utf8_decode_error"
+    except OSError:
+        return True, None, None, "approval_source_read_error"
+    source_bytes = source_text.encode("utf-8")
+    source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    return True, source_text, source_sha256, None
