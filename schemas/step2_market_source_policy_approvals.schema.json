@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-system.local/schemas/step2_market_source_policy_approvals.schema.json",
+  "title": "Step 2 Market Source Policy Operator Approvals v1",
+  "description": "Closed decoded-object contract for operator approval claims. Object validity does not establish raw-artifact validity, operator authentication, policy activation, source-role eligibility, workflow permission, trading permission, publication eligibility, order compilation, or execution authority.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "operator_approved_source_policy_sha256",
+    "approval_content"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "step2_market_source_policy_approvals_v1"
+    },
+    "operator_approved_source_policy_sha256": {
+      "type": "string"
+    },
+    "approval_content": {
+      "$ref": "#/$defs/approval_content"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "approval_content": {
+      "type": "object",
+      "required": [
+        "policy_version",
+        "supersedes_policy_version",
+        "policy_change_reason",
+        "approved_by",
+        "approved_at_utc",
+        "sources"
+      ],
+      "properties": {
+        "policy_version": {
+          "type": "string"
+        },
+        "supersedes_policy_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "policy_change_reason": {
+          "type": "string"
+        },
+        "approved_by": {
+          "type": "string"
+        },
+        "approved_at_utc": {
+          "type": "string"
+        },
+        "sources": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/source"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "source": {
+      "type": "object",
+      "required": [
+        "canonical_source_id",
+        "source_version",
+        "exact_aliases",
+        "permissions",
+        "approval_reason"
+      ],
+      "properties": {
+        "canonical_source_id": {
+          "type": "string"
+        },
+        "source_version": {
+          "type": "string"
+        },
+        "exact_aliases": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 32,
+          "items": {
+            "type": "string"
+          }
+        },
+        "permissions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/permission"
+          }
+        },
+        "approval_reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "permission": {
+      "type": "object",
+      "required": [
+        "source_role",
+        "content_type",
+        "capture_adapter_id",
+        "capture_adapter_version"
+      ],
+      "properties": {
+        "source_role": {
+          "type": "string"
+        },
+        "content_type": {
+          "type": "string"
+        },
+        "capture_adapter_id": {
+          "type": "string"
+        },
+        "capture_adapter_version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
