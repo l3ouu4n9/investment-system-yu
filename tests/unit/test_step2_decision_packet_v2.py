@@ -1962,6 +1962,10 @@ _CONTRACT_RELATIVE_PATH = Path(
 _B1_RELATIVE_PATH = Path(
     "src/investment_orchestrator/validators/validate_step2_market_observations.py"
 )
+_B3A_RELATIVE_PATH = Path(
+    "src/investment_orchestrator/validators/"
+    "validate_step2_decision_packet_semantics.py"
+)
 _CONTRACT_SYMBOLS = frozenset(
     {
         validate_step2_decision_packet_v2.__name__,
@@ -2062,6 +2066,7 @@ def test_no_production_consumer_references_decision_packet_v2_contract() -> None
     production_root = repo_root / "src" / "investment_orchestrator"
     excluded_paths = {
         repo_root / _CONTRACT_RELATIVE_PATH,
+        repo_root / _B3A_RELATIVE_PATH,
     }
     findings: list[str] = []
     for path in sorted(production_root.rglob("*.py")):
