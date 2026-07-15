@@ -1,0 +1,859 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-system.local/schemas/step2_decision_packet.schema.json",
+  "title": "Step 2 Decision Packet v2",
+  "description": "Closed structural contract for a non-authorizing Step 2 decision proposal. Structural validity does not establish semantic consistency, freshness, source validity, market usability, universe membership, candidate validity, readiness, permission, publication eligibility, order eligibility, final safety, or execution authority.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "mode",
+    "market_observations",
+    "proposed_buy_universe",
+    "active_shortlist",
+    "exposure_overlap_diagnostics",
+    "buy_side_delta_table",
+    "rotation_decision_layer_8_15",
+    "sell_side_delta_table_8_2",
+    "execution_plan_drafts_8_5",
+    "sell_execution_plan_drafts_8_6",
+    "cold_regime_review_proposal",
+    "post_cancel_redeployment_proposal",
+    "reported_assumptions_and_data_gaps"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "step2_decision_packet_v2"
+    },
+    "mode": {
+      "enum": [
+        "DECISION_DRAFT",
+        "NO_TRADE"
+      ]
+    },
+    "no_trade_reason": {
+      "$ref": "#/$defs/no_trade_reason"
+    },
+    "market_observations": {
+      "anyOf": [
+        {
+          "$ref": "https://investment-system.local/schemas/step2_market_observations.schema.json"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "proposed_buy_universe": {
+      "$ref": "#/$defs/ticker_array_128"
+    },
+    "active_shortlist": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 32,
+      "items": {
+        "$ref": "#/$defs/active_shortlist_row"
+      }
+    },
+    "exposure_overlap_diagnostics": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 128,
+      "items": {
+        "$ref": "#/$defs/exposure_overlap_row"
+      }
+    },
+    "buy_side_delta_table": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 128,
+      "items": {
+        "$ref": "#/$defs/buy_side_delta_row"
+      }
+    },
+    "rotation_decision_layer_8_15": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 128,
+      "items": {
+        "$ref": "#/$defs/rotation_row"
+      }
+    },
+    "sell_side_delta_table_8_2": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 128,
+      "items": {
+        "$ref": "#/$defs/sell_side_delta_row"
+      }
+    },
+    "execution_plan_drafts_8_5": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 128,
+      "items": {
+        "$ref": "#/$defs/execution_plan_row"
+      }
+    },
+    "sell_execution_plan_drafts_8_6": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 128,
+      "items": {
+        "$ref": "#/$defs/sell_execution_plan_row"
+      }
+    },
+    "cold_regime_review_proposal": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/cold_regime_review"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "post_cancel_redeployment_proposal": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/post_cancel_redeployment"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reported_assumptions_and_data_gaps": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 128,
+      "items": {
+        "$ref": "#/$defs/reported_assumption_or_gap_row"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "oneOf": [
+    {
+      "$ref": "#/$defs/decision_draft_branch"
+    },
+    {
+      "$ref": "#/$defs/no_trade_branch"
+    }
+  ],
+  "$defs": {
+    "ticker": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9.-]{0,9}$"
+    },
+    "bounded_identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "bounded_rationale": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "reference_array": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/bounded_identifier"
+      }
+    },
+    "risk_note_array": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/bounded_rationale"
+      }
+    },
+    "ticker_array_64": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/ticker"
+      }
+    },
+    "ticker_array_128": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/ticker"
+      }
+    },
+    "nullable_nonnegative_safe_integer": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "strict_date": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+      "format": "date"
+    },
+    "no_trade_reason": {
+      "type": "object",
+      "required": [
+        "reason_code",
+        "reason_detail",
+        "reference_ids"
+      ],
+      "properties": {
+        "reason_code": {
+          "enum": [
+            "NO_ELIGIBLE_CHANGE",
+            "MISSING_REQUIRED_DATA",
+            "STALE_MARKET_DATA",
+            "FUTURE_DATED_DATA",
+            "SOURCE_CONFLICT",
+            "POLICY_BLOCKED",
+            "MANUAL_REVIEW_REQUIRED"
+          ]
+        },
+        "reason_detail": {
+          "$ref": "#/$defs/bounded_rationale"
+        },
+        "reference_ids": {
+          "$ref": "#/$defs/reference_array"
+        }
+      },
+      "additionalProperties": false
+    },
+    "active_shortlist_row": {
+      "type": "object",
+      "required": [
+        "ticker",
+        "rank",
+        "role_claim",
+        "proposal_status",
+        "rationale",
+        "reference_ids",
+        "reported_risk_notes"
+      ],
+      "properties": {
+        "ticker": {
+          "$ref": "#/$defs/ticker"
+        },
+        "rank": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 128
+        },
+        "role_claim": {
+          "$ref": "#/$defs/bounded_identifier"
+        },
+        "proposal_status": {
+          "enum": [
+            "SELECTED",
+            "WATCH_ONLY"
+          ]
+        },
+        "rationale": {
+          "$ref": "#/$defs/bounded_rationale"
+        },
+        "reference_ids": {
+          "$ref": "#/$defs/reference_array"
+        },
+        "reported_risk_notes": {
+          "$ref": "#/$defs/risk_note_array"
+        }
+      },
+      "additionalProperties": false
+    },
+    "exposure_overlap_row": {
+      "type": "object",
+      "required": [
+        "ticker",
+        "overlaps_with",
+        "overlap_assessment",
+        "rationale",
+        "reference_ids"
+      ],
+      "properties": {
+        "ticker": {
+          "$ref": "#/$defs/ticker"
+        },
+        "overlaps_with": {
+          "$ref": "#/$defs/ticker_array_64"
+        },
+        "overlap_assessment": {
+          "enum": [
+            "LOW",
+            "MODERATE",
+            "HIGH",
+            "UNKNOWN"
+          ]
+        },
+        "rationale": {
+          "$ref": "#/$defs/bounded_rationale"
+        },
+        "reference_ids": {
+          "$ref": "#/$defs/reference_array"
+        }
+      },
+      "additionalProperties": false
+    },
+    "buy_side_delta_row": {
+      "type": "object",
+      "required": [
+        "ticker",
+        "proposed_action",
+        "proposed_budget_cents",
+        "rationale",
+        "reference_ids"
+      ],
+      "properties": {
+        "ticker": {
+          "$ref": "#/$defs/ticker"
+        },
+        "proposed_action": {
+          "enum": [
+            "KEEP_EXISTING",
+            "HOLD_NO_NEW_BUDGET",
+            "WATCHLIST_NO_TRADE",
+            "NEW_ORDER",
+            "REPLACE_EXISTING",
+            "CANCEL_EXISTING"
+          ]
+        },
+        "proposed_budget_cents": {
+          "$ref": "#/$defs/nullable_nonnegative_safe_integer"
+        },
+        "rationale": {
+          "$ref": "#/$defs/bounded_rationale"
+        },
+        "reference_ids": {
+          "$ref": "#/$defs/reference_array"
+        }
+      },
+      "additionalProperties": false
+    },
+    "rotation_row": {
+      "type": "object",
+      "required": [
+        "from_ticker",
+        "to_ticker",
+        "proposal_type",
+        "proposed_budget_cents",
+        "rationale",
+        "reference_ids"
+      ],
+      "properties": {
+        "from_ticker": {
+          "$ref": "#/$defs/ticker"
+        },
+        "to_ticker": {
+          "$ref": "#/$defs/ticker"
+        },
+        "proposal_type": {
+          "const": "SAME_ROLE_ROTATION"
+        },
+        "proposed_budget_cents": {
+          "$ref": "#/$defs/nullable_nonnegative_safe_integer"
+        },
+        "rationale": {
+          "$ref": "#/$defs/bounded_rationale"
+        },
+        "reference_ids": {
+          "$ref": "#/$defs/reference_array"
+        }
+      },
+      "additionalProperties": false
+    },
+    "sell_side_delta_row": {
+      "type": "object",
+      "required": [
+        "ticker",
+        "proposed_action",
+        "proposed_share_quantity",
+        "replacement_ticker",
+        "rationale",
+        "reference_ids"
+      ],
+      "properties": {
+        "ticker": {
+          "$ref": "#/$defs/ticker"
+        },
+        "proposed_action": {
+          "enum": [
+            "HOLD_NO_SELL",
+            "SELL"
+          ]
+        },
+        "proposed_share_quantity": {
+          "$ref": "#/$defs/nullable_nonnegative_safe_integer"
+        },
+        "replacement_ticker": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ticker"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rationale": {
+          "$ref": "#/$defs/bounded_rationale"
+        },
+        "reference_ids": {
+          "$ref": "#/$defs/reference_array"
+        }
+      },
+      "additionalProperties": false
+    },
+    "execution_step": {
+      "type": "object",
+      "required": [
+        "step_label",
+        "proposed_offset_bps",
+        "proposed_weight_bps"
+      ],
+      "properties": {
+        "step_label": {
+          "$ref": "#/$defs/bounded_identifier"
+        },
+        "proposed_offset_bps": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "proposed_weight_bps": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        }
+      },
+      "additionalProperties": false
+    },
+    "execution_plan_row": {
+      "type": "object",
+      "required": [
+        "ticker",
+        "proposal_action",
+        "plan_kind",
+        "proposed_time_in_force",
+        "proposed_expiry_date",
+        "proposed_steps",
+        "rationale",
+        "reference_ids"
+      ],
+      "properties": {
+        "ticker": {
+          "$ref": "#/$defs/ticker"
+        },
+        "proposal_action": {
+          "enum": [
+            "KEEP_EXISTING",
+            "NEW_ORDER",
+            "REPLACE_EXISTING",
+            "CANCEL_EXISTING"
+          ]
+        },
+        "plan_kind": {
+          "enum": [
+            "KEEP_EXISTING_LADDER",
+            "NEW_LIMIT_LADDER",
+            "REPLACE_EXISTING_LADDER",
+            "CANCEL_EXISTING_ORDER"
+          ]
+        },
+        "proposed_time_in_force": {
+          "enum": [
+            "DAY",
+            "GTD"
+          ]
+        },
+        "proposed_expiry_date": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/strict_date"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "proposed_steps": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/execution_step"
+          }
+        },
+        "rationale": {
+          "$ref": "#/$defs/bounded_rationale"
+        },
+        "reference_ids": {
+          "$ref": "#/$defs/reference_array"
+        }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "properties": {
+            "proposed_time_in_force": {
+              "const": "DAY"
+            },
+            "proposed_expiry_date": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "properties": {
+            "proposed_time_in_force": {
+              "const": "GTD"
+            },
+            "proposed_expiry_date": {
+              "$ref": "#/$defs/strict_date"
+            }
+          }
+        }
+      ]
+    },
+    "sell_execution_plan_row": {
+      "type": "object",
+      "required": [
+        "ticker",
+        "proposal_action",
+        "plan_kind",
+        "proposed_share_quantity",
+        "proposed_limit_rule",
+        "proposed_lot_policy",
+        "proposed_time_in_force",
+        "proposed_expiry_date",
+        "rationale",
+        "reference_ids"
+      ],
+      "properties": {
+        "ticker": {
+          "$ref": "#/$defs/ticker"
+        },
+        "proposal_action": {
+          "const": "SELL"
+        },
+        "plan_kind": {
+          "const": "SINGLE_LIMIT_SELL_PROPOSAL"
+        },
+        "proposed_share_quantity": {
+          "$ref": "#/$defs/nullable_nonnegative_safe_integer"
+        },
+        "proposed_limit_rule": {
+          "$ref": "#/$defs/bounded_rationale"
+        },
+        "proposed_lot_policy": {
+          "const": "LTCG_ELIGIBLE_ONLY"
+        },
+        "proposed_time_in_force": {
+          "enum": [
+            "DAY",
+            "GTD"
+          ]
+        },
+        "proposed_expiry_date": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/strict_date"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rationale": {
+          "$ref": "#/$defs/bounded_rationale"
+        },
+        "reference_ids": {
+          "$ref": "#/$defs/reference_array"
+        }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "properties": {
+            "proposed_time_in_force": {
+              "const": "DAY"
+            },
+            "proposed_expiry_date": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "properties": {
+            "proposed_time_in_force": {
+              "const": "GTD"
+            },
+            "proposed_expiry_date": {
+              "$ref": "#/$defs/strict_date"
+            }
+          }
+        }
+      ]
+    },
+    "cold_regime_review": {
+      "type": "object",
+      "required": [
+        "reported_triggered",
+        "candidate_tickers",
+        "conclusion_claim",
+        "rationale",
+        "reference_ids"
+      ],
+      "properties": {
+        "reported_triggered": {
+          "type": "boolean"
+        },
+        "candidate_tickers": {
+          "$ref": "#/$defs/ticker_array_128"
+        },
+        "conclusion_claim": {
+          "enum": [
+            "NOT_TRIGGERED",
+            "PRESERVE_HEADROOM",
+            "PROPOSE_DEPLOYMENT",
+            "INSUFFICIENT_EVIDENCE"
+          ]
+        },
+        "rationale": {
+          "$ref": "#/$defs/bounded_rationale"
+        },
+        "reference_ids": {
+          "$ref": "#/$defs/reference_array"
+        }
+      },
+      "additionalProperties": false
+    },
+    "post_cancel_redeployment": {
+      "type": "object",
+      "required": [
+        "source_tickers",
+        "destination_tickers",
+        "proposal",
+        "proposed_budget_cents",
+        "rationale",
+        "reference_ids"
+      ],
+      "properties": {
+        "source_tickers": {
+          "$ref": "#/$defs/ticker_array_128"
+        },
+        "destination_tickers": {
+          "$ref": "#/$defs/ticker_array_128"
+        },
+        "proposal": {
+          "enum": [
+            "NO_REDEPLOYMENT",
+            "REDEPLOY",
+            "PRESERVE_HEADROOM"
+          ]
+        },
+        "proposed_budget_cents": {
+          "$ref": "#/$defs/nullable_nonnegative_safe_integer"
+        },
+        "rationale": {
+          "$ref": "#/$defs/bounded_rationale"
+        },
+        "reference_ids": {
+          "$ref": "#/$defs/reference_array"
+        }
+      },
+      "additionalProperties": false
+    },
+    "reported_assumption_or_gap_row": {
+      "type": "object",
+      "required": [
+        "category",
+        "code",
+        "detail",
+        "related_tickers",
+        "reference_ids"
+      ],
+      "properties": {
+        "category": {
+          "enum": [
+            "ASSUMPTION",
+            "DATA_GAP_CLAIM",
+            "SOURCE_CLAIM",
+            "POLICY_CONCERN",
+            "MANUAL_REVIEW_CLAIM"
+          ]
+        },
+        "code": {
+          "$ref": "#/$defs/bounded_identifier"
+        },
+        "detail": {
+          "$ref": "#/$defs/bounded_rationale"
+        },
+        "related_tickers": {
+          "$ref": "#/$defs/ticker_array_128"
+        },
+        "reference_ids": {
+          "$ref": "#/$defs/reference_array"
+        }
+      },
+      "additionalProperties": false
+    },
+    "decision_draft_branch": {
+      "properties": {
+        "mode": {
+          "const": "DECISION_DRAFT"
+        },
+        "market_observations": {
+          "$ref": "https://investment-system.local/schemas/step2_market_observations.schema.json"
+        }
+      },
+      "not": {
+        "required": [
+          "no_trade_reason"
+        ]
+      },
+      "anyOf": [
+        {
+          "required": [
+            "buy_side_delta_table"
+          ],
+          "properties": {
+            "buy_side_delta_table": {
+              "minItems": 1
+            }
+          }
+        },
+        {
+          "required": [
+            "rotation_decision_layer_8_15"
+          ],
+          "properties": {
+            "rotation_decision_layer_8_15": {
+              "minItems": 1
+            }
+          }
+        },
+        {
+          "required": [
+            "sell_side_delta_table_8_2"
+          ],
+          "properties": {
+            "sell_side_delta_table_8_2": {
+              "minItems": 1
+            }
+          }
+        },
+        {
+          "required": [
+            "execution_plan_drafts_8_5"
+          ],
+          "properties": {
+            "execution_plan_drafts_8_5": {
+              "minItems": 1
+            }
+          }
+        },
+        {
+          "required": [
+            "sell_execution_plan_drafts_8_6"
+          ],
+          "properties": {
+            "sell_execution_plan_drafts_8_6": {
+              "minItems": 1
+            }
+          }
+        }
+      ]
+    },
+    "no_trade_branch": {
+      "required": [
+        "no_trade_reason"
+      ],
+      "properties": {
+        "mode": {
+          "const": "NO_TRADE"
+        },
+        "proposed_buy_universe": {
+          "maxItems": 0
+        },
+        "active_shortlist": {
+          "maxItems": 0
+        },
+        "exposure_overlap_diagnostics": {
+          "maxItems": 0
+        },
+        "buy_side_delta_table": {
+          "maxItems": 0
+        },
+        "rotation_decision_layer_8_15": {
+          "maxItems": 0
+        },
+        "sell_side_delta_table_8_2": {
+          "maxItems": 0
+        },
+        "execution_plan_drafts_8_5": {
+          "maxItems": 0
+        },
+        "sell_execution_plan_drafts_8_6": {
+          "maxItems": 0
+        },
+        "cold_regime_review_proposal": {
+          "type": "null"
+        },
+        "post_cancel_redeployment_proposal": {
+          "type": "null"
+        },
+        "reported_assumptions_and_data_gaps": {
+          "minItems": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "no_trade_reason": {
+                "properties": {
+                  "reason_code": {
+                    "enum": [
+                      "NO_ELIGIBLE_CHANGE",
+                      "STALE_MARKET_DATA",
+                      "FUTURE_DATED_DATA",
+                      "SOURCE_CONFLICT"
+                    ]
+                  }
+                },
+                "required": [
+                  "reason_code"
+                ]
+              }
+            },
+            "required": [
+              "no_trade_reason"
+            ]
+          },
+          "then": {
+            "properties": {
+              "market_observations": {
+                "$ref": "https://investment-system.local/schemas/step2_market_observations.schema.json"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

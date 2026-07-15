@@ -1196,11 +1196,17 @@ _CONTRACT_MODULE_BASENAME = _CONTRACT_MODULE.rsplit(".", 1)[-1]
 _CONTRACT_MODULE_RELATIVE_PATH = Path(
     "src/investment_orchestrator/validators"
 ) / f"{_CONTRACT_MODULE_BASENAME}.py"
+_APPROVED_PACKET_COMPOSITION_RELATIVE_PATH = Path(
+    "src/investment_orchestrator/validators/validate_step2_decision_packet_v2.py"
+)
 _CONTRACT_SYMBOLS = frozenset(
     {
         validate_step2_market_observations.__name__,
         market_observations.Step2MarketObservationsValidationResult.__name__,
         market_observations.Step2MarketObservationsDiagnostic.__name__,
+        "MARKET_OBSERVATIONS_SCHEMA_FILENAME",
+        "MARKET_OBSERVATIONS_SCHEMA_VERSION",
+        "MARKET_OBSERVATIONS_VALIDATION_RESULT_VERSION",
     }
 )
 _CONTRACT_TEXT_MARKERS = (
@@ -1252,6 +1258,24 @@ def _contract_reference_findings(
 
 def _repository_root_for_contract_tests() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def _is_approved_packet_composition_finding(
+    relative_path: str,
+    finding: str,
+) -> bool:
+    """Allow only the public b1 dependency needed by the pure b2 validator."""
+    approved_path = _APPROVED_PACKET_COMPOSITION_RELATIVE_PATH.as_posix()
+    if relative_path != approved_path:
+        return False
+    return finding in {
+        f"{approved_path}: from-import {_CONTRACT_MODULE}",
+        f"{approved_path}: symbol MARKET_OBSERVATIONS_SCHEMA_FILENAME",
+        f"{approved_path}: symbol {validate_step2_market_observations.__name__}",
+        f"{approved_path}: text {_CONTRACT_MODULE}",
+        f"{approved_path}: text MARKET_OBSERVATIONS_SCHEMA_FILENAME",
+        f"{approved_path}: text {validate_step2_market_observations.__name__}",
+    }
 
 
 def test_contract_reference_detector_recognizes_all_forbidden_forms() -> None:
@@ -1329,6 +1353,47 @@ def test_contract_reference_detector_recognizes_all_forbidden_forms() -> None:
     )
 
 
+def test_b1_isolation_allows_only_exact_b2_public_validator_composition() -> None:
+    approved_path = _APPROVED_PACKET_COMPOSITION_RELATIVE_PATH.as_posix()
+    approved_source = (
+        f"from {_CONTRACT_MODULE} import "
+        f"MARKET_OBSERVATIONS_SCHEMA_FILENAME, "
+        f"{validate_step2_market_observations.__name__}\n"
+        f"result = {validate_step2_market_observations.__name__}({{}})\n"
+    )
+    approved_findings = _contract_reference_findings(
+        approved_path,
+        approved_source,
+    )
+    assert approved_findings
+    assert all(
+        _is_approved_packet_composition_finding(approved_path, finding)
+        for finding in approved_findings
+    )
+
+    unapproved_type_source = (
+        approved_source
+        + f"result_type = "
+        f"{market_observations.Step2MarketObservationsValidationResult.__name__}\n"
+    )
+    assert any(
+        not _is_approved_packet_composition_finding(approved_path, finding)
+        for finding in _contract_reference_findings(
+            approved_path,
+            unapproved_type_source,
+        )
+    )
+
+    workflow_path = "src/investment_orchestrator/workflows/future_consumer.py"
+    assert all(
+        not _is_approved_packet_composition_finding(workflow_path, finding)
+        for finding in _contract_reference_findings(
+            workflow_path,
+            approved_source,
+        )
+    )
+
+
 def test_no_production_consumer_references_market_observations_v2_contract() -> None:
     repo_root = _repository_root_for_contract_tests()
     production_root = repo_root / "src" / "investment_orchestrator"
@@ -1339,10 +1404,16 @@ def test_no_production_consumer_references_market_observations_v2_contract() -> 
         if path == allowed_contract_path:
             continue
         relative_path = path.relative_to(repo_root).as_posix()
+        path_findings = _contract_reference_findings(
+            relative_path,
+            path.read_text(encoding="utf-8"),
+        )
         findings.extend(
-            _contract_reference_findings(
+            finding
+            for finding in path_findings
+            if not _is_approved_packet_composition_finding(
                 relative_path,
-                path.read_text(encoding="utf-8"),
+                finding,
             )
         )
 
