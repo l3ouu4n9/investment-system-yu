@@ -1,0 +1,211 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "step2_publication_receipt.schema.json",
+  "title": "Step 2 Publication Identity Receipt",
+  "description": "Non-authorizing identity evidence only. A valid receipt grants no publication, action, downstream, order, broker, or execution authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generation_id",
+    "publication_mode",
+    "evaluated_date",
+    "candidate_identities",
+    "input_identities",
+    "gate_result",
+    "promoted_source_identities",
+    "identity_only",
+    "not_authorization",
+    "permission_effect"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "step2_publication_receipt_v1"
+    },
+    "generation_id": {
+      "$ref": "#/$defs/sha256"
+    },
+    "publication_mode": {
+      "enum": [
+        "strict_fresh_actionable",
+        "promoted_step2_decision_only"
+      ]
+    },
+    "evaluated_date": {
+      "$ref": "#/$defs/iso_date"
+    },
+    "candidate_identities": {
+      "$ref": "#/$defs/candidate_identities"
+    },
+    "input_identities": {
+      "$ref": "#/$defs/input_identities"
+    },
+    "gate_result": {
+      "$ref": "#/$defs/gate_result"
+    },
+    "promoted_source_identities": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/promoted_source_identities"}
+      ]
+    },
+    "identity_only": {
+      "const": true
+    },
+    "not_authorization": {
+      "const": true
+    },
+    "permission_effect": {
+      "const": "none"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "publication_mode": {"const": "strict_fresh_actionable"}
+        },
+        "required": ["publication_mode"]
+      },
+      "then": {
+        "properties": {
+          "gate_result": {
+            "allOf": [
+              {"$ref": "#/$defs/gate_result"},
+              {
+                "properties": {
+                  "mode": {"const": "strict_fresh_actionable"},
+                  "state": {"const": "STRICT_FRESH"}
+                }
+              }
+            ]
+          },
+          "promoted_source_identities": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "publication_mode": {"const": "promoted_step2_decision_only"}
+        },
+        "required": ["publication_mode"]
+      },
+      "then": {
+        "properties": {
+          "gate_result": {
+            "allOf": [
+              {"$ref": "#/$defs/gate_result"},
+              {
+                "properties": {
+                  "mode": {"const": "promoted_step2_decision_only"},
+                  "state": {
+                    "const": "STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY"
+                  }
+                }
+              }
+            ]
+          },
+          "promoted_source_identities": {
+            "$ref": "#/$defs/promoted_source_identities"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "iso_date": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+      "format": "date"
+    },
+    "candidate_identities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "template2_output_sha256",
+        "decision_packet_sha256"
+      ],
+      "properties": {
+        "template2_output_sha256": {"$ref": "#/$defs/sha256"},
+        "decision_packet_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "input_identities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "prompt_sha256",
+        "raw_output_sha256",
+        "normalization_settings_sha256",
+        "permission_artifact_sha256"
+      ],
+      "properties": {
+        "prompt_sha256": {"$ref": "#/$defs/sha256"},
+        "raw_output_sha256": {"$ref": "#/$defs/sha256"},
+        "normalization_settings_sha256": {"$ref": "#/$defs/sha256"},
+        "permission_artifact_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "gate_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy",
+        "outcome",
+        "reason_code",
+        "allowed",
+        "mode",
+        "state",
+        "manual_review_required",
+        "gate_result_sha256"
+      ],
+      "properties": {
+        "policy": {"const": "research_degraded_mode_gate"},
+        "outcome": {"const": "allowed"},
+        "reason_code": {"const": "step2_gate_allowed"},
+        "allowed": {"const": true},
+        "mode": {
+          "enum": [
+            "strict_fresh_actionable",
+            "promoted_step2_decision_only"
+          ]
+        },
+        "state": {
+          "enum": [
+            "STRICT_FRESH",
+            "STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY"
+          ]
+        },
+        "manual_review_required": {"const": false},
+        "gate_result_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "promoted_source_identities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active_research_handoff_source_sha256",
+        "research_handoff_candidate_effective_sha256",
+        "research_handoff_candidate_effective_validation_sha256",
+        "verified_effective_handoff_sha256",
+        "pointer_effective_handoff_sha256",
+        "promoted_verification_sha256",
+        "promotion_expires_at"
+      ],
+      "properties": {
+        "active_research_handoff_source_sha256": {"$ref": "#/$defs/sha256"},
+        "research_handoff_candidate_effective_sha256": {"$ref": "#/$defs/sha256"},
+        "research_handoff_candidate_effective_validation_sha256": {"$ref": "#/$defs/sha256"},
+        "verified_effective_handoff_sha256": {"$ref": "#/$defs/sha256"},
+        "pointer_effective_handoff_sha256": {"$ref": "#/$defs/sha256"},
+        "promoted_verification_sha256": {"$ref": "#/$defs/sha256"},
+        "promotion_expires_at": {"$ref": "#/$defs/iso_date"}
+      }
+    }
+  }
+}
