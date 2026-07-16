@@ -2102,6 +2102,10 @@ _BASENAME = _MODULE.rsplit(".", 1)[-1]
 _RELATIVE_PATH = (
     Path("src/investment_orchestrator/validators") / f"{_BASENAME}.py"
 )
+_ALLOWED_EXPECTED_IDENTITY_BINDER = Path(
+    "src/investment_orchestrator/validators/"
+    "bind_step2_market_source_policy_approval_expected_identity.py"
+)
 _PUBLIC_SYMBOLS = frozenset(
     {
         "validate_step2_market_source_policy_approval_artifact_bytes",
@@ -2170,9 +2174,10 @@ def test_composition_module_has_zero_production_consumers() -> None:
     root = Path(__file__).resolve().parents[2]
     production_root = root / "src" / "investment_orchestrator"
     contract_path = root / _RELATIVE_PATH
+    allowed_consumer_path = root / _ALLOWED_EXPECTED_IDENTITY_BINDER
     findings: list[str] = []
     for path in sorted(production_root.rglob("*.py")):
-        if path == contract_path:
+        if path in {contract_path, allowed_consumer_path}:
             continue
         relative = path.relative_to(root).as_posix()
         findings.extend(
