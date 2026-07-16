@@ -1099,6 +1099,10 @@ def test_parser_uses_no_forbidden_decoder_or_recursive_function() -> None:
 _MODULE = parser_contract.__name__
 _BASENAME = _MODULE.rsplit(".", 1)[-1]
 _RELATIVE_PATH = Path("src/investment_orchestrator/parsers") / f"{_BASENAME}.py"
+_ALLOWED_COMPOSITION_CONSUMER = Path(
+    "src/investment_orchestrator/validators/"
+    "validate_step2_market_source_policy_approval_artifact.py"
+)
 _PUBLIC_SYMBOLS = frozenset(
     {
         "parse_step2_market_source_policy_approvals_bytes",
@@ -1167,9 +1171,10 @@ def test_no_production_consumer_references_strict_parser_contract() -> None:
     root = Path(__file__).resolve().parents[2]
     production_root = root / "src" / "investment_orchestrator"
     parser_path = root / _RELATIVE_PATH
+    allowed_consumer_path = root / _ALLOWED_COMPOSITION_CONSUMER
     findings: list[str] = []
     for path in sorted(production_root.rglob("*.py")):
-        if path == parser_path:
+        if path in {parser_path, allowed_consumer_path}:
             continue
         relative = path.relative_to(root).as_posix()
         findings.extend(_reference_findings(relative, path.read_text(encoding="utf-8")))
