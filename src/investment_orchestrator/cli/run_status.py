@@ -16,6 +16,10 @@ from investment_orchestrator.common.paths import repo_root
 from investment_orchestrator.state.blocked_run_summary import (
     RUN_SUMMARY_FILENAME,
     summarize_current_run,
+    terminal_observation_from_research_gate,
+)
+from investment_orchestrator.state.research_degraded_mode_gate import (
+    load_and_evaluate_step2_research_gate,
 )
 from investment_orchestrator.workflow.step1_research import (
     step1_research_degraded_mode_decision_path,
@@ -51,15 +55,32 @@ def main() -> int:
     build_parser().parse_args()
 
     try:
+        decision_path = step1_research_degraded_mode_decision_path()
+        source_paths = (
+            decision_path,
+            step2_blocked_by_research_gate_path(),
+            step3_blocked_by_upstream_gate_path(),
+            step4_blocked_by_upstream_gate_path(),
+            step4_blocked_by_final_execution_safety_gate_path(),
+        )
+        # Preserve the existing standalone "no observed run" result.  A
+        # present Step 1 decision is the only source from which this standalone
+        # command may project a research-gate terminal; downstream block files
+        # retain their own earlier-stage precedence when Step 1 is unavailable.
+        terminal_observation = None
+        if decision_path.exists():
+            gate = load_and_evaluate_step2_research_gate(decision_path)
+            terminal_observation = terminal_observation_from_research_gate(gate)
         output_path = repo_root() / "artifacts" / "current" / RUN_SUMMARY_FILENAME
         result = summarize_current_run(
-            step1_decision_path=step1_research_degraded_mode_decision_path(),
-            step2_block_path=step2_blocked_by_research_gate_path(),
-            step3_block_path=step3_blocked_by_upstream_gate_path(),
-            step4_block_path=step4_blocked_by_upstream_gate_path(),
-            step4_final_safety_block_path=step4_blocked_by_final_execution_safety_gate_path(),
+            step1_decision_path=decision_path,
+            step2_block_path=source_paths[1],
+            step3_block_path=source_paths[2],
+            step4_block_path=source_paths[3],
+            step4_final_safety_block_path=source_paths[4],
             output_path=output_path,
             repo_root_path=repo_root(),
+            terminal_observation=terminal_observation,
         )
     except Exception as exc:  # noqa: BLE001
         print(str(exc), file=sys.stderr)

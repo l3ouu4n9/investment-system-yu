@@ -4,11 +4,17 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from investment_orchestrator.state.blocked_run_summary import (
     BlockedRunSummaryResult,
     blocked_run_summary_result_to_dict,
     build_blocked_run_summary,
     summarize_current_run,
+    terminal_observation_from_research_gate,
+)
+from investment_orchestrator.state.research_degraded_mode_gate import (
+    evaluate_step2_research_gate,
 )
 
 
@@ -329,7 +335,7 @@ def test_primary_blocker_reasons_deduped_in_order() -> None:
         step4_block=None,
     )
 
-    assert result.primary_blocker_reasons[0] == "no research output and no last-known-good available."
+    assert result.primary_blocker_reasons[0] == "research state NO_OUTPUT is not STRICT_FRESH."
     assert len(result.primary_blocker_reasons) == len(set(result.primary_blocker_reasons))
 
 
@@ -479,6 +485,51 @@ def test_summarize_current_run_no_artifacts_is_not_blocked(tmp_path: Path) -> No
     assert paths["output_path"].is_file()
 
 
+def test_standalone_run_status_with_no_observed_artifacts_remains_no_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from investment_orchestrator.cli import run_status
+
+    base = tmp_path / "artifacts" / "current"
+    monkeypatch.setattr(run_status, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        run_status,
+        "step1_research_degraded_mode_decision_path",
+        lambda: base / "step1_research" / "research_degraded_mode_decision.json",
+    )
+    monkeypatch.setattr(
+        run_status,
+        "step2_blocked_by_research_gate_path",
+        lambda: base / "step2_decision_builder" / "step2_blocked_by_research_gate.json",
+    )
+    monkeypatch.setattr(
+        run_status,
+        "step3_blocked_by_upstream_gate_path",
+        lambda: base / "step3_audit_engine" / "step3_blocked_by_upstream_gate.json",
+    )
+    monkeypatch.setattr(
+        run_status,
+        "step4_blocked_by_upstream_gate_path",
+        lambda: base / "step4_order_compiler" / "step4_blocked_by_upstream_gate.json",
+    )
+    monkeypatch.setattr(
+        run_status,
+        "step4_blocked_by_final_execution_safety_gate_path",
+        lambda: base
+        / "step4_order_compiler"
+        / "step4_blocked_by_final_execution_safety_gate.json",
+    )
+    monkeypatch.setattr(run_status.sys, "argv", ["run_status"])
+
+    assert run_status.main() == 0
+
+    written = json.loads((base / "run_summary.json").read_text(encoding="utf-8"))
+    assert written["run_blocked"] is False
+    assert written["terminal_stage"] is None
+    assert written["terminal_reason_codes"] == []
+
+
 def test_summarize_current_run_includes_final_gate_only_block(tmp_path: Path) -> None:
     paths = summary_paths(tmp_path)
     # Upstream all green (STRICT_FRESH permission, no upstream blocks), only the
@@ -546,3 +597,214 @@ def test_step2_decision_only_state_summarizes_to_blocked_no_trade() -> None:
     assert result.allowed_actions == ["HOLD", "NO_TRADE", "PROMOTED_RESEARCH_DECISION"]
     assert "NEW_BUY" in result.blocked_actions
     assert "ORDER_COMPILATION" in result.blocked_actions
+
+
+# --- terminal observability contract ----------------------------------------
+
+
+def test_gate_terminal_observation_reports_current_degraded_parse_details() -> None:
+    decision = step1_decision(
+        state="DEGRADED_WITH_LAST_GOOD",
+        allowed_actions=["HOLD", "NO_TRADE"],
+    )
+    decision["blocker_reasons"] = []
+    decision["diagnostic_reason"] = "step1 parse failed before research_output.json was produced."
+    decision["parse_error"] = (
+        "Could not find RESEARCH_JSON_START/END or any balanced JSON object in Step 1 raw output."
+    )
+    observation = terminal_observation_from_research_gate(
+        evaluate_step2_research_gate(decision)
+    )
+
+    result = build_blocked_run_summary(
+        step1_decision=decision,
+        step2_block=None,
+        step3_block=None,
+        step4_block=None,
+        terminal_observation=observation,
+    )
+
+    assert result.run_blocked is True
+    assert result.recommended_result == "NO_TRADE"
+    assert result.terminal_stage == "step2_research_gate"
+    assert result.stopped_before_stage == "step2_decision_builder"
+    assert result.terminal_reason_codes == ["research_degraded_mode"]
+    assert result.blocked_stages == []
+    assert result.primary_blocker_reasons == [
+        "research state DEGRADED_WITH_LAST_GOOD is not STRICT_FRESH.",
+        "research permission does not allow required actions: NEW_BUY, ORDER_COMPILATION",
+    ]
+    assert result.terminal_diagnostics == [
+        "step1 parse failed before research_output.json was produced.",
+        "Could not find RESEARCH_JSON_START/END or any balanced JSON object in Step 1 raw output.",
+    ]
+
+
+def test_gate_reason_order_is_preserved_and_deduplicated() -> None:
+    decision = step1_decision(state="NO_OUTPUT")
+    decision["blocker_reasons"] = ["first deterministic reason", "first deterministic reason"]
+    observation = terminal_observation_from_research_gate(
+        evaluate_step2_research_gate(decision)
+    )
+
+    result = build_blocked_run_summary(
+        step1_decision=decision,
+        step2_block=None,
+        step3_block=None,
+        step4_block=None,
+        terminal_observation=observation,
+    )
+
+    assert result.primary_blocker_reasons == [
+        "first deterministic reason",
+        "research state NO_OUTPUT is not STRICT_FRESH.",
+        "research permission does not allow required actions: NEW_BUY, ORDER_COMPILATION",
+    ]
+
+
+def test_terminal_observation_is_additive_to_unchanged_summary_actions() -> None:
+    decision = step1_decision(
+        state="DEGRADED_WITH_LAST_GOOD",
+        allowed_actions=["HOLD", "NO_TRADE"],
+    )
+    decision["blocker_reasons"] = []
+    baseline = build_blocked_run_summary(
+        step1_decision=decision,
+        step2_block=None,
+        step3_block=None,
+        step4_block=None,
+    )
+    observed = build_blocked_run_summary(
+        step1_decision=decision,
+        step2_block=None,
+        step3_block=None,
+        step4_block=None,
+        terminal_observation=terminal_observation_from_research_gate(
+            evaluate_step2_research_gate(decision)
+        ),
+    )
+
+    for field_name in (
+        "run_blocked",
+        "recommended_result",
+        "manual_review_required",
+        "highest_severity_state",
+        "research_state",
+        "research_availability",
+        "allowed_actions",
+        "blocked_actions",
+        "blocked_stages",
+    ):
+        assert getattr(observed, field_name) == getattr(baseline, field_name)
+    assert baseline.primary_blocker_reasons == []
+    assert observed.primary_blocker_reasons
+
+
+def test_missing_optional_step1_diagnostics_preserve_gate_reason() -> None:
+    decision = step1_decision(state="NO_OUTPUT")
+    observation = terminal_observation_from_research_gate(
+        evaluate_step2_research_gate(decision)
+    )
+
+    result = build_blocked_run_summary(
+        step1_decision=decision,
+        step2_block=None,
+        step3_block=None,
+        step4_block=None,
+        terminal_observation=observation,
+    )
+
+    assert result.terminal_reason_codes == ["research_degraded_mode"]
+    assert result.primary_blocker_reasons
+    assert result.terminal_diagnostics == []
+
+
+def test_malformed_step1_diagnostic_is_not_copied_or_stringified() -> None:
+    class HostileDiagnostic(str):
+        def __str__(self) -> str:
+            raise AssertionError("must not stringify malformed diagnostic")
+
+    decision = step1_decision(state="NO_OUTPUT")
+    decision["diagnostic_reason"] = HostileDiagnostic("untrusted")
+    observation = terminal_observation_from_research_gate(
+        evaluate_step2_research_gate(decision)
+    )
+
+    result = build_blocked_run_summary(
+        step1_decision=decision,
+        step2_block=None,
+        step3_block=None,
+        step4_block=None,
+        terminal_observation=observation,
+    )
+
+    assert "terminal_diagnostic_invalid" in result.terminal_reason_codes
+    assert result.terminal_diagnostics == [
+        "step1 diagnostic_reason is not a non-empty string."
+    ]
+
+
+def test_conflicting_terminal_observation_and_explicit_block_is_reported() -> None:
+    decision = step1_decision(state="NO_OUTPUT")
+    observation = terminal_observation_from_research_gate(
+        evaluate_step2_research_gate(decision)
+    )
+
+    result = build_blocked_run_summary(
+        step1_decision=decision,
+        step2_block=step2_block(state="NO_OUTPUT"),
+        step3_block=None,
+        step4_block=None,
+        terminal_observation=observation,
+    )
+
+    assert result.terminal_reason_codes == [
+        "research_degraded_mode",
+        "terminal_source_conflict",
+    ]
+    assert result.terminal_diagnostics == [
+        "weekly terminal observation conflicts with explicit downstream block artifacts."
+    ]
+    assert result.blocked_stages == ["step2"]
+
+
+def test_explicit_final_safety_block_has_its_own_terminal_location() -> None:
+    result = build_blocked_run_summary(
+        step1_decision=step1_decision(
+            state="STRICT_FRESH",
+            allowed_actions=["HOLD", "NO_TRADE", "NEW_BUY", "ORDER_COMPILATION"],
+            blocked_actions=[],
+        ),
+        step2_block=None,
+        step3_block=None,
+        step4_block=None,
+        step4_final_safety_block=final_safety_block(),
+    )
+
+    assert result.terminal_stage == "step4_final_execution_safety_gate"
+    assert result.stopped_before_stage == "order_compilation"
+    assert result.terminal_reason_codes == ["final_execution_safety_gate_blocked"]
+    assert result.blocked_stages == ["step4"]
+
+
+def test_malformed_explicit_block_is_not_reported_as_a_valid_blocked_stage(
+    tmp_path: Path,
+) -> None:
+    paths = summary_paths(tmp_path)
+    write_json_file(
+        paths["step1_decision_path"],
+        step1_decision(
+            state="STRICT_FRESH",
+            allowed_actions=["HOLD", "NO_TRADE", "NEW_BUY", "ORDER_COMPILATION"],
+            blocked_actions=[],
+        ),
+    )
+    write_json_file(paths["step2_block_path"], {"blocked": True, "reason": 7})
+
+    result = summarize_current_run(repo_root_path=tmp_path, **paths)
+
+    assert result.blocked_stages == []
+    assert result.run_blocked is True
+    assert result.terminal_stage is None
+    assert result.terminal_reason_codes == ["summary_source_invalid"]
+    assert result.terminal_diagnostics == ["step2 explicit block artifact is invalid."]

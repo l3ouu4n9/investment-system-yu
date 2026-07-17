@@ -243,6 +243,43 @@ def test_manual_review_required_terminal_flags_manual_review(
     assert run_summary["manual_review_required"] is True
 
 
+def test_degraded_terminal_summary_reports_gate_reasons_and_step1_diagnostics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    permission = degraded_permission("DEGRADED_WITH_LAST_GOOD")
+    permission["blocker_reasons"] = []
+    permission["diagnostic_reason"] = "step1 parse failed before research_output.json was produced."
+    permission["parse_error"] = (
+        "Could not find RESEARCH_JSON_START/END or any balanced JSON object in Step 1 raw output."
+    )
+    prepare_repo(tmp_path, monkeypatch, permission=permission)
+
+    result = weekly_orchestrator.run_weekly()
+
+    assert result.terminal_result == "NO_TRADE"
+    assert result.allowed_actions == ["HOLD", "NO_TRADE"]
+    assert "NEW_BUY" in result.blocked_actions
+    assert "ORDER_COMPILATION" in result.blocked_actions
+    summary = json.loads(
+        (tmp_path / "artifacts" / "current" / "run_summary.json").read_text(encoding="utf-8")
+    )
+    assert summary["summary_contract_version"] == "blocked_run_summary_observability_v1"
+    assert summary["terminal_stage"] == "step2_research_gate"
+    assert summary["stopped_before_stage"] == "step2_decision_builder"
+    assert summary["terminal_reason_codes"] == ["research_degraded_mode"]
+    assert summary["blocked_stages"] == []
+    assert summary["primary_blocker_reasons"] == [
+        "research state DEGRADED_WITH_LAST_GOOD is not STRICT_FRESH.",
+        "research permission does not allow required actions: NEW_BUY, ORDER_COMPILATION",
+    ]
+    assert summary["terminal_diagnostics"] == [
+        "step1 parse failed before research_output.json was produced.",
+        "Could not find RESEARCH_JSON_START/END or any balanced JSON object in Step 1 raw output.",
+    ]
+    assert_no_downstream_artifacts_created(tmp_path)
+
+
 def test_missing_decision_artifact_fails_closed_to_no_trade(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -256,6 +293,15 @@ def test_missing_decision_artifact_fails_closed_to_no_trade(
     assert result.terminal_result == "NO_TRADE"
     assert result.research_state == "MISSING_RESEARCH_PERMISSION"
     assert result.exit_code == 0
+    summary = json.loads(
+        (tmp_path / "artifacts" / "current" / "run_summary.json").read_text(encoding="utf-8")
+    )
+    assert summary["terminal_stage"] == "step2_research_gate"
+    assert summary["stopped_before_stage"] == "step2_decision_builder"
+    assert summary["terminal_reason_codes"] == ["research_degraded_mode"]
+    assert summary["primary_blocker_reasons"] == [
+        "missing research degraded-mode decision artifact."
+    ]
     assert_no_downstream_artifacts_created(tmp_path)
 
 
@@ -270,6 +316,12 @@ def test_malformed_decision_artifact_fails_closed_to_no_trade(
 
     assert result.terminal_result == "NO_TRADE"
     assert result.research_state == "MALFORMED_RESEARCH_PERMISSION"
+    summary = json.loads(
+        (tmp_path / "artifacts" / "current" / "run_summary.json").read_text(encoding="utf-8")
+    )
+    assert summary["terminal_stage"] == "step2_research_gate"
+    assert summary["terminal_reason_codes"] == ["research_degraded_mode"]
+    assert summary["primary_blocker_reasons"]
     assert_no_downstream_artifacts_created(tmp_path)
 
 
@@ -523,6 +575,12 @@ def test_promoted_decision_only_terminates_no_trade_pending_final_gates(
     assert run_summary["run_blocked"] is True
     assert run_summary["recommended_result"] == "NO_TRADE"
     assert run_summary["research_state"] == "STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY"
+    assert run_summary["terminal_stage"] == "weekly_orchestrator"
+    assert run_summary["stopped_before_stage"] is None
+    assert run_summary["terminal_reason_codes"] == [
+        "promoted_step2_decision_only_pending_final_gates"
+    ]
+    assert run_summary["blocked_stages"] == []
 
     # No Step 2/3/4 decision / audit / order artifacts are fabricated.
     assert_no_downstream_artifacts_created(tmp_path)

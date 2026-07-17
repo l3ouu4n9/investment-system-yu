@@ -34,6 +34,7 @@ from investment_orchestrator.common.paths import repo_root
 from investment_orchestrator.state.blocked_run_summary import (
     RUN_SUMMARY_FILENAME,
     summarize_current_run,
+    terminal_observation_from_research_gate,
 )
 from investment_orchestrator.state.research_degraded_mode_gate import (
     MODE_PROMOTED_STEP2_DECISION_ONLY,
@@ -265,6 +266,7 @@ def _terminal_promoted_decision_only(
         step4_final_safety_block_path=step4_final_safety_block_path,
         output_path=run_summary_output_path,
         repo_root_path=repo_root_path,
+        terminal_observation=terminal_observation_from_research_gate(gate),
     )
 
     blocked_actions = _with_order_actions_blocked(gate.allowed_actions, gate.blocked_actions)
@@ -340,6 +342,7 @@ def _terminal_no_trade(
         step4_final_safety_block_path=step4_final_safety_block_path,
         output_path=run_summary_output_path,
         repo_root_path=repo_root_path,
+        terminal_observation=terminal_observation_from_research_gate(gate),
     )
 
     blocked_actions = _with_order_actions_blocked(gate.allowed_actions, gate.blocked_actions)

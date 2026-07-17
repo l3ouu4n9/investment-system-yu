@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Blocked Run Summary",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "summary_contract_version",
+    "run_blocked",
+    "recommended_result",
+    "manual_review_required",
+    "highest_severity_state",
+    "research_state",
+    "research_availability",
+    "allowed_actions",
+    "blocked_actions",
+    "blocked_stages",
+    "primary_blocker_reasons",
+    "terminal_stage",
+    "stopped_before_stage",
+    "terminal_reason_codes",
+    "terminal_diagnostics",
+    "source_artifacts",
+    "read_errors",
+    "is_llm_generated",
+    "report_only"
+  ],
+  "properties": {
+    "summary_contract_version": {
+      "const": "blocked_run_summary_observability_v1"
+    },
+    "run_blocked": {
+      "type": "boolean"
+    },
+    "recommended_result": {
+      "type": ["string", "null"]
+    },
+    "manual_review_required": {
+      "type": "boolean"
+    },
+    "highest_severity_state": {
+      "type": ["string", "null"]
+    },
+    "research_state": {
+      "type": ["string", "null"]
+    },
+    "research_availability": {
+      "type": ["string", "null"]
+    },
+    "allowed_actions": {
+      "$ref": "#/$defs/string_array"
+    },
+    "blocked_actions": {
+      "$ref": "#/$defs/string_array"
+    },
+    "blocked_stages": {
+      "type": "array",
+      "items": {
+        "enum": ["step2", "step3", "step4"]
+      },
+      "uniqueItems": true
+    },
+    "primary_blocker_reasons": {
+      "$ref": "#/$defs/string_array"
+    },
+    "terminal_stage": {
+      "type": ["string", "null"],
+      "enum": [
+        "weekly_orchestrator",
+        "step2_research_gate",
+        "step3_upstream_gate",
+        "step4_upstream_gate",
+        "step4_final_execution_safety_gate",
+        null
+      ]
+    },
+    "stopped_before_stage": {
+      "type": ["string", "null"],
+      "enum": [
+        "step2_decision_builder",
+        "step3_audit_engine",
+        "step4_order_compiler",
+        "order_compilation",
+        null
+      ]
+    },
+    "terminal_reason_codes": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "research_degraded_mode",
+          "promoted_step2_decision_only_pending_final_gates",
+          "step2_research_gate_blocked",
+          "step3_upstream_gate_blocked",
+          "step4_upstream_gate_blocked",
+          "final_execution_safety_gate_blocked",
+          "terminal_diagnostic_unavailable",
+          "terminal_diagnostic_invalid",
+          "terminal_source_conflict",
+          "summary_source_invalid"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "terminal_diagnostics": {
+      "$ref": "#/$defs/string_array"
+    },
+    "source_artifacts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "read_errors": {
+      "$ref": "#/$defs/string_array"
+    },
+    "is_llm_generated": {
+      "const": false
+    },
+    "report_only": {
+      "const": false
+    }
+  },
+  "$defs": {
+    "string_array": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

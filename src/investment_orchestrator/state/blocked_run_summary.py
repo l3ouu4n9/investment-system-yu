@@ -20,9 +20,50 @@ import json
 from pathlib import Path
 from typing import Any
 
+from investment_orchestrator.common.schema_validation import write_validated_json
+from investment_orchestrator.state.research_degraded_mode_gate import (
+    MODE_PROMOTED_STEP2_DECISION_ONLY,
+    ResearchDegradedModeGateResult,
+)
+
 
 RUN_SUMMARY_FILENAME = "run_summary.json"
+RUN_SUMMARY_SCHEMA_NAME = "blocked_run_summary.schema.json"
+RUN_SUMMARY_CONTRACT_VERSION = "blocked_run_summary_observability_v1"
 STRICT_FRESH = "STRICT_FRESH"
+
+TERMINAL_REASON_RESEARCH_DEGRADED_MODE = "research_degraded_mode"
+TERMINAL_REASON_PROMOTED_STEP2_DECISION_ONLY_PENDING_FINAL_GATES = (
+    "promoted_step2_decision_only_pending_final_gates"
+)
+TERMINAL_REASON_STEP2_RESEARCH_GATE_BLOCKED = "step2_research_gate_blocked"
+TERMINAL_REASON_STEP3_UPSTREAM_GATE_BLOCKED = "step3_upstream_gate_blocked"
+TERMINAL_REASON_STEP4_UPSTREAM_GATE_BLOCKED = "step4_upstream_gate_blocked"
+TERMINAL_REASON_FINAL_EXECUTION_SAFETY_GATE_BLOCKED = (
+    "final_execution_safety_gate_blocked"
+)
+TERMINAL_REASON_DIAGNOSTIC_UNAVAILABLE = "terminal_diagnostic_unavailable"
+TERMINAL_REASON_DIAGNOSTIC_INVALID = "terminal_diagnostic_invalid"
+TERMINAL_REASON_SOURCE_CONFLICT = "terminal_source_conflict"
+TERMINAL_REASON_SUMMARY_SOURCE_INVALID = "summary_source_invalid"
+
+_TERMINAL_STAGES = frozenset(
+    {
+        "weekly_orchestrator",
+        "step2_research_gate",
+        "step3_upstream_gate",
+        "step4_upstream_gate",
+        "step4_final_execution_safety_gate",
+    }
+)
+_STOPPED_BEFORE_STAGES = frozenset(
+    {
+        "step2_decision_builder",
+        "step3_audit_engine",
+        "step4_order_compiler",
+        "order_compilation",
+    }
+)
 
 # Order-generating actions that must be explicitly listed as blocked whenever
 # they are not allowed on a blocked run.
@@ -69,8 +110,64 @@ class BlockedRunSummaryResult:
     blocked_actions: list[str]
     blocked_stages: list[str]
     primary_blocker_reasons: list[str]
+    terminal_stage: str | None
+    stopped_before_stage: str | None
+    terminal_reason_codes: list[str]
+    terminal_diagnostics: list[str]
     source_artifacts: dict[str, str] = field(default_factory=dict)
     read_errors: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class RunSummaryTerminalObservation:
+    """Closed, in-memory routing facts supplied by the weekly entrypoint.
+
+    This is deliberately not a persisted permission artifact.  It carries the
+    exact result already used by the caller to choose a controlled weekly
+    terminal, so the summary does not re-evaluate a gate or infer a terminal
+    from absent downstream files.
+    """
+
+    terminal_stage: str
+    stopped_before_stage: str | None
+    terminal_reason_codes: tuple[str, ...]
+    primary_blocker_reasons: tuple[str, ...]
+    research_state: str
+    allowed_actions: tuple[str, ...]
+    blocked_actions: tuple[str, ...]
+    manual_review_required: bool
+
+
+def terminal_observation_from_research_gate(
+    gate: ResearchDegradedModeGateResult,
+) -> RunSummaryTerminalObservation | None:
+    """Return the terminal observation implied by an already-evaluated gate.
+
+    ``None`` means the legacy strict-fresh actionable route proceeds.  This
+    function only projects the supplied result; it does not evaluate a gate.
+    """
+    if gate.allowed and gate.mode != MODE_PROMOTED_STEP2_DECISION_ONLY:
+        return None
+
+    if gate.allowed:
+        terminal_stage = "weekly_orchestrator"
+        stopped_before_stage = None
+        reason_code = TERMINAL_REASON_PROMOTED_STEP2_DECISION_ONLY_PENDING_FINAL_GATES
+    else:
+        terminal_stage = "step2_research_gate"
+        stopped_before_stage = "step2_decision_builder"
+        reason_code = TERMINAL_REASON_RESEARCH_DEGRADED_MODE
+
+    return RunSummaryTerminalObservation(
+        terminal_stage=terminal_stage,
+        stopped_before_stage=stopped_before_stage,
+        terminal_reason_codes=(reason_code,),
+        primary_blocker_reasons=tuple(_exact_string_list(gate.blocker_reasons)),
+        research_state=gate.state if type(gate.state) is str else "",
+        allowed_actions=tuple(_exact_string_list(gate.allowed_actions)),
+        blocked_actions=tuple(_exact_string_list(gate.blocked_actions)),
+        manual_review_required=gate.manual_review_required is True,
+    )
 
 
 def build_blocked_run_summary(
@@ -80,6 +177,7 @@ def build_blocked_run_summary(
     step3_block: Mapping[str, Any] | None,
     step4_block: Mapping[str, Any] | None,
     step4_final_safety_block: Mapping[str, Any] | None = None,
+    terminal_observation: RunSummaryTerminalObservation | None = None,
     source_artifacts: Mapping[str, str] | None = None,
     read_errors: list[str] | None = None,
 ) -> BlockedRunSummaryResult:
@@ -92,14 +190,31 @@ def build_blocked_run_summary(
         step4_final_safety_block if isinstance(step4_final_safety_block, Mapping) else None
     )
 
+    explicit_step2_block = _is_valid_explicit_block_artifact(step2_block)
+    explicit_step3_block = _is_valid_explicit_block_artifact(step3_block)
+    explicit_step4_block = _is_valid_explicit_block_artifact(step4_block)
+    explicit_final_safety_block = _is_valid_explicit_block_artifact(step4_final_safety_block)
+    invalid_explicit_block_sources = [
+        label
+        for label, source, valid in (
+            ("step2", step2_block, explicit_step2_block),
+            ("step3", step3_block, explicit_step3_block),
+            ("step4", step4_block, explicit_step4_block),
+            ("step4 final execution safety", step4_final_safety_block, explicit_final_safety_block),
+        )
+        if source is not None and not valid
+    ]
+
     # Both the Step 4 upstream guard and the final execution safety gate block
-    # Step 4; "step4" appears at most once in blocked_stages.
-    step4_blocked = step4_block is not None or step4_final_safety_block is not None
+    # Step 4; "step4" appears at most once in blocked_stages.  A malformed JSON
+    # object is not a valid explicit block artifact and must not be promoted to
+    # a stage classification merely because its path exists.
+    step4_blocked = explicit_step4_block or explicit_final_safety_block
     blocked_stages = [
         stage
         for stage, blocked in (
-            ("step2", step2_block is not None),
-            ("step3", step3_block is not None),
+            ("step2", explicit_step2_block),
+            ("step3", explicit_step3_block),
             ("step4", step4_blocked),
         )
         if blocked
@@ -107,9 +222,81 @@ def build_blocked_run_summary(
 
     step1_state = _str_or_none(step1_decision.get("state")) if step1_decision else None
     step1_degraded = step1_state is not None and step1_state != STRICT_FRESH
-    run_blocked = bool(blocked_stages) or step1_degraded
+    terminal_observation = _validated_terminal_observation(terminal_observation)
+    explicit_observation = _terminal_observation_from_explicit_block(
+        step2_block=step2_block if explicit_step2_block else None,
+        step3_block=step3_block if explicit_step3_block else None,
+        step4_block=step4_block if explicit_step4_block else None,
+        step4_final_safety_block=(
+            step4_final_safety_block if explicit_final_safety_block else None
+        ),
+    )
 
-    permission = _primary_permission(step1_decision, step2_block, step3_block, step4_block)
+    terminal_reason_codes: list[str] = []
+    terminal_diagnostics: list[str] = []
+    terminal_stage: str | None = None
+    stopped_before_stage: str | None = None
+    primary_blocker_reasons: list[str] = []
+
+    if terminal_observation is not None:
+        terminal_stage = terminal_observation.terminal_stage
+        stopped_before_stage = terminal_observation.stopped_before_stage
+        terminal_reason_codes.extend(terminal_observation.terminal_reason_codes)
+        primary_blocker_reasons.extend(terminal_observation.primary_blocker_reasons)
+        if explicit_observation is not None:
+            terminal_reason_codes.append(TERMINAL_REASON_SOURCE_CONFLICT)
+            terminal_diagnostics.append(
+                "weekly terminal observation conflicts with explicit downstream block artifacts."
+            )
+        if invalid_explicit_block_sources:
+            terminal_reason_codes.append(TERMINAL_REASON_SUMMARY_SOURCE_INVALID)
+            terminal_diagnostics.extend(
+                f"{label} explicit block artifact is invalid."
+                for label in invalid_explicit_block_sources
+            )
+    elif explicit_observation is not None:
+        terminal_stage = explicit_observation.terminal_stage
+        stopped_before_stage = explicit_observation.stopped_before_stage
+        terminal_reason_codes.extend(explicit_observation.terminal_reason_codes)
+        primary_blocker_reasons.extend(explicit_observation.primary_blocker_reasons)
+    elif invalid_explicit_block_sources:
+        terminal_reason_codes.append(TERMINAL_REASON_SUMMARY_SOURCE_INVALID)
+        terminal_diagnostics.extend(
+            f"{label} explicit block artifact is invalid."
+            for label in invalid_explicit_block_sources
+        )
+    elif step1_degraded:
+        # Direct builder callers without the weekly gate retain the established
+        # NO_TRADE classification.  Production weekly callers supply the exact
+        # gate observation above, so this fallback is never a second gate.
+        terminal_stage = "step2_research_gate"
+        stopped_before_stage = "step2_decision_builder"
+        terminal_reason_codes.append(TERMINAL_REASON_RESEARCH_DEGRADED_MODE)
+        primary_blocker_reasons.extend(_primary_blocker_reasons(
+            step1_decision, None, None, None, None
+        ))
+    elif read_errors:
+        terminal_reason_codes.append(TERMINAL_REASON_SUMMARY_SOURCE_INVALID)
+        terminal_diagnostics.extend(_exact_string_list(read_errors))
+
+    terminal_diagnostics.extend(_step1_terminal_diagnostics(step1_decision, terminal_reason_codes))
+
+    if terminal_reason_codes and not primary_blocker_reasons and not terminal_diagnostics:
+        terminal_reason_codes.append(TERMINAL_REASON_DIAGNOSTIC_UNAVAILABLE)
+        terminal_diagnostics.append("deterministic terminal diagnostic detail is unavailable.")
+
+    terminal_reason_codes = _dedupe_exact_strings(terminal_reason_codes)
+    terminal_diagnostics = _dedupe_exact_strings(terminal_diagnostics)
+    primary_blocker_reasons = _dedupe_exact_strings(primary_blocker_reasons)
+
+    run_blocked = bool(blocked_stages) or step1_degraded or bool(terminal_reason_codes)
+
+    permission = _primary_permission(
+        step1_decision,
+        step2_block if explicit_step2_block else None,
+        step3_block if explicit_step3_block else None,
+        step4_block if explicit_step4_block else None,
+    )
     research_state = step1_state or (_str_or_none(permission.get("state")) if permission else None)
     research_availability = (
         _str_or_none(permission.get("research_availability")) if permission else None
@@ -117,12 +304,25 @@ def build_blocked_run_summary(
 
     allowed_actions = _string_list(permission.get("allowed_actions")) if permission else []
     blocked_actions = _string_list(permission.get("blocked_actions")) if permission else []
+    if terminal_observation is not None:
+        if research_state is None:
+            research_state = terminal_observation.research_state or None
+        if not allowed_actions:
+            allowed_actions = list(terminal_observation.allowed_actions)
+        if not blocked_actions:
+            blocked_actions = list(terminal_observation.blocked_actions)
     if run_blocked:
         blocked_actions = _with_required_blocked_actions(allowed_actions, blocked_actions)
 
     manual_review_required = _any_manual_review(
-        step1_decision, step2_block, step3_block, step4_block, step4_final_safety_block
+        step1_decision,
+        step2_block if explicit_step2_block else None,
+        step3_block if explicit_step3_block else None,
+        step4_block if explicit_step4_block else None,
+        step4_final_safety_block if explicit_final_safety_block else None,
     )
+    if terminal_observation is not None and not manual_review_required:
+        manual_review_required = terminal_observation.manual_review_required
 
     recommended_result = "NO_TRADE" if run_blocked else None
 
@@ -131,16 +331,21 @@ def build_blocked_run_summary(
         recommended_result=recommended_result,
         manual_review_required=manual_review_required,
         highest_severity_state=_highest_severity_state(
-            step1_decision, step2_block, step3_block, step4_block
+            step1_decision,
+            step2_block if explicit_step2_block else None,
+            step3_block if explicit_step3_block else None,
+            step4_block if explicit_step4_block else None,
         ),
         research_state=research_state,
         research_availability=research_availability,
         allowed_actions=allowed_actions,
         blocked_actions=blocked_actions,
         blocked_stages=blocked_stages,
-        primary_blocker_reasons=_primary_blocker_reasons(
-            step1_decision, step2_block, step3_block, step4_block, step4_final_safety_block
-        ),
+        primary_blocker_reasons=primary_blocker_reasons,
+        terminal_stage=terminal_stage,
+        stopped_before_stage=stopped_before_stage,
+        terminal_reason_codes=terminal_reason_codes,
+        terminal_diagnostics=terminal_diagnostics,
         source_artifacts=dict(source_artifacts or {}),
         read_errors=list(read_errors or []),
     )
@@ -149,6 +354,7 @@ def build_blocked_run_summary(
 def blocked_run_summary_result_to_dict(result: BlockedRunSummaryResult) -> dict[str, Any]:
     """Serialize the run summary as a stable, deterministic operational artifact."""
     return {
+        "summary_contract_version": RUN_SUMMARY_CONTRACT_VERSION,
         "run_blocked": result.run_blocked,
         "recommended_result": result.recommended_result,
         "manual_review_required": result.manual_review_required,
@@ -159,6 +365,10 @@ def blocked_run_summary_result_to_dict(result: BlockedRunSummaryResult) -> dict[
         "blocked_actions": list(result.blocked_actions),
         "blocked_stages": list(result.blocked_stages),
         "primary_blocker_reasons": list(result.primary_blocker_reasons),
+        "terminal_stage": result.terminal_stage,
+        "stopped_before_stage": result.stopped_before_stage,
+        "terminal_reason_codes": list(result.terminal_reason_codes),
+        "terminal_diagnostics": list(result.terminal_diagnostics),
         "source_artifacts": dict(result.source_artifacts),
         "read_errors": list(result.read_errors),
         "is_llm_generated": False,
@@ -197,6 +407,7 @@ def summarize_current_run(
     output_path: Path,
     step4_final_safety_block_path: Path | None = None,
     repo_root_path: Path | None = None,
+    terminal_observation: RunSummaryTerminalObservation | None = None,
 ) -> BlockedRunSummaryResult:
     """Read the current-run artifacts, build the summary, and write it.
 
@@ -231,17 +442,183 @@ def summarize_current_run(
         step3_block=loaded["step3_blocked_by_upstream_gate"],
         step4_block=loaded["step4_blocked_by_upstream_gate"],
         step4_final_safety_block=loaded.get("step4_final_execution_safety_gate"),
+        terminal_observation=terminal_observation,
         source_artifacts=source_artifacts,
         read_errors=read_errors,
     )
 
-    from investment_orchestrator.common.io import write_json
-
-    write_json(output_path, blocked_run_summary_result_to_dict(result))
+    write_validated_json(
+        output_path,
+        blocked_run_summary_result_to_dict(result),
+        schema_name=RUN_SUMMARY_SCHEMA_NAME,
+    )
     return result
 
 
 # --- helpers -----------------------------------------------------------------
+
+
+def _validated_terminal_observation(
+    observation: RunSummaryTerminalObservation | None,
+) -> RunSummaryTerminalObservation | None:
+    if type(observation) is not RunSummaryTerminalObservation:
+        return None
+    if type(observation.terminal_stage) is not str:
+        return None
+    if observation.terminal_stage not in _TERMINAL_STAGES:
+        return None
+    if observation.stopped_before_stage is not None and type(observation.stopped_before_stage) is not str:
+        return None
+    if observation.stopped_before_stage not in _STOPPED_BEFORE_STAGES | {None}:
+        return None
+    if type(observation.terminal_reason_codes) is not tuple:
+        return None
+    if not _exact_string_list(observation.terminal_reason_codes):
+        return None
+    if type(observation.primary_blocker_reasons) is not tuple:
+        return None
+    if type(observation.research_state) is not str:
+        return None
+    if type(observation.allowed_actions) is not tuple:
+        return None
+    if type(observation.blocked_actions) is not tuple:
+        return None
+    if type(observation.manual_review_required) is not bool:
+        return None
+    if len(_exact_string_list(observation.terminal_reason_codes)) != len(
+        observation.terminal_reason_codes
+    ):
+        return None
+    if len(_exact_string_list(observation.primary_blocker_reasons)) != len(
+        observation.primary_blocker_reasons
+    ):
+        return None
+    if len(_exact_string_list(observation.allowed_actions)) != len(observation.allowed_actions):
+        return None
+    if len(_exact_string_list(observation.blocked_actions)) != len(observation.blocked_actions):
+        return None
+    return observation
+
+
+def _is_valid_explicit_block_artifact(source: Mapping[str, Any] | None) -> bool:
+    """Return whether a decoded artifact is a minimum valid explicit block.
+
+    The summary is not a substitute validator for Step 2--4 artifacts.  It
+    nevertheless must not report an arbitrary malformed mapping as a persisted
+    block merely because a file happened to exist.
+    """
+    if type(source) is not dict:
+        return False
+    return (
+        source.get("blocked") is True
+        and type(source.get("reason")) is str
+        and bool(source["reason"])
+        and type(source.get("recommended_result")) is str
+        and source["recommended_result"] == "NO_TRADE"
+    )
+
+
+def _terminal_observation_from_explicit_block(
+    *,
+    step2_block: Mapping[str, Any] | None,
+    step3_block: Mapping[str, Any] | None,
+    step4_block: Mapping[str, Any] | None,
+    step4_final_safety_block: Mapping[str, Any] | None,
+) -> RunSummaryTerminalObservation | None:
+    """Return the first valid persisted block in execution order."""
+    sources: tuple[tuple[Mapping[str, Any] | None, str, str, str], ...] = (
+        (
+            step2_block,
+            "step2_research_gate",
+            "step2_decision_builder",
+            TERMINAL_REASON_STEP2_RESEARCH_GATE_BLOCKED,
+        ),
+        (
+            step3_block,
+            "step3_upstream_gate",
+            "step3_audit_engine",
+            TERMINAL_REASON_STEP3_UPSTREAM_GATE_BLOCKED,
+        ),
+        (
+            step4_block,
+            "step4_upstream_gate",
+            "step4_order_compiler",
+            TERMINAL_REASON_STEP4_UPSTREAM_GATE_BLOCKED,
+        ),
+        (
+            step4_final_safety_block,
+            "step4_final_execution_safety_gate",
+            "order_compilation",
+            TERMINAL_REASON_FINAL_EXECUTION_SAFETY_GATE_BLOCKED,
+        ),
+    )
+    for source, terminal_stage, stopped_before_stage, reason_code in sources:
+        if not _is_valid_explicit_block_artifact(source):
+            continue
+        reasons = _blocker_reasons_for_explicit_block(source)
+        return RunSummaryTerminalObservation(
+            terminal_stage=terminal_stage,
+            stopped_before_stage=stopped_before_stage,
+            terminal_reason_codes=(reason_code,),
+            primary_blocker_reasons=tuple(reasons),
+            research_state="",
+            allowed_actions=(),
+            blocked_actions=(),
+            manual_review_required=False,
+        )
+    return None
+
+
+def _blocker_reasons_for_explicit_block(source: Mapping[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    reasons.extend(_exact_string_list(source.get("blocker_reasons")))
+    reasons.extend(_exact_string_list(source.get("fail_reasons")))
+    permission = source.get("upstream_permission")
+    if type(permission) is dict:
+        reasons.extend(_exact_string_list(permission.get("blocker_reasons")))
+    if not reasons:
+        reason = source.get("reason")
+        if type(reason) is str and reason:
+            reasons.append(reason)
+    return _dedupe_exact_strings(reasons)
+
+
+def _step1_terminal_diagnostics(
+    step1_decision: Mapping[str, Any] | None,
+    terminal_reason_codes: list[str],
+) -> list[str]:
+    if type(step1_decision) is not dict:
+        return []
+
+    diagnostics: list[str] = []
+    for field_name in ("diagnostic_reason", "parse_error"):
+        if field_name not in step1_decision:
+            continue
+        value = step1_decision[field_name]
+        if value is None:
+            continue
+        if type(value) is str and value:
+            diagnostics.append(value)
+            continue
+        terminal_reason_codes.append(TERMINAL_REASON_DIAGNOSTIC_INVALID)
+        diagnostics.append(f"step1 {field_name} is not a non-empty string.")
+    return diagnostics
+
+
+def _exact_string_list(value: Any) -> list[str]:
+    if type(value) not in (list, tuple):
+        return []
+    return [item for item in value if type(item) is str and item]
+
+
+def _dedupe_exact_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if type(value) is str and value and value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result
 
 
 def _primary_permission(
