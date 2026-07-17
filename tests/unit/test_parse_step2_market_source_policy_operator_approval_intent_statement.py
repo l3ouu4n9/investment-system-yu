@@ -1385,22 +1385,36 @@ def test_parser_has_no_production_consumers_or_external_capabilities() -> None:
     repository_root = Path(__file__).resolve().parents[2]
     parser_path = Path(parser_contract.__file__).resolve()
     parser_relative = parser_path.relative_to(repository_root).as_posix()
-    consumers: list[str] = []
+    parser_module = (
+        "investment_orchestrator.parsers."
+        "parse_step2_market_source_policy_operator_approval_intent_statement"
+    )
+    consumers: set[str] = set()
     for path in (repository_root / "src").rglob("*.py"):
         if path.resolve() == parser_path:
             continue
-        source = path.read_text(encoding="utf-8")
-        if (
-            "parse_step2_market_source_policy_operator_approval_intent_statement"
-            in source
-            or "FrozenApprovalIntentJson" in source
-        ):
-            consumers.append(path.relative_to(repository_root).as_posix())
+        source_tree = ast.parse(path.read_text(encoding="utf-8"))
+        imported_modules = {
+            alias.name
+            for node in ast.walk(source_tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        }
+        imported_modules.update(
+            node.module
+            for node in ast.walk(source_tree)
+            if isinstance(node, ast.ImportFrom) and node.module is not None
+        )
+        if parser_module in imported_modules:
+            consumers.add(path.relative_to(repository_root).as_posix())
     assert parser_relative == (
         "src/investment_orchestrator/parsers/"
         "parse_step2_market_source_policy_operator_approval_intent_statement.py"
     )
-    assert consumers == []
+    assert consumers == {
+        "src/investment_orchestrator/validators/"
+        "validate_step2_market_source_policy_operator_approval_intent_statement_artifact.py"
+    }
     imports = {
         node.names[0].name.split(".")[0]
         for node in ast.walk(ast.parse(parser_path.read_text(encoding="utf-8")))

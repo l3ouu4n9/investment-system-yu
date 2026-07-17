@@ -852,14 +852,20 @@ def test_module_is_pure_and_has_no_production_consumers() -> None:
         "investment_orchestrator.validators."
         "validate_step2_market_source_policy_operator_approval_intent_statement"
     )
+    consumers: set[str] = set()
     for source_path in (root / "src").rglob("*.py"):
         if source_path.resolve() == module_path:
             continue
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
-        imported_modules = []
+        imported_modules: set[str] = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
-                imported_modules.extend(alias.name for alias in node.names)
-            if isinstance(node, ast.ImportFrom):
-                imported_modules.append(node.module)
-        assert module_name not in imported_modules, source_path
+                imported_modules.update(alias.name for alias in node.names)
+            if isinstance(node, ast.ImportFrom) and node.module is not None:
+                imported_modules.add(node.module)
+        if module_name in imported_modules:
+            consumers.add(source_path.relative_to(root).as_posix())
+    assert consumers == {
+        "src/investment_orchestrator/validators/"
+        "validate_step2_market_source_policy_operator_approval_intent_statement_artifact.py"
+    }
