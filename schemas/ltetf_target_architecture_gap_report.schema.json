@@ -1,0 +1,2621 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ltetf_target_architecture_gap_report.schema.json",
+  "title": "LTETF-01 target-architecture prerequisite gap report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "observer_version",
+    "architecture_version",
+    "prerequisite_catalog_version",
+    "prerequisite_catalog_identity_sha256",
+    "evaluated_at_utc",
+    "evaluation_time_source",
+    "repository_evidence_identity_sha256",
+    "evidence",
+    "dimensions",
+    "summary_counts",
+    "diagnostics",
+    "authority",
+    "content_identity_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "ltetf_target_architecture_gap_report_v1"
+    },
+    "observer_version": {
+      "const": "ltetf_target_architecture_gap_observer_v1"
+    },
+    "architecture_version": {
+      "const": "ltetf_target_architecture_v1"
+    },
+    "prerequisite_catalog_version": {
+      "const": "ltetf_target_architecture_prerequisite_catalog_v1"
+    },
+    "prerequisite_catalog_identity_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "evaluated_at_utc": {
+      "type": "null"
+    },
+    "evaluation_time_source": {
+      "const": "trusted_clock_unavailable_not_used"
+    },
+    "repository_evidence_identity_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 512,
+      "items": {
+        "$ref": "#/$defs/evidence"
+      }
+    },
+    "dimensions": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 7,
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/dimension_operator_mandate"
+        },
+        {
+          "$ref": "#/$defs/dimension_evidence_and_grounding"
+        },
+        {
+          "$ref": "#/$defs/dimension_structured_portfolio_state"
+        },
+        {
+          "$ref": "#/$defs/dimension_llm_analyst_and_signal_contract"
+        },
+        {
+          "$ref": "#/$defs/dimension_portfolio_construction"
+        },
+        {
+          "$ref": "#/$defs/dimension_semantic_audit_and_resolution"
+        },
+        {
+          "$ref": "#/$defs/dimension_approval_order_and_migration_safety"
+        }
+      ],
+      "items": false
+    },
+    "summary_counts": {
+      "$ref": "#/$defs/summary_counts"
+    },
+    "diagnostics": {
+      "type": "array",
+      "maxItems": 0,
+      "items": {
+        "$ref": "#/$defs/code"
+      }
+    },
+    "authority": {
+      "$ref": "#/$defs/authority"
+    },
+    "content_identity_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "code": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Z][A-Z0-9_]*$"
+    },
+    "relative_path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?![A-Za-z]:)(?!/)(?!.*\\\\)(?!.*\\u0000)(?!.*//)(?!.*(?:^|/)\\.(?:/|$))(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*/$)[A-Za-z0-9][A-Za-z0-9._/:-]*$"
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_id",
+        "evidence_kind",
+        "repository_relative_path",
+        "locator_kind",
+        "locator",
+        "content_identity_sha256",
+        "validation_state",
+        "current",
+        "diagnostic_codes"
+      ],
+      "properties": {
+        "evidence_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[a-z][a-z0-9_:-]*$"
+        },
+        "evidence_kind": {
+          "enum": [
+            "schema",
+            "validator",
+            "production_module",
+            "test_contract",
+            "operator_input",
+            "runtime_artifact",
+            "repository_config",
+            "draft_document",
+            "repository_inventory"
+          ]
+        },
+        "repository_relative_path": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/relative_path"
+            }
+          ]
+        },
+        "locator_kind": {
+          "enum": [
+            "json_pointer",
+            "python_symbol",
+            "schema_pointer",
+            "ast_selector",
+            "config_key"
+          ]
+        },
+        "locator": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "content_identity_sha256": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/sha256"
+            }
+          ]
+        },
+        "validation_state": {
+          "enum": [
+            "valid",
+            "absent",
+            "invalid",
+            "draft",
+            "unaccepted"
+          ]
+        },
+        "current": {
+          "type": "boolean"
+        },
+        "diagnostic_codes": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/code"
+          }
+        }
+      }
+    },
+    "ownership": {
+      "oneOf": [
+        {
+          "properties": {
+            "contract_owner": {
+              "const": "deterministic_code"
+            },
+            "runtime_actor": {
+              "const": "deterministic_code"
+            }
+          }
+        },
+        {
+          "properties": {
+            "contract_owner": {
+              "const": "deterministic_code"
+            },
+            "runtime_actor": {
+              "const": "llm"
+            }
+          }
+        },
+        {
+          "properties": {
+            "contract_owner": {
+              "const": "deterministic_code"
+            },
+            "runtime_actor": {
+              "const": "not_applicable"
+            }
+          }
+        },
+        {
+          "properties": {
+            "contract_owner": {
+              "const": "operator_and_deterministic_validation"
+            },
+            "runtime_actor": {
+              "const": "operator"
+            }
+          }
+        },
+        {
+          "properties": {
+            "contract_owner": {
+              "const": "operator_and_deterministic_validation"
+            },
+            "runtime_actor": {
+              "const": "deterministic_code"
+            }
+          }
+        }
+      ]
+    },
+    "predicate_outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "predicate_id",
+        "satisfied",
+        "evidence_ids",
+        "diagnostic_codes"
+      ],
+      "properties": {
+        "predicate_id": {
+          "type": "string",
+          "pattern": "^P(?:0[1-9]|[12][0-9]|3[0-9]|40)$"
+        },
+        "satisfied": {
+          "type": "boolean"
+        },
+        "evidence_ids": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[a-z][a-z0-9_:-]*$"
+          }
+        },
+        "diagnostic_codes": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/code"
+          }
+        }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "check_id",
+        "title",
+        "contract_owner",
+        "runtime_actor",
+        "authority_effect",
+        "status",
+        "reason_codes",
+        "evidence_ids",
+        "diagnostic_codes",
+        "predicate_outcomes",
+        "blocker_type",
+        "blocker_code",
+        "dependency_check_ids"
+      ],
+      "properties": {
+        "check_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 96,
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "contract_owner": {
+          "enum": [
+            "deterministic_code",
+            "operator_and_deterministic_validation"
+          ]
+        },
+        "runtime_actor": {
+          "enum": [
+            "operator",
+            "llm",
+            "deterministic_code",
+            "not_applicable"
+          ]
+        },
+        "authority_effect": {
+          "const": "none"
+        },
+        "status": {
+          "enum": [
+            "PROVEN_PRESENT",
+            "PRESENT_UNACCEPTED",
+            "DRAFT_ONLY",
+            "PARTIAL",
+            "MISSING",
+            "UNRESOLVED_OPERATOR_POLICY",
+            "UNRESOLVED_CONTRACT",
+            "UNAVAILABLE_RUNTIME_DATA",
+            "CONTRADICTORY"
+          ]
+        },
+        "reason_codes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/code"
+          }
+        },
+        "evidence_ids": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[a-z][a-z0-9_:-]*$"
+          }
+        },
+        "diagnostic_codes": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/code"
+          }
+        },
+        "predicate_outcomes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 40,
+          "items": {
+            "$ref": "#/$defs/predicate_outcome"
+          }
+        },
+        "blocker_type": {
+          "enum": [
+            "operator_policy",
+            "contract",
+            "runtime_data",
+            "implementation",
+            "contradiction"
+          ]
+        },
+        "blocker_code": {
+          "type": "string",
+          "pattern": "^LTETF01_[A-Z0-9_]+_BLOCKED$",
+          "maxLength": 160
+        },
+        "dependency_check_ids": {
+          "type": "array",
+          "maxItems": 24,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "maxLength": 96
+          }
+        }
+      },
+      "allOf": [
+        {
+          "$ref": "#/$defs/ownership"
+        }
+      ]
+    },
+    "dimension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dimension_id",
+        "status",
+        "check_count",
+        "checks"
+      ],
+      "properties": {
+        "dimension_id": {
+          "enum": [
+            "operator_mandate",
+            "evidence_and_grounding",
+            "structured_portfolio_state",
+            "llm_analyst_and_signal_contract",
+            "portfolio_construction",
+            "semantic_audit_and_resolution",
+            "approval_order_and_migration_safety"
+          ]
+        },
+        "status": {
+          "enum": [
+            "PROVEN_PRESENT",
+            "PRESENT_UNACCEPTED",
+            "DRAFT_ONLY",
+            "PARTIAL",
+            "MISSING",
+            "UNRESOLVED_OPERATOR_POLICY",
+            "UNRESOLVED_CONTRACT",
+            "UNAVAILABLE_RUNTIME_DATA",
+            "CONTRADICTORY"
+          ]
+        },
+        "check_count": {
+          "enum": [
+            7,
+            9,
+            11,
+            12,
+            15,
+            18
+          ]
+        },
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 18,
+          "items": {
+            "$ref": "#/$defs/check"
+          }
+        }
+      }
+    },
+    "dimension_operator_mandate": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/dimension"
+        },
+        {
+          "properties": {
+            "dimension_id": {
+              "const": "operator_mandate"
+            },
+            "check_count": {
+              "const": 11
+            },
+            "checks": {
+              "minItems": 11,
+              "maxItems": 11,
+              "prefixItems": [
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "investment_horizon_policy"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "operator"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "risk_drawdown_policy"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "operator"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "strategic_allocation_policy"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "operator"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "liquidity_cash_policy"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "operator"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "contribution_withdrawal_policy"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "operator"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "turnover_policy"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "operator"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "tax_realization_policy"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "operator"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "etf_product_policy"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "operator"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "concentration_overlap_policy"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "operator"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "sell_lot_policy"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "operator"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "manual_live_state_process_policy"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "operator"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ],
+              "items": false
+            }
+          }
+        }
+      ]
+    },
+    "dimension_evidence_and_grounding": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/dimension"
+        },
+        {
+          "properties": {
+            "dimension_id": {
+              "const": "evidence_and_grounding"
+            },
+            "check_count": {
+              "const": 15
+            },
+            "checks": {
+              "minItems": 15,
+              "maxItems": 15,
+              "prefixItems": [
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "source_policy_contract"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "operator"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "authorized_source_inventory"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "operator"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "evidence_provenance_contract"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "evidence_timestamp_semantics"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "trusted_evaluation_clock"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "field_level_freshness_contract"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "evidence_conflict_gap_contract"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "structured_market_metrics"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "structured_scheduled_events"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "evidence_selection_policy"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "evidence_packet_bounds"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "deterministic_evidence_sufficiency"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "prior_thesis_continuity"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "review_trigger_contract"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "prompt_envelope_identity"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ],
+              "items": false
+            }
+          }
+        }
+      ]
+    },
+    "dimension_structured_portfolio_state": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/dimension"
+        },
+        {
+          "properties": {
+            "dimension_id": {
+              "const": "structured_portfolio_state"
+            },
+            "check_count": {
+              "const": 7
+            },
+            "checks": {
+              "minItems": 7,
+              "maxItems": 7,
+              "prefixItems": [
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "holdings_state_contract"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "cash_state_contract"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "tax_lot_state_contract"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "open_order_state_contract"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "account_metadata_contract"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "manual_order_state_contract"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "portfolio_snapshot_identity"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ],
+              "items": false
+            }
+          }
+        }
+      ]
+    },
+    "dimension_llm_analyst_and_signal_contract": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/dimension"
+        },
+        {
+          "properties": {
+            "dimension_id": {
+              "const": "llm_analyst_and_signal_contract"
+            },
+            "check_count": {
+              "const": 9
+            },
+            "checks": {
+              "minItems": 9,
+              "maxItems": 9,
+              "prefixItems": [
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "analyst_disposition_vocabulary"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "llm"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "analyst_required_fields_contract"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "llm"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "analyst_prohibited_authority_contract"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "analyst_evidence_reference_contract"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "llm"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "analyst_generation_provenance"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "analyst_parser_validator"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "analyst_semantic_identity"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "analyst_invocation_grounding_boundary"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "signal_mapping_contract"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ],
+              "items": false
+            }
+          }
+        }
+      ]
+    },
+    "dimension_portfolio_construction": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/dimension"
+        },
+        {
+          "properties": {
+            "dimension_id": {
+              "const": "portfolio_construction"
+            },
+            "check_count": {
+              "const": 12
+            },
+            "checks": {
+              "minItems": 12,
+              "maxItems": 12,
+              "prefixItems": [
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "portfolio_objective_contract"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "operator"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "portfolio_hard_constraints"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "rebalance_band_policy"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "operator"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "no_trade_band_policy"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "operator"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "hysteresis_cooldown_policy"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "operator"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "after_cost_improvement_hurdle"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "operator"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "transaction_cost_policy"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "operator"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "liquidity_minimum_trade_policy"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "operator"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "new_buy_eligibility_evaluation"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "sell_lot_eligibility_evaluation"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "tax_constraint_enforcement"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "deterministic_portfolio_constructor"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ],
+              "items": false
+            }
+          }
+        }
+      ]
+    },
+    "dimension_semantic_audit_and_resolution": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/dimension"
+        },
+        {
+          "properties": {
+            "dimension_id": {
+              "const": "semantic_audit_and_resolution"
+            },
+            "check_count": {
+              "const": 9
+            },
+            "checks": {
+              "minItems": 9,
+              "maxItems": 9,
+              "prefixItems": [
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "semantic_finding_vocabulary"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "llm"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "semantic_audit_prohibited_authority_contract"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "semantic_audit_parser_validator"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "semantic_finding_identity"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "immutable_finding_ledger"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "semantic_resolution_table"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "bounded_recomputation_policy"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "semantic_recomputation_lineage"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "repeated_finding_policy"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ],
+              "items": false
+            }
+          }
+        }
+      ]
+    },
+    "dimension_approval_order_and_migration_safety": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/dimension"
+        },
+        {
+          "properties": {
+            "dimension_id": {
+              "const": "approval_order_and_migration_safety"
+            },
+            "check_count": {
+              "const": 18
+            },
+            "checks": {
+              "minItems": 18,
+              "maxItems": 18,
+              "prefixItems": [
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "resolved_proposal_review_package"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "proposal_approval_intent_contract"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "operator"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "approval_authentication_threat_model"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "operator"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "approval_expiry_policy"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "operator"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "price_drift_recompilation_tolerance"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "operator"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "precompile_eligibility_contract"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "deterministic_order_compiler"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "complete_buy_order_validator"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "complete_sell_order_validator"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "postcompile_final_safety"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "atomic_manual_order_package"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "atomic_current_package_pointer"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "artifact_retention_policy"
+                        },
+                        "contract_owner": {
+                          "const": "operator_and_deterministic_validation"
+                        },
+                        "runtime_actor": {
+                          "const": "operator"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "dormant_p4a_runtime_isolation"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "not_applicable"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "broker_live_execution_absence"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "not_applicable"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "fail_closed_weekly_baseline"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "automatic_weekly_llm_absence"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "not_applicable"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/check"
+                    },
+                    {
+                      "properties": {
+                        "check_id": {
+                          "const": "target_orchestration_contract"
+                        },
+                        "contract_owner": {
+                          "const": "deterministic_code"
+                        },
+                        "runtime_actor": {
+                          "const": "deterministic_code"
+                        },
+                        "authority_effect": {
+                          "const": "none"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ],
+              "items": false
+            }
+          }
+        }
+      ]
+    },
+    "summary_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "PROVEN_PRESENT",
+        "PRESENT_UNACCEPTED",
+        "DRAFT_ONLY",
+        "PARTIAL",
+        "MISSING",
+        "UNRESOLVED_OPERATOR_POLICY",
+        "UNRESOLVED_CONTRACT",
+        "UNAVAILABLE_RUNTIME_DATA",
+        "CONTRADICTORY",
+        "total_checks"
+      ],
+      "properties": {
+        "PROVEN_PRESENT": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 81
+        },
+        "PRESENT_UNACCEPTED": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 81
+        },
+        "DRAFT_ONLY": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 81
+        },
+        "PARTIAL": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 81
+        },
+        "MISSING": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 81
+        },
+        "UNRESOLVED_OPERATOR_POLICY": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 81
+        },
+        "UNRESOLVED_CONTRACT": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 81
+        },
+        "UNAVAILABLE_RUNTIME_DATA": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 81
+        },
+        "CONTRADICTORY": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 81
+        },
+        "total_checks": {
+          "const": 81
+        }
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "report_only",
+        "not_authorization",
+        "authority_scope",
+        "permitted_consumer_scope",
+        "authority_consumers",
+        "trade_permission_effect",
+        "stage_reachability_effect",
+        "canonical_publication_effect",
+        "order_path_effect",
+        "weekly_behavior_effect"
+      ],
+      "properties": {
+        "report_only": {
+          "const": true
+        },
+        "not_authorization": {
+          "const": true
+        },
+        "authority_scope": {
+          "const": "target_architecture_migration_observability_only"
+        },
+        "permitted_consumer_scope": {
+          "const": "operator_observability_only"
+        },
+        "authority_consumers": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "trade_permission_effect": {
+          "const": "none"
+        },
+        "stage_reachability_effect": {
+          "const": "none"
+        },
+        "canonical_publication_effect": {
+          "const": "none"
+        },
+        "order_path_effect": {
+          "const": "none"
+        },
+        "weekly_behavior_effect": {
+          "const": "none"
+        }
+      }
+    }
+  }
+}
