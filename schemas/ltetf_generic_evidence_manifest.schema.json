@@ -1,0 +1,327 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-system.local/schemas/ltetf_generic_evidence_manifest.schema.json",
+  "title": "LTETF Generic Evidence Manifest v1",
+  "description": "Closed identity and provenance manifest. It contains no validation result, freshness result, relevance, sufficiency, universe membership, permission, action, publication, order, broker, or execution claim.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "manifest_id",
+    "evidence_class",
+    "evidence_subject",
+    "subject_identity_sha256",
+    "source_bindings",
+    "content_binding",
+    "producer_binding",
+    "acquired_at_utc",
+    "normalization_identity_sha256",
+    "policy_bindings",
+    "ltetf_02a_catalog_identity_sha256",
+    "predecessor_binding",
+    "authority_effect",
+    "manifest_identity_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "ltetf_generic_evidence_manifest_v1"},
+    "manifest_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+    },
+    "evidence_class": {"$ref": "#/$defs/evidence_class"},
+    "evidence_subject": {"$ref": "#/$defs/evidence_subject"},
+    "subject_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "source_bindings": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {"$ref": "#/$defs/source_binding"}
+    },
+    "content_binding": {"$ref": "#/$defs/content_binding"},
+    "producer_binding": {"$ref": "#/$defs/producer_binding"},
+    "acquired_at_utc": {"$ref": "#/$defs/timestamp_utc"},
+    "normalization_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "policy_bindings": {"$ref": "#/$defs/policy_bindings"},
+    "ltetf_02a_catalog_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "predecessor_binding": {
+      "anyOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/predecessor_binding"}
+      ]
+    },
+    "authority_effect": {"const": "none"},
+    "manifest_identity_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {"properties": {"evidence_class": {"const": "trusted_evaluation_epoch"}}, "required": ["evidence_class"]},
+      "then": {
+        "properties": {
+          "evidence_subject": {
+            "properties": {
+              "subject_kind": {"const": "evaluation_context"},
+              "subject_identity_profile_id": {"const": "ltetf_evaluation_context_subject_v1"}
+            }
+          },
+          "content_binding": {
+            "properties": {
+              "content_schema_version": {"const": "ltetf_trusted_evaluation_epoch_v1"}
+            }
+          },
+          "policy_bindings": {
+            "properties": {"field_freshness_policy": {"type": "null"}}
+          },
+          "predecessor_binding": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"evidence_class": {"const": "structured_market_metrics"}}, "required": ["evidence_class"]},
+      "then": {
+        "properties": {
+          "evidence_subject": {
+            "properties": {
+              "subject_kind": {"const": "instrument"},
+              "subject_identity_profile_id": {"const": "ltetf_instrument_subject_v1"}
+            }
+          },
+          "content_binding": {
+            "properties": {
+              "content_schema_version": {"const": "ltetf_structured_market_metrics_v1"}
+            }
+          },
+          "policy_bindings": {
+            "properties": {"field_freshness_policy": {"$ref": "#/$defs/policy_binding"}}
+          },
+          "predecessor_binding": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"evidence_class": {"const": "structured_scheduled_events"}}, "required": ["evidence_class"]},
+      "then": {
+        "properties": {
+          "evidence_subject": {
+            "properties": {
+              "subject_kind": {"const": "instrument"},
+              "subject_identity_profile_id": {"const": "ltetf_instrument_subject_v1"}
+            }
+          },
+          "content_binding": {
+            "properties": {
+              "content_schema_version": {"const": "ltetf_structured_scheduled_events_v1"}
+            }
+          },
+          "policy_bindings": {
+            "properties": {"field_freshness_policy": {"$ref": "#/$defs/policy_binding"}}
+          },
+          "predecessor_binding": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"evidence_class": {"const": "prior_thesis_continuity"}}, "required": ["evidence_class"]},
+      "then": {
+        "properties": {
+          "evidence_subject": {
+            "properties": {
+              "subject_kind": {"const": "instrument"},
+              "subject_identity_profile_id": {"const": "ltetf_instrument_subject_v1"}
+            }
+          },
+          "content_binding": {
+            "properties": {
+              "content_schema_version": {"const": "ltetf_prior_thesis_continuity_v1"}
+            }
+          },
+          "policy_bindings": {
+            "properties": {"field_freshness_policy": {"$ref": "#/$defs/policy_binding"}}
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "version": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9_]{0,126}_v[1-9][0-9]*$"
+    },
+    "timestamp_utc": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 20,
+      "pattern": "^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z$"
+    },
+    "evidence_class": {
+      "enum": [
+        "trusted_evaluation_epoch",
+        "structured_market_metrics",
+        "structured_scheduled_events",
+        "prior_thesis_continuity"
+      ]
+    },
+    "evidence_subject": {
+      "type": "object",
+      "required": ["subject_kind", "canonical_subject_id", "subject_identity_profile_id"],
+      "properties": {
+        "subject_kind": {"enum": ["evaluation_context", "instrument", "market"]},
+        "canonical_subject_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "subject_identity_profile_id": {
+          "enum": [
+            "ltetf_evaluation_context_subject_v1",
+            "ltetf_instrument_subject_v1",
+            "ltetf_market_subject_v1"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "source_binding": {
+      "type": "object",
+      "required": [
+        "source_id",
+        "source_record_identity_sha256",
+        "source_class",
+        "authorized_source_registry_artifact_identity_sha256"
+      ],
+      "properties": {
+        "source_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z][a-z0-9._-]{0,127}$"
+        },
+        "source_record_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "source_class": {"enum": ["operator_attested", "registered_external", "repository_derived"]},
+        "authorized_source_registry_artifact_identity_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+    "content_binding": {
+      "type": "object",
+      "required": [
+        "repository_relative_path",
+        "media_type",
+        "content_bytes_sha256",
+        "content_identity_sha256",
+        "content_schema_version",
+        "content_schema_identity_sha256",
+        "content_contract_identity_sha256"
+      ],
+      "properties": {
+        "repository_relative_path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[\\x01-\\x5B\\x5D-\\x7F]+$",
+          "allOf": [
+            {"not": {"pattern": "^/"}},
+            {"not": {"pattern": "^[A-Za-z]:"}},
+            {"not": {"pattern": "//"}},
+            {"not": {"pattern": "(?:^|/)\\.{1,2}(?:/|$)"}},
+            {"not": {"pattern": "/$"}}
+          ]
+        },
+        "media_type": {"const": "application/json"},
+        "content_bytes_sha256": {"$ref": "#/$defs/sha256"},
+        "content_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "content_schema_version": {
+          "enum": [
+            "ltetf_trusted_evaluation_epoch_v1",
+            "ltetf_structured_market_metrics_v1",
+            "ltetf_structured_scheduled_events_v1",
+            "ltetf_prior_thesis_continuity_v1"
+          ]
+        },
+        "content_schema_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "content_contract_identity_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+    "producer_binding": {
+      "type": "object",
+      "required": [
+        "producer_id",
+        "producer_version",
+        "producer_contract_identity_sha256",
+        "producer_identity_sha256"
+      ],
+      "properties": {
+        "producer_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z][a-z0-9._-]{0,127}$"
+        },
+        "producer_version": {"$ref": "#/$defs/version"},
+        "producer_contract_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "producer_identity_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+    "policy_binding": {
+      "type": "object",
+      "required": [
+        "policy_type",
+        "policy_id",
+        "policy_version",
+        "policy_artifact_identity_sha256",
+        "policy_content_identity_sha256",
+        "policy_schema_identity_sha256",
+        "policy_contract_identity_sha256",
+        "acceptance_artifact_identity_sha256"
+      ],
+      "properties": {
+        "policy_type": {
+          "enum": ["source_authority_policy", "authorized_source_registry", "field_freshness_policy"]
+        },
+        "policy_id": {
+          "enum": [
+            "ltetf_source_authority_policy",
+            "ltetf_authorized_source_registry",
+            "ltetf_field_freshness_policy"
+          ]
+        },
+        "policy_version": {"$ref": "#/$defs/version"},
+        "policy_artifact_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "policy_content_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "policy_schema_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "policy_contract_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "acceptance_artifact_identity_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+    "policy_bindings": {
+      "type": "object",
+      "required": [
+        "source_authority_policy",
+        "authorized_source_registry",
+        "field_freshness_policy"
+      ],
+      "properties": {
+        "source_authority_policy": {"$ref": "#/$defs/policy_binding"},
+        "authorized_source_registry": {"$ref": "#/$defs/policy_binding"},
+        "field_freshness_policy": {
+          "anyOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/policy_binding"}
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "predecessor_binding": {
+      "type": "object",
+      "required": ["predecessor_manifest_identity_sha256", "predecessor_content_identity_sha256"],
+      "properties": {
+        "predecessor_manifest_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "predecessor_content_identity_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-system.local/schemas/ltetf_field_freshness_policy.schema.json",
+  "title": "LTETF Field Freshness Policy v1",
+  "description": "Closed operator-authored as-of evaluation policy. It neither supplies trusted time nor accepts itself and has no investment sufficiency or action effect.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "policy_type",
+    "authority_effect",
+    "policy_content",
+    "policy_content_identity_sha256",
+    "policy_artifact_identity_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "ltetf_field_freshness_policy_v1"},
+    "policy_type": {"const": "field_freshness_policy"},
+    "authority_effect": {"const": "none"},
+    "policy_content": {"$ref": "#/$defs/policy_content"},
+    "policy_content_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "policy_artifact_identity_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "version": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,126}_v[1-9][0-9]*$",
+      "maxLength": 128
+    },
+    "policy_binding": {
+      "type": "object",
+      "required": [
+        "policy_type",
+        "policy_id",
+        "policy_version",
+        "policy_artifact_identity_sha256",
+        "policy_content_identity_sha256",
+        "policy_schema_identity_sha256",
+        "policy_contract_identity_sha256"
+      ],
+      "properties": {
+        "policy_type": {"enum": ["source_authority_policy", "authorized_source_registry"]},
+        "policy_id": {
+          "enum": ["ltetf_source_authority_policy", "ltetf_authorized_source_registry"]
+        },
+        "policy_version": {"$ref": "#/$defs/version"},
+        "policy_artifact_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "policy_content_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "policy_schema_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "policy_contract_identity_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+    "market_metrics_rule": {
+      "type": "object",
+      "required": [
+        "evidence_class",
+        "field_profile_id",
+        "timestamp_field",
+        "max_age_seconds",
+        "future_tolerance_seconds"
+      ],
+      "properties": {
+        "evidence_class": {"const": "structured_market_metrics"},
+        "field_profile_id": {"const": "market_metric_value"},
+        "timestamp_field": {"const": "observed_at_utc"},
+        "max_age_seconds": {"type": "integer", "minimum": 0, "maximum": 315576000},
+        "future_tolerance_seconds": {"const": 0}
+      },
+      "additionalProperties": false
+    },
+    "scheduled_events_rule": {
+      "type": "object",
+      "required": [
+        "evidence_class",
+        "field_profile_id",
+        "timestamp_field",
+        "max_age_seconds",
+        "future_tolerance_seconds"
+      ],
+      "properties": {
+        "evidence_class": {"const": "structured_scheduled_events"},
+        "field_profile_id": {"const": "scheduled_event_record"},
+        "timestamp_field": {"const": "published_at_utc"},
+        "max_age_seconds": {"type": "integer", "minimum": 0, "maximum": 315576000},
+        "future_tolerance_seconds": {"const": 0}
+      },
+      "additionalProperties": false
+    },
+    "prior_thesis_rule": {
+      "type": "object",
+      "required": [
+        "evidence_class",
+        "field_profile_id",
+        "timestamp_field",
+        "max_age_seconds",
+        "future_tolerance_seconds"
+      ],
+      "properties": {
+        "evidence_class": {"const": "prior_thesis_continuity"},
+        "field_profile_id": {"const": "prior_thesis_record"},
+        "timestamp_field": {"const": "recorded_at_utc"},
+        "max_age_seconds": {"type": "integer", "minimum": 0, "maximum": 315576000},
+        "future_tolerance_seconds": {"const": 0}
+      },
+      "additionalProperties": false
+    },
+    "policy_content": {
+      "type": "object",
+      "required": [
+        "policy_id",
+        "policy_version",
+        "policy_schema_identity_sha256",
+        "policy_contract_identity_sha256",
+        "source_authority_policy_binding",
+        "authorized_source_registry_binding",
+        "rules"
+      ],
+      "properties": {
+        "policy_id": {"const": "ltetf_field_freshness_policy"},
+        "policy_version": {"$ref": "#/$defs/version"},
+        "policy_schema_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "policy_contract_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "source_authority_policy_binding": {"$ref": "#/$defs/policy_binding"},
+        "authorized_source_registry_binding": {"$ref": "#/$defs/policy_binding"},
+        "rules": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "prefixItems": [
+            {"$ref": "#/$defs/market_metrics_rule"},
+            {"$ref": "#/$defs/scheduled_events_rule"},
+            {"$ref": "#/$defs/prior_thesis_rule"}
+          ],
+          "items": false
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

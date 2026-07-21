@@ -1,4 +1,5 @@
 from copy import deepcopy
+import hashlib
 import json
 
 from jsonschema import Draft202012Validator
@@ -15,10 +16,30 @@ from investment_orchestrator.observability.ltetf_target_architecture_gap_report 
     report_content_identity_sha256,
     validate_gap_report_record,
 )
+from investment_orchestrator.observability.ltetf_evidence_contract_common import (
+    DOMAIN_SEPARATORS,
+    NORMALIZATION_PROFILE,
+    SCHEMA_FILENAME_BY_VERSION,
+    SCHEMA_IDENTITY_SHA256_BY_VERSION,
+    parse_strict_json_bytes,
+)
 from investment_orchestrator.observability.ltetf_target_architecture_prerequisite_catalog import CATALOG
 from investment_orchestrator.state.blocked_run_summary import (
     blocked_run_summary_result_to_dict,
     build_blocked_run_summary,
+)
+
+
+LTETF_02A1_SCHEMA_FILENAMES = (
+    "ltetf_source_authority_policy.schema.json",
+    "ltetf_authorized_source_registry.schema.json",
+    "ltetf_field_freshness_policy.schema.json",
+    "ltetf_operator_policy_acceptance.schema.json",
+    "ltetf_generic_evidence_manifest.schema.json",
+    "ltetf_trusted_evaluation_epoch.schema.json",
+    "ltetf_structured_market_metrics.schema.json",
+    "ltetf_structured_scheduled_events.schema.json",
+    "ltetf_prior_thesis_continuity.schema.json",
 )
 
 
@@ -253,3 +274,162 @@ def test_ltetf_report_binds_catalog_identity_ownership_and_exact_order() -> None
         for dimension in report["dimensions"]
         for check in dimension["checks"]
     ) == tuple(check.check_id for check in CATALOG)
+
+
+def test_every_repository_schema_is_discovered_parsed_and_draft_2020_12_valid() -> None:
+    schema_paths = tuple(sorted((repo_root() / "schemas").glob("*.schema.json")))
+    assert schema_paths
+    assert len(schema_paths) == len({path.name for path in schema_paths})
+    for schema_path in schema_paths:
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema", schema_path.name
+        Draft202012Validator.check_schema(schema)
+
+
+def _assert_all_domain_objects_closed(node: object, *, location: str = "$") -> None:
+    if isinstance(node, dict):
+        if node.get("type") == "object":
+            assert node.get("additionalProperties") is False, location
+        for key, value in node.items():
+            _assert_all_domain_objects_closed(value, location=f"{location}/{key}")
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            _assert_all_domain_objects_closed(value, location=f"{location}/{index}")
+
+
+def test_ltetf_02a1_schema_set_is_exact_closed_bounded_and_identity_bound() -> None:
+    assert tuple(path.rsplit("/", 1)[-1] for path in SCHEMA_FILENAME_BY_VERSION.values()) == (
+        LTETF_02A1_SCHEMA_FILENAMES
+    )
+    assert tuple(SCHEMA_FILENAME_BY_VERSION) == (
+        "ltetf_source_authority_policy_v1",
+        "ltetf_authorized_source_registry_v1",
+        "ltetf_field_freshness_policy_v1",
+        "ltetf_operator_policy_acceptance_v1",
+        "ltetf_generic_evidence_manifest_v1",
+        "ltetf_trusted_evaluation_epoch_v1",
+        "ltetf_structured_market_metrics_v1",
+        "ltetf_structured_scheduled_events_v1",
+        "ltetf_prior_thesis_continuity_v1",
+    )
+    identities: list[str] = []
+    for schema_version, schema_relative_path in SCHEMA_FILENAME_BY_VERSION.items():
+        schema_path = repo_root() / schema_relative_path
+        assert schema_path.name in LTETF_02A1_SCHEMA_FILENAMES
+        schema = parse_strict_json_bytes(schema_path.read_bytes())
+        assert isinstance(schema, dict)
+        assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+        assert schema["$id"] == f"https://investment-system.local/{schema_relative_path}"
+        assert schema["additionalProperties"] is False
+        Draft202012Validator.check_schema(schema)
+        _assert_all_domain_objects_closed(schema)
+        identity_payload = {
+            "schema_version": schema_version,
+            "schema_path": schema_relative_path,
+            "schema_id": schema["$id"],
+            "normalization_profile_identity_sha256": NORMALIZATION_PROFILE.identity_sha256,
+            "schema": schema,
+        }
+        canonical = json.dumps(
+            identity_payload,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        independent_identity = hashlib.sha256(
+            DOMAIN_SEPARATORS["schema_identity"] + canonical
+        ).hexdigest()
+        assert independent_identity == SCHEMA_IDENTITY_SHA256_BY_VERSION[schema_version]
+        identities.append(independent_identity)
+    assert len(identities) == len(set(identities)) == 9
+
+
+def test_ltetf_02a1_schemas_bind_exact_constants_and_observer_safety_bounds() -> None:
+    source_policy = parse_strict_json_bytes(
+        (repo_root() / "schemas/ltetf_source_authority_policy.schema.json").read_bytes()
+    )
+    assert source_policy["properties"]["authority_effect"]["const"] == "none"
+    rules = source_policy["$defs"]["policy_content"]["properties"]["rules"]
+    assert rules["minItems"] == rules["maxItems"] == 4
+    assert rules["items"] is False
+
+    registry = parse_strict_json_bytes(
+        (repo_root() / "schemas/ltetf_authorized_source_registry.schema.json").read_bytes()
+    )
+    assert registry["$defs"]["policy_content"]["properties"]["sources"]["maxItems"] == 4096
+    assert tuple(
+        branch["$ref"] for branch in registry["$defs"]["source_locator"]["oneOf"]
+    ) == (
+        "#/$defs/repository_path_locator",
+        "#/$defs/https_origin_locator",
+        "#/$defs/opaque_source_id_locator",
+    )
+
+    manifest = parse_strict_json_bytes(
+        (repo_root() / "schemas/ltetf_generic_evidence_manifest.schema.json").read_bytes()
+    )
+    assert manifest["properties"]["source_bindings"]["minItems"] == 1
+    assert manifest["properties"]["source_bindings"]["maxItems"] == 16
+    assert manifest["properties"]["authority_effect"]["const"] == "none"
+
+    for filename in (
+        "ltetf_structured_market_metrics.schema.json",
+        "ltetf_structured_scheduled_events.schema.json",
+    ):
+        schema = parse_strict_json_bytes((repo_root() / "schemas" / filename).read_bytes())
+        assert schema["properties"]["records"]["minItems"] == 0
+        assert schema["properties"]["records"]["maxItems"] == 4096
+
+
+def test_ltetf_02a1_policy_payloads_cannot_self_accept_and_manifest_has_no_result_fields() -> None:
+    prohibited_policy_fields = {
+        "accepted",
+        "acceptance_state",
+        "is_accepted",
+        "activation",
+        "activation_state",
+        "operator_approval",
+    }
+    for filename in (
+        "ltetf_source_authority_policy.schema.json",
+        "ltetf_authorized_source_registry.schema.json",
+        "ltetf_field_freshness_policy.schema.json",
+    ):
+        schema = parse_strict_json_bytes((repo_root() / "schemas" / filename).read_bytes())
+        root_fields = set(schema["properties"])
+        content_fields = set(schema["$defs"]["policy_content"]["properties"])
+        assert not prohibited_policy_fields & (root_fields | content_fields)
+        assert schema["properties"]["policy_content"]["$ref"] == "#/$defs/policy_content"
+
+    acceptance = parse_strict_json_bytes(
+        (repo_root() / "schemas/ltetf_operator_policy_acceptance.schema.json").read_bytes()
+    )
+    assert "accepted_policy_type" in acceptance["required"]
+    assert "acceptance_artifact_identity_sha256" in acceptance["required"]
+    assert acceptance["properties"]["authority_effect"]["const"] == "none"
+
+    manifest = parse_strict_json_bytes(
+        (repo_root() / "schemas/ltetf_generic_evidence_manifest.schema.json").read_bytes()
+    )
+    manifest_fields = set(manifest["properties"])
+    assert not {
+        "validation_status",
+        "freshness_status",
+        "sufficiency",
+        "relevance",
+        "actionability",
+        "permission",
+        "order_readiness",
+    } & manifest_fields
+    assert {
+        "evidence_subject",
+        "subject_identity_sha256",
+        "source_bindings",
+        "content_binding",
+        "producer_binding",
+        "acquired_at_utc",
+        "policy_bindings",
+        "ltetf_02a_catalog_identity_sha256",
+        "predecessor_binding",
+    } <= manifest_fields

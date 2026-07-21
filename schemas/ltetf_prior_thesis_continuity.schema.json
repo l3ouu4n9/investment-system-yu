@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-system.local/schemas/ltetf_prior_thesis_continuity.schema.json",
+  "title": "LTETF Prior Thesis Continuity v1",
+  "description": "Closed neutral prior-thesis lineage content. It does not establish thesis quality, recommendation, actionability, or investment sufficiency.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "evidence_class",
+    "subject_identity_sha256",
+    "thesis_record_id",
+    "thesis_identity_profile_id",
+    "recorded_at_utc",
+    "thesis_text",
+    "predecessor_manifest_identity_sha256",
+    "predecessor_content_identity_sha256",
+    "evidence_references",
+    "authority_effect"
+  ],
+  "properties": {
+    "schema_version": {"const": "ltetf_prior_thesis_continuity_v1"},
+    "evidence_class": {"const": "prior_thesis_continuity"},
+    "subject_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "thesis_record_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+    },
+    "thesis_identity_profile_id": {"const": "ltetf_thesis_record_identity_profile_v1"},
+    "recorded_at_utc": {"$ref": "#/$defs/timestamp_utc"},
+    "thesis_text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16384,
+      "pattern": "^[\\u0020-\\u007E\\n]+$"
+    },
+    "predecessor_manifest_identity_sha256": {
+      "anyOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]
+    },
+    "predecessor_content_identity_sha256": {
+      "anyOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]
+    },
+    "evidence_references": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 4096,
+      "items": {"$ref": "#/$defs/evidence_reference"}
+    },
+    "authority_effect": {"const": "none"}
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "oneOf": [
+        {
+          "properties": {
+            "predecessor_manifest_identity_sha256": {"type": "null"},
+            "predecessor_content_identity_sha256": {"type": "null"}
+          }
+        },
+        {
+          "properties": {
+            "predecessor_manifest_identity_sha256": {"$ref": "#/$defs/sha256"},
+            "predecessor_content_identity_sha256": {"$ref": "#/$defs/sha256"}
+          }
+        }
+      ]
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "timestamp_utc": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 20,
+      "pattern": "^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z$"
+    },
+    "evidence_reference": {
+      "type": "object",
+      "required": ["evidence_class", "manifest_identity_sha256", "content_identity_sha256"],
+      "properties": {
+        "evidence_class": {"enum": ["structured_market_metrics", "structured_scheduled_events"]},
+        "manifest_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "content_identity_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

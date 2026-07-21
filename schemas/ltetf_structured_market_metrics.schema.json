@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-system.local/schemas/ltetf_structured_market_metrics.schema.json",
+  "title": "LTETF Structured Market Metrics v1",
+  "description": "Closed neutral market-metric content contract. Empty records are structurally valid and never establish evidence or investment sufficiency.",
+  "type": "object",
+  "required": ["schema_version", "evidence_class", "subject_identity_sha256", "records", "authority_effect"],
+  "properties": {
+    "schema_version": {"const": "ltetf_structured_market_metrics_v1"},
+    "evidence_class": {"const": "structured_market_metrics"},
+    "subject_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "records": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 4096,
+      "items": {"$ref": "#/$defs/metric_record"}
+    },
+    "authority_effect": {"const": "none"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "timestamp_utc": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 20,
+      "pattern": "^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z$"
+    },
+    "metric_record": {
+      "type": "object",
+      "required": [
+        "metric_id",
+        "metric_identity_profile_id",
+        "value_decimal",
+        "unit_id",
+        "unit_identity_profile_id",
+        "observed_at_utc"
+      ],
+      "properties": {
+        "metric_id": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 128,
+          "pattern": "^[a-z][a-z0-9]*(?:\\.[a-z0-9]+){1,7}$"
+        },
+        "metric_identity_profile_id": {"const": "ltetf_metric_identity_profile_v1"},
+        "value_decimal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 68,
+          "pattern": "^(?:0|-?(?:0\\.[0-9]{0,17}[1-9]|[1-9][0-9]{0,47}(?:\\.[0-9]{0,17}[1-9])?))$"
+        },
+        "unit_id": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 16,
+          "pattern": "^(?:currency:[A-Z]{3}|ratio:decimal|rate:decimal|count:integer|price:[A-Z]{3}|volume:shares)$"
+        },
+        "unit_identity_profile_id": {"const": "ltetf_unit_identity_profile_v1"},
+        "observed_at_utc": {"$ref": "#/$defs/timestamp_utc"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

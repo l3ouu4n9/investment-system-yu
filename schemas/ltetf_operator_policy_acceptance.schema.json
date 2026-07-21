@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-system.local/schemas/ltetf_operator_policy_acceptance.schema.json",
+  "title": "LTETF Generic Operator Policy Acceptance v1",
+  "description": "Closed operator-input binding to one exact policy payload and accepted LTETF-02a catalog. It makes no authentication, activation, permission, publication, order, broker, or execution claim.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "acceptance_id",
+    "accepted_policy_type",
+    "policy_id",
+    "policy_version",
+    "policy_artifact_identity_sha256",
+    "policy_content_identity_sha256",
+    "policy_schema_identity_sha256",
+    "policy_contract_identity_sha256",
+    "ltetf_02a_catalog_identity_sha256",
+    "authority_effect",
+    "acceptance_artifact_identity_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "ltetf_operator_policy_acceptance_v1"},
+    "acceptance_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9._-]{0,127}$"
+    },
+    "accepted_policy_type": {
+      "enum": ["source_authority_policy", "authorized_source_registry", "field_freshness_policy"]
+    },
+    "policy_id": {
+      "enum": [
+        "ltetf_source_authority_policy",
+        "ltetf_authorized_source_registry",
+        "ltetf_field_freshness_policy"
+      ]
+    },
+    "policy_version": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9_]{0,126}_v[1-9][0-9]*$"
+    },
+    "policy_artifact_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "policy_content_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "policy_schema_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "policy_contract_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "ltetf_02a_catalog_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "authority_effect": {"const": "none"},
+    "acceptance_artifact_identity_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}
