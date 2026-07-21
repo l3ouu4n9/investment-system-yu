@@ -3680,3 +3680,379 @@ def test_broker_negative_proof_never_supplies_atomic_package_or_pointer_facts() 
     no_pointer = replace(complete, atomic_current_package_pointer_proven=False)
     assert _assessment("atomic_current_package_pointer", no_pointer).status is not ReadinessStatus.PROVEN_PRESENT
     assert _assessment("atomic_current_package_pointer", complete, dependencies_proven=False).status is ReadinessStatus.PARTIAL
+
+
+# --- LTETF-01 ast.Raise consumer-inventory availability repair ---------------
+#
+# Historical defect: ``statements_result`` inside ``_parameter_flow_kind``
+# accessed ``statement.value`` for every ``ast.Expr, ast.Return, ast.Raise,
+# ast.Assert`` statement.  ``ast.Raise`` has no ``.value`` (its fields are
+# ``exc`` and ``cause``), so any scanned function whose body contained an
+# ordinary trailing ``raise`` crashed the whole production inventory scan
+# with an uncaught ``AttributeError`` instead of classifying the flow.  These
+# tests exercise the real production scanner functions directly and through
+# the full repository-inventory pipeline to prove every ``raise`` form is now
+# handled safely, without any change to classification policy.
+
+
+def _flow_kind_for_source(source: str, *, tracked: str = "p") -> str:
+    """Parse one top-level ``def wrapper(...)`` and classify its tracked
+    parameter with the real ``_parameter_flow_kind`` production helper."""
+    tree = ast.parse(source)
+    function = tree.body[0]
+    assert isinstance(function, ast.FunctionDef)
+    return gap._parameter_flow_kind(tree, function, {tracked})
+
+
+def test_trailing_raise_expression_no_longer_raises_attributeerror() -> None:
+    """Direct synthetic reproduction of the former ``ast.Raise.value`` crash."""
+    assert _flow_kind_for_source("def wrapper(p):\n    raise ValueError(p)\n") == "unresolved"
+
+
+def test_bare_trailing_raise_no_longer_raises_attributeerror() -> None:
+    assert _flow_kind_for_source("def wrapper(p):\n    x = p\n    raise\n") == "none"
+
+
+def test_raise_from_cause_visits_the_cause_expression_safely() -> None:
+    result = _flow_kind_for_source(
+        "def wrapper(p):\n    raise RuntimeError('boom') from ValueError(p)\n"
+    )
+    assert result == "unresolved"
+
+
+def test_raise_exc_uses_alias_while_cause_is_independently_visited() -> None:
+    result = _flow_kind_for_source(
+        "def wrapper(p):\n    raise ValueError(p) from RuntimeError('unrelated')\n"
+    )
+    assert result == "unresolved"
+
+
+def test_raise_with_no_relevant_exc_or_cause_classifies_as_none() -> None:
+    assert _flow_kind_for_source("def wrapper(p):\n    raise ValueError('unrelated')\n") == "none"
+
+
+def test_raise_exc_reaches_reader_classification_through_a_nested_call() -> None:
+    assert _flow_kind_for_source("def wrapper(p):\n    raise ValueError(p.read_text())\n") == "reader"
+
+
+def test_raise_cause_reaches_reader_classification() -> None:
+    result = _flow_kind_for_source(
+        "def wrapper(p):\n    raise RuntimeError('boom') from ValueError(p.read_text())\n"
+    )
+    assert result == "reader"
+
+
+def test_rebound_alias_inside_raise_cannot_taint_the_flow() -> None:
+    assert _flow_kind_for_source("def wrapper(p):\n    p = 1\n    raise ValueError(p)\n") == "none"
+
+
+def test_ambiguous_local_callable_inside_raise_remains_unresolved() -> None:
+    source = (
+        "def wrapper(p):\n"
+        "    if condition():\n"
+        "        def helper():\n"
+        "            return p\n"
+        "    else:\n"
+        "        def helper():\n"
+        "            return None\n"
+        "    raise ValueError(helper())\n"
+    )
+    assert _flow_kind_for_source(source) == "unresolved"
+
+
+def test_reachable_load_before_unconditional_raise_remains_proven() -> None:
+    source = (
+        "def wrapper(p):\n"
+        "    result = p.read_text()\n"
+        "    raise RuntimeError('unrelated-after-proof')\n"
+    )
+    assert _flow_kind_for_source(source) == "reader"
+
+
+def test_load_after_unconditional_raise_is_unreachable_and_cannot_taint() -> None:
+    source = "def wrapper(p):\n    raise RuntimeError('terminates-here')\n    return p.read_text()\n"
+    assert _flow_kind_for_source(source) == "none"
+
+
+def test_binding_after_unconditional_raise_is_unreachable_and_cannot_compete() -> None:
+    source = (
+        "def wrapper(p):\n"
+        "    result = p.read_text()\n"
+        "    raise RuntimeError('terminates-here')\n"
+        "    p = 'rebound-but-unreachable'\n"
+    )
+    assert _flow_kind_for_source(source) == "reader"
+
+
+def test_direct_parameter_flow_nested_function_scope_is_independent_of_an_outer_raise() -> None:
+    source = (
+        "def wrapper(p):\n"
+        "    raise RuntimeError('outer-terminates')\n"
+        "    def nested(p):\n"
+        "        return p.read_text()\n"
+    )
+    assert _flow_kind_for_source(source) == "none"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "def consume(path):\n    raise ValueError(path)\n"
+        "report_path = 'artifacts/target_architecture/report_only/ltetf_01/reports/report.json'\n"
+        "consume(report_path)\n",
+        "def consume(path):\n    raise ValueError(path) from RuntimeError('unrelated')\n"
+        "report_path = 'artifacts/target_architecture/report_only/ltetf_01/reports/report.json'\n"
+        "consume(report_path)\n",
+        "def consume(path):\n    raise RuntimeError('boom') from ValueError(path)\n"
+        "report_path = 'artifacts/target_architecture/report_only/ltetf_01/reports/report.json'\n"
+        "consume(report_path)\n",
+    ],
+    ids=("raise-exc", "raise-exc-from-unrelated-cause", "raise-with-cause-only"),
+)
+def test_real_production_inventory_no_longer_crashes_on_relevant_trailing_raise_and_fails_closed(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    previous = _write_relevant_inventory_failure(
+        root, "src/investment_orchestrator/consumer.py", source
+    )
+    _assert_relevant_inventory_failure_preserves_report(root, previous)
+
+
+def test_bare_raise_after_local_alias_does_not_taint_report_path(tmp_path: Path) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _write(
+        root,
+        "src/investment_orchestrator/consumer.py",
+        "def consume(path):\n    x = path\n    raise\n"
+        "report_path = 'artifacts/target_architecture/report_only/ltetf_01/reports/report.json'\n"
+        "consume(report_path)\n",
+    )
+    evidence = gap.collect_repository_evidence(root)
+    assert evidence.inventory.report_artifact_readers == ()
+    assert gap.build_gap_report(root)["summary_counts"]
+
+
+def test_reader_wrapper_with_trailing_raise_still_proves_report_reader_relation(
+    tmp_path: Path,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    consumer_path = "src/investment_orchestrator/consumer.py"
+    _write(
+        root,
+        consumer_path,
+        "def consume(path):\n"
+        "    raise ValueError(path.read_text())\n"
+        "report_path = 'artifacts/target_architecture/report_only/ltetf_01/reports/report.json'\n"
+        "consume(report_path)\n",
+    )
+    evidence = gap.collect_repository_evidence(root)
+    assert evidence.inventory.report_artifact_readers == (consumer_path,)
+    with pytest.raises(gap.ObserverIntegrityError, match="CONSUMER_INVENTORY_INCOMPLETE"):
+        gap.build_gap_report(root)
+
+
+def test_raise_of_bare_imported_common_alias_attribute_proves_internal_edge(
+    tmp_path: Path,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "raise _common.CONTRACT_VALUE\n"
+        ),
+    )
+    _assert_synthetic_ltetf_02a1_edge_is_internal(root)
+
+
+def test_raise_error_wrapping_imported_common_alias_attribute_proves_internal_edge(
+    tmp_path: Path,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "raise ValueError(_common.CONTRACT_VALUE)\n"
+        ),
+    )
+    _assert_synthetic_ltetf_02a1_edge_is_internal(root)
+
+
+def test_rebound_alias_inside_raise_cannot_prove_internal_edge(tmp_path: Path) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "_common = object()\n"
+            "raise ValueError(_common.CONTRACT_VALUE)\n"
+        ),
+    )
+    _assert_synthetic_ltetf_02a1_edge_is_external(root)
+
+
+def test_ambiguous_alias_inside_raise_remains_external(tmp_path: Path) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "if condition:\n"
+            "    _common = object()\n"
+            "raise ValueError(_common.CONTRACT_VALUE)\n"
+        ),
+    )
+    _assert_synthetic_ltetf_02a1_edge_is_external(root)
+
+
+def test_direct_symbol_import_used_inside_raise_remains_external(tmp_path: Path) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from investment_orchestrator.observability."
+            "ltetf_evidence_contract_common import CONTRACT_VALUE\n"
+            "raise ValueError(CONTRACT_VALUE)\n"
+        ),
+    )
+    _assert_synthetic_ltetf_02a1_edge_is_external(root)
+
+
+def test_proven_load_before_unrelated_raise_remains_internal(tmp_path: Path) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+            "raise ValueError('unrelated-after-proof')\n"
+        ),
+    )
+    _assert_synthetic_ltetf_02a1_edge_is_internal(root)
+
+
+def test_load_after_unconditional_raise_is_unreachable_and_cannot_prove_internal_edge(
+    tmp_path: Path,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "raise ValueError('terminates-before-any-use')\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+        ),
+    )
+    _assert_synthetic_ltetf_02a1_edge_is_external(root)
+
+
+def test_binding_after_unconditional_raise_cannot_compete_with_earlier_proof(
+    tmp_path: Path,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+            "raise ValueError('terminates-here')\n"
+            "_common = object()\n"
+        ),
+    )
+    _assert_synthetic_ltetf_02a1_edge_is_internal(root)
+
+
+def test_internal_edge_nested_function_scope_is_independent_of_an_outer_raise(
+    tmp_path: Path,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "def outer():\n"
+            "    raise RuntimeError('outer-terminates')\n"
+            "    def nested():\n"
+            "        from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "        return _common.CONTRACT_VALUE\n"
+        ),
+    )
+    _assert_synthetic_ltetf_02a1_edge_is_internal(root)
+
+
+def test_mixed_internal_edge_and_raise_based_report_reader_relations_remain_visible(
+    tmp_path: Path,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+        ),
+    )
+    consumer_path = "src/investment_orchestrator/consumer.py"
+    _write(
+        root,
+        consumer_path,
+        "def consume(path):\n"
+        "    raise ValueError(path.read_text())\n"
+        "report_path = 'artifacts/target_architecture/report_only/ltetf_01/reports/report.json'\n"
+        "consume(report_path)\n",
+    )
+    inventory = gap._scan_production_inventory(root)
+    assert inventory.report_artifact_readers == (consumer_path,)
+    assert any(
+        relation.category.value == "INTERNAL_IMPLEMENTATION_EDGE"
+        for relation in _synthetic_catalog_relations(root)
+    )
+    with pytest.raises(gap.ObserverIntegrityError, match="CONSUMER_INVENTORY_INCOMPLETE"):
+        gap.build_and_write_gap_report(root)
+
+
+def test_unresolvable_relevant_dynamic_target_alongside_raise_remains_fail_closed(
+    tmp_path: Path,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(root)
+    _write(
+        root,
+        "src/investment_orchestrator/dynamic_consumer.py",
+        "import importlib\n"
+        "def suffix():\n"
+        "    return 'ltetf_evidence_requirement_catalog'\n"
+        "MODULE_NAME = 'investment_orchestrator.observability.' + suffix()\n"
+        "VALUE = importlib.import_module(MODULE_NAME)\n"
+        "raise RuntimeError('trailing-raise-after-unresolved-target')\n",
+    )
+    with pytest.raises(gap.ObserverIntegrityError, match="CONSUMER_INVENTORY_INCOMPLETE"):
+        gap.build_and_write_gap_report(root)
+
+
+def test_unrelated_literal_dynamic_import_alongside_raise_remains_irrelevant(
+    tmp_path: Path,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _write(
+        root,
+        "src/investment_orchestrator/consumer.py",
+        "import importlib\n"
+        "def load_unrelated():\n"
+        "    if False:\n"
+        "        raise RuntimeError('unreachable')\n"
+        "    return importlib.import_module('json')\n"
+        "load_unrelated()\n",
+    )
+    report = gap.build_gap_report(root)
+    assert report["summary_counts"]

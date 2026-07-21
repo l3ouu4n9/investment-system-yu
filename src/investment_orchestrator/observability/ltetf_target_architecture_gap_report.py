@@ -2849,10 +2849,23 @@ def _parameter_flow_kind(
                 if _assignment_target_names(statement.target) & aliases or _expression_uses_names(statement.value, aliases):
                     return "unresolved"
                 continue
-            if isinstance(statement, (ast.Expr, ast.Return, ast.Raise, ast.Assert)):
+            if isinstance(statement, ast.Raise):
+                # ``ast.Raise`` has no ``.value``; its evaluated expressions are
+                # ``exc`` and ``cause`` (either or both ``None`` for a bare
+                # ``raise`` or a cause-less ``raise EXC``), visited in that
+                # syntactic/evaluation order.  A ``Raise`` unconditionally
+                # terminates this path, exactly like ``Return``.
+                for value in (statement.exc, statement.cause):
+                    result = expression_result(value)
+                    if result == "reader":
+                        return "reader"
+                    if result == "unresolved":
+                        unresolved = True
+                return "unresolved" if unresolved else "none"
+            if isinstance(statement, (ast.Expr, ast.Return, ast.Assert)):
                 values = (
                     (statement.value,)
-                    if isinstance(statement, (ast.Expr, ast.Return, ast.Raise))
+                    if isinstance(statement, (ast.Expr, ast.Return))
                     else (statement.test, statement.msg)
                 )
                 for value in values:
@@ -2861,7 +2874,7 @@ def _parameter_flow_kind(
                         return "reader"
                     if result == "unresolved":
                         unresolved = True
-                if isinstance(statement, (ast.Return, ast.Raise)):
+                if isinstance(statement, ast.Return):
                     return "unresolved" if unresolved else "none"
                 continue
             if isinstance(statement, ast.Delete):
