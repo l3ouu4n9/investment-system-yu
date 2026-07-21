@@ -68,6 +68,51 @@ _PORTFOLIO_STATE_SCHEMA_RELATIVE_PATH: Final = "schemas/ltetf_portfolio_state.sc
 _OPERATOR_MANDATE_POLICY_SCHEMA_VERSION: Final = "ltetf_operator_mandate_policy_v1"
 _PORTFOLIO_STATE_SCHEMA_VERSION: Final = "ltetf_portfolio_state_v1"
 _CURRENT_RUNTIME_SLOT: Final = "ltetf_portfolio_state"
+
+
+class _ConsumerRelationCategory(str, Enum):
+    """Private per-relation inventory categories; never report vocabulary."""
+
+    INTERNAL_IMPLEMENTATION_EDGE = "INTERNAL_IMPLEMENTATION_EDGE"
+    EXTERNAL_OBSERVER_CONSUMER = "EXTERNAL_OBSERVER_CONSUMER"
+    REPORT_ARTIFACT_READER = "REPORT_ARTIFACT_READER"
+    UNRESOLVED_RELEVANT_CONSUMER = "UNRESOLVED_RELEVANT_CONSUMER"
+    NOT_RELEVANT_TO_LTETF01 = "NOT_RELEVANT_TO_LTETF01"
+
+
+@dataclass(frozen=True, slots=True)
+class _DeclaredObserverContractModule:
+    """One exact production module in a closed observer-contract suite."""
+
+    relative_path: str
+    module_name: str
+
+
+@dataclass(frozen=True, slots=True)
+class _DeclaredInternalModuleRelation:
+    """One explicitly allowed module-to-module implementation relation."""
+
+    importer_module: str
+    importee_module: str
+    edge_kind: str
+
+
+@dataclass(frozen=True, slots=True)
+class _DeclaredObserverContractSuite:
+    """Closed suite membership and relations; no package inference is allowed."""
+
+    suite_id: str
+    modules: tuple[_DeclaredObserverContractModule, ...]
+    allowed_internal_relations: tuple[_DeclaredInternalModuleRelation, ...]
+
+
+_LTETF_02A1_MODULE_LEAF_PREFIX: Final = "ltetf_" + "evidence_"
+_LTETF_02A1_CATALOG_MODULE_LEAF: Final = (
+    _LTETF_02A1_MODULE_LEAF_PREFIX + "requirement_catalog"
+)
+_LTETF_02A1_COMMON_MODULE_LEAF: Final = (
+    _LTETF_02A1_MODULE_LEAF_PREFIX + "contract_common"
+)
 _OBSERVER_INTERNAL_RELATIVE_PATHS: Final = frozenset(
     {
         "src/investment_orchestrator/observability/__init__.py",
@@ -77,6 +122,46 @@ _OBSERVER_INTERNAL_RELATIVE_PATHS: Final = frozenset(
 )
 _OBSERVER_CLI_RELATIVE_PATH: Final = (
     "src/investment_orchestrator/cli/observe_ltetf_target_architecture_gaps.py"
+)
+_DECLARED_OBSERVER_CONTRACT_SUITES: Final = (
+    _DeclaredObserverContractSuite(
+        suite_id="ltetf_02a1_static_evidence_contract",
+        modules=(
+            _DeclaredObserverContractModule(
+                relative_path=(
+                    "src/investment_orchestrator/observability/"
+                    f"{_LTETF_02A1_COMMON_MODULE_LEAF}.py"
+                ),
+                module_name=(
+                    "investment_orchestrator.observability."
+                    f"{_LTETF_02A1_COMMON_MODULE_LEAF}"
+                ),
+            ),
+            _DeclaredObserverContractModule(
+                relative_path=(
+                    "src/investment_orchestrator/observability/"
+                    f"{_LTETF_02A1_CATALOG_MODULE_LEAF}.py"
+                ),
+                module_name=(
+                    "investment_orchestrator.observability."
+                    f"{_LTETF_02A1_CATALOG_MODULE_LEAF}"
+                ),
+            ),
+        ),
+        allowed_internal_relations=(
+            _DeclaredInternalModuleRelation(
+                importer_module=(
+                    "investment_orchestrator.observability."
+                    f"{_LTETF_02A1_CATALOG_MODULE_LEAF}"
+                ),
+                importee_module=(
+                    "investment_orchestrator.observability."
+                    f"{_LTETF_02A1_COMMON_MODULE_LEAF}"
+                ),
+                edge_kind="static_module_binding",
+            ),
+        ),
+    ),
 )
 _INVENTORY_EXCLUDED_PATH_PARTS: Final = frozenset(
     {".git", ".venv", "__pycache__", "vendor"}
@@ -848,7 +933,10 @@ def _tree_has_observer_relevance(tree: ast.AST, bindings: Mapping[str, str]) -> 
     return any(_is_observer_relevant_value(value) for value in (*_tree_string_literals(tree), *bindings.values()))
 
 
-def _imports_in_tree(tree: ast.AST, module_name: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+def _imports_in_tree(
+    tree: ast.AST,
+    module_name: str,
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     """Resolve bounded import bindings and fail closed only when relevant.
 
     The analysis deliberately follows only local literal aliases and one
@@ -857,6 +945,7 @@ def _imports_in_tree(tree: ast.AST, module_name: str) -> tuple[tuple[str, ...], 
     an inventory-integrity failure.
     """
     imports: set[str] = set()
+    dynamic_imports: set[str] = set()
     findings: set[str] = set()
     bindings = _literal_bindings(tree)
     importlib_modules: set[str] = set()
@@ -940,8 +1029,6 @@ def _imports_in_tree(tree: ast.AST, module_name: str) -> tuple[tuple[str, ...], 
         if not changed:
             break
 
-    global_relevance = _tree_has_observer_relevance(tree, bindings)
-
     def dynamic_kind(call: ast.Call) -> str | None:
         if isinstance(call.func, ast.Name):
             if call.func.id in dynamic_functions:
@@ -966,21 +1053,94 @@ def _imports_in_tree(tree: ast.AST, module_name: str) -> tuple[tuple[str, ...], 
                 return "dynamic" if selector in {"import_module", "__import__"} else "unresolved_dispatch"
         return None
 
+    def record_dynamic_target(target: str) -> None:
+        if target.startswith("."):
+            resolved = _resolve_relative_dynamic_import(
+                module_name.rsplit(".", 1)[0],
+                target,
+            )
+            if resolved is None:
+                findings.add("unresolved_dynamic_import")
+                return
+            target = resolved
+        imports.add(target)
+        dynamic_imports.add(target)
+
+    parent_by_node = _ast_parent_index(tree)
+    handled_wrapper_calls: set[int] = set()
+    for function in (
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ):
+        parameters = tuple(
+            argument.arg
+            for argument in (
+                *function.args.posonlyargs,
+                *function.args.args,
+                *function.args.kwonlyargs,
+                *((function.args.vararg,) if function.args.vararg is not None else ()),
+                *((function.args.kwarg,) if function.args.kwarg is not None else ()),
+            )
+        )
+        if not parameters:
+            continue
+        inner_calls = tuple(
+            call
+            for call in ast.walk(function)
+            if isinstance(call, ast.Call)
+            and dynamic_kind(call) == "dynamic"
+            and call.args
+            and isinstance(call.args[0], ast.Name)
+            and call.args[0].id in parameters
+        )
+        if len(inner_calls) != 1:
+            continue
+        inner = inner_calls[0]
+        parameter = inner.args[0].id
+        parameter_order = parameters.index(parameter)
+        call_sites = tuple(
+            call
+            for call in ast.walk(tree)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == function.name
+            and not _is_descendant_of(call, function, parent_by_node)
+        )
+        handled_wrapper_calls.add(id(inner))
+        for call in call_sites:
+            expression: ast.AST | None = (
+                call.args[parameter_order]
+                if parameter_order < len(call.args)
+                else next(
+                    (
+                        keyword.value
+                        for keyword in call.keywords
+                        if keyword.arg == parameter
+                    ),
+                    None,
+                )
+            )
+            target = _bound_literal_path_expression(expression, bindings)
+            if target is None:
+                findings.add("unresolved_dynamic_import")
+            else:
+                record_dynamic_target(target)
+
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
+            continue
+        if id(node) in handled_wrapper_calls:
             continue
         kind = dynamic_kind(node)
         if kind is None:
             continue
         target = _bound_literal_path_expression(node.args[0], bindings) if node.args else None
-        relevant = global_relevance or (target is not None and _is_observer_relevant_value(target))
         if kind == "unresolved_dispatch":
-            if relevant:
-                findings.add("unresolved_dynamic_import")
+            findings.add("unresolved_dynamic_import")
             continue
         if target is None:
-            if relevant:
-                findings.add("unresolved_dynamic_import")
+            findings.add("unresolved_dynamic_import")
             continue
         if target.startswith("."):
             package = _bound_literal_path_expression(node.args[1], bindings) if len(node.args) > 1 else None
@@ -997,13 +1157,68 @@ def _imports_in_tree(tree: ast.AST, module_name: str) -> tuple[tuple[str, ...], 
                 package = module_name.rsplit(".", 1)[0]
             resolved = _resolve_relative_dynamic_import(package, target)
             if resolved is None:
-                if relevant:
-                    findings.add("unresolved_dynamic_import")
+                findings.add("unresolved_dynamic_import")
             else:
                 imports.add(resolved)
+                dynamic_imports.add(resolved)
         else:
             imports.add(target)
-    return tuple(sorted(imports)), tuple(sorted(findings))
+            dynamic_imports.add(target)
+
+    entry_point_factories = {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module in {"importlib.metadata", "importlib_metadata"}
+        for alias in node.names
+        if alias.name == "entry_points"
+    }
+    has_entry_point_provider_import = any(
+        (
+            isinstance(node, ast.Import)
+            and any(
+                alias.name in {"importlib.metadata", "importlib_metadata"}
+                for alias in node.names
+            )
+        )
+        or (
+            isinstance(node, ast.ImportFrom)
+            and (
+                node.module in {"importlib.metadata", "importlib_metadata"}
+                or (
+                    node.module == "importlib"
+                    and any(alias.name == "metadata" for alias in node.names)
+                )
+            )
+        )
+        for node in ast.walk(tree)
+    )
+    enumerates_entry_points = any(
+        isinstance(node, ast.Call)
+        and (
+            (
+                isinstance(node.func, ast.Name)
+                and node.func.id in entry_point_factories
+            )
+            or (
+                has_entry_point_provider_import
+                and _call_name(node) == "entry_points"
+            )
+        )
+        for node in ast.walk(tree)
+    )
+    if enumerates_entry_points and any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "load"
+        for node in ast.walk(tree)
+    ):
+        findings.add("unresolved_dynamic_import")
+    return (
+        tuple(sorted(imports)),
+        tuple(sorted(findings)),
+        tuple(sorted(dynamic_imports)),
+    )
 
 
 def _literal_dynamic_code_facts(
@@ -1118,6 +1333,92 @@ def _file_access_findings(
     policy_reader = False
     findings: set[str] = set()
     scanner_names = {"glob", "rglob", "iterdir", "walk", "listdir", "scandir"}
+    dynamic_import_modules: set[str] = set()
+    dynamic_import_names: set[str] = {"__import__"}
+    for import_node in ast.walk(tree):
+        if isinstance(import_node, ast.Import):
+            for alias in import_node.names:
+                if alias.name in {"importlib", "builtins"}:
+                    dynamic_import_modules.add(alias.asname or alias.name)
+        elif isinstance(import_node, ast.ImportFrom):
+            if import_node.module == "importlib":
+                dynamic_import_names.update(
+                    alias.asname or alias.name
+                    for alias in import_node.names
+                    if alias.name == "import_module"
+                )
+            if import_node.module == "builtins":
+                dynamic_import_names.update(
+                    alias.asname or alias.name
+                    for alias in import_node.names
+                    if alias.name == "__import__"
+                )
+    for _ in range(8):
+        changed = False
+        for assignment in (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ):
+            target = assignment.targets[0].id
+            value = assignment.value
+            dynamic = (
+                isinstance(value, ast.Name)
+                and value.id in dynamic_import_names
+            ) or (
+                isinstance(value, ast.Attribute)
+                and isinstance(value.value, ast.Name)
+                and value.value.id in dynamic_import_modules
+                and value.attr in {"import_module", "__import__"}
+            )
+            if dynamic and target not in dynamic_import_names:
+                dynamic_import_names.add(target)
+                changed = True
+        if not changed:
+            break
+    dynamic_wrapper_names = {
+        function.name
+        for function in ast.walk(tree)
+        if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and any(
+            isinstance(call, ast.Call)
+            and (
+                (
+                    isinstance(call.func, ast.Name)
+                    and call.func.id in dynamic_import_names
+                )
+                or (
+                    isinstance(call.func, ast.Attribute)
+                    and isinstance(call.func.value, ast.Name)
+                    and call.func.value.id in dynamic_import_modules
+                    and call.func.attr in {"import_module", "__import__"}
+                )
+            )
+            for call in ast.walk(function)
+        )
+    }
+
+    def is_dynamic_import_dispatch(call: ast.Call) -> bool:
+        if isinstance(call.func, ast.Name):
+            return call.func.id in dynamic_import_names | dynamic_wrapper_names
+        if (
+            isinstance(call.func, ast.Call)
+            and _call_name(call.func) == "getattr"
+            and len(call.func.args) >= 2
+            and isinstance(call.func.args[0], ast.Name)
+            and call.func.args[0].id in dynamic_import_modules
+            and _literal_string(call.func.args[1])
+            in {"import_module", "__import__"}
+        ):
+            return True
+        return bool(
+            isinstance(call.func, ast.Attribute)
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id in dynamic_import_modules
+            and call.func.attr in {"import_module", "__import__"}
+        )
     assignments = [
         node
         for node in _iter_inventory_nodes(tree)
@@ -1189,6 +1490,10 @@ def _file_access_findings(
         if not isinstance(node, ast.Call):
             continue
         name = _call_name(node)
+        if is_dynamic_import_dispatch(node):
+            # Dynamic module relations are classified by _imports_in_tree;
+            # they are not file/report-loader calls.
+            continue
         if name in {"exec", "eval"}:
             code = node.args[0] if node.args else None
             literal = _bound_literal_path_expression(code, bindings)
@@ -1452,6 +1757,7 @@ class _ParsedProductionSource:
     module_name: str
     tree: ast.AST
     imports: tuple[str, ...]
+    dynamic_imports: tuple[str, ...]
     findings: tuple[str, ...]
     report_reader: bool
     policy_reader: bool
@@ -1513,6 +1819,49 @@ def _assignment_target_names(node: ast.AST) -> set[str]:
     return set()
 
 
+def _pattern_bound_names(pattern: ast.AST) -> tuple[tuple[str, ast.AST], ...]:
+    """Return the non-wildcard names conditionally captured by a pattern.
+
+    Structural pattern matching binds captures before a case guard and body.
+    This observer does not evaluate patterns; it records every syntactically
+    possible capture so later lexical resolution remains conservative.
+    """
+    result: list[tuple[str, ast.AST]] = []
+
+    def add(name: str | None, node: ast.AST) -> None:
+        if name is not None and name != "_":
+            result.append((name, node))
+
+    def visit(node: ast.AST) -> None:
+        if isinstance(node, ast.MatchAs):
+            add(node.name, node)
+            if node.pattern is not None:
+                visit(node.pattern)
+            return
+        if isinstance(node, ast.MatchStar):
+            add(node.name, node)
+            return
+        if isinstance(node, ast.MatchMapping):
+            add(node.rest, node)
+            for child in node.patterns:
+                visit(child)
+            return
+        if isinstance(node, ast.MatchSequence):
+            for child in node.patterns:
+                visit(child)
+            return
+        if isinstance(node, ast.MatchClass):
+            for child in (*node.patterns, *node.kwd_patterns):
+                visit(child)
+            return
+        if isinstance(node, ast.MatchOr):
+            for child in node.patterns:
+                visit(child)
+
+    visit(pattern)
+    return tuple(result)
+
+
 def _statement_binding_names(statement: ast.stmt) -> set[str]:
     """Return names a statement can bind in its enclosing lexical scope.
 
@@ -1558,6 +1907,10 @@ def _statement_binding_names(statement: ast.stmt) -> set[str]:
         }
     if isinstance(statement, ast.Match):
         return {
+            name
+            for case in statement.cases
+            for name, _node in _pattern_bound_names(case.pattern)
+        } | {
             name
             for case in statement.cases
             for child in case.body
@@ -1619,7 +1972,10 @@ def _lexical_scope_index(tree: ast.AST) -> _LexicalScopeIndex:
 
 
 def _scope_body(scope: ast.AST) -> Sequence[ast.stmt]:
-    if isinstance(scope, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef)):
+    if isinstance(
+        scope,
+        (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef),
+    ):
         return scope.body
     return ()
 
@@ -2740,6 +3096,1048 @@ def _imported_wrapper_findings(
     return tuple(sorted(findings)), report_reader, policy_reader
 
 
+@dataclass(frozen=True, slots=True)
+class _StaticImportOccurrence:
+    """One alias-level static import relation and its lexical binding."""
+
+    statement: ast.Import | ast.ImportFrom
+    alias: ast.alias
+    scope: ast.AST
+    target_module: str | None
+    binding_name: str | None
+    binds_module_object: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _ClassifiedConsumerRelation:
+    """One private relation classification; it is never serialized."""
+
+    category: _ConsumerRelationCategory
+    importer_relative_path: str
+    importer_module: str
+    target_module: str | None
+    lineno: int
+    col_offset: int
+
+
+def _declared_contract_modules() -> Mapping[str, _DeclaredObserverContractModule]:
+    return {
+        module.module_name: module
+        for suite in _DECLARED_OBSERVER_CONTRACT_SUITES
+        for module in suite.modules
+    }
+
+
+def _declared_internal_relations() -> frozenset[tuple[str, str, str]]:
+    return frozenset(
+        (relation.importer_module, relation.importee_module, relation.edge_kind)
+        for suite in _DECLARED_OBSERVER_CONTRACT_SUITES
+        for relation in suite.allowed_internal_relations
+    )
+
+
+def _is_observer_relation_target(module_name: str | None) -> bool:
+    return module_name is not None and (
+        module_name == "investment_orchestrator.observability"
+        or module_name.startswith("investment_orchestrator.observability.")
+        or module_name in _declared_contract_modules()
+    )
+
+
+def _static_import_occurrences(
+    source: _ParsedProductionSource,
+    *,
+    sources: Mapping[str, _ParsedProductionSource],
+) -> tuple[_StaticImportOccurrence, ...]:
+    """Enumerate static imports alias-by-alias without importing target code."""
+    declared_modules = _declared_contract_modules()
+    result: list[_StaticImportOccurrence] = []
+
+    class Visitor(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.scope: ast.AST = source.tree
+
+        def _visit_nested_scope(self, node: ast.AST, body: Sequence[ast.stmt]) -> None:
+            previous = self.scope
+            self.scope = node
+            for statement in body:
+                self.visit(statement)
+            self.scope = previous
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            self._visit_nested_scope(node, node.body)
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            self._visit_nested_scope(node, node.body)
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            self._visit_nested_scope(node, node.body)
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            return
+
+        def visit_Import(self, node: ast.Import) -> None:
+            for alias in node.names:
+                binding = alias.asname or alias.name.split(".", 1)[0]
+                result.append(
+                    _StaticImportOccurrence(
+                        statement=node,
+                        alias=alias,
+                        scope=self.scope,
+                        target_module=alias.name,
+                        binding_name=binding,
+                        binds_module_object=(
+                            alias.asname is not None or "." not in alias.name
+                        ),
+                    )
+                )
+
+        def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+            base = _resolve_relative_import(
+                source.module_name,
+                node.level,
+                node.module,
+            )
+            for alias in node.names:
+                if base is None:
+                    target = None
+                    binds_module = False
+                elif alias.name == "*":
+                    target = base
+                    binds_module = False
+                else:
+                    child = f"{base}.{alias.name}"
+                    binds_module = child in sources or child in declared_modules
+                    target = child if binds_module else base
+                result.append(
+                    _StaticImportOccurrence(
+                        statement=node,
+                        alias=alias,
+                        scope=self.scope,
+                        target_module=target,
+                        binding_name=(
+                            None if alias.name == "*" else alias.asname or alias.name
+                        ),
+                        binds_module_object=binds_module,
+                    )
+                )
+
+    Visitor().visit(source.tree)
+    return tuple(result)
+
+
+def _ast_parent_index(tree: ast.AST) -> Mapping[int, ast.AST]:
+    return {
+        id(child): parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+
+
+def _is_descendant_of(
+    node: ast.AST,
+    ancestor: ast.AST,
+    parents: Mapping[int, ast.AST],
+) -> bool:
+    current: ast.AST | None = node
+    while current is not None:
+        if current is ancestor:
+            return True
+        current = parents.get(id(current))
+    return False
+
+
+def _nearest_binding_scope(
+    node: ast.AST,
+    *,
+    tree: ast.AST,
+    parents: Mapping[int, ast.AST],
+) -> ast.AST:
+    current = parents.get(id(node))
+    while current is not None:
+        if isinstance(
+            current,
+            (
+                ast.Module,
+                ast.FunctionDef,
+                ast.AsyncFunctionDef,
+                ast.Lambda,
+                ast.ClassDef,
+                ast.ListComp,
+                ast.SetComp,
+                ast.DictComp,
+                ast.GeneratorExp,
+            ),
+        ):
+            return current
+        current = parents.get(id(current))
+    return tree
+
+
+def _scope_parent(
+    scope: ast.AST,
+    *,
+    tree: ast.AST,
+    parents: Mapping[int, ast.AST],
+) -> ast.AST | None:
+    current = parents.get(id(scope))
+    while current is not None:
+        if isinstance(
+            current,
+            (
+                ast.Module,
+                ast.FunctionDef,
+                ast.AsyncFunctionDef,
+                ast.Lambda,
+                ast.ClassDef,
+                ast.ListComp,
+                ast.SetComp,
+                ast.DictComp,
+                ast.GeneratorExp,
+            ),
+        ):
+            return current
+        current = parents.get(id(current))
+    return tree if scope is not tree else None
+
+
+def _function_parameter_names(scope: ast.AST) -> set[str]:
+    if not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        return set()
+    arguments = scope.args
+    return {
+        argument.arg
+        for argument in (
+            *arguments.posonlyargs,
+            *arguments.args,
+            *arguments.kwonlyargs,
+            *((arguments.vararg,) if arguments.vararg is not None else ()),
+            *((arguments.kwarg,) if arguments.kwarg is not None else ()),
+        )
+    }
+
+
+def _comprehension_namedexpr_targets(
+    node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp,
+) -> tuple[ast.Name, ...]:
+    """Return walrus targets whose writes belong to the enclosing scope.
+
+    Iteration targets are deliberately excluded: Python gives those names an
+    implicit comprehension-local scope.  Assignment expressions are the
+    opposite special case and bind in the enclosing scope (except invalid
+    class-scope forms, which are syntactically rejected by Python).  The
+    inventory is conservative for nested expressions and never executes one.
+    """
+    result: list[ast.Name] = []
+
+    class Visitor(ast.NodeVisitor):
+        def visit_NamedExpr(self, named_expression: ast.NamedExpr) -> None:
+            if isinstance(named_expression.target, ast.Name):
+                result.append(named_expression.target)
+            self.visit(named_expression.value)
+
+        def visit_Lambda(self, lambda_node: ast.Lambda) -> None:
+            return
+
+        def visit_FunctionDef(self, function: ast.FunctionDef) -> None:
+            return
+
+        def visit_AsyncFunctionDef(self, function: ast.AsyncFunctionDef) -> None:
+            return
+
+        def visit_ClassDef(self, class_node: ast.ClassDef) -> None:
+            return
+
+    visitor = Visitor()
+    for generator in node.generators:
+        visitor.visit(generator.iter)
+        for condition in generator.ifs:
+            visitor.visit(condition)
+    if isinstance(node, ast.DictComp):
+        visitor.visit(node.key)
+        visitor.visit(node.value)
+    else:
+        visitor.visit(node.elt)
+    return tuple(result)
+
+
+def _scope_name_declarations(scope: ast.AST) -> tuple[set[str], set[str], set[str]]:
+    """Return local, global, and nonlocal names for one lexical scope."""
+    local = _function_parameter_names(scope)
+    global_names: set[str] = set()
+    nonlocal_names: set[str] = set()
+
+    class Visitor(ast.NodeVisitor):
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            local.add(node.name)
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            local.add(node.name)
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            local.add(node.name)
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            return
+
+        def visit_ListComp(self, node: ast.ListComp) -> None:
+            self._visit_comprehension_namedexpr_targets(node)
+
+        def visit_SetComp(self, node: ast.SetComp) -> None:
+            self._visit_comprehension_namedexpr_targets(node)
+
+        def visit_DictComp(self, node: ast.DictComp) -> None:
+            self._visit_comprehension_namedexpr_targets(node)
+
+        def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
+            self._visit_comprehension_namedexpr_targets(node)
+
+        def _visit_comprehension_namedexpr_targets(
+            self,
+            node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp,
+        ) -> None:
+            for target in _comprehension_namedexpr_targets(node):
+                local.add(target.id)
+
+        def visit_Global(self, node: ast.Global) -> None:
+            global_names.update(node.names)
+
+        def visit_Nonlocal(self, node: ast.Nonlocal) -> None:
+            nonlocal_names.update(node.names)
+
+        def visit_Import(self, node: ast.Import) -> None:
+            local.update(alias.asname or alias.name.split(".", 1)[0] for alias in node.names)
+
+        def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+            local.update(
+                alias.asname or alias.name for alias in node.names if alias.name != "*"
+            )
+
+        def visit_Name(self, node: ast.Name) -> None:
+            if isinstance(node.ctx, (ast.Store, ast.Del)):
+                local.add(node.id)
+
+        def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+            if node.name is not None:
+                local.add(node.name)
+            for statement in node.body:
+                self.visit(statement)
+
+        def visit_Match(self, node: ast.Match) -> None:
+            self.visit(node.subject)
+            for case in node.cases:
+                local.update(name for name, _bound_node in _pattern_bound_names(case.pattern))
+                if case.guard is not None:
+                    self.visit(case.guard)
+                for statement in case.body:
+                    self.visit(statement)
+
+    for statement in _scope_body(scope):
+        Visitor().visit(statement)
+    local.difference_update(global_names | nonlocal_names)
+    return local, global_names, nonlocal_names
+
+
+class _Reachability(str, Enum):
+    """Bounded statement reachability used only for lexical proof."""
+
+    NEVER = "never"
+    MAYBE = "maybe"
+    DEFINITE = "definite"
+
+
+@dataclass(frozen=True, slots=True)
+class _ControlFlow:
+    """Whether a statement can and must fall through when it is reached."""
+
+    can_fall_through: bool
+    must_fall_through: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _ScopeReachability:
+    """Private reachability states for AST nodes in one lexical scope."""
+
+    by_node_id: Mapping[int, _Reachability]
+
+    def state(self, node: ast.AST) -> _Reachability:
+        # Unknown shapes must never establish a unique proof.
+        return self.by_node_id.get(id(node), _Reachability.MAYBE)
+
+
+def _branch_reachability(state: _Reachability) -> _Reachability:
+    if state is _Reachability.NEVER:
+        return state
+    return _Reachability.MAYBE
+
+
+def _statement_control_flow(statement: ast.stmt) -> _ControlFlow:
+    """Return a deliberately small, conservative fall-through model."""
+    if isinstance(statement, (ast.Return, ast.Raise)):
+        return _ControlFlow(False, False)
+    if isinstance(statement, ast.If):
+        literal = _literal_bool(statement.test)
+        if literal is not None:
+            return _block_control_flow(statement.body if literal else statement.orelse)
+        body = _block_control_flow(statement.body)
+        otherwise = _block_control_flow(statement.orelse)
+        return _ControlFlow(
+            body.can_fall_through or otherwise.can_fall_through,
+            body.must_fall_through and otherwise.must_fall_through,
+        )
+    if isinstance(statement, ast.While):
+        if _literal_bool(statement.test) is False:
+            return _block_control_flow(statement.orelse)
+        # Non-literal loops can execute zero, one, or many times; do not make
+        # a termination claim from their syntax.
+        return _ControlFlow(True, False)
+    if isinstance(
+        statement,
+        (
+            ast.For,
+            ast.AsyncFor,
+            ast.Try,
+            ast.With,
+            ast.AsyncWith,
+        ),
+    ):
+        return _ControlFlow(True, False)
+    if isinstance(statement, ast.Match):
+        # A match executes as one sequential statement.  Its captures remain
+        # conditional events, but a wildcard-only match cannot by itself
+        # shadow a later module binding.
+        return _ControlFlow(True, True)
+    return _ControlFlow(True, True)
+
+
+def _block_control_flow(statements: Sequence[ast.stmt]) -> _ControlFlow:
+    """Combine a block without attempting a general control-flow graph."""
+    if not statements:
+        return _ControlFlow(True, True)
+    first = _statement_control_flow(statements[0])
+    if not first.can_fall_through:
+        return first
+    rest = _block_control_flow(statements[1:])
+    return _ControlFlow(
+        rest.can_fall_through,
+        first.must_fall_through and rest.must_fall_through,
+    )
+
+
+def _scope_reachability(scope: ast.AST) -> _ScopeReachability:
+    """Mark only bounded, syntactically certain statement reachability.
+
+    This intentionally is not a CFG.  It recognizes sequential return/raise,
+    literal booleans in ``if`` and ``while``, and otherwise retains feasible
+    alternatives as ``MAYBE``.  ``MAYBE`` nodes cannot prove an internal edge.
+    """
+    states: dict[int, _Reachability] = {}
+
+    def mark(node: ast.AST, state: _Reachability) -> None:
+        states[id(node)] = state
+
+    def mark_expression(node: ast.AST | None, state: _Reachability) -> None:
+        if node is None:
+            return
+        mark(node, state)
+        for child in ast.iter_child_nodes(node):
+            mark_expression(child, state)
+
+    def mark_function_header(
+        node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef,
+        state: _Reachability,
+    ) -> None:
+        mark(node, state)
+        for decorator in node.decorator_list:
+            mark_expression(decorator, state)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for default in (*node.args.defaults, *node.args.kw_defaults):
+                mark_expression(default, state)
+            mark_expression(node.returns, state)
+        else:
+            for base in node.bases:
+                mark_expression(base, state)
+            for keyword in node.keywords:
+                mark_expression(keyword.value, state)
+
+    def mark_block(statements: Sequence[ast.stmt], state: _Reachability) -> None:
+        next_state = state
+        for statement in statements:
+            mark_statement(statement, next_state)
+            flow = _statement_control_flow(statement)
+            if next_state is _Reachability.NEVER or not flow.can_fall_through:
+                next_state = _Reachability.NEVER
+            elif next_state is _Reachability.DEFINITE and flow.must_fall_through:
+                next_state = _Reachability.DEFINITE
+            else:
+                next_state = _Reachability.MAYBE
+
+    def mark_statement(statement: ast.stmt, state: _Reachability) -> None:
+        mark(statement, state)
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            mark_function_header(statement, state)
+            return
+        if isinstance(statement, ast.If):
+            mark_expression(statement.test, state)
+            literal = _literal_bool(statement.test)
+            if literal is True:
+                mark_block(statement.body, state)
+                mark_block(statement.orelse, _Reachability.NEVER)
+            elif literal is False:
+                mark_block(statement.body, _Reachability.NEVER)
+                mark_block(statement.orelse, state)
+            else:
+                branch_state = _branch_reachability(state)
+                mark_block(statement.body, branch_state)
+                mark_block(statement.orelse, branch_state)
+            return
+        if isinstance(statement, ast.While):
+            mark_expression(statement.test, state)
+            if _literal_bool(statement.test) is False:
+                mark_block(statement.body, _Reachability.NEVER)
+                mark_block(statement.orelse, state)
+            else:
+                branch_state = _branch_reachability(state)
+                mark_block(statement.body, branch_state)
+                mark_block(statement.orelse, branch_state)
+            return
+        if isinstance(statement, (ast.For, ast.AsyncFor)):
+            mark_expression(statement.iter, state)
+            branch_state = _branch_reachability(state)
+            mark_expression(statement.target, branch_state)
+            mark_block(statement.body, branch_state)
+            mark_block(statement.orelse, branch_state)
+            return
+        if isinstance(statement, (ast.With, ast.AsyncWith)):
+            branch_state = _branch_reachability(state)
+            for item in statement.items:
+                mark_expression(item.context_expr, state)
+                mark_expression(item.optional_vars, branch_state)
+            mark_block(statement.body, branch_state)
+            return
+        if isinstance(statement, ast.Try):
+            branch_state = _branch_reachability(state)
+            mark_block(statement.body, branch_state)
+            for handler in statement.handlers:
+                mark(handler, branch_state)
+                mark_expression(handler.type, branch_state)
+                mark_block(handler.body, branch_state)
+            mark_block(statement.orelse, branch_state)
+            mark_block(statement.finalbody, branch_state)
+            return
+        if isinstance(statement, ast.Match):
+            mark_expression(statement.subject, state)
+            branch_state = _branch_reachability(state)
+            for case in statement.cases:
+                mark(case, branch_state)
+                mark_expression(case.pattern, branch_state)
+                mark_expression(case.guard, branch_state)
+                mark_block(case.body, branch_state)
+            return
+        for child in ast.iter_child_nodes(statement):
+            mark_expression(child, state)
+
+    if isinstance(scope, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+        mark(scope, _Reachability.DEFINITE)
+        if scope.generators:
+            mark_expression(scope.generators[0].iter, _Reachability.DEFINITE)
+        for generator in scope.generators:
+            mark_expression(generator.target, _Reachability.MAYBE)
+            for condition in generator.ifs:
+                mark_expression(condition, _Reachability.MAYBE)
+            if generator is not scope.generators[0]:
+                mark_expression(generator.iter, _Reachability.MAYBE)
+        if isinstance(scope, ast.DictComp):
+            mark_expression(scope.key, _Reachability.MAYBE)
+            mark_expression(scope.value, _Reachability.MAYBE)
+        else:
+            mark_expression(scope.elt, _Reachability.MAYBE)
+    elif isinstance(scope, ast.Lambda):
+        mark(scope, _Reachability.DEFINITE)
+        mark_expression(scope.body, _Reachability.DEFINITE)
+    else:
+        mark_block(_scope_body(scope), _Reachability.DEFINITE)
+    return _ScopeReachability(states)
+
+
+@dataclass(frozen=True, slots=True)
+class _BindingEvent:
+    node: ast.AST
+    alias: ast.alias | None
+    conditional: bool
+    reachability: _Reachability
+
+
+def _scope_binding_events(
+    scope: ast.AST,
+    name: str,
+    *,
+    reachability: _ScopeReachability | None = None,
+) -> tuple[_BindingEvent, ...]:
+    """Collect same-scope writes while excluding nested lexical scopes."""
+    reachability = reachability or _scope_reachability(scope)
+    events: list[_BindingEvent] = []
+
+    def add(
+        node: ast.AST,
+        alias: ast.alias | None = None,
+        *,
+        conditional: bool = False,
+    ) -> None:
+        state = reachability.state(node)
+        if state is _Reachability.NEVER:
+            return
+        events.append(
+            _BindingEvent(
+                node,
+                alias,
+                conditional or state is not _Reachability.DEFINITE,
+                state,
+            )
+        )
+
+    class Visitor(ast.NodeVisitor):
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            if node.name == name:
+                add(node)
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            if node.name == name:
+                add(node)
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            if node.name == name:
+                add(node)
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            return
+
+        def _visit_comprehension_namedexpr_targets(
+            self,
+            node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp,
+        ) -> None:
+            for target in _comprehension_namedexpr_targets(node):
+                if target.id == name:
+                    # Any comprehension can iterate zero times.  Its walrus
+                    # still belongs to this scope, but cannot be a definite
+                    # binding after the expression without more analysis.
+                    add(target, conditional=True)
+
+        def visit_ListComp(self, node: ast.ListComp) -> None:
+            self._visit_comprehension_namedexpr_targets(node)
+
+        def visit_SetComp(self, node: ast.SetComp) -> None:
+            self._visit_comprehension_namedexpr_targets(node)
+
+        def visit_DictComp(self, node: ast.DictComp) -> None:
+            self._visit_comprehension_namedexpr_targets(node)
+
+        def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
+            self._visit_comprehension_namedexpr_targets(node)
+
+        def visit_Import(self, node: ast.Import) -> None:
+            for alias in node.names:
+                if (alias.asname or alias.name.split(".", 1)[0]) == name:
+                    add(node, alias)
+
+        def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+            for alias in node.names:
+                if alias.name != "*" and (alias.asname or alias.name) == name:
+                    add(node, alias)
+
+        def visit_Name(self, node: ast.Name) -> None:
+            if node.id == name and isinstance(node.ctx, (ast.Store, ast.Del)):
+                add(node)
+
+        def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+            if node.type is not None:
+                self.visit(node.type)
+            if node.name == name:
+                add(node)
+            for statement in node.body:
+                self.visit(statement)
+
+        def visit_Match(self, node: ast.Match) -> None:
+            self.visit(node.subject)
+            for case in node.cases:
+                for bound_name, bound_node in _pattern_bound_names(case.pattern):
+                    if bound_name == name:
+                        add(bound_node)
+                if case.guard is not None:
+                    self.visit(case.guard)
+                for statement in case.body:
+                    self.visit(statement)
+
+    visitor = Visitor()
+    for statement in _scope_body(scope):
+        visitor.visit(statement)
+    return tuple(events)
+
+
+def _node_position(node: ast.AST) -> tuple[int, int]:
+    return (getattr(node, "lineno", -1), getattr(node, "col_offset", -1))
+
+
+def _load_is_exception_shadowed(
+    load: ast.Name,
+    name: str,
+    parents: Mapping[int, ast.AST],
+) -> bool:
+    current = parents.get(id(load))
+    while current is not None:
+        if isinstance(current, ast.ExceptHandler) and current.name == name:
+            return True
+        if isinstance(
+            current,
+            (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef),
+        ):
+            return False
+        current = parents.get(id(current))
+    return False
+
+
+def _comprehension_shadows_load(
+    load: ast.Name,
+    name: str,
+    scope: ast.AST,
+    parents: Mapping[int, ast.AST],
+) -> bool:
+    if not isinstance(
+        scope,
+        (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp),
+    ):
+        return False
+    generators = scope.generators
+    if generators and _is_descendant_of(load, generators[0].iter, parents):
+        return False
+    return any(name in _assignment_target_names(generator.target) for generator in generators)
+
+
+def _candidate_uniquely_reaches_same_scope_load(
+    occurrence: _StaticImportOccurrence,
+    load: ast.Name,
+    *,
+    reachability: _ScopeReachability,
+) -> bool:
+    if reachability.state(load) is not _Reachability.DEFINITE:
+        return False
+    if _node_position(occurrence.statement) >= _node_position(load):
+        return False
+    events = tuple(
+        event
+        for event in _scope_binding_events(
+            occurrence.scope,
+            occurrence.binding_name or "",
+            reachability=reachability,
+        )
+        if _node_position(event.node) < _node_position(load)
+    )
+    candidate_indexes = tuple(
+        index for index, event in enumerate(events) if event.alias is occurrence.alias
+    )
+    if not candidate_indexes:
+        return False
+    candidate_index = candidate_indexes[-1]
+    if events[candidate_index].conditional:
+        return False
+    for event in events[candidate_index + 1 :]:
+        if event.conditional or event.alias is not occurrence.alias:
+            return False
+    return True
+
+
+def _candidate_is_stable_for_nested_load(
+    occurrence: _StaticImportOccurrence,
+    nested_scope: ast.AST,
+    *,
+    occurrence_reachability: _ScopeReachability,
+) -> bool:
+    events = _scope_binding_events(
+        occurrence.scope,
+        occurrence.binding_name or "",
+        reachability=occurrence_reachability,
+    )
+    matching = tuple(event for event in events if event.alias is occurrence.alias)
+    if len(events) != 1 or len(matching) != 1 or matching[0].conditional:
+        return False
+    name = occurrence.binding_name or ""
+    for nested in ast.walk(occurrence.scope):
+        if not isinstance(nested, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        changes_outer = any(
+            (
+                isinstance(declaration, ast.Global)
+                or isinstance(declaration, ast.Nonlocal)
+            )
+            and name in declaration.names
+            for declaration in ast.walk(nested)
+        ) and any(
+            isinstance(candidate, ast.Name)
+            and candidate.id == name
+            and isinstance(candidate.ctx, (ast.Store, ast.Del))
+            for candidate in ast.walk(nested)
+        )
+        if changes_outer:
+            return False
+    return _node_position(occurrence.statement) < _node_position(nested_scope)
+
+
+def _module_binding_occurrence_has_proven_load(
+    source: _ParsedProductionSource,
+    occurrence: _StaticImportOccurrence,
+) -> bool:
+    """Prove at least one lexical load of this exact static module binding."""
+    name = occurrence.binding_name
+    if name is None or not occurrence.binds_module_object:
+        return False
+    parents = _ast_parent_index(source.tree)
+    declarations: dict[int, tuple[set[str], set[str], set[str]]] = {}
+    reachabilities: dict[int, _ScopeReachability] = {}
+
+    def declaration(scope: ast.AST) -> tuple[set[str], set[str], set[str]]:
+        value = declarations.get(id(scope))
+        if value is None:
+            value = _scope_name_declarations(scope)
+            declarations[id(scope)] = value
+        return value
+
+    def reachability(scope: ast.AST) -> _ScopeReachability:
+        value = reachabilities.get(id(scope))
+        if value is None:
+            value = _scope_reachability(scope)
+            reachabilities[id(scope)] = value
+        return value
+
+    for load in (
+        node
+        for node in ast.walk(source.tree)
+        if isinstance(node, ast.Name)
+        and node.id == name
+        and isinstance(node.ctx, ast.Load)
+    ):
+        if _load_is_exception_shadowed(load, name, parents):
+            continue
+        scope = _nearest_binding_scope(load, tree=source.tree, parents=parents)
+        if _comprehension_shadows_load(load, name, scope, parents):
+            continue
+        load_reachability = reachability(scope)
+        load_state = load_reachability.state(load)
+        if isinstance(
+            scope,
+            (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp),
+        ):
+            if scope.generators and _is_descendant_of(
+                load,
+                scope.generators[0].iter,
+                parents,
+            ):
+                load_state = reachability(
+                    _scope_parent(scope, tree=source.tree, parents=parents) or source.tree
+                ).state(scope)
+            else:
+                parent_scope = _scope_parent(scope, tree=source.tree, parents=parents)
+                parent_state = reachability(parent_scope or source.tree).state(scope)
+                if (
+                    parent_state is _Reachability.NEVER
+                    or load_state is _Reachability.NEVER
+                ):
+                    load_state = _Reachability.NEVER
+                else:
+                    load_state = _Reachability.MAYBE
+            scope = _scope_parent(scope, tree=source.tree, parents=parents) or source.tree
+        if load_state is not _Reachability.DEFINITE:
+            continue
+
+        resolved_scope: ast.AST | None = scope
+        while resolved_scope is not None and resolved_scope is not occurrence.scope:
+            if isinstance(resolved_scope, ast.ClassDef):
+                prior_class_bindings = tuple(
+                    event
+                    for event in _scope_binding_events(
+                        resolved_scope,
+                        name,
+                        reachability=reachability(resolved_scope),
+                    )
+                    if _node_position(event.node) < _node_position(load)
+                )
+                if prior_class_bindings:
+                    resolved_scope = None
+                    break
+                resolved_scope = _scope_parent(
+                    resolved_scope,
+                    tree=source.tree,
+                    parents=parents,
+                )
+                continue
+            local, global_names, nonlocal_names = declaration(resolved_scope)
+            if name in global_names:
+                if any(
+                    _node_position(event.node) < _node_position(load)
+                    for event in _scope_binding_events(
+                        resolved_scope,
+                        name,
+                        reachability=reachability(resolved_scope),
+                    )
+                ):
+                    resolved_scope = None
+                    break
+                resolved_scope = source.tree
+                break
+            if name in local and name not in nonlocal_names:
+                resolved_scope = None
+                break
+            parent_scope = _scope_parent(
+                resolved_scope,
+                tree=source.tree,
+                parents=parents,
+            )
+            if isinstance(resolved_scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                while isinstance(parent_scope, ast.ClassDef):
+                    parent_scope = _scope_parent(
+                        parent_scope,
+                        tree=source.tree,
+                        parents=parents,
+                    )
+            resolved_scope = parent_scope
+        if resolved_scope is not occurrence.scope:
+            continue
+        if scope is occurrence.scope:
+            if _candidate_uniquely_reaches_same_scope_load(
+                occurrence,
+                load,
+                reachability=reachability(occurrence.scope),
+            ):
+                return True
+        elif _candidate_is_stable_for_nested_load(
+            occurrence,
+            scope,
+            occurrence_reachability=reachability(occurrence.scope),
+        ):
+            return True
+    return False
+
+
+def _classify_static_import_relations(
+    source: _ParsedProductionSource,
+    *,
+    sources: Mapping[str, _ParsedProductionSource],
+) -> tuple[_ClassifiedConsumerRelation, ...]:
+    """Classify every static import alias independently."""
+    declared_modules = _declared_contract_modules()
+    allowed = _declared_internal_relations()
+    result: list[_ClassifiedConsumerRelation] = []
+    for occurrence in _static_import_occurrences(source, sources=sources):
+        target = occurrence.target_module
+        category = _ConsumerRelationCategory.NOT_RELEVANT_TO_LTETF01
+        if _is_observer_relation_target(target):
+            internal = False
+            declared_importee = declared_modules.get(target or "")
+            actual_importee = sources.get(target or "")
+            if (
+                declared_importee is not None
+                and actual_importee is not None
+                and actual_importee.relative_path == declared_importee.relative_path
+                and (
+                    source.module_name,
+                    target,
+                    "static_module_binding",
+                )
+                in allowed
+                and source.relative_path
+                == declared_modules[source.module_name].relative_path
+                and _module_binding_occurrence_has_proven_load(source, occurrence)
+            ):
+                internal = True
+            category = (
+                _ConsumerRelationCategory.INTERNAL_IMPLEMENTATION_EDGE
+                if internal
+                else _ConsumerRelationCategory.EXTERNAL_OBSERVER_CONSUMER
+            )
+        result.append(
+            _ClassifiedConsumerRelation(
+                category=category,
+                importer_relative_path=source.relative_path,
+                importer_module=source.module_name,
+                target_module=target,
+                lineno=getattr(occurrence.statement, "lineno", -1),
+                col_offset=getattr(occurrence.statement, "col_offset", -1),
+            )
+        )
+    return tuple(result)
+
+
+def _classify_consumer_relations(
+    source: _ParsedProductionSource,
+    *,
+    sources: Mapping[str, _ParsedProductionSource],
+) -> tuple[_ClassifiedConsumerRelation, ...]:
+    """Combine independent static, dynamic, reader, and unresolved relations."""
+    relations = list(_classify_static_import_relations(source, sources=sources))
+    for target in source.dynamic_imports:
+        relations.append(
+            _ClassifiedConsumerRelation(
+                category=(
+                    _ConsumerRelationCategory.EXTERNAL_OBSERVER_CONSUMER
+                    if _is_observer_relation_target(target)
+                    else _ConsumerRelationCategory.NOT_RELEVANT_TO_LTETF01
+                ),
+                importer_relative_path=source.relative_path,
+                importer_module=source.module_name,
+                target_module=target,
+                lineno=-1,
+                col_offset=-1,
+            )
+        )
+    if source.report_reader:
+        relations.append(
+            _ClassifiedConsumerRelation(
+                category=_ConsumerRelationCategory.REPORT_ARTIFACT_READER,
+                importer_relative_path=source.relative_path,
+                importer_module=source.module_name,
+                target_module=None,
+                lineno=-1,
+                col_offset=-1,
+            )
+        )
+    if any(
+        finding
+        in {
+            "dynamic_execution",
+            "unresolved_dynamic_import",
+            "unresolved_dynamic_path",
+        }
+        for finding in source.findings
+    ):
+        relations.append(
+            _ClassifiedConsumerRelation(
+                category=_ConsumerRelationCategory.UNRESOLVED_RELEVANT_CONSUMER,
+                importer_relative_path=source.relative_path,
+                importer_module=source.module_name,
+                target_module=None,
+                lineno=-1,
+                col_offset=-1,
+            )
+        )
+    precedence = {
+        _ConsumerRelationCategory.UNRESOLVED_RELEVANT_CONSUMER: 0,
+        _ConsumerRelationCategory.REPORT_ARTIFACT_READER: 1,
+        _ConsumerRelationCategory.EXTERNAL_OBSERVER_CONSUMER: 2,
+        _ConsumerRelationCategory.INTERNAL_IMPLEMENTATION_EDGE: 3,
+        _ConsumerRelationCategory.NOT_RELEVANT_TO_LTETF01: 4,
+    }
+    return tuple(
+        sorted(
+            relations,
+            key=lambda relation: (
+                precedence[relation.category],
+                relation.target_module or "",
+                relation.lineno,
+                relation.col_offset,
+            ),
+        )
+    )
+
+
 def _scan_production_inventory(root: Path) -> ProductionInventory:
     source_root = root / "src" / "investment_orchestrator"
     try:
@@ -2768,12 +4166,13 @@ def _scan_production_inventory(root: Path) -> ProductionInventory:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=relative_path)
         except (OSError, UnicodeDecodeError, SyntaxError):
             raise ObserverIntegrityError("CONSUMER_INVENTORY_INCOMPLETE") from None
-        imports, import_findings = _imports_in_tree(tree, module_name)
+        imports, import_findings, dynamic_imports = _imports_in_tree(tree, module_name)
         parsed = _ParsedProductionSource(
             relative_path=relative_path,
             module_name=module_name,
             tree=tree,
             imports=imports,
+            dynamic_imports=dynamic_imports,
             findings=import_findings,
             report_reader=False,
             policy_reader=False,
@@ -2803,6 +4202,7 @@ def _scan_production_inventory(root: Path) -> ProductionInventory:
             module_name=parsed.module_name,
             tree=parsed.tree,
             imports=parsed.imports,
+            dynamic_imports=parsed.dynamic_imports,
             findings=findings,
             report_reader=report_reader,
             policy_reader=policy_reader,
@@ -2874,11 +4274,24 @@ def _scan_production_inventory(root: Path) -> ProductionInventory:
         "investment_orchestrator.validators.validate_step2_market_source_policy_operator_approval_intent_statement_artifact",
     )
     allowed_p4a_definition = "src/investment_orchestrator/validators/validate_step2_market_source_policy_operator_approval_intent_statement_artifact.py"
-    for relative, _, imports, _, report_reader, policy_reader, broker_capabilities in analyses:
+    relations_by_module = {
+        module_name: _classify_consumer_relations(
+            source,
+            sources=parsed_sources,
+        )
+        for module_name, source in parsed_sources.items()
+    }
+    for relative, module, imports, findings, report_reader, policy_reader, broker_capabilities in analyses:
         imports_by_path.append((relative, imports))
         is_internal = relative in _OBSERVER_INTERNAL_RELATIVE_PATHS
         is_cli = relative == _OBSERVER_CLI_RELATIVE_PATH
-        if any(item == "investment_orchestrator.observability" or item.startswith("investment_orchestrator.observability.") for item in imports) and not is_internal:
+        relations = relations_by_module[module]
+        has_external_relation = any(
+            relation.category
+            is _ConsumerRelationCategory.EXTERNAL_OBSERVER_CONSUMER
+            for relation in relations
+        )
+        if has_external_relation and not is_internal:
             observer_consumers.add(relative)
         if report_reader and not is_internal and not is_cli:
             report_readers.add(relative)

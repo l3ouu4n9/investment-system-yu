@@ -7,6 +7,7 @@ artifact collection only; they never execute a target source or validator.
 
 from __future__ import annotations
 
+import ast
 from dataclasses import replace
 import inspect
 import json
@@ -65,6 +66,93 @@ def _minimal_observer_repository(tmp_path: Path) -> Path:
         (repo_root() / "schemas/ltetf_target_architecture_gap_report.schema.json").read_bytes(),
     )
     return root
+
+
+def _install_synthetic_ltetf_02a1_internal_edge(
+    root: Path,
+    *,
+    catalog_source: str | None = None,
+    common_source: str = "CONTRACT_VALUE = 'static-contract'\n",
+) -> None:
+    """Install the exact package-local edge without using working-tree 02a1."""
+    _write(
+        root,
+        "src/investment_orchestrator/observability/ltetf_evidence_contract_common.py",
+        common_source,
+    )
+    _write(
+        root,
+        "src/investment_orchestrator/observability/ltetf_evidence_requirement_catalog.py",
+        catalog_source
+        or (
+            "from investment_orchestrator.observability import (\n"
+            "    ltetf_evidence_contract_common as _common,\n"
+            ")\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+        ),
+    )
+
+
+def _assert_synthetic_ltetf_02a1_edge_is_external(root: Path) -> None:
+    """A structurally invalid declared edge remains an ordinary consumer."""
+    catalog_path = (
+        "src/investment_orchestrator/observability/"
+        "ltetf_evidence_requirement_catalog.py"
+    )
+    inventory = gap._scan_production_inventory(root)
+    assert catalog_path in inventory.observer_external_consumers
+    with pytest.raises(gap.ObserverIntegrityError, match="CONSUMER_INVENTORY_INCOMPLETE"):
+        gap.build_gap_report(root)
+
+
+def _synthetic_catalog_relations(
+    root: Path,
+) -> tuple[gap._ClassifiedConsumerRelation, ...]:
+    """Return private relation facts without importing synthetic source."""
+    sources: dict[str, gap._ParsedProductionSource] = {}
+    for path in sorted((root / "src" / "investment_orchestrator").rglob("*.py")):
+        relative = path.relative_to(root).as_posix()
+        module = gap._module_name_for_path(relative)
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=relative)
+        imports, findings, dynamic_imports = gap._imports_in_tree(tree, module)
+        sources[module] = gap._ParsedProductionSource(
+            relative_path=relative,
+            module_name=module,
+            tree=tree,
+            imports=imports,
+            dynamic_imports=dynamic_imports,
+            findings=findings,
+            report_reader=False,
+            policy_reader=False,
+            broker_capabilities=(),
+        )
+    catalog_module = (
+        "investment_orchestrator.observability."
+        "ltetf_evidence_requirement_catalog"
+    )
+    return gap._classify_static_import_relations(
+        sources[catalog_module],
+        sources=sources,
+    )
+
+
+def _assert_synthetic_ltetf_02a1_edge_is_internal(root: Path) -> None:
+    catalog_path = (
+        "src/investment_orchestrator/observability/"
+        "ltetf_evidence_requirement_catalog.py"
+    )
+    relations = _synthetic_catalog_relations(root)
+    assert any(
+        relation.category.value == "INTERNAL_IMPLEMENTATION_EDGE"
+        and relation.target_module
+        == (
+            "investment_orchestrator.observability."
+            "ltetf_evidence_contract_common"
+        )
+        for relation in relations
+    )
+    inventory = gap._scan_production_inventory(root)
+    assert catalog_path not in inventory.observer_external_consumers
 
 
 def _check(report: dict[str, object], check_id: str) -> dict[str, object]:
@@ -1063,6 +1151,1201 @@ def test_target_adapter_consumer_allowlist_is_checked_from_resolved_production_i
     outcomes = {outcome["predicate_id"]: outcome for outcome in check["predicate_outcomes"]}
     assert not outcomes["P08"]["satisfied"]
     assert not outcomes["P40"]["satisfied"]
+
+
+def test_exact_declared_ltetf_02a1_edge_is_internal_without_working_tree_modules(
+    tmp_path: Path,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(root)
+    inventory = gap._scan_production_inventory(root)
+    assert inventory.observer_external_consumers == (
+        "src/investment_orchestrator/cli/observe_ltetf_target_architecture_gaps.py",
+    )
+    assert inventory.report_artifact_readers == ()
+    assert inventory.dynamic_findings == ()
+    assert inventory.prohibited_observer_capability_imports == ()
+    assert gap.build_gap_report(root)["authority"] == gap.AUTHORITY_DECLARATION
+
+
+def test_internal_edge_declaration_is_one_exact_immutable_suite_relationship() -> None:
+    suites = gap._DECLARED_OBSERVER_CONTRACT_SUITES
+    assert type(suites) is tuple and len(suites) == 1
+    suite = suites[0]
+    assert suite.suite_id == "ltetf_02a1_static_evidence_contract"
+    assert tuple((item.relative_path, item.module_name) for item in suite.modules) == (
+        (
+            "src/investment_orchestrator/observability/"
+            "ltetf_evidence_contract_common.py",
+            "investment_orchestrator.observability."
+            "ltetf_evidence_contract_common",
+        ),
+        (
+            "src/investment_orchestrator/observability/"
+            "ltetf_evidence_requirement_catalog.py",
+            "investment_orchestrator.observability."
+            "ltetf_evidence_requirement_catalog",
+        ),
+    )
+    assert tuple(
+        (item.importer_module, item.importee_module, item.edge_kind)
+        for item in suite.allowed_internal_relations
+    ) == (
+        (
+            "investment_orchestrator.observability."
+            "ltetf_evidence_requirement_catalog",
+            "investment_orchestrator.observability."
+            "ltetf_evidence_contract_common",
+            "static_module_binding",
+        ),
+    )
+    with pytest.raises(AttributeError):
+        suite.suite_id = "changed"  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    "catalog_source",
+    (
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as common\n"
+            "CATALOG_BINDING = common.CONTRACT_VALUE\n"
+        ),
+        (
+            "def load_contract():\n"
+            "    from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "    return _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "from . import ltetf_evidence_contract_common as relative_common\n"
+            "CATALOG_BINDING = relative_common.CONTRACT_VALUE\n"
+        ),
+        (
+            "import investment_orchestrator.observability."
+            "ltetf_evidence_contract_common as common_contract\n"
+            "CATALOG_BINDING = common_contract.CONTRACT_VALUE\n"
+        ),
+        (
+            "from investment_orchestrator.observability import(\n"
+            "ltetf_evidence_contract_common as reformatted_common)\n"
+            "CATALOG_BINDING=reformatted_common.CONTRACT_VALUE\n"
+        ),
+    ),
+    ids=(
+        "alternate-alias",
+        "nested-function-import",
+        "relative-import",
+        "absolute-import-as",
+        "formatting",
+    ),
+)
+def test_ast_equivalent_static_module_bindings_are_internal(
+    tmp_path: Path,
+    catalog_source: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=catalog_source,
+    )
+    _assert_synthetic_ltetf_02a1_edge_is_internal(root)
+
+
+@pytest.mark.parametrize(
+    "catalog_source",
+    (
+        (
+            "from investment_orchestrator.observability."
+            "ltetf_evidence_contract_common import CONTRACT_VALUE\n"
+            "CATALOG_BINDING = CONTRACT_VALUE\n"
+        ),
+        (
+            "from investment_orchestrator.observability import (\n"
+            "    ltetf_evidence_contract_common as _common,\n"
+            ")\n"
+        ),
+        (
+            "from investment_orchestrator.observability import (\n"
+            "    ltetf_evidence_contract_common as _common,\n"
+            ")\n"
+            "_common = object()\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "from investment_orchestrator.observability import (\n"
+            "    ltetf_evidence_contract_common as _common,\n"
+            ")\n"
+            "def _common():\n"
+            "    return None\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "from investment_orchestrator.observability import (\n"
+            "    ltetf_evidence_contract_common as _common,\n"
+            ")\n"
+            "class _common:\n"
+            "    pass\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "from investment_orchestrator.observability import (\n"
+            "    ltetf_evidence_contract_common as _common,\n"
+            ")\n"
+            "if condition:\n"
+            "    _common = object()\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "for _common in ():\n"
+            "    pass\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "_common: object = object()\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "(_common := object())\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "del _common\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "def only_shadowed(_common):\n"
+            "    return _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "VALUES = [_common.CONTRACT_VALUE for _common in ()]\n"
+        ),
+    ),
+    ids=(
+        "direct-symbol-import",
+        "unused-binding",
+        "assignment-before-use",
+        "function-definition-before-use",
+        "class-definition-before-use",
+        "ambiguous-branch-before-use",
+        "loop-target-before-use",
+        "annotated-assignment-before-use",
+        "named-expression-before-use",
+        "delete-before-use",
+        "parameter-only-shadowed-use",
+        "comprehension-only-shadowed-use",
+    ),
+)
+def test_nonqualifying_or_ambiguous_static_bindings_remain_external(
+    tmp_path: Path,
+    catalog_source: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=catalog_source,
+    )
+    _assert_synthetic_ltetf_02a1_edge_is_external(root)
+
+
+def test_direct_star_import_does_not_prove_module_binding(tmp_path: Path) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from investment_orchestrator.observability."
+            "ltetf_evidence_contract_common import *\n"
+            "CATALOG_BINDING = CONTRACT_VALUE\n"
+        ),
+    )
+    _assert_synthetic_ltetf_02a1_edge_is_external(root)
+
+
+def test_unresolvable_relevant_static_import_remains_fail_closed(tmp_path: Path) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from ....observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+        ),
+    )
+    with pytest.raises(gap.ObserverIntegrityError, match="CONSUMER_INVENTORY_INCOMPLETE"):
+        gap.build_and_write_gap_report(root)
+    assert not (root / gap.REPORT_NAMESPACE_RELATIVE_PATH).exists()
+
+
+@pytest.mark.parametrize(
+    "side",
+    ("importer", "importee"),
+)
+@pytest.mark.parametrize(
+    "dynamic_source",
+    (
+        "import importlib\nJSON = importlib.import_module('json')\n",
+        "JSON = __import__('json')\n",
+        "import builtins\nJSON = builtins.__import__('json')\n",
+        "from importlib import import_module as load_module\nJSON = load_module('json')\n",
+        "import importlib\nload_module = importlib.import_module\nJSON = load_module('json')\n",
+        (
+            "import importlib\n"
+            "JSON = getattr(importlib, 'import_module')('json')\n"
+        ),
+    ),
+    ids=(
+        "importlib",
+        "dunder-import",
+        "builtins-dunder-import",
+        "from-import-alias",
+        "assignment-alias",
+        "getattr",
+    ),
+)
+def test_literal_json_dynamic_import_does_not_invalidate_static_edge(
+    tmp_path: Path,
+    side: str,
+    dynamic_source: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+            + (dynamic_source if side == "importer" else "")
+        ),
+        common_source=(
+            "CONTRACT_VALUE = 'static-contract'\n"
+            + (dynamic_source if side == "importee" else "")
+        ),
+    )
+    _assert_synthetic_ltetf_02a1_edge_is_internal(root)
+
+
+@pytest.mark.parametrize(
+    "utility_source",
+    (
+        (
+            "from http.client import HTTPSConnection\n"
+            "HTTP_CLIENT = HTTPSConnection('example.invalid')\n"
+        ),
+        (
+            "import os\n"
+            "SUBPROCESS_RESULT = os.system('true')\n"
+        ),
+    ),
+    ids=("network-utility", "subprocess-utility"),
+)
+def test_unrelated_network_and_subprocess_utilities_do_not_invalidate_edge(
+    tmp_path: Path,
+    utility_source: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+            + utility_source
+        ),
+    )
+    _assert_synthetic_ltetf_02a1_edge_is_internal(root)
+
+
+@pytest.mark.parametrize(
+    "extra_source",
+    (
+        "from investment_orchestrator import unrelated\n",
+        "import investment_orchestrator.unrelated\n",
+        "from .. import unrelated\n",
+    ),
+    ids=("from-application", "import-application-child", "relative-application"),
+)
+@pytest.mark.parametrize("side", ("importer", "importee"))
+def test_unrelated_application_import_does_not_invalidate_internal_edge(
+    tmp_path: Path,
+    extra_source: str,
+    side: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+            + (extra_source if side == "importer" else "")
+        ),
+        common_source=(
+            "CONTRACT_VALUE = 'static-contract'\n"
+            + (extra_source if side == "importee" else "")
+        ),
+    )
+    _assert_synthetic_ltetf_02a1_edge_is_internal(root)
+
+
+def test_multi_name_import_is_classified_per_alias(tmp_path: Path) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from investment_orchestrator.observability import (\n"
+            "    ltetf_evidence_contract_common as common_contract,\n"
+            "    ltetf_target_architecture_gap_report as gap_report,\n"
+            ")\n"
+            "CATALOG_BINDING = common_contract.CONTRACT_VALUE\n"
+            "REPORT_BUILDER = gap_report.build_gap_report\n"
+        ),
+    )
+    categories = {
+        (relation.target_module, relation.category.value)
+        for relation in _synthetic_catalog_relations(root)
+    }
+    assert (
+        "investment_orchestrator.observability.ltetf_evidence_contract_common",
+        "INTERNAL_IMPLEMENTATION_EDGE",
+    ) in categories
+    assert (
+        "investment_orchestrator.observability."
+        "ltetf_target_architecture_gap_report",
+        "EXTERNAL_OBSERVER_CONSUMER",
+    ) in categories
+    _assert_synthetic_ltetf_02a1_edge_is_external(root)
+
+
+def test_proven_use_before_later_rebinding_still_qualifies(tmp_path: Path) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+            "_common = object()\n"
+        ),
+    )
+    _assert_synthetic_ltetf_02a1_edge_is_internal(root)
+
+
+@pytest.mark.parametrize(
+    "catalog_source",
+    (
+        (
+            "class ContractSuite:\n"
+            "    from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "    VALUE = _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "class ContractSuite:\n"
+            "    VALUE = _common.CONTRACT_VALUE\n"
+            "    def method(self, _common):\n"
+            "        return _common\n"
+        ),
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "VALUE = _common.CONTRACT_VALUE\n"
+            "class ContractSuite:\n"
+            "    _common = object()\n"
+        ),
+        (
+            "class ContractSuite:\n"
+            "    from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "    VALUE = _common.CONTRACT_VALUE\n"
+            "    _common = object()\n"
+        ),
+    ),
+    ids=(
+        "class-local-import-and-use",
+        "nested-method-parameter-does-not-shadow-class-use",
+        "module-use-survives-class-shadow",
+        "class-use-before-later-overwrite",
+    ),
+)
+def test_class_scope_valid_bindings_and_independent_uses_prove_internal_relation(
+    tmp_path: Path,
+    catalog_source: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(root, catalog_source=catalog_source)
+    _assert_synthetic_ltetf_02a1_edge_is_internal(root)
+
+
+@pytest.mark.parametrize(
+    "class_rebinding",
+    (
+        "    _common = object()\n",
+        "    def _common():\n        return None\n",
+        "    class _common:\n        pass\n",
+    ),
+    ids=("assignment", "function-definition", "class-definition"),
+)
+def test_class_local_rebinding_before_only_use_prevents_internal_proof(
+    tmp_path: Path,
+    class_rebinding: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "class ContractSuite:\n"
+            "    from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            + class_rebinding
+            + "    VALUE = _common.CONTRACT_VALUE\n"
+        ),
+    )
+    _assert_synthetic_ltetf_02a1_edge_is_external(root)
+
+
+@pytest.mark.parametrize(
+    "catalog_source",
+    (
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "match value:\n"
+            "    case [_common]:\n"
+            "        pass\n"
+            "    case _:\n"
+            "        pass\n"
+            "VALUE = _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "match value:\n"
+            "    case [_common]:\n"
+            "        pass\n"
+            "    case {'other': other}:\n"
+            "        pass\n"
+            "VALUE = _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "match value:\n"
+            "    case [nested] as _common:\n"
+            "        pass\n"
+            "VALUE = _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "match value:\n"
+            "    case {'key': [nested], **_common}:\n"
+            "        pass\n"
+            "VALUE = _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "match value:\n"
+            "    case Wrapper([_common]):\n"
+            "        pass\n"
+            "VALUE = _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "match value:\n"
+            "    case [*_common, tail]:\n"
+            "        pass\n"
+            "VALUE = _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "match value:\n"
+            "    case [_common]:\n"
+            "        pass\n"
+            "    case (_common,):\n"
+            "        pass\n"
+            "VALUE = _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "match value:\n"
+            "    case [_common] | (_common,):\n"
+            "        pass\n"
+            "VALUE = _common.CONTRACT_VALUE\n"
+        ),
+    ),
+    ids=(
+        "capture-in-one-case",
+        "capture-in-alternative-case",
+        "match-as-capture",
+        "nested-mapping-and-sequence-capture",
+        "match-class-nested-capture",
+        "match-star-capture",
+        "capture-in-all-cases",
+        "match-or-capture",
+    ),
+)
+def test_reachable_match_capture_prevents_later_internal_binding_proof(
+    tmp_path: Path,
+    catalog_source: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(root, catalog_source=catalog_source)
+    _assert_synthetic_ltetf_02a1_edge_is_external(root)
+
+
+@pytest.mark.parametrize(
+    "catalog_source",
+    (
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "match value:\n"
+            "    case _:\n"
+            "        pass\n"
+            "VALUE = _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "VALUE = _common.CONTRACT_VALUE\n"
+            "match value:\n"
+            "    case [_common]:\n"
+            "        pass\n"
+        ),
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "if False:\n"
+            "    match value:\n"
+            "        case [_common]:\n"
+            "            pass\n"
+            "VALUE = _common.CONTRACT_VALUE\n"
+        ),
+    ),
+    ids=("wildcard-does-not-bind", "use-before-match", "unreachable-capture"),
+)
+def test_wildcard_or_unreachable_match_capture_does_not_block_independent_proof(
+    tmp_path: Path,
+    catalog_source: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(root, catalog_source=catalog_source)
+    _assert_synthetic_ltetf_02a1_edge_is_internal(root)
+
+
+@pytest.mark.parametrize(
+    "catalog_source",
+    (
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "VALUES = [(_common := object()) for item in items]\n"
+            "VALUE = _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "def build(items):\n"
+            "    from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "    VALUES = [(_common := object()) for item in items]\n"
+            "    return _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "VALUES = [item for item in (_common := values)]\n"
+            "VALUE = _common.CONTRACT_VALUE\n"
+        ),
+    ),
+    ids=(
+        "module-walrus-before-load",
+        "function-walrus-before-load",
+        "first-iterable-walrus-before-load",
+    ),
+)
+def test_comprehension_namedexpr_routes_to_enclosing_scope_conservatively(
+    tmp_path: Path,
+    catalog_source: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(root, catalog_source=catalog_source)
+    _assert_synthetic_ltetf_02a1_edge_is_external(root)
+
+
+@pytest.mark.parametrize(
+    "catalog_source",
+    (
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "VALUES = [item for _common in items]\n"
+            "VALUE = _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "VALUES = [item for item in _common.CONTRACT_VALUE]\n"
+        ),
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "VALUE = _common.CONTRACT_VALUE\n"
+            "VALUES = [(_common := object()) for item in items]\n"
+        ),
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "VALUE = _common.CONTRACT_VALUE\n"
+            "VALUES = [(_common := object()) for item in items]\n"
+            "_common = object()\n"
+        ),
+    ),
+    ids=(
+        "iteration-target-is-local",
+        "first-iterable-is-enclosing",
+        "use-before-walrus",
+        "later-rebinding-does-not-revoke-early-use",
+    ),
+)
+def test_comprehension_scope_rules_preserve_independent_internal_proof(
+    tmp_path: Path,
+    catalog_source: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(root, catalog_source=catalog_source)
+    _assert_synthetic_ltetf_02a1_edge_is_internal(root)
+
+
+@pytest.mark.parametrize(
+    "catalog_source",
+    (
+        (
+            "def build():\n"
+            "    from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "    return None\n"
+            "    VALUE = _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "def build():\n"
+            "    from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "    raise RuntimeError\n"
+            "    VALUE = _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "if False:\n"
+            "    VALUE = _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "while False:\n"
+            "    VALUE = _common.CONTRACT_VALUE\n"
+        ),
+    ),
+    ids=("load-after-return", "load-after-raise", "load-in-if-false", "load-in-while-false"),
+)
+def test_unreachable_loads_do_not_prove_internal_relation(
+    tmp_path: Path,
+    catalog_source: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(root, catalog_source=catalog_source)
+    _assert_synthetic_ltetf_02a1_edge_is_external(root)
+
+
+@pytest.mark.parametrize(
+    "catalog_source",
+    (
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "if False:\n"
+            "    ignored = _common\n"
+            "else:\n"
+            "    VALUE = _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "if True:\n"
+            "    VALUE = _common.CONTRACT_VALUE\n"
+            "else:\n"
+            "    ignored = _common\n"
+        ),
+        (
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "while False:\n"
+            "    ignored = _common\n"
+            "else:\n"
+            "    VALUE = _common.CONTRACT_VALUE\n"
+        ),
+        (
+            "def build():\n"
+            "    from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "    VALUE = _common.CONTRACT_VALUE\n"
+            "    return VALUE\n"
+            "    _common = object()\n"
+        ),
+        (
+            "def build():\n"
+            "    from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "    VALUE = _common.CONTRACT_VALUE\n"
+            "    raise RuntimeError\n"
+            "    _common = object()\n"
+        ),
+        (
+            "def outer():\n"
+            "    return None\n"
+            "    def nested():\n"
+            "        from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "        return _common.CONTRACT_VALUE\n"
+        ),
+    ),
+    ids=(
+        "if-false-else",
+        "if-true-body",
+        "while-false-else",
+        "use-before-return-with-unreachable-binding",
+        "use-before-raise-with-unreachable-binding",
+        "nested-function-is-separate-scope",
+    ),
+)
+def test_reachable_literal_branch_and_pre_terminator_loads_remain_proven(
+    tmp_path: Path,
+    catalog_source: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(root, catalog_source=catalog_source)
+    _assert_synthetic_ltetf_02a1_edge_is_internal(root)
+
+
+@pytest.mark.parametrize(
+    "shadow_source",
+    (
+        (
+            "def local_parameter(_common):\n"
+            "    return _common\n"
+        ),
+        (
+            "try:\n"
+            "    raise ValueError\n"
+            "except ValueError as _common:\n"
+            "    HANDLER_VALUE = _common\n"
+        ),
+        "COMPREHENSION = [_common for _common in ()]\n",
+        (
+            "def nested_local():\n"
+            "    _common = object()\n"
+            "    return _common\n"
+        ),
+    ),
+    ids=("parameter", "exception-alias", "comprehension-target", "nested-local"),
+)
+def test_nested_shadowing_does_not_invalidate_independent_outer_use(
+    tmp_path: Path,
+    shadow_source: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+            + shadow_source
+        ),
+    )
+    _assert_synthetic_ltetf_02a1_edge_is_internal(root)
+
+
+def test_exception_alias_cleanup_prevents_later_load_from_proving_edge(
+    tmp_path: Path,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "try:\n"
+            "    raise ValueError\n"
+            "except ValueError as _common:\n"
+            "    pass\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+        ),
+    )
+    _assert_synthetic_ltetf_02a1_edge_is_external(root)
+
+
+def test_global_rebinding_makes_nested_global_load_ambiguous(tmp_path: Path) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "def replace_common():\n"
+            "    global _common\n"
+            "    _common = object()\n"
+            "def read_common():\n"
+            "    return _common.CONTRACT_VALUE\n"
+        ),
+    )
+    _assert_synthetic_ltetf_02a1_edge_is_external(root)
+
+
+def test_literal_json_one_level_wrapper_is_irrelevant(tmp_path: Path) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "import importlib\n"
+            "def load_module(target):\n"
+            "    return importlib.import_module(target)\n"
+            "JSON = load_module('json')\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+        ),
+    )
+    _assert_synthetic_ltetf_02a1_edge_is_internal(root)
+
+
+@pytest.mark.parametrize("side", ("importer", "importee"))
+def test_unresolved_dynamic_target_in_declared_suite_remains_fail_closed(
+    tmp_path: Path,
+    side: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    dynamic_source = (
+        "import importlib\n"
+        "DYNAMIC = importlib.import_module(unknown_target)\n"
+    )
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+            + (dynamic_source if side == "importer" else "")
+        ),
+        common_source=(
+            "CONTRACT_VALUE = 'static-contract'\n"
+            + (dynamic_source if side == "importee" else "")
+        ),
+    )
+    with pytest.raises(gap.ObserverIntegrityError, match="CONSUMER_INVENTORY_INCOMPLETE"):
+        gap.build_and_write_gap_report(root)
+    assert not (root / gap.REPORT_NAMESPACE_RELATIVE_PATH).exists()
+
+
+def test_unbounded_generic_dynamic_import_remains_fail_closed(tmp_path: Path) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _write(
+        root,
+        "src/investment_orchestrator/generic_module_loader.py",
+        "import importlib\nVALUE = importlib.import_module(unknown_target)\n",
+    )
+    with pytest.raises(gap.ObserverIntegrityError, match="CONSUMER_INVENTORY_INCOMPLETE"):
+        gap.build_and_write_gap_report(root)
+    assert not (root / gap.REPORT_NAMESPACE_RELATIVE_PATH).exists()
+
+
+def test_resolved_dynamic_common_target_is_external_relation(tmp_path: Path) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "import importlib\n"
+            "DYNAMIC = importlib.import_module(\n"
+            "    'investment_orchestrator.observability."
+            "ltetf_evidence_contract_common'\n"
+            ")\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+        ),
+    )
+    _assert_synthetic_ltetf_02a1_edge_is_external(root)
+
+
+def test_entry_point_enumeration_without_load_is_irrelevant(tmp_path: Path) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "from importlib.metadata import entry_points\n"
+            "PLUGINS = entry_points()\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+        ),
+    )
+    _assert_synthetic_ltetf_02a1_edge_is_internal(root)
+
+
+def test_unbounded_entry_point_load_remains_fail_closed(tmp_path: Path) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "from importlib.metadata import entry_points\n"
+            "PLUGINS = entry_points()\n"
+            "PLUGIN = next(iter(PLUGINS))\n"
+            "LOADED = PLUGIN.load()\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+        ),
+    )
+    with pytest.raises(gap.ObserverIntegrityError, match="CONSUMER_INVENTORY_INCOMPLETE"):
+        gap.build_and_write_gap_report(root)
+    assert not (root / gap.REPORT_NAMESPACE_RELATIVE_PATH).exists()
+
+
+def test_capability_like_local_names_are_not_consumer_evidence(tmp_path: Path) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+            "def grant_permission(): return None\n"
+            "def publish_canonical(): return None\n"
+            "def resolve_policy(): return None\n"
+            "def submit_order(): return None\n"
+        ),
+    )
+    _assert_synthetic_ltetf_02a1_edge_is_internal(root)
+
+
+@pytest.mark.parametrize("reader_side", ("catalog", "common"))
+def test_report_reader_remains_visible_alongside_internal_relation(
+    tmp_path: Path,
+    reader_side: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    reader = (
+        "from pathlib import Path\n"
+        "REPORT = Path('artifacts/target_architecture/report_only/ltetf_01/"
+        "reports/report.json').read_text()\n"
+    )
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+            + (reader if reader_side == "catalog" else "")
+        ),
+        common_source=(
+            "CONTRACT_VALUE = 'static-contract'\n"
+            + (reader if reader_side == "common" else "")
+        ),
+    )
+    inventory = gap._scan_production_inventory(root)
+    expected = (
+        "src/investment_orchestrator/observability/"
+        + (
+            "ltetf_evidence_requirement_catalog.py"
+            if reader_side == "catalog"
+            else "ltetf_evidence_contract_common.py"
+        )
+    )
+    assert inventory.report_artifact_readers == (expected,)
+    relations = _synthetic_catalog_relations(root)
+    assert any(
+        relation.category.value == "INTERNAL_IMPLEMENTATION_EDGE"
+        for relation in relations
+    )
+    with pytest.raises(gap.ObserverIntegrityError, match="CONSUMER_INVENTORY_INCOMPLETE"):
+        gap.build_and_write_gap_report(root)
+
+
+def test_generic_report_loader_is_not_suppressed_by_internal_relation(
+    tmp_path: Path,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(
+        root,
+        catalog_source=(
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common as _common\n"
+            "from pathlib import Path\n"
+            "REPORTS = tuple(Path('artifacts').rglob('*.json'))\n"
+            "CATALOG_BINDING = _common.CONTRACT_VALUE\n"
+        ),
+    )
+    inventory = gap._scan_production_inventory(root)
+    assert inventory.report_artifact_readers == (
+        "src/investment_orchestrator/observability/"
+        "ltetf_evidence_requirement_catalog.py",
+    )
+    assert any(
+        relation.category.value == "INTERNAL_IMPLEMENTATION_EDGE"
+        for relation in _synthetic_catalog_relations(root)
+    )
+    with pytest.raises(gap.ObserverIntegrityError, match="CONSUMER_INVENTORY_INCOMPLETE"):
+        gap.build_and_write_gap_report(root)
+
+
+def test_same_package_module_with_identical_private_common_import_is_not_exempt(
+    tmp_path: Path,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(root)
+    consumer_path = (
+        "src/investment_orchestrator/observability/another_catalog.py"
+    )
+    _write(
+        root,
+        consumer_path,
+        "from investment_orchestrator.observability import (\n"
+        "    ltetf_evidence_contract_common as _common,\n"
+        ")\n"
+        "VALUE = _common.CONTRACT_VALUE\n",
+    )
+    inventory = gap._scan_production_inventory(root)
+    assert consumer_path in inventory.observer_external_consumers
+
+
+@pytest.mark.parametrize(
+    ("consumer_path", "source"),
+    (
+        (
+            "src/investment_orchestrator/workflow/catalog_consumer.py",
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_requirement_catalog\n",
+        ),
+        (
+            "src/investment_orchestrator/cli/other_observer.py",
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_requirement_catalog\n",
+        ),
+        (
+            "src/investment_orchestrator/state/permission_gate.py",
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_requirement_catalog\n",
+        ),
+        (
+            "src/investment_orchestrator/workflow/step4_order_compiler.py",
+            "from investment_orchestrator.observability import "
+            "ltetf_evidence_contract_common\n",
+        ),
+        (
+            "src/investment_orchestrator/observability/publication_adapter.py",
+            "from investment_orchestrator.observability."
+            "ltetf_target_architecture_gap_report import build_and_write_gap_report\n",
+        ),
+    ),
+)
+def test_workflow_cli_permission_order_and_same_package_publication_consumers_remain_external(
+    tmp_path: Path,
+    consumer_path: str,
+    source: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(root)
+    _write(root, consumer_path, source)
+    inventory = gap._scan_production_inventory(root)
+    assert consumer_path in inventory.observer_external_consumers
+
+
+@pytest.mark.parametrize(
+    "target",
+    (
+        "investment_orchestrator.observability."
+        "ltetf_evidence_requirement_catalog",
+        "investment_orchestrator.observability."
+        "ltetf_evidence_contract_common",
+    ),
+)
+def test_literal_dynamic_ltetf_02a1_imports_remain_fail_closed(
+    tmp_path: Path,
+    target: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(root)
+    consumer_path = "src/investment_orchestrator/dynamic_consumer.py"
+    _write(
+        root,
+        consumer_path,
+        f"import importlib\nVALUE = importlib.import_module({target!r})\n",
+    )
+    with pytest.raises(gap.ObserverIntegrityError, match="CONSUMER_INVENTORY_INCOMPLETE"):
+        gap.build_and_write_gap_report(root)
+    assert not (root / gap.REPORT_NAMESPACE_RELATIVE_PATH).exists()
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        (
+            "from pathlib import Path\n"
+            "Path('artifacts/target_architecture/report_only/ltetf_01/"
+            "reports/report.json').read_text()\n"
+        ),
+        "from pathlib import Path\nlist(Path('artifacts').rglob('*.json'))\n",
+    ),
+)
+def test_same_package_report_readers_and_generic_loaders_remain_visible(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(root)
+    reader_path = "src/investment_orchestrator/observability/report_reader.py"
+    _write(root, reader_path, source)
+    inventory = gap._scan_production_inventory(root)
+    assert inventory.report_artifact_readers == (reader_path,)
+    with pytest.raises(gap.ObserverIntegrityError, match="CONSUMER_INVENTORY_INCOMPLETE"):
+        gap.build_and_write_gap_report(root)
+    assert not (root / gap.REPORT_NAMESPACE_RELATIVE_PATH).exists()
+
+
+def test_relevant_unresolved_dynamic_ltetf_02a1_import_remains_fail_closed(
+    tmp_path: Path,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ltetf_02a1_internal_edge(root)
+    _write(
+        root,
+        "src/investment_orchestrator/observability/dynamic_loader.py",
+        "import importlib\n"
+        "selector = unknown_selector\n"
+        "loader = getattr(importlib, selector)\n"
+        "loader('investment_orchestrator.observability."
+        "ltetf_evidence_requirement_catalog')\n",
+    )
+    with pytest.raises(gap.ObserverIntegrityError, match="CONSUMER_INVENTORY_INCOMPLETE"):
+        gap.build_and_write_gap_report(root)
+    assert not (root / gap.REPORT_NAMESPACE_RELATIVE_PATH).exists()
 
 
 @pytest.mark.parametrize(
