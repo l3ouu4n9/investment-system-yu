@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-system.local/schemas/weekly_shadow_01_analyst_response.schema.json",
+  "title": "WEEKLY-SHADOW-01 Analyst Response v1",
+  "description": "Untrusted LLM content. It contains no run status, validation result, gate result, publication outcome, approval state, permission state, portfolio state, compiler eligibility, order eligibility, or execution state field. A schema-valid instance of this contract carries only qualitative research content and confers no authority.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "stage_version",
+    "run_id",
+    "input_package_identity_sha256",
+    "prompt_template_identity_sha256",
+    "source_generation_id",
+    "source_artifact_bindings",
+    "evidence_record_bindings",
+    "analyst_conclusion",
+    "analyst_confidence",
+    "analytical_sections",
+    "analyst_limitation_codes",
+    "negative_authority"
+  ],
+  "properties": {
+    "schema_version": {"const": "weekly_shadow_01_analyst_response_v1"},
+    "stage_version": {"const": "weekly_shadow_01_stage_a_v1"},
+    "run_id": {"$ref": "#/$defs/identifier"},
+    "input_package_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "prompt_template_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "source_generation_id": {"$ref": "#/$defs/identifier"},
+    "source_artifact_bindings": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/source_artifact_binding"}
+    },
+    "evidence_record_bindings": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/evidence_record_binding"}
+    },
+    "analyst_conclusion": {
+      "enum": [
+        "OBSERVATIONS_AVAILABLE",
+        "NO_CHANGE_JUSTIFIED",
+        "INSUFFICIENT_EVIDENCE_FOR_CONCLUSION"
+      ]
+    },
+    "analyst_confidence": {"enum": ["LOW", "MEDIUM", "HIGH"]},
+    "analytical_sections": {"$ref": "#/$defs/analytical_sections"},
+    "analyst_limitation_codes": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 32,
+      "items": {"$ref": "#/$defs/analyst_limitation_entry"}
+    },
+    "negative_authority": {"$ref": "#/$defs/negative_authority_profile"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9._-]{0,127}$"
+    },
+    "source_artifact_binding": {
+      "type": "object",
+      "required": ["source_id", "source_artifact_identity_sha256"],
+      "properties": {
+        "source_id": {"$ref": "#/$defs/identifier"},
+        "source_artifact_identity_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+    "evidence_record_binding": {
+      "type": "object",
+      "required": ["evidence_record_id", "evidence_record_identity_sha256"],
+      "properties": {
+        "evidence_record_id": {"$ref": "#/$defs/identifier"},
+        "evidence_record_identity_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+    "analytical_entry": {
+      "type": "object",
+      "required": ["entry_id", "statement", "evidence_record_ids"],
+      "properties": {
+        "entry_id": {"$ref": "#/$defs/identifier"},
+        "statement": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "evidence_record_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/identifier"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "missing_evidence_entry": {
+      "type": "object",
+      "required": ["entry_id", "statement", "diagnostic_ids"],
+      "properties": {
+        "entry_id": {"$ref": "#/$defs/identifier"},
+        "statement": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "diagnostic_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/identifier"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "analytical_sections": {
+      "type": "object",
+      "required": ["observations", "risks_and_uncertainties", "missing_evidence_notes"],
+      "properties": {
+        "observations": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 32,
+          "items": {"$ref": "#/$defs/analytical_entry"}
+        },
+        "risks_and_uncertainties": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 32,
+          "items": {"$ref": "#/$defs/analytical_entry"}
+        },
+        "missing_evidence_notes": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 32,
+          "items": {"$ref": "#/$defs/missing_evidence_entry"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "analyst_limitation_entry": {
+      "type": "object",
+      "required": ["code", "reference_ids"],
+      "properties": {
+        "code": {
+          "enum": [
+            "WS01_AL_EVIDENCE_SPARSE",
+            "WS01_AL_EVIDENCE_PERCEIVED_STALE",
+            "WS01_AL_SCOPE_NARROW",
+            "WS01_AL_SOURCE_COVERAGE_GAP",
+            "WS01_AL_AMBIGUOUS_SIGNAL",
+            "WS01_AL_FOLLOWUP_REQUIRED"
+          ]
+        },
+        "reference_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/identifier"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "negative_authority_profile": {
+      "type": "object",
+      "required": [
+        "authority_effect",
+        "permission_effect",
+        "approval_eligible",
+        "precompile_eligible",
+        "order_eligible",
+        "portfolio_effect",
+        "order_path_effect",
+        "execution_authority"
+      ],
+      "properties": {
+        "authority_effect": {"const": "none"},
+        "permission_effect": {"const": "none"},
+        "approval_eligible": {"const": false},
+        "precompile_eligible": {"const": false},
+        "order_eligible": {"const": false},
+        "portfolio_effect": {"const": "none"},
+        "order_path_effect": {"const": "none"},
+        "execution_authority": {"const": false}
+      },
+      "additionalProperties": false
+    }
+  }
+}

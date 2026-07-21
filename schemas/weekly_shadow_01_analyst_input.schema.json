@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-system.local/schemas/weekly_shadow_01_analyst_input.schema.json",
+  "title": "WEEKLY-SHADOW-01 Analyst Input v1",
+  "description": "Entirely code-owned input package bound to a single explicit R2F v2 source generation. It contains no field inviting the LLM to choose a run status, validation result, gate result, permission, portfolio, or order outcome. It confers no authority.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "adapter_id",
+    "adapter_version",
+    "source_generation_id",
+    "evaluation_timestamp_utc",
+    "source_artifact_bindings",
+    "evidence_records",
+    "availability_freshness_diagnostics",
+    "permitted_question_ids",
+    "prohibited_conclusion_ids",
+    "resource_bound_profile_identity_sha256",
+    "prompt_template_identity_sha256",
+    "negative_authority_profile",
+    "input_package_identity_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "weekly_shadow_01_analyst_input_v1"},
+    "run_id": {"$ref": "#/$defs/identifier"},
+    "adapter_id": {"$ref": "#/$defs/identifier"},
+    "adapter_version": {"$ref": "#/$defs/version"},
+    "source_generation_id": {"$ref": "#/$defs/identifier"},
+    "evaluation_timestamp_utc": {"$ref": "#/$defs/timestamp_utc"},
+    "source_artifact_bindings": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/source_artifact_binding"}
+    },
+    "evidence_records": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/evidence_record_binding"}
+    },
+    "availability_freshness_diagnostics": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 256,
+      "items": {"$ref": "#/$defs/identifier"}
+    },
+    "permitted_question_ids": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/identifier"}
+    },
+    "prohibited_conclusion_ids": {
+      "type": "array",
+      "minItems": 10,
+      "maxItems": 10,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "HOLD",
+          "NO_TRADE",
+          "BUY",
+          "SELL",
+          "NEW_BUY",
+          "BLOCKED",
+          "APPROVED",
+          "REJECTED",
+          "ELIGIBLE",
+          "INELIGIBLE"
+        ]
+      }
+    },
+    "resource_bound_profile_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "prompt_template_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "negative_authority_profile": {"$ref": "#/$defs/negative_authority_profile"},
+    "input_package_identity_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9._-]{0,127}$"
+    },
+    "version": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9_]{0,126}_v[1-9][0-9]*$"
+    },
+    "timestamp_utc": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 20,
+      "pattern": "^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z$"
+    },
+    "source_artifact_binding": {
+      "type": "object",
+      "required": ["source_id", "source_artifact_identity_sha256"],
+      "properties": {
+        "source_id": {"$ref": "#/$defs/identifier"},
+        "source_artifact_identity_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+    "evidence_record_binding": {
+      "type": "object",
+      "required": ["evidence_record_id", "evidence_record_identity_sha256"],
+      "properties": {
+        "evidence_record_id": {"$ref": "#/$defs/identifier"},
+        "evidence_record_identity_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+    "negative_authority_profile": {
+      "type": "object",
+      "required": [
+        "authority_effect",
+        "permission_effect",
+        "approval_eligible",
+        "precompile_eligible",
+        "order_eligible",
+        "portfolio_effect",
+        "order_path_effect",
+        "execution_authority"
+      ],
+      "properties": {
+        "authority_effect": {"const": "none"},
+        "permission_effect": {"const": "none"},
+        "approval_eligible": {"const": false},
+        "precompile_eligible": {"const": false},
+        "order_eligible": {"const": false},
+        "portfolio_effect": {"const": "none"},
+        "order_path_effect": {"const": "none"},
+        "execution_authority": {"const": false}
+      },
+      "additionalProperties": false
+    }
+  }
+}

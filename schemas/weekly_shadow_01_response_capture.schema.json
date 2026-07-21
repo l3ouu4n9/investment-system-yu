@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-system.local/schemas/weekly_shadow_01_response_capture.schema.json",
+  "title": "WEEKLY-SHADOW-01 Response Capture v1",
+  "description": "Entirely code-owned envelope around exact untrusted response bytes. It is not a report, run summary, state artifact, or approval artifact. It contains no validation success claim, analyst-report status, approval, or authority.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "input_package_identity_sha256",
+    "source_generation_id",
+    "raw_response_base64",
+    "raw_response_sha256",
+    "raw_response_byte_size",
+    "negative_authority_profile",
+    "response_capture_identity_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "weekly_shadow_01_response_capture_v1"},
+    "run_id": {"$ref": "#/$defs/identifier"},
+    "input_package_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "source_generation_id": {"$ref": "#/$defs/identifier"},
+    "raw_response_base64": {
+      "type": "string",
+      "minLength": 0,
+      "maxLength": 174764,
+      "pattern": "^[A-Za-z0-9+/]*={0,2}$"
+    },
+    "raw_response_sha256": {"$ref": "#/$defs/sha256"},
+    "raw_response_byte_size": {"type": "integer", "minimum": 0, "maximum": 131072},
+    "negative_authority_profile": {"$ref": "#/$defs/negative_authority_profile"},
+    "response_capture_identity_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9._-]{0,127}$"
+    },
+    "negative_authority_profile": {
+      "type": "object",
+      "required": [
+        "authority_effect",
+        "permission_effect",
+        "approval_eligible",
+        "precompile_eligible",
+        "order_eligible",
+        "portfolio_effect",
+        "order_path_effect",
+        "execution_authority"
+      ],
+      "properties": {
+        "authority_effect": {"const": "none"},
+        "permission_effect": {"const": "none"},
+        "approval_eligible": {"const": false},
+        "precompile_eligible": {"const": false},
+        "order_eligible": {"const": false},
+        "portfolio_effect": {"const": "none"},
+        "order_path_effect": {"const": "none"},
+        "execution_authority": {"const": false}
+      },
+      "additionalProperties": false
+    }
+  }
+}

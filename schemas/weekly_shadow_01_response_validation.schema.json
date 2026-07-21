@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-system.local/schemas/weekly_shadow_01_response_validation.schema.json",
+  "title": "WEEKLY-SHADOW-01 Response Validation v1",
+  "description": "Entirely code-owned validation record. No unvalidated analyst prose may be embedded as findings. It contains no field that is populated from, copied from, or overridden by LLM output.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "input_package_identity_sha256",
+    "response_capture_identity_sha256",
+    "validation_status",
+    "blocking_reason_codes",
+    "validator_diagnostics",
+    "report_payload_constructible",
+    "negative_authority_profile",
+    "validation_identity_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "weekly_shadow_01_response_validation_v1"},
+    "run_id": {"$ref": "#/$defs/identifier"},
+    "input_package_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "response_capture_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "validation_status": {"enum": ["VALID", "INVALID"]},
+    "blocking_reason_codes": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/blocking_reason_code"}
+    },
+    "validator_diagnostics": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 256,
+      "items": {"type": "string", "minLength": 1, "maxLength": 2048}
+    },
+    "report_payload_constructible": {"type": "boolean"},
+    "negative_authority_profile": {"$ref": "#/$defs/negative_authority_profile"},
+    "validation_identity_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {"properties": {"validation_status": {"const": "VALID"}}, "required": ["validation_status"]},
+      "then": {
+        "properties": {
+          "blocking_reason_codes": {"maxItems": 0},
+          "report_payload_constructible": {"const": true}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"validation_status": {"const": "INVALID"}}, "required": ["validation_status"]},
+      "then": {
+        "properties": {
+          "blocking_reason_codes": {"minItems": 1},
+          "report_payload_constructible": {"const": false}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9._-]{0,127}$"
+    },
+    "blocking_reason_code": {
+      "enum": [
+        "WS01_BR_SOURCE_GENERATION_INVALID",
+        "WS01_BR_SOURCE_ARTIFACT_SET_MISMATCH",
+        "WS01_BR_SOURCE_VERSION_UNSUPPORTED",
+        "WS01_BR_SOURCE_READ_UNSTABLE",
+        "WS01_BR_SOURCE_BINDING_MISMATCH",
+        "WS01_BR_PACKAGE_CONSTRUCTION_FAILED",
+        "WS01_BR_RESOURCE_BOUND_EXCEEDED",
+        "WS01_BR_RESPONSE_MISSING",
+        "WS01_BR_RESPONSE_UNREADABLE",
+        "WS01_BR_RESPONSE_OVERSIZED",
+        "WS01_BR_RESPONSE_PARSE_FAILED",
+        "WS01_BR_RESPONSE_DUPLICATE_KEY",
+        "WS01_BR_RESPONSE_SCHEMA_INVALID",
+        "WS01_BR_RUN_BINDING_MISMATCH",
+        "WS01_BR_PACKAGE_BINDING_MISMATCH",
+        "WS01_BR_PROMPT_TEMPLATE_BINDING_MISMATCH",
+        "WS01_BR_SOURCE_GENERATION_BINDING_MISMATCH",
+        "WS01_BR_ARTIFACT_ECHO_INCOMPLETE",
+        "WS01_BR_ARTIFACT_ECHO_UNEXPECTED",
+        "WS01_BR_EVIDENCE_ECHO_INCOMPLETE",
+        "WS01_BR_EVIDENCE_ECHO_UNEXPECTED",
+        "WS01_BR_EVIDENCE_REFERENCE_INVALID",
+        "WS01_BR_PROHIBITED_KEY",
+        "WS01_BR_PROHIBITED_INTENT",
+        "WS01_BR_CROSS_FIELD_INVALID",
+        "WS01_BR_REPORT_CONSTRUCTION_FAILED",
+        "WS01_BR_REPORT_IDENTITY_FAILURE",
+        "WS01_BR_PUBLICATION_FAILED",
+        "WS01_BR_PUBLICATION_CONFLICT",
+        "WS01_BR_PUBLICATION_AMBIGUOUS",
+        "WS01_BR_IMMUTABLE_VERIFICATION_FAILED",
+        "WS01_BR_INTERNAL_INVARIANT_FAILURE"
+      ]
+    },
+    "negative_authority_profile": {
+      "type": "object",
+      "required": [
+        "authority_effect",
+        "permission_effect",
+        "approval_eligible",
+        "precompile_eligible",
+        "order_eligible",
+        "portfolio_effect",
+        "order_path_effect",
+        "execution_authority"
+      ],
+      "properties": {
+        "authority_effect": {"const": "none"},
+        "permission_effect": {"const": "none"},
+        "approval_eligible": {"const": false},
+        "precompile_eligible": {"const": false},
+        "order_eligible": {"const": false},
+        "portfolio_effect": {"const": "none"},
+        "order_path_effect": {"const": "none"},
+        "execution_authority": {"const": false}
+      },
+      "additionalProperties": false
+    }
+  }
+}

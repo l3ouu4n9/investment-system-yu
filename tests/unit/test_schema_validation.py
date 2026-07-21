@@ -24,9 +24,20 @@ from investment_orchestrator.observability.ltetf_evidence_contract_common import
     parse_strict_json_bytes,
 )
 from investment_orchestrator.observability.ltetf_target_architecture_prerequisite_catalog import CATALOG
+from investment_orchestrator.observability import weekly_shadow_01_contracts as ws01a
 from investment_orchestrator.state.blocked_run_summary import (
     blocked_run_summary_result_to_dict,
     build_blocked_run_summary,
+)
+
+
+WS01A_SCHEMA_FILENAMES = (
+    "weekly_shadow_01_analyst_input.schema.json",
+    "weekly_shadow_01_analyst_response.schema.json",
+    "weekly_shadow_01_response_capture.schema.json",
+    "weekly_shadow_01_response_validation.schema.json",
+    "weekly_shadow_01_analyst_report.schema.json",
+    "weekly_shadow_01_run_summary.schema.json",
 )
 
 
@@ -343,6 +354,48 @@ def test_ltetf_02a1_schema_set_is_exact_closed_bounded_and_identity_bound() -> N
         assert independent_identity == SCHEMA_IDENTITY_SHA256_BY_VERSION[schema_version]
         identities.append(independent_identity)
     assert len(identities) == len(set(identities)) == 9
+
+
+def test_ws01a_schema_set_is_exact_closed_bounded_and_identity_bound() -> None:
+    assert tuple(path.rsplit("/", 1)[-1] for path in ws01a.SCHEMA_FILENAME_BY_VERSION.values()) == (
+        WS01A_SCHEMA_FILENAMES
+    )
+    assert tuple(ws01a.SCHEMA_FILENAME_BY_VERSION) == (
+        "weekly_shadow_01_analyst_input_v1",
+        "weekly_shadow_01_analyst_response_v1",
+        "weekly_shadow_01_response_capture_v1",
+        "weekly_shadow_01_response_validation_v1",
+        "weekly_shadow_01_analyst_report_v1",
+        "weekly_shadow_01_run_summary_v1",
+    )
+    identities: list[str] = []
+    for schema_version, schema_relative_path in ws01a.SCHEMA_FILENAME_BY_VERSION.items():
+        schema_path = repo_root() / schema_relative_path
+        assert schema_path.name in WS01A_SCHEMA_FILENAMES
+        schema = json.loads(schema_path.read_bytes().decode("utf-8"))
+        assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+        assert schema["$id"] == f"https://investment-system.local/{schema_relative_path}"
+        assert schema["additionalProperties"] is False
+        Draft202012Validator.check_schema(schema)
+        _assert_all_domain_objects_closed(schema)
+        identity_payload = {
+            "schema_version": schema_version,
+            "schema_path": schema_relative_path,
+            "schema_id": schema["$id"],
+            "schema": schema,
+        }
+        independent_identity = hashlib.sha256(
+            ws01a.DOMAIN_SEPARATORS["schema_identity"] + json.dumps(
+                identity_payload,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        assert independent_identity == ws01a.SCHEMA_IDENTITY_SHA256_BY_VERSION[schema_version]
+        identities.append(independent_identity)
+    assert len(identities) == len(set(identities)) == 6
 
 
 def test_ltetf_02a1_schemas_bind_exact_constants_and_observer_safety_bounds() -> None:
