@@ -1,4 +1,4 @@
-"""Frozen WEEKLY-SHADOW-01 static contract and identity foundation (WS01a).
+"""Frozen WEEKLY-SHADOW-01 static contract and identity foundation (WS01a/WS01a2).
 
 This module owns only the static, code-owned vocabulary, resource-bound,
 negative-authority, and identity primitives for WEEKLY-SHADOW-01.  It defines
@@ -323,6 +323,369 @@ NEGATIVE_AUTHORITY_PROFILE_IDENTITY_SHA256: Final = compute_identity(
 )
 
 
+# --- WS01a2 grounding-input contract metadata -------------------------------
+
+WEEKLY_SHADOW_STAGE_VERSION: Final = "weekly_shadow_01_stage_a_v1"
+LEGACY_R2F_ADAPTER_ID: Final = "legacy_r2f_v2_to_weekly_shadow_v1"
+R2F_SOURCE_GENERATION_ID_PATTERN: Final = "^[0-9a-f]{64}$"
+R2F_SOURCE_GENERATION_VERSION: Final = "step1_replacement_render_observation_v2"
+
+CONSUMED_SOURCE_ARTIFACT_ROLES: Final = (
+    "replacement_input_manifest.json",
+    "evidence_packet.json",
+    "analyst_memo_prompt.txt",
+    "render_generation_binding.json",
+)
+PERMANENTLY_UNCONSUMED_SOURCE_ARTIFACT_ROLE: Final = "analyst_memo_raw_output.txt"
+INCOMPLETE_SOURCE_GENERATION_MARKER: Final = ".render_in_progress"
+
+EVIDENCE_VALUE_VARIANTS: Final = (
+    "active_anchor_v1",
+    "availability_status_v1",
+    "diagnostic_code_v1",
+)
+ACTIVE_ANCHOR_NORMALIZED_VALUE_FIELDS: Final = (
+    "applicable_tickers",
+    "anchor_date_et",
+    "valid_from",
+    "valid_until",
+    "confidence_floor",
+    "summary",
+    "validation.stale",
+)
+AVAILABILITY_STATUS_NORMALIZED_VALUE_FIELDS: Final = (
+    "available",
+    "data_gap",
+)
+DIAGNOSTIC_CODE_VALUES: Final = ("EMPTY_ACTIVE_REGISTRY",)
+
+SOURCE_LOCATOR_TYPES: Final = (
+    "active_anchor_by_id",
+    "availability_status",
+    "manifest_diagnostic",
+)
+AVAILABILITY_SUBJECTS: Final = (
+    "market_metrics",
+    "scheduled_events_deterministic",
+)
+ACTIVE_ANCHOR_SOURCE_LOCATOR_CONTRACT: Final = _MappingProxyType(
+    {
+        "locator_type": "active_anchor_by_id",
+        "source_artifact_role": "evidence_packet.json",
+        "required_fields": ("locator_type", "source_artifact_role", "anchor_id"),
+        "anchor_id_contract": "bounded_nonempty_source_owned_text_max_2048_code_points",
+    }
+)
+AVAILABILITY_SOURCE_LOCATOR_CONTRACT: Final = _MappingProxyType(
+    {
+        "locator_type": "availability_status",
+        "source_artifact_role": "evidence_packet.json",
+        "required_fields": (
+            "locator_type",
+            "source_artifact_role",
+            "availability_subject",
+        ),
+        "availability_subjects": AVAILABILITY_SUBJECTS,
+    }
+)
+DIAGNOSTIC_SOURCE_LOCATOR_CONTRACT: Final = _MappingProxyType(
+    {
+        "locator_type": "manifest_diagnostic",
+        "source_artifact_role": "replacement_input_manifest.json",
+        "required_fields": (
+            "locator_type",
+            "source_artifact_role",
+            "diagnostic_code",
+        ),
+        "diagnostic_code": "EMPTY_ACTIVE_REGISTRY",
+        "normalized_value_present": False,
+    }
+)
+PACKAGE_OWNED_SOURCE_CONTEXT: Final = _MappingProxyType(
+    {
+        "lineage_type": "verified_r2f_v2_generation",
+        "package_owned_fields": (
+            "source_generation_id",
+            "source_generation_version",
+            "source_artifact_bindings",
+        ),
+        "source_generation_version": R2F_SOURCE_GENERATION_VERSION,
+        "record_generation_lineage": "inherited_from_package",
+        "artifact_identity_resolution": (
+            "locator.source_artifact_role_to_unique_package_source_artifact_binding"
+        ),
+    }
+)
+OBSOLETE_EVIDENCE_RECORD_FIELDS: Final = (
+    "source_artifact_identity_sha256",
+    "source_field_bindings",
+    "source_lineage",
+)
+OBSOLETE_ACTIVE_ANCHOR_NORMALIZED_VALUE_FIELDS: Final = ("anchor_id",)
+SOURCE_LOCATOR_SEMANTICS: Final = (
+    "each_evidence_variant_has_one_closed_source_locator",
+    "locator_role_is_a_closed_consumed_source_artifact_role",
+    "record_artifact_identity_is_resolved_from_the_unique_package_binding",
+    "record_generation_lineage_is_inherited_from_package_context",
+    "active_anchor_id_selects_one_unique_verified_source_anchor",
+    "active_anchor_normalized_value_excludes_locator_anchor_id",
+    "applicable_tickers_is_one_complete_ordered_source_array",
+    "availability_subject_selects_one_closed_verified_source_object",
+    "manifest_diagnostic_code_is_both_locator_and_sole_source_value",
+    "no_arbitrary_source_paths_or_dynamic_source_indices_are_representable",
+    "obsolete_duplicate_record_fields_are_rejected_by_closed_record_schemas",
+)
+LOGICAL_LOCATOR_DEFINITION: Final = _MappingProxyType(
+    {
+        "ordered_components": (
+            "value_type",
+            "source_locator",
+            "package_source_generation_context",
+            "resolved_source_artifact_binding",
+        ),
+        "package_source_generation_context_fields": (
+            "source_generation_id",
+            "source_generation_version",
+        ),
+        "resolved_source_artifact_binding_fields": (
+            "source_id",
+            "source_artifact_identity_sha256",
+        ),
+    }
+)
+LOGICAL_LOCATOR_UNIQUENESS_RULES: Final = (
+    "reject_duplicate_complete_logical_locator",
+    "reject_duplicate_evidence_record_id",
+    "reject_one_logical_locator_with_multiple_normalized_values",
+    "reject_duplicate_active_anchor_id",
+    "reject_duplicate_availability_subject",
+    "reject_duplicate_manifest_diagnostic",
+    "reject_duplicates_before_input_package_identity_acceptance",
+    "json_schema_unique_items_is_not_the_enforcement_mechanism",
+    "no_first_write_last_write_merge_deduplication_or_silent_normalization",
+)
+EVIDENCE_VARIANT_RANKS: Final = _MappingProxyType(
+    {
+        "active_anchor_v1": 0,
+        "availability_status_v1": 1,
+        "diagnostic_code_v1": 2,
+    }
+)
+AVAILABILITY_SUBJECT_RANKS: Final = _MappingProxyType(
+    {
+        "market_metrics": 0,
+        "scheduled_events_deterministic": 1,
+    }
+)
+EVIDENCE_RECORD_CANONICAL_ORDERING: Final = _MappingProxyType(
+    {
+        "ordering_key": (
+            "variant_rank",
+            "canonical_source_locator_bytes",
+            "evidence_record_id",
+        ),
+        "direction": "ascending",
+        "canonical_source_locator_encoding": "canonical_json_bytes",
+        "canonical_source_locator_byte_comparison": "unsigned_lexicographic",
+        "active_anchor_within_variant_order": "locator_anchor_id",
+        "availability_subject_order": AVAILABILITY_SUBJECTS,
+        "manifest_diagnostic_position": "single_fixed_position_under_variant_rank",
+        "final_sequence_requirement": "strictly_increasing",
+    }
+)
+CANONICAL_EVIDENCE_ORDERING_RULES: Final = (
+    "construct_evidence_records_in_frozen_canonical_order",
+    "reject_duplicate_canonical_ordering_keys",
+    "verify_final_evidence_record_sequence_is_strictly_increasing",
+    "never_rely_on_source_traversal_or_caller_mapping_order",
+    "reject_caller_supplied_noncanonical_evidence_record_sequence",
+    "never_silently_reorder_or_accept_a_noncanonical_input_package",
+    "ws01c_never_repairs_analyst_input_evidence_record_order",
+)
+CANONICAL_ORDER_INDEPENDENCE_INPUTS: Final = (
+    "source_json_insertion_order",
+    "filesystem_enumeration_order",
+    "caller_dictionary_order",
+    "hash_seed",
+    "locale",
+    "timezone",
+    "process_identity",
+    "repository_path",
+)
+ANALYST_INPUT_SCHEMA_ENFORCED_CONSTRAINTS: Final = (
+    "source_generation_id_lowercase_sha256_shape",
+    "closed_source_artifact_role_membership_and_exact_four_position_binding_array",
+    "closed_evidence_record_source_locator_and_normalized_value_shapes",
+    "authority_effect_none",
+    "evidence_records_max_items_256",
+    "active_anchor_summary_max_code_points_2048",
+    "active_anchor_applicable_tickers_max_items_1017",
+    "availability_diagnostic_record_ids_max_items_256",
+    "freshness_diagnostic_record_ids_max_items_256",
+    "individual_text_array_and_object_shape_bounds",
+    "closed_schema_shape_guarantees_nesting_below_max_nesting_depth",
+)
+WS01B_RUNTIME_DEFERRED_RESOURCE_BOUND_RESPONSIBILITIES: Final = (
+    "each_source_artifact_byte_length_le_source_artifact_max_bytes",
+    "combined_source_artifact_byte_length_le_source_artifacts_total_max_bytes",
+    "canonical_analyst_input_package_byte_length_le_analyst_input_max_bytes",
+    "rendered_analyst_prompt_byte_length_le_rendered_prompt_max_bytes",
+    "combined_diagnostic_reference_union_count_le_max_diagnostics",
+    "diagnostic_reference_ids_unique_across_both_arrays",
+    "logical_locator_count_and_uniqueness_le_max_evidence_records",
+    "aggregate_analyst_text_code_points_le_max_aggregate_analyst_text_code_points",
+)
+WS01B_RUNTIME_BOUND_FAILURE_CODE: Final = "WS01_BR_RESOURCE_BOUND_EXCEEDED"
+STATIC_RUNTIME_RESPONSIBILITY_TABLE: Final = _MappingProxyType(
+    {
+        "schema_enforced": (
+            "source_generation_id_shape",
+            "closed_source_locator_variant",
+            "source_artifact_role_membership",
+            "closed_normalized_value_shape",
+            "authority_effect_none",
+            "individual_evidence_text_and_array_bounds",
+            "individual_diagnostic_array_bounds",
+            "closed_object_shapes_and_nesting",
+        ),
+        "ws01b_enforced": (
+            "verified_source_generation_selection",
+            "role_to_unique_package_artifact_resolution",
+            "unique_active_anchor_lookup",
+            "exact_normalized_value_equality_with_verified_source",
+            "logical_locator_uniqueness",
+            "evidence_record_id_uniqueness",
+            "canonical_evidence_record_ordering",
+            "diagnostic_reference_membership_category_cross_array_uniqueness_and_union_bound",
+            "canonical_analyst_input_package_byte_bound",
+            "rendered_analyst_prompt_byte_bound",
+            "aggregate_analyst_input_resource_bounds",
+            "record_and_package_identity_computation_before_acceptance",
+        ),
+        "ws01c_enforced": (
+            "untrusted_analyst_response_schema_and_prohibited_content_validation",
+            "analyst_response_artifact_and_evidence_identity_echo_validation",
+            "analyst_response_reference_membership_validation",
+            "analyst_response_negative_authority_validation",
+        ),
+        "not_required": (
+            "record_level_source_generation_equality_reconciliation",
+            "record_level_source_artifact_identity_equality_reconciliation",
+            "dynamic_source_field_path_reconciliation",
+            "input_package_duplicate_merge_or_deduplication",
+            "ws01c_input_package_repair_reconciliation_or_reordering",
+        ),
+    }
+)
+WS01B_SOURCE_CORRELATION_RESPONSIBILITIES: Final = (
+    "select_the_explicit_verified_r2f_v2_generation",
+    "resolve_locator_role_to_the_unique_package_artifact_binding",
+    "lookup_active_anchor_by_unique_verified_source_anchor_id",
+    "copy_the_complete_permitted_normalized_value_exactly",
+    "preserve_complete_ticker_array_order_and_values",
+    "perform_no_coercion_defaulting_truncation_or_summarization",
+    "reject_duplicate_logical_locators_and_evidence_record_ids_before_package_identity_acceptance",
+    "reject_one_logical_locator_with_multiple_normalized_values",
+    "reject_duplicate_active_anchor_availability_or_manifest_diagnostic_locators",
+    "never_merge_deduplicate_or_choose_first_or_last_duplicate_record",
+    "construct_and_verify_strictly_increasing_canonical_evidence_record_order",
+    "reject_duplicate_ordering_keys_and_noncanonical_caller_sequences",
+    "enforce_diagnostic_referential_category_cross_array_and_union_invariants",
+    "enforce_runtime_deferred_analyst_input_resource_bounds_fail_closed",
+    "compute_record_locator_record_identity_and_package_identity_from_frozen_recipes",
+)
+WS01C_RESPONSE_VALIDATION_RESPONSIBILITIES: Final = (
+    "validate_untrusted_analyst_response_content",
+    "validate_package_artifact_and_evidence_identity_echoes",
+    "validate_response_evidence_references_and_negative_authority",
+    "never_reconcile_or_repair_input_package_source_correlation",
+)
+
+DIAGNOSTIC_REFERENCE_INVARIANTS: Final = (
+    "every_diagnostic_id_references_one_evidence_record",
+    "availability_ids_reference_only_availability_or_empty_active_registry_records",
+    "freshness_ids_reference_only_active_anchor_records",
+    "diagnostic_id_union_count_does_not_exceed_max_diagnostics",
+    "no_duplicate_id_across_availability_and_freshness_arrays",
+    "referential_and_union_invariants_are_enforced_by_future_ws01b",
+)
+
+PROJECTION_EXCLUSIONS: Final = (
+    "analyst_memo_prompt_prose",
+    "analyst_memo_raw_output",
+    "existing_analyst_recommendation_or_conclusion",
+    "universe_membership",
+    "allowed_buy_lists",
+    "budget_or_cap_configuration",
+    "allocation_configuration",
+    "portfolio_positions_or_targets",
+    "existing_or_proposed_orders",
+    "inactive_anchor_approval_revocation_readiness_or_audit_fields",
+    "permission_approval_gate_or_compiler_eligibility",
+    "broker_or_execution_data",
+)
+
+EVIDENCE_RECORD_ID_RECIPE: Final = _MappingProxyType(
+    {
+        "domain_name": "evidence_record",
+        "payload_kind": "weekly_shadow_01_evidence_record_locator_v2",
+        "record_contract_version": "weekly_shadow_01_evidence_record_v2",
+        "package_source_context_fields": (
+            "source_generation_id",
+            "source_generation_version",
+        ),
+        "resolved_artifact_binding_fields": (
+            "source_id",
+            "source_artifact_identity_sha256",
+        ),
+        "ordered_payload_fields": (
+            "record_contract_version",
+            "source_generation_id",
+            "source_generation_version",
+            "resolved_source_artifact_binding",
+            "value_type",
+            "source_locator",
+        ),
+        "normalized_value_included": False,
+        "identifier_encoding": "ws01ev-<64-lowercase-hex-digest>",
+    }
+)
+EVIDENCE_RECORD_IDENTITY_RECIPE: Final = _MappingProxyType(
+    {
+        "domain_name": "evidence_record",
+        "payload_kind": "weekly_shadow_01_evidence_record_identity_v2",
+        "payload_shape": (
+            "payload_kind_package_source_context_resolved_artifact_binding_and_evidence_record"
+        ),
+        "package_source_context_fields": (
+            "source_generation_id",
+            "source_generation_version",
+        ),
+        "resolved_artifact_binding_fields": (
+            "source_id",
+            "source_artifact_identity_sha256",
+        ),
+        "ordered_payload_fields": (
+            "source_generation_id",
+            "source_generation_version",
+            "resolved_source_artifact_binding",
+            "evidence_record",
+        ),
+        "payload": "complete_evidence_record",
+        "excluded_fields": ("evidence_record_identity_sha256",),
+        "identity_encoding": "64-lowercase-hex-digest",
+    }
+)
+INPUT_PACKAGE_IDENTITY_RECIPE: Final = _MappingProxyType(
+    {
+        "domain_name": "input_package",
+        "payload": "complete_analyst_input_package",
+        "excluded_fields": ("input_package_identity_sha256",),
+        "identity_encoding": "64-lowercase-hex-digest",
+    }
+)
+
+
 # --- resource-bound profile --------------------------------------------------
 
 RESOURCE_BOUND_PROFILE: Final = _MappingProxyType(
@@ -621,9 +984,9 @@ ANALYST_LIMITATION_VOCABULARY_IDENTITY_SHA256: Final = compute_identity(
 
 SCHEMA_FILENAME_BY_VERSION: Final = _MappingProxyType(
     {
-        "weekly_shadow_01_analyst_input_v1": "schemas/weekly_shadow_01_analyst_input.schema.json",
-        "weekly_shadow_01_analyst_response_v1": "schemas/weekly_shadow_01_analyst_response.schema.json",
-        "weekly_shadow_01_response_capture_v1": "schemas/weekly_shadow_01_response_capture.schema.json",
+        "weekly_shadow_01_analyst_input_v2": "schemas/weekly_shadow_01_analyst_input.schema.json",
+        "weekly_shadow_01_analyst_response_v2": "schemas/weekly_shadow_01_analyst_response.schema.json",
+        "weekly_shadow_01_response_capture_v2": "schemas/weekly_shadow_01_response_capture.schema.json",
         "weekly_shadow_01_response_validation_v1": "schemas/weekly_shadow_01_response_validation.schema.json",
         "weekly_shadow_01_analyst_report_v1": "schemas/weekly_shadow_01_analyst_report.schema.json",
         "weekly_shadow_01_run_summary_v1": "schemas/weekly_shadow_01_run_summary.schema.json",
@@ -634,9 +997,9 @@ SCHEMA_FILENAME_BY_VERSION: Final = _MappingProxyType(
 # strict decoding. They are literals so importing this module performs no I/O.
 SCHEMA_IDENTITY_SHA256_BY_VERSION: Final = _MappingProxyType(
     {
-        "weekly_shadow_01_analyst_input_v1": "809c61a4569e3bd408ad32bd509377768ede4b1325146fee0b9d8a1cb1d51af5",
-        "weekly_shadow_01_analyst_response_v1": "2fad9bf5f216fb000c3c17e742a839cff3878f7acbbcacbdc0bdef6cd15426d7",
-        "weekly_shadow_01_response_capture_v1": "529127017ce3fb541d2ca41959b252d1b9992d2fadaf94b1e6c056ee9d927bab",
+        "weekly_shadow_01_analyst_input_v2": "41c6258b3d27b97554a785628ab3e990e0f1f89bbaad7d70a787dd230853f5f0",
+        "weekly_shadow_01_analyst_response_v2": "3625d86dd84ae1243ccb4992e339d0935dff646c87e74f7792ecd635956ca160",
+        "weekly_shadow_01_response_capture_v2": "a2f727e89e29f2a3ab9791d8274236f8481b2c30175eb07bc4d4bf458d429a95",
         "weekly_shadow_01_response_validation_v1": "2990ad8fc4f22de8b21691f54b3a967aed66e733078bd75ea74bc1330ee02f02",
         "weekly_shadow_01_analyst_report_v1": "7b415fa8eb7cb4ecce92ddf06eb394574f7d1435dd840657396dd2eeb0f4feb8",
         "weekly_shadow_01_run_summary_v1": "114e92f0d151bba7266a651172cd7dac01f9652a4c6fe47557582b10dcf706a7",
@@ -653,8 +1016,9 @@ def _semantic_contract_record(
     relevant_blocking_reason_codes: "Sequence[str]",
     relevant_analyst_limitation_codes: "Sequence[str]",
     required_profile_identities_sha256: "Sequence[str]",
+    semantic_metadata: object | None = None,
 ) -> "Mapping[str, object]":
-    return {
+    record = {
         "contract_version": f"{schema_key}_contract_v1",
         "contract_id": f"{schema_key}_semantic_contract",
         "schema_identity_sha256": SCHEMA_IDENTITY_SHA256_BY_VERSION[schema_key],
@@ -664,12 +1028,113 @@ def _semantic_contract_record(
         "required_profile_identities_sha256": list(required_profile_identities_sha256),
         "authority_effect": "none",
     }
+    if semantic_metadata is not None:
+        record["semantic_metadata"] = semantic_metadata
+    return record
+
+
+def _recipe_payload(recipe: "Mapping[str, object]") -> dict[str, object]:
+    return {
+        key: list(value) if type(value) is tuple else value
+        for key, value in recipe.items()
+    }
+
+
+_ANALYST_INPUT_V2_SEMANTIC_METADATA: Final = {
+    "source_generation_contract": {
+        "identifier_type": "string",
+        "identifier_pattern": R2F_SOURCE_GENERATION_ID_PATTERN,
+        "source_generation_version": R2F_SOURCE_GENERATION_VERSION,
+        "selection_owner": "future_ws01b_explicit_caller_input",
+        "current_latest_active_fallback": False,
+    },
+    "adapter_id": LEGACY_R2F_ADAPTER_ID,
+    "ordered_consumed_source_artifact_roles": list(CONSUMED_SOURCE_ARTIFACT_ROLES),
+    "binding_only_source_artifact_roles": ["analyst_memo_prompt.txt"],
+    "permanently_unconsumed_source_artifact_role": PERMANENTLY_UNCONSUMED_SOURCE_ARTIFACT_ROLE,
+    "incomplete_source_generation_marker": INCOMPLETE_SOURCE_GENERATION_MARKER,
+    "evidence_value_variants": list(EVIDENCE_VALUE_VARIANTS),
+    "active_anchor_normalized_value_fields": list(ACTIVE_ANCHOR_NORMALIZED_VALUE_FIELDS),
+    "availability_status_normalized_value_fields": list(
+        AVAILABILITY_STATUS_NORMALIZED_VALUE_FIELDS
+    ),
+    "diagnostic_code_values": list(DIAGNOSTIC_CODE_VALUES),
+    "source_locator_contracts": {
+        "active_anchor_v1": _recipe_payload(ACTIVE_ANCHOR_SOURCE_LOCATOR_CONTRACT),
+        "availability_status_v1": _recipe_payload(AVAILABILITY_SOURCE_LOCATOR_CONTRACT),
+        "diagnostic_code_v1": _recipe_payload(DIAGNOSTIC_SOURCE_LOCATOR_CONTRACT),
+    },
+    "package_owned_source_context": _recipe_payload(PACKAGE_OWNED_SOURCE_CONTEXT),
+    "source_locator_semantics": list(SOURCE_LOCATOR_SEMANTICS),
+    "logical_locator_definition": _recipe_payload(LOGICAL_LOCATOR_DEFINITION),
+    "logical_locator_uniqueness_rules": list(LOGICAL_LOCATOR_UNIQUENESS_RULES),
+    "evidence_variant_ranks": dict(EVIDENCE_VARIANT_RANKS),
+    "availability_subject_ranks": dict(AVAILABILITY_SUBJECT_RANKS),
+    "canonical_evidence_record_ordering": _recipe_payload(
+        EVIDENCE_RECORD_CANONICAL_ORDERING
+    ),
+    "canonical_evidence_ordering_rules": list(CANONICAL_EVIDENCE_ORDERING_RULES),
+    "canonical_order_independence_inputs": list(CANONICAL_ORDER_INDEPENDENCE_INPUTS),
+    "analyst_input_schema_enforced_constraints": list(
+        ANALYST_INPUT_SCHEMA_ENFORCED_CONSTRAINTS
+    ),
+    "future_ws01b_runtime_deferred_resource_bound_responsibilities": list(
+        WS01B_RUNTIME_DEFERRED_RESOURCE_BOUND_RESPONSIBILITIES
+    ),
+    "future_ws01b_runtime_bound_failure_code": WS01B_RUNTIME_BOUND_FAILURE_CODE,
+    "static_runtime_responsibility_table": _recipe_payload(
+        STATIC_RUNTIME_RESPONSIBILITY_TABLE
+    ),
+    "future_ws01b_source_correlation_responsibilities": list(
+        WS01B_SOURCE_CORRELATION_RESPONSIBILITIES
+    ),
+    "future_ws01c_response_validation_responsibilities": list(
+        WS01C_RESPONSE_VALIDATION_RESPONSIBILITIES
+    ),
+    "obsolete_evidence_record_fields": list(OBSOLETE_EVIDENCE_RECORD_FIELDS),
+    "obsolete_active_anchor_normalized_value_fields": list(
+        OBSOLETE_ACTIVE_ANCHOR_NORMALIZED_VALUE_FIELDS
+    ),
+    "diagnostic_reference_arrays": [
+        "availability_diagnostic_record_ids",
+        "freshness_diagnostic_record_ids",
+    ],
+    "diagnostic_reference_invariants": list(DIAGNOSTIC_REFERENCE_INVARIANTS),
+    "diagnostic_relational_enforcement_owner": "future_ws01b",
+    "projection_exclusions": list(PROJECTION_EXCLUSIONS),
+    "evidence_record_id_recipe": _recipe_payload(EVIDENCE_RECORD_ID_RECIPE),
+    "evidence_record_identity_recipe": _recipe_payload(EVIDENCE_RECORD_IDENTITY_RECIPE),
+    "input_package_identity_recipe": _recipe_payload(INPUT_PACKAGE_IDENTITY_RECIPE),
+    "stage_version_field_present": False,
+    "raw_or_canonical_artifact_hash_package_fields_present": False,
+    "record_level_source_lineage_present": False,
+    "record_level_source_artifact_identity_present": False,
+    "dynamic_source_field_bindings_present": False,
+    "negative_authority_profile_hash_field_present": False,
+    "authority_effect": "none",
+}
+
+_ANALYST_RESPONSE_V2_SEMANTIC_METADATA: Final = {
+    "stage_version": WEEKLY_SHADOW_STAGE_VERSION,
+    "source_generation_id_pattern": R2F_SOURCE_GENERATION_ID_PATTERN,
+    "ordered_source_artifact_echoes": "source_id_and_identity_only",
+    "ordered_evidence_record_echoes": "record_id_and_identity_only",
+    "evidence_values_or_lineage_echoed": False,
+    "content_trust": "untrusted_llm_content_validated_by_future_ws01c",
+    "authority_effect": "none",
+}
+
+_RESPONSE_CAPTURE_V2_SEMANTIC_METADATA: Final = {
+    "source_generation_id_pattern": R2F_SOURCE_GENERATION_ID_PATTERN,
+    "capture_content": "exact_untrusted_response_bytes_only",
+    "authority_effect": "none",
+}
 
 
 _SEMANTIC_CONTRACT_RECORDS: Final = _MappingProxyType(
     {
-        "weekly_shadow_01_analyst_input_v1": _semantic_contract_record(
-            "weekly_shadow_01_analyst_input_v1",
+        "weekly_shadow_01_analyst_input_v2": _semantic_contract_record(
+            "weekly_shadow_01_analyst_input_v2",
             owner="deterministic_code",
             relevant_blocking_reason_codes=(
                 "WS01_BR_SOURCE_GENERATION_INVALID",
@@ -686,9 +1151,10 @@ _SEMANTIC_CONTRACT_RECORDS: Final = _MappingProxyType(
                 PROMPT_TEMPLATE_IDENTITY_SHA256,
                 NEGATIVE_AUTHORITY_PROFILE_IDENTITY_SHA256,
             ),
+            semantic_metadata=_ANALYST_INPUT_V2_SEMANTIC_METADATA,
         ),
-        "weekly_shadow_01_analyst_response_v1": _semantic_contract_record(
-            "weekly_shadow_01_analyst_response_v1",
+        "weekly_shadow_01_analyst_response_v2": _semantic_contract_record(
+            "weekly_shadow_01_analyst_response_v2",
             owner="llm_content_validated_by_code",
             relevant_blocking_reason_codes=(
                 "WS01_BR_RESPONSE_SCHEMA_INVALID",
@@ -712,9 +1178,10 @@ _SEMANTIC_CONTRACT_RECORDS: Final = _MappingProxyType(
                 ANALYST_LIMITATION_VOCABULARY_IDENTITY_SHA256,
                 NEGATIVE_AUTHORITY_PROFILE_IDENTITY_SHA256,
             ),
+            semantic_metadata=_ANALYST_RESPONSE_V2_SEMANTIC_METADATA,
         ),
-        "weekly_shadow_01_response_capture_v1": _semantic_contract_record(
-            "weekly_shadow_01_response_capture_v1",
+        "weekly_shadow_01_response_capture_v2": _semantic_contract_record(
+            "weekly_shadow_01_response_capture_v2",
             owner="deterministic_code",
             relevant_blocking_reason_codes=(
                 "WS01_BR_RESPONSE_MISSING",
@@ -726,6 +1193,7 @@ _SEMANTIC_CONTRACT_RECORDS: Final = _MappingProxyType(
                 RESOURCE_BOUND_PROFILE_IDENTITY_SHA256,
                 NEGATIVE_AUTHORITY_PROFILE_IDENTITY_SHA256,
             ),
+            semantic_metadata=_RESPONSE_CAPTURE_V2_SEMANTIC_METADATA,
         ),
         "weekly_shadow_01_response_validation_v1": _semantic_contract_record(
             "weekly_shadow_01_response_validation_v1",
@@ -772,11 +1240,65 @@ SEMANTIC_CONTRACT_IDENTITY_SHA256_BY_VERSION: Final = _MappingProxyType(
 )
 
 
-# --- overall WS01a contract-catalog identity ---------------------------------
+# --- overall WS01a2 contract-catalog identity --------------------------------
 
 _CONTRACT_CATALOG_PAYLOAD: Final = {
-    "catalog_version": "weekly_shadow_01_contract_catalog_v1",
+    "catalog_version": "weekly_shadow_01_contract_catalog_v2",
     "domain_separators_hex": {name: value.hex() for name, value in DOMAIN_SEPARATORS.items()},
+    "weekly_shadow_stage_version": WEEKLY_SHADOW_STAGE_VERSION,
+    "legacy_r2f_adapter_id": LEGACY_R2F_ADAPTER_ID,
+    "r2f_source_generation_id_pattern": R2F_SOURCE_GENERATION_ID_PATTERN,
+    "r2f_source_generation_version": R2F_SOURCE_GENERATION_VERSION,
+    "ordered_consumed_source_artifact_roles": list(CONSUMED_SOURCE_ARTIFACT_ROLES),
+    "permanently_unconsumed_source_artifact_role": PERMANENTLY_UNCONSUMED_SOURCE_ARTIFACT_ROLE,
+    "incomplete_source_generation_marker": INCOMPLETE_SOURCE_GENERATION_MARKER,
+    "evidence_value_variants": list(EVIDENCE_VALUE_VARIANTS),
+    "active_anchor_normalized_value_fields": list(ACTIVE_ANCHOR_NORMALIZED_VALUE_FIELDS),
+    "availability_status_normalized_value_fields": list(
+        AVAILABILITY_STATUS_NORMALIZED_VALUE_FIELDS
+    ),
+    "diagnostic_code_values": list(DIAGNOSTIC_CODE_VALUES),
+    "source_locator_contracts": {
+        "active_anchor_v1": _recipe_payload(ACTIVE_ANCHOR_SOURCE_LOCATOR_CONTRACT),
+        "availability_status_v1": _recipe_payload(AVAILABILITY_SOURCE_LOCATOR_CONTRACT),
+        "diagnostic_code_v1": _recipe_payload(DIAGNOSTIC_SOURCE_LOCATOR_CONTRACT),
+    },
+    "package_owned_source_context": _recipe_payload(PACKAGE_OWNED_SOURCE_CONTEXT),
+    "source_locator_semantics": list(SOURCE_LOCATOR_SEMANTICS),
+    "logical_locator_definition": _recipe_payload(LOGICAL_LOCATOR_DEFINITION),
+    "logical_locator_uniqueness_rules": list(LOGICAL_LOCATOR_UNIQUENESS_RULES),
+    "evidence_variant_ranks": dict(EVIDENCE_VARIANT_RANKS),
+    "availability_subject_ranks": dict(AVAILABILITY_SUBJECT_RANKS),
+    "canonical_evidence_record_ordering": _recipe_payload(
+        EVIDENCE_RECORD_CANONICAL_ORDERING
+    ),
+    "canonical_evidence_ordering_rules": list(CANONICAL_EVIDENCE_ORDERING_RULES),
+    "canonical_order_independence_inputs": list(CANONICAL_ORDER_INDEPENDENCE_INPUTS),
+    "analyst_input_schema_enforced_constraints": list(
+        ANALYST_INPUT_SCHEMA_ENFORCED_CONSTRAINTS
+    ),
+    "future_ws01b_runtime_deferred_resource_bound_responsibilities": list(
+        WS01B_RUNTIME_DEFERRED_RESOURCE_BOUND_RESPONSIBILITIES
+    ),
+    "future_ws01b_runtime_bound_failure_code": WS01B_RUNTIME_BOUND_FAILURE_CODE,
+    "static_runtime_responsibility_table": _recipe_payload(
+        STATIC_RUNTIME_RESPONSIBILITY_TABLE
+    ),
+    "future_ws01b_source_correlation_responsibilities": list(
+        WS01B_SOURCE_CORRELATION_RESPONSIBILITIES
+    ),
+    "future_ws01c_response_validation_responsibilities": list(
+        WS01C_RESPONSE_VALIDATION_RESPONSIBILITIES
+    ),
+    "obsolete_evidence_record_fields": list(OBSOLETE_EVIDENCE_RECORD_FIELDS),
+    "obsolete_active_anchor_normalized_value_fields": list(
+        OBSOLETE_ACTIVE_ANCHOR_NORMALIZED_VALUE_FIELDS
+    ),
+    "diagnostic_reference_invariants": list(DIAGNOSTIC_REFERENCE_INVARIANTS),
+    "projection_exclusions": list(PROJECTION_EXCLUSIONS),
+    "evidence_record_id_recipe": _recipe_payload(EVIDENCE_RECORD_ID_RECIPE),
+    "evidence_record_identity_recipe": _recipe_payload(EVIDENCE_RECORD_IDENTITY_RECIPE),
+    "input_package_identity_recipe": _recipe_payload(INPUT_PACKAGE_IDENTITY_RECIPE),
     "run_status_values": list(RUN_STATUS_VALUES),
     "analyst_conclusion_values": list(ANALYST_CONCLUSION_VALUES),
     "analyst_confidence_values": list(ANALYST_CONFIDENCE_VALUES),
@@ -827,6 +1349,44 @@ __all__ = [
     "ANALYST_LIMITATION_CODES",
     "NEGATIVE_AUTHORITY_PROFILE",
     "NEGATIVE_AUTHORITY_PROFILE_IDENTITY_SHA256",
+    "WEEKLY_SHADOW_STAGE_VERSION",
+    "LEGACY_R2F_ADAPTER_ID",
+    "R2F_SOURCE_GENERATION_ID_PATTERN",
+    "R2F_SOURCE_GENERATION_VERSION",
+    "CONSUMED_SOURCE_ARTIFACT_ROLES",
+    "PERMANENTLY_UNCONSUMED_SOURCE_ARTIFACT_ROLE",
+    "INCOMPLETE_SOURCE_GENERATION_MARKER",
+    "EVIDENCE_VALUE_VARIANTS",
+    "ACTIVE_ANCHOR_NORMALIZED_VALUE_FIELDS",
+    "AVAILABILITY_STATUS_NORMALIZED_VALUE_FIELDS",
+    "DIAGNOSTIC_CODE_VALUES",
+    "SOURCE_LOCATOR_TYPES",
+    "AVAILABILITY_SUBJECTS",
+    "ACTIVE_ANCHOR_SOURCE_LOCATOR_CONTRACT",
+    "AVAILABILITY_SOURCE_LOCATOR_CONTRACT",
+    "DIAGNOSTIC_SOURCE_LOCATOR_CONTRACT",
+    "PACKAGE_OWNED_SOURCE_CONTEXT",
+    "OBSOLETE_EVIDENCE_RECORD_FIELDS",
+    "OBSOLETE_ACTIVE_ANCHOR_NORMALIZED_VALUE_FIELDS",
+    "SOURCE_LOCATOR_SEMANTICS",
+    "LOGICAL_LOCATOR_DEFINITION",
+    "LOGICAL_LOCATOR_UNIQUENESS_RULES",
+    "EVIDENCE_VARIANT_RANKS",
+    "AVAILABILITY_SUBJECT_RANKS",
+    "EVIDENCE_RECORD_CANONICAL_ORDERING",
+    "CANONICAL_EVIDENCE_ORDERING_RULES",
+    "CANONICAL_ORDER_INDEPENDENCE_INPUTS",
+    "ANALYST_INPUT_SCHEMA_ENFORCED_CONSTRAINTS",
+    "WS01B_RUNTIME_DEFERRED_RESOURCE_BOUND_RESPONSIBILITIES",
+    "WS01B_RUNTIME_BOUND_FAILURE_CODE",
+    "STATIC_RUNTIME_RESPONSIBILITY_TABLE",
+    "WS01B_SOURCE_CORRELATION_RESPONSIBILITIES",
+    "WS01C_RESPONSE_VALIDATION_RESPONSIBILITIES",
+    "DIAGNOSTIC_REFERENCE_INVARIANTS",
+    "PROJECTION_EXCLUSIONS",
+    "EVIDENCE_RECORD_ID_RECIPE",
+    "EVIDENCE_RECORD_IDENTITY_RECIPE",
+    "INPUT_PACKAGE_IDENTITY_RECIPE",
     "RESOURCE_BOUND_PROFILE",
     "RESOURCE_BOUND_PROFILE_IDENTITY_SHA256",
     "RESOURCE_BOUND_SCHEMA_OR_HELPER_ENFORCED_FIELDS",

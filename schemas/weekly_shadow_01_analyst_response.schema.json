@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://investment-system.local/schemas/weekly_shadow_01_analyst_response.schema.json",
-  "title": "WEEKLY-SHADOW-01 Analyst Response v1",
+  "$id": "https://investment-system.local/schemas/weekly_shadow_01_analyst_response_v2.schema.json",
+  "title": "WEEKLY-SHADOW-01 Analyst Response v2",
   "description": "Untrusted LLM content. It contains no run status, validation result, gate result, publication outcome, approval state, permission state, portfolio state, compiler eligibility, order eligibility, or execution state field. A schema-valid instance of this contract carries only qualitative research content and confers no authority.",
   "type": "object",
   "required": [
@@ -20,18 +20,24 @@
     "negative_authority"
   ],
   "properties": {
-    "schema_version": {"const": "weekly_shadow_01_analyst_response_v1"},
+    "schema_version": {"const": "weekly_shadow_01_analyst_response_v2"},
     "stage_version": {"const": "weekly_shadow_01_stage_a_v1"},
     "run_id": {"$ref": "#/$defs/identifier"},
     "input_package_identity_sha256": {"$ref": "#/$defs/sha256"},
     "prompt_template_identity_sha256": {"$ref": "#/$defs/sha256"},
-    "source_generation_id": {"$ref": "#/$defs/identifier"},
+    "source_generation_id": {"$ref": "#/$defs/r2f_generation_id"},
     "source_artifact_bindings": {
       "type": "array",
       "minItems": 4,
       "maxItems": 4,
       "uniqueItems": true,
-      "items": {"$ref": "#/$defs/source_artifact_binding"}
+      "prefixItems": [
+        {"$ref": "#/$defs/replacement_input_manifest_binding"},
+        {"$ref": "#/$defs/evidence_packet_binding"},
+        {"$ref": "#/$defs/analyst_memo_prompt_binding"},
+        {"$ref": "#/$defs/render_generation_binding"}
+      ],
+      "items": false
     },
     "evidence_record_bindings": {
       "type": "array",
@@ -60,17 +66,45 @@
   "additionalProperties": false,
   "$defs": {
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "r2f_generation_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "identifier": {
       "type": "string",
       "minLength": 1,
       "maxLength": 128,
       "pattern": "^[a-z][a-z0-9._-]{0,127}$"
     },
-    "source_artifact_binding": {
+    "replacement_input_manifest_binding": {
       "type": "object",
       "required": ["source_id", "source_artifact_identity_sha256"],
       "properties": {
-        "source_id": {"$ref": "#/$defs/identifier"},
+        "source_id": {"const": "replacement_input_manifest.json"},
+        "source_artifact_identity_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+    "evidence_packet_binding": {
+      "type": "object",
+      "required": ["source_id", "source_artifact_identity_sha256"],
+      "properties": {
+        "source_id": {"const": "evidence_packet.json"},
+        "source_artifact_identity_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+    "analyst_memo_prompt_binding": {
+      "type": "object",
+      "required": ["source_id", "source_artifact_identity_sha256"],
+      "properties": {
+        "source_id": {"const": "analyst_memo_prompt.txt"},
+        "source_artifact_identity_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+    "render_generation_binding": {
+      "type": "object",
+      "required": ["source_id", "source_artifact_identity_sha256"],
+      "properties": {
+        "source_id": {"const": "render_generation_binding.json"},
         "source_artifact_identity_sha256": {"$ref": "#/$defs/sha256"}
       },
       "additionalProperties": false

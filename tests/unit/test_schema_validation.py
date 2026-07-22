@@ -361,9 +361,9 @@ def test_ws01a_schema_set_is_exact_closed_bounded_and_identity_bound() -> None:
         WS01A_SCHEMA_FILENAMES
     )
     assert tuple(ws01a.SCHEMA_FILENAME_BY_VERSION) == (
-        "weekly_shadow_01_analyst_input_v1",
-        "weekly_shadow_01_analyst_response_v1",
-        "weekly_shadow_01_response_capture_v1",
+        "weekly_shadow_01_analyst_input_v2",
+        "weekly_shadow_01_analyst_response_v2",
+        "weekly_shadow_01_response_capture_v2",
         "weekly_shadow_01_response_validation_v1",
         "weekly_shadow_01_analyst_report_v1",
         "weekly_shadow_01_run_summary_v1",
@@ -374,7 +374,16 @@ def test_ws01a_schema_set_is_exact_closed_bounded_and_identity_bound() -> None:
         assert schema_path.name in WS01A_SCHEMA_FILENAMES
         schema = json.loads(schema_path.read_bytes().decode("utf-8"))
         assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
-        assert schema["$id"] == f"https://investment-system.local/{schema_relative_path}"
+        expected_schema_id = (
+            f"https://investment-system.local/schemas/{schema_version}.schema.json"
+            if schema_version in {
+                "weekly_shadow_01_analyst_input_v2",
+                "weekly_shadow_01_analyst_response_v2",
+                "weekly_shadow_01_response_capture_v2",
+            }
+            else f"https://investment-system.local/{schema_relative_path}"
+        )
+        assert schema["$id"] == expected_schema_id
         assert schema["additionalProperties"] is False
         Draft202012Validator.check_schema(schema)
         _assert_all_domain_objects_closed(schema)
@@ -396,6 +405,55 @@ def test_ws01a_schema_set_is_exact_closed_bounded_and_identity_bound() -> None:
         assert independent_identity == ws01a.SCHEMA_IDENTITY_SHA256_BY_VERSION[schema_version]
         identities.append(independent_identity)
     assert len(identities) == len(set(identities)) == 6
+
+
+def test_ws01a2_input_uses_closed_source_locators_without_record_level_context_copies() -> None:
+    schema = json.loads(
+        (repo_root() / "schemas/weekly_shadow_01_analyst_input.schema.json").read_bytes()
+    )
+    definitions = schema["$defs"]
+    assert [entry["$ref"] for entry in definitions["evidence_record"]["oneOf"]] == [
+        "#/$defs/active_anchor_evidence_record",
+        "#/$defs/availability_evidence_record",
+        "#/$defs/diagnostic_evidence_record",
+    ]
+    for record_name in (
+        "active_anchor_evidence_record",
+        "availability_evidence_record",
+        "diagnostic_evidence_record",
+    ):
+        record = definitions[record_name]
+        assert record["additionalProperties"] is False
+        assert not {
+            "source_artifact_identity_sha256",
+            "source_field_bindings",
+            "source_lineage",
+        } & set(record["properties"])
+
+    assert definitions["active_anchor_source_locator"] == {
+        "type": "object",
+        "required": ["locator_type", "source_artifact_role", "anchor_id"],
+        "properties": {
+            "locator_type": {"const": "active_anchor_by_id"},
+            "source_artifact_role": {"const": "evidence_packet.json"},
+            "anchor_id": {"$ref": "#/$defs/bounded_nonempty_text"},
+        },
+        "additionalProperties": False,
+    }
+    assert definitions["availability_source_locator"]["properties"][
+        "availability_subject"
+    ]["enum"] == ["market_metrics", "scheduled_events_deterministic"]
+    assert definitions["diagnostic_source_locator"]["properties"]["diagnostic_code"] == {
+        "const": "EMPTY_ACTIVE_REGISTRY"
+    }
+    assert "normalized_value" not in definitions["diagnostic_evidence_record"]["properties"]
+    assert "anchor_id" not in definitions["active_anchor_value"]["properties"]
+    assert not {
+        "active_anchor_source_field_bindings",
+        "availability_source_field_bindings",
+        "diagnostic_code_source_field_bindings",
+        "source_lineage",
+    } & set(definitions)
 
 
 def test_ltetf_02a1_schemas_bind_exact_constants_and_observer_safety_bounds() -> None:
