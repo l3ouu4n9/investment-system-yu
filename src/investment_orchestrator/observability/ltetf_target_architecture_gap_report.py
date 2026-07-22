@@ -113,6 +113,13 @@ _LTETF_02A1_CATALOG_MODULE_LEAF: Final = (
 _LTETF_02A1_COMMON_MODULE_LEAF: Final = (
     _LTETF_02A1_MODULE_LEAF_PREFIX + "contract_common"
 )
+_WS01B_MODULE_LEAF_PREFIX: Final = "weekly_" + "shadow_" + "01_"
+_WS01B_PACKAGE_BUILDER_MODULE_LEAF: Final = (
+    _WS01B_MODULE_LEAF_PREFIX + "package_" + "builder"
+)
+_WS01B_SOURCE_ADAPTER_MODULE_LEAF: Final = (
+    _WS01B_MODULE_LEAF_PREFIX + "source_" + "adapter"
+)
 _OBSERVER_INTERNAL_RELATIVE_PATHS: Final = frozenset(
     {
         "src/investment_orchestrator/observability/__init__.py",
@@ -157,6 +164,44 @@ _DECLARED_OBSERVER_CONTRACT_SUITES: Final = (
                 importee_module=(
                     "investment_orchestrator.observability."
                     f"{_LTETF_02A1_COMMON_MODULE_LEAF}"
+                ),
+                edge_kind="static_module_binding",
+            ),
+        ),
+    ),
+    _DeclaredObserverContractSuite(
+        suite_id="weekly_shadow_01b_grounding_runtime",
+        modules=(
+            _DeclaredObserverContractModule(
+                relative_path=(
+                    "src/investment_orchestrator/observability/"
+                    f"{_WS01B_PACKAGE_BUILDER_MODULE_LEAF}.py"
+                ),
+                module_name=(
+                    "investment_orchestrator.observability."
+                    f"{_WS01B_PACKAGE_BUILDER_MODULE_LEAF}"
+                ),
+            ),
+            _DeclaredObserverContractModule(
+                relative_path=(
+                    "src/investment_orchestrator/observability/"
+                    f"{_WS01B_SOURCE_ADAPTER_MODULE_LEAF}.py"
+                ),
+                module_name=(
+                    "investment_orchestrator.observability."
+                    f"{_WS01B_SOURCE_ADAPTER_MODULE_LEAF}"
+                ),
+            ),
+        ),
+        allowed_internal_relations=(
+            _DeclaredInternalModuleRelation(
+                importer_module=(
+                    "investment_orchestrator.observability."
+                    f"{_WS01B_PACKAGE_BUILDER_MODULE_LEAF}"
+                ),
+                importee_module=(
+                    "investment_orchestrator.observability."
+                    f"{_WS01B_SOURCE_ADAPTER_MODULE_LEAF}"
                 ),
                 edge_kind="static_module_binding",
             ),

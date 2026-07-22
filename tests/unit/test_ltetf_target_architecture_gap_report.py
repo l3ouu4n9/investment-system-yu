@@ -29,6 +29,24 @@ from investment_orchestrator.observability.ltetf_target_architecture_prerequisit
 )
 
 
+_WS01B_BUILDER_PATH = (
+    "src/investment_orchestrator/observability/"
+    "weekly_shadow_01_package_builder.py"
+)
+_WS01B_ADAPTER_PATH = (
+    "src/investment_orchestrator/observability/"
+    "weekly_shadow_01_source_adapter.py"
+)
+_WS01B_BUILDER_MODULE = (
+    "investment_orchestrator.observability."
+    "weekly_shadow_01_package_builder"
+)
+_WS01B_ADAPTER_MODULE = (
+    "investment_orchestrator.observability."
+    "weekly_shadow_01_source_adapter"
+)
+
+
 def _write(root: Path, relative_path: str, content: str | bytes) -> Path:
     path = root / relative_path
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -93,22 +111,37 @@ def _install_synthetic_ltetf_02a1_internal_edge(
     )
 
 
-def _assert_synthetic_ltetf_02a1_edge_is_external(root: Path) -> None:
-    """A structurally invalid declared edge remains an ordinary consumer."""
-    catalog_path = (
-        "src/investment_orchestrator/observability/"
-        "ltetf_evidence_requirement_catalog.py"
-    )
-    inventory = gap._scan_production_inventory(root)
-    assert catalog_path in inventory.observer_external_consumers
-    with pytest.raises(gap.ObserverIntegrityError, match="CONSUMER_INVENTORY_INCOMPLETE"):
-        gap.build_gap_report(root)
-
-
-def _synthetic_catalog_relations(
+def _install_synthetic_ws01b_internal_edge(
     root: Path,
-) -> tuple[gap._ClassifiedConsumerRelation, ...]:
-    """Return private relation facts without importing synthetic source."""
+    *,
+    builder_source: str | None = None,
+    adapter_source: str = (
+        "class _WS01bResult: pass\n"
+        "class _VerifiedSourceSnapshot: pass\n"
+        "class _AuthenticatedContractSurface: pass\n"
+    ),
+) -> None:
+    """Install the exact WS01b edge without using working-tree candidates."""
+    _write(root, _WS01B_ADAPTER_PATH, adapter_source)
+    _write(
+        root,
+        _WS01B_BUILDER_PATH,
+        builder_source
+        or (
+            "from investment_orchestrator.observability import (\n"
+            "    weekly_shadow_01_source_adapter as _source_adapter,\n"
+            ")\n"
+            "_ADAPTER_RESULT_TYPE = _source_adapter._WS01bResult\n"
+            "_ADAPTER_SNAPSHOT_TYPE = _source_adapter._VerifiedSourceSnapshot\n"
+            "_ADAPTER_SURFACE_TYPE = _source_adapter._AuthenticatedContractSurface\n"
+        ),
+    )
+
+
+def _parsed_production_sources(
+    root: Path,
+) -> dict[str, gap._ParsedProductionSource]:
+    """Parse synthetic production source without importing or executing it."""
     sources: dict[str, gap._ParsedProductionSource] = {}
     for path in sorted((root / "src" / "investment_orchestrator").rglob("*.py")):
         relative = path.relative_to(root).as_posix()
@@ -126,12 +159,43 @@ def _synthetic_catalog_relations(
             policy_reader=False,
             broker_capabilities=(),
         )
+    return sources
+
+
+def _assert_synthetic_ltetf_02a1_edge_is_external(root: Path) -> None:
+    """A structurally invalid declared edge remains an ordinary consumer."""
+    catalog_path = (
+        "src/investment_orchestrator/observability/"
+        "ltetf_evidence_requirement_catalog.py"
+    )
+    inventory = gap._scan_production_inventory(root)
+    assert catalog_path in inventory.observer_external_consumers
+    with pytest.raises(gap.ObserverIntegrityError, match="CONSUMER_INVENTORY_INCOMPLETE"):
+        gap.build_gap_report(root)
+
+
+def _synthetic_catalog_relations(
+    root: Path,
+) -> tuple[gap._ClassifiedConsumerRelation, ...]:
+    """Return private relation facts without importing synthetic source."""
+    sources = _parsed_production_sources(root)
     catalog_module = (
         "investment_orchestrator.observability."
         "ltetf_evidence_requirement_catalog"
     )
     return gap._classify_static_import_relations(
         sources[catalog_module],
+        sources=sources,
+    )
+
+
+def _synthetic_ws01b_builder_relations(
+    root: Path,
+) -> tuple[gap._ClassifiedConsumerRelation, ...]:
+    """Return WS01b builder relation facts without importing candidate code."""
+    sources = _parsed_production_sources(root)
+    return gap._classify_consumer_relations(
+        sources[_WS01B_BUILDER_MODULE],
         sources=sources,
     )
 
@@ -153,6 +217,28 @@ def _assert_synthetic_ltetf_02a1_edge_is_internal(root: Path) -> None:
     )
     inventory = gap._scan_production_inventory(root)
     assert catalog_path not in inventory.observer_external_consumers
+
+
+def _assert_synthetic_ws01b_edge_is_internal(root: Path) -> None:
+    relations = _synthetic_ws01b_builder_relations(root)
+    assert any(
+        relation.category.value == "INTERNAL_IMPLEMENTATION_EDGE"
+        and relation.target_module == _WS01B_ADAPTER_MODULE
+        for relation in relations
+    )
+    inventory = gap._scan_production_inventory(root)
+    assert _WS01B_BUILDER_PATH not in inventory.observer_external_consumers
+
+
+def _assert_synthetic_ws01b_edge_is_external(root: Path) -> None:
+    relations = _synthetic_ws01b_builder_relations(root)
+    assert any(
+        relation.category.value == "EXTERNAL_OBSERVER_CONSUMER"
+        and relation.target_module == _WS01B_ADAPTER_MODULE
+        for relation in relations
+    )
+    inventory = gap._scan_production_inventory(root)
+    assert _WS01B_BUILDER_PATH in inventory.observer_external_consumers
 
 
 def _check(report: dict[str, object], check_id: str) -> dict[str, object]:
@@ -1170,7 +1256,7 @@ def test_exact_declared_ltetf_02a1_edge_is_internal_without_working_tree_modules
 
 def test_internal_edge_declaration_is_one_exact_immutable_suite_relationship() -> None:
     suites = gap._DECLARED_OBSERVER_CONTRACT_SUITES
-    assert type(suites) is tuple and len(suites) == 1
+    assert type(suites) is tuple and len(suites) == 2
     suite = suites[0]
     assert suite.suite_id == "ltetf_02a1_static_evidence_contract"
     assert tuple((item.relative_path, item.module_name) for item in suite.modules) == (
@@ -1201,6 +1287,333 @@ def test_internal_edge_declaration_is_one_exact_immutable_suite_relationship() -
     )
     with pytest.raises(AttributeError):
         suite.suite_id = "changed"  # type: ignore[misc]
+
+
+def test_ws01b_internal_edge_declaration_is_one_exact_closed_relationship() -> None:
+    suites = gap._DECLARED_OBSERVER_CONTRACT_SUITES
+    assert tuple(suite.suite_id for suite in suites) == (
+        "ltetf_02a1_static_evidence_contract",
+        "weekly_shadow_01b_grounding_runtime",
+    )
+    suite = suites[1]
+    assert tuple((item.relative_path, item.module_name) for item in suite.modules) == (
+        (_WS01B_BUILDER_PATH, _WS01B_BUILDER_MODULE),
+        (_WS01B_ADAPTER_PATH, _WS01B_ADAPTER_MODULE),
+    )
+    assert tuple(
+        (item.importer_module, item.importee_module, item.edge_kind)
+        for item in suite.allowed_internal_relations
+    ) == (
+        (
+            _WS01B_BUILDER_MODULE,
+            _WS01B_ADAPTER_MODULE,
+            "static_module_binding",
+        ),
+    )
+    assert _WS01B_BUILDER_PATH not in gap._OBSERVER_INTERNAL_RELATIVE_PATHS
+    assert _WS01B_ADAPTER_PATH not in gap._OBSERVER_INTERNAL_RELATIVE_PATHS
+    assert all("*" not in value for value in (
+        suite.modules[0].relative_path,
+        suite.modules[0].module_name,
+        suite.modules[1].relative_path,
+        suite.modules[1].module_name,
+    ))
+    with pytest.raises(AttributeError):
+        suite.suite_id = "changed"  # type: ignore[misc]
+
+
+def test_exact_declared_ws01b_edge_is_internal_in_synthetic_clean_checkout(
+    tmp_path: Path,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01b_internal_edge(root)
+    _assert_synthetic_ws01b_edge_is_internal(root)
+    inventory = gap._scan_production_inventory(root)
+    assert inventory.observer_external_consumers == (
+        "src/investment_orchestrator/cli/observe_ltetf_target_architecture_gaps.py",
+    )
+    assert inventory.dynamic_findings == ()
+    assert inventory.report_artifact_readers == ()
+    assert inventory.prohibited_observer_capability_imports == ()
+    assert inventory.p4a_runtime_consumers == ()
+    assert inventory.broker_capability_imports == ()
+    assert inventory.weekly_llm_invocation_markers == ()
+    assert gap.build_gap_report(root)["authority"] == gap.AUTHORITY_DECLARATION
+
+
+def test_declared_ws01b_edge_is_not_observed_without_exact_source_occurrence(
+    tmp_path: Path,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01b_internal_edge(root, builder_source="VALUE = 1\n")
+    assert not any(
+        relation.category.value == "INTERNAL_IMPLEMENTATION_EDGE"
+        for relation in _synthetic_ws01b_builder_relations(root)
+    )
+    assert gap._scan_production_inventory(root).observer_external_consumers == (
+        "src/investment_orchestrator/cli/observe_ltetf_target_architecture_gaps.py",
+    )
+
+
+@pytest.mark.parametrize(
+    "builder_source",
+    (
+        (
+            "from investment_orchestrator.observability."
+            "weekly_shadow_01_source_adapter import _WS01bResult\n"
+            "BOUND = _WS01bResult\n"
+        ),
+        (
+            "from investment_orchestrator.observability import (\n"
+            "    weekly_shadow_01_source_adapter as _source_adapter,\n"
+            ")\n"
+        ),
+        (
+            "from investment_orchestrator.observability import (\n"
+            "    weekly_shadow_01_source_adapter as _source_adapter,\n"
+            ")\n"
+            "_source_adapter = object()\n"
+            "BOUND = _source_adapter._WS01bResult\n"
+        ),
+        (
+            "from investment_orchestrator.observability import (\n"
+            "    weekly_shadow_01_source_adapter as _source_adapter,\n"
+            ")\n"
+            "def only_shadowed(_source_adapter):\n"
+            "    return _source_adapter._WS01bResult\n"
+        ),
+        (
+            "from investment_orchestrator.observability import (\n"
+            "    weekly_shadow_01_source_adapter as _source_adapter,\n"
+            ")\n"
+            "import json as _source_adapter\n"
+            "BOUND = _source_adapter.dumps\n"
+        ),
+    ),
+    ids=(
+        "direct-symbol",
+        "unused-module-binding",
+        "rebound-module-binding",
+        "shadowed-only-use",
+        "alias-rebound-to-another-module",
+    ),
+)
+def test_nonqualifying_ws01b_bindings_remain_external(
+    tmp_path: Path,
+    builder_source: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01b_internal_edge(root, builder_source=builder_source)
+    _assert_synthetic_ws01b_edge_is_external(root)
+
+
+def test_dynamic_ws01b_adapter_import_remains_external(tmp_path: Path) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01b_internal_edge(
+        root,
+        builder_source=(
+            "import importlib\n"
+            "ADAPTER = importlib.import_module(\n"
+            f"    {_WS01B_ADAPTER_MODULE!r}\n"
+            ")\n"
+        ),
+    )
+    relations = _synthetic_ws01b_builder_relations(root)
+    assert any(
+        relation.category.value == "EXTERNAL_OBSERVER_CONSUMER"
+        and relation.target_module == _WS01B_ADAPTER_MODULE
+        for relation in relations
+    )
+    assert _WS01B_BUILDER_PATH in (
+        gap._scan_production_inventory(root).observer_external_consumers
+    )
+
+
+def test_same_ws01b_importee_from_third_observability_module_remains_external(
+    tmp_path: Path,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01b_internal_edge(root)
+    third_path = (
+        "src/investment_orchestrator/observability/"
+        "weekly_shadow_01_third_consumer.py"
+    )
+    _write(
+        root,
+        third_path,
+        "from investment_orchestrator.observability import (\n"
+        "    weekly_shadow_01_source_adapter as _source_adapter,\n"
+        ")\n"
+        "BOUND = _source_adapter._WS01bResult\n",
+    )
+    inventory = gap._scan_production_inventory(root)
+    assert _WS01B_BUILDER_PATH not in inventory.observer_external_consumers
+    assert third_path in inventory.observer_external_consumers
+
+
+def test_ws01b_builder_importing_different_observer_module_remains_external(
+    tmp_path: Path,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01b_internal_edge(
+        root,
+        builder_source=(
+            "from investment_orchestrator.observability import (\n"
+            "    ltetf_target_architecture_gap_report as _source_adapter,\n"
+            ")\n"
+            "BOUND = _source_adapter.build_gap_report\n"
+        ),
+    )
+    relations = _synthetic_ws01b_builder_relations(root)
+    assert any(
+        relation.category.value == "EXTERNAL_OBSERVER_CONSUMER"
+        and relation.target_module
+        == "investment_orchestrator.observability."
+        "ltetf_target_architecture_gap_report"
+        for relation in relations
+    )
+    assert _WS01B_BUILDER_PATH in (
+        gap._scan_production_inventory(root).observer_external_consumers
+    )
+
+
+@pytest.mark.parametrize("substitution", ("importer-path", "importee-path"))
+def test_ws01b_declared_relation_requires_exact_repository_paths(
+    tmp_path: Path,
+    substitution: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01b_internal_edge(root)
+    sources = _parsed_production_sources(root)
+    if substitution == "importer-path":
+        sources[_WS01B_BUILDER_MODULE] = replace(
+            sources[_WS01B_BUILDER_MODULE],
+            relative_path=(
+                "src/investment_orchestrator/observability/"
+                "substituted_package_builder.py"
+            ),
+        )
+    else:
+        sources[_WS01B_ADAPTER_MODULE] = replace(
+            sources[_WS01B_ADAPTER_MODULE],
+            relative_path=(
+                "src/investment_orchestrator/observability/"
+                "substituted_source_adapter.py"
+            ),
+        )
+    relations = gap._classify_consumer_relations(
+        sources[_WS01B_BUILDER_MODULE],
+        sources=sources,
+    )
+    assert any(
+        relation.category.value == "EXTERNAL_OBSERVER_CONSUMER"
+        and relation.target_module == _WS01B_ADAPTER_MODULE
+        for relation in relations
+    )
+    assert not any(
+        relation.category.value == "INTERNAL_IMPLEMENTATION_EDGE"
+        and relation.target_module == _WS01B_ADAPTER_MODULE
+        for relation in relations
+    )
+
+
+def test_additional_ws01b_observer_import_is_classified_independently(
+    tmp_path: Path,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01b_internal_edge(
+        root,
+        builder_source=(
+            "from investment_orchestrator.observability import (\n"
+            "    weekly_shadow_01_source_adapter as _source_adapter,\n"
+            "    ltetf_target_architecture_gap_report as _gap_report,\n"
+            ")\n"
+            "ADAPTER_TYPE = _source_adapter._WS01bResult\n"
+            "REPORT_BUILDER = _gap_report.build_gap_report\n"
+        ),
+    )
+    categories = {
+        (relation.target_module, relation.category.value)
+        for relation in _synthetic_ws01b_builder_relations(root)
+    }
+    assert (_WS01B_ADAPTER_MODULE, "INTERNAL_IMPLEMENTATION_EDGE") in categories
+    assert (
+        "investment_orchestrator.observability."
+        "ltetf_target_architecture_gap_report",
+        "EXTERNAL_OBSERVER_CONSUMER",
+    ) in categories
+    assert _WS01B_BUILDER_PATH in (
+        gap._scan_production_inventory(root).observer_external_consumers
+    )
+
+
+def test_ws01b_report_reader_remains_visible_alongside_internal_edge(
+    tmp_path: Path,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01b_internal_edge(
+        root,
+        builder_source=(
+            "from investment_orchestrator.observability import (\n"
+            "    weekly_shadow_01_source_adapter as _source_adapter,\n"
+            ")\n"
+            "from pathlib import Path\n"
+            "ADAPTER_TYPE = _source_adapter._WS01bResult\n"
+            "REPORT = Path('artifacts/target_architecture/report_only/ltetf_01/"
+            "reports/report.json').read_text()\n"
+        ),
+    )
+    inventory = gap._scan_production_inventory(root)
+    assert inventory.report_artifact_readers == (_WS01B_BUILDER_PATH,)
+    assert any(
+        relation.category.value == "INTERNAL_IMPLEMENTATION_EDGE"
+        and relation.target_module == _WS01B_ADAPTER_MODULE
+        for relation in _synthetic_ws01b_builder_relations(root)
+    )
+    with pytest.raises(gap.ObserverIntegrityError, match="CONSUMER_INVENTORY_INCOMPLETE"):
+        gap.build_gap_report(root)
+
+
+@pytest.mark.parametrize(
+    "consumer_path",
+    (
+        "src/investment_orchestrator/workflow/ws01b_consumer.py",
+        "src/investment_orchestrator/state/ws01b_consumer.py",
+        "src/investment_orchestrator/permissions/ws01b_consumer.py",
+        "src/investment_orchestrator/gates/ws01b_consumer.py",
+        "src/investment_orchestrator/workflow/step4_ws01b_compiler.py",
+        "src/investment_orchestrator/orders/ws01b_consumer.py",
+        "src/investment_orchestrator/broker/ws01b_consumer.py",
+        "src/investment_orchestrator/llm/ws01b_consumer.py",
+    ),
+    ids=(
+        "workflow",
+        "state",
+        "permission",
+        "gate",
+        "compiler",
+        "order",
+        "broker",
+        "model",
+    ),
+)
+def test_ws01b_runtime_capability_consumers_remain_external(
+    tmp_path: Path,
+    consumer_path: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01b_internal_edge(root)
+    _write(
+        root,
+        consumer_path,
+        "from investment_orchestrator.observability import (\n"
+        "    weekly_shadow_01_source_adapter as _source_adapter,\n"
+        ")\n"
+        "BOUND = _source_adapter._WS01bResult\n",
+    )
+    inventory = gap._scan_production_inventory(root)
+    assert _WS01B_BUILDER_PATH not in inventory.observer_external_consumers
+    assert consumer_path in inventory.observer_external_consumers
 
 
 @pytest.mark.parametrize(
