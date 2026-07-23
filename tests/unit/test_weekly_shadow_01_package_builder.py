@@ -23,6 +23,9 @@ import pytest
 import yaml
 
 from investment_orchestrator.observability import weekly_shadow_01_contracts as contracts
+from investment_orchestrator.observability import (
+    ltetf_target_architecture_gap_report as gap,
+)
 from investment_orchestrator.observability import weekly_shadow_01_package_builder as builder
 from investment_orchestrator.observability import weekly_shadow_01_source_adapter as adapter
 from investment_orchestrator.research import replacement_observation as r2f
@@ -1460,12 +1463,41 @@ def test_module_toplevels_have_no_io_network_subprocess_environment_or_registrat
 
 def test_production_dependency_direction_and_no_runtime_consumer_imports() -> None:
     root = Path(__file__).parents[2]
-    builder_tree = ast.parse(
-        (root / "src/investment_orchestrator/observability/weekly_shadow_01_package_builder.py").read_text()
+    relative_paths = (
+        "src/investment_orchestrator/observability/weekly_shadow_01_source_adapter.py",
+        "src/investment_orchestrator/observability/weekly_shadow_01_package_builder.py",
+        "src/investment_orchestrator/observability/weekly_shadow_01_response_validator.py",
     )
-    adapter_tree = ast.parse(
-        (root / "src/investment_orchestrator/observability/weekly_shadow_01_source_adapter.py").read_text()
+    sources: dict[str, gap._ParsedProductionSource] = {}
+    for relative_path in relative_paths:
+        path = root / relative_path
+        module_name = gap._module_name_for_path(relative_path)
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=relative_path)
+        imports, findings, dynamic_imports = gap._imports_in_tree(tree, module_name)
+        sources[module_name] = gap._ParsedProductionSource(
+            relative_path=relative_path,
+            module_name=module_name,
+            tree=tree,
+            imports=imports,
+            dynamic_imports=dynamic_imports,
+            findings=findings,
+            report_reader=False,
+            policy_reader=False,
+            broker_capabilities=(),
+        )
+
+    adapter_module = (
+        "investment_orchestrator.observability.weekly_shadow_01_source_adapter"
     )
+    builder_module = (
+        "investment_orchestrator.observability.weekly_shadow_01_package_builder"
+    )
+    validator_module = (
+        "investment_orchestrator.observability.weekly_shadow_01_response_validator"
+    )
+    adapter_tree = sources[adapter_module].tree
+    builder_tree = sources[builder_module].tree
+    validator_tree = sources[validator_module].tree
     builder_imports = {
         alias.name
         for node in ast.walk(builder_tree)
@@ -1493,17 +1525,76 @@ def test_production_dependency_direction_and_no_runtime_consumer_imports() -> No
     assert "weekly_shadow_01_source_adapter" in builder_imports
     assert "weekly_shadow_01_contracts" not in builder_imports
     assert "weekly_shadow_01_contracts" not in adapter_imports
-    production_hits = []
-    for path in (root / "src/investment_orchestrator").rglob("*.py"):
-        if path.name in {
-            "weekly_shadow_01_source_adapter.py",
-            "weekly_shadow_01_package_builder.py",
-        }:
-            continue
-        text = path.read_text(encoding="utf-8")
-        if "weekly_shadow_01_source_adapter" in text or "weekly_shadow_01_package_builder" in text:
-            production_hits.append(path)
-    assert production_hits == []
+    validator_module_bindings = [
+        (node.module, tuple((alias.name, alias.asname) for alias in node.names))
+        for node in validator_tree.body
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "investment_orchestrator.observability"
+    ]
+    assert validator_module_bindings == [
+        (
+            "investment_orchestrator.observability",
+            (("weekly_shadow_01_package_builder", "_package_builder"),),
+        )
+    ]
+
+    def observer_relations(module_name: str) -> tuple[gap._ClassifiedConsumerRelation, ...]:
+        return tuple(
+            relation
+            for relation in gap._classify_consumer_relations(
+                sources[module_name],
+                sources=sources,
+            )
+            if relation.target_module in {
+                adapter_module,
+                builder_module,
+                validator_module,
+            }
+        )
+
+    builder_relations = observer_relations(builder_module)
+    validator_relations = observer_relations(validator_module)
+    assert len(builder_relations) == 1
+    assert len(validator_relations) == 1
+    builder_relation = builder_relations[0]
+    validator_relation = validator_relations[0]
+    assert (
+        builder_relation.category
+        is gap._ConsumerRelationCategory.INTERNAL_IMPLEMENTATION_EDGE
+    )
+    assert (
+        builder_relation.importer_relative_path
+        == "src/investment_orchestrator/observability/weekly_shadow_01_package_builder.py"
+    )
+    assert builder_relation.importer_module == builder_module
+    assert builder_relation.target_module == adapter_module
+    assert builder_relation.lineno > 0
+    assert builder_relation.col_offset == 0
+    assert (
+        validator_relation.category
+        is gap._ConsumerRelationCategory.INTERNAL_IMPLEMENTATION_EDGE
+    )
+    assert (
+        validator_relation.importer_relative_path
+        == "src/investment_orchestrator/observability/weekly_shadow_01_response_validator.py"
+    )
+    assert validator_relation.importer_module == validator_module
+    assert validator_relation.target_module == builder_module
+    assert validator_relation.lineno > 0
+    assert validator_relation.col_offset == 0
+    assert observer_relations(adapter_module) == ()
+
+    inventory = gap._scan_production_inventory(root)
+    assert inventory.observer_external_consumers == (
+        "src/investment_orchestrator/cli/observe_ltetf_target_architecture_gaps.py",
+    )
+    assert inventory.dynamic_findings == ()
+    assert inventory.report_artifact_readers == ()
+    assert inventory.policy_artifact_consumers == ()
+    assert inventory.prohibited_observer_capability_imports == ()
+    assert inventory.p4a_runtime_consumers == ()
+    assert inventory.broker_capability_imports == ()
+    assert inventory.weekly_llm_invocation_markers == ()
 
 
 def test_builder_public_results_are_immutable_code_only_and_unknown_codes_fail_closed(
