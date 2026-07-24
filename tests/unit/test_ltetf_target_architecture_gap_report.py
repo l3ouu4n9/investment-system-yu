@@ -53,6 +53,14 @@ _WS01C_VALIDATOR_MODULE = (
     "investment_orchestrator.observability."
     "weekly_shadow_01_response_validator"
 )
+_WS01D_PUBLISHER_PATH = (
+    "src/investment_orchestrator/observability/"
+    "weekly_shadow_01_report_publisher.py"
+)
+_WS01D_PUBLISHER_MODULE = (
+    "investment_orchestrator.observability."
+    "weekly_shadow_01_report_publisher"
+)
 
 
 def _write(root: Path, relative_path: str, content: str | bytes) -> Path:
@@ -170,6 +178,36 @@ def _install_synthetic_ws01c_internal_edge(
     )
 
 
+def _install_synthetic_ws01d_internal_edge(
+    root: Path,
+    *,
+    publisher_source: str | None = None,
+    validator_source: str | None = None,
+    builder_source: str | None = None,
+    adapter_source: str | None = None,
+) -> None:
+    """Install the exact three-edge WS01 chain using synthetic source only."""
+    _install_synthetic_ws01c_internal_edge(
+        root,
+        validator_source=validator_source,
+        builder_source=builder_source,
+    )
+    if adapter_source is not None:
+        _write(root, _WS01B_ADAPTER_PATH, adapter_source)
+    _write(
+        root,
+        _WS01D_PUBLISHER_PATH,
+        publisher_source
+        or (
+            "from investment_orchestrator.observability import (\n"
+            "    weekly_shadow_01_response_validator as _response_validator,\n"
+            ")\n"
+            "_VALIDATE_RESPONSE = "
+            "_response_validator.validate_analyst_response\n"
+        ),
+    )
+
+
 def _parsed_production_sources(
     root: Path,
 ) -> dict[str, gap._ParsedProductionSource]:
@@ -243,6 +281,29 @@ def _synthetic_ws01c_validator_relations(
     )
 
 
+def _synthetic_ws01d_publisher_relations(
+    root: Path,
+) -> tuple[gap._ClassifiedConsumerRelation, ...]:
+    """Return WS01d-prerequisite relation facts without importing source."""
+    sources = _parsed_production_sources(root)
+    return gap._classify_consumer_relations(
+        sources[_WS01D_PUBLISHER_MODULE],
+        sources=sources,
+    )
+
+
+def _synthetic_module_relations(
+    root: Path,
+    module_name: str,
+) -> tuple[gap._ClassifiedConsumerRelation, ...]:
+    """Classify one synthetic module without importing or executing it."""
+    sources = _parsed_production_sources(root)
+    return gap._classify_consumer_relations(
+        sources[module_name],
+        sources=sources,
+    )
+
+
 def _assert_synthetic_ltetf_02a1_edge_is_internal(root: Path) -> None:
     catalog_path = (
         "src/investment_orchestrator/observability/"
@@ -304,6 +365,28 @@ def _assert_synthetic_ws01c_edge_is_external(root: Path) -> None:
     )
     inventory = gap._scan_production_inventory(root)
     assert _WS01C_VALIDATOR_PATH in inventory.observer_external_consumers
+
+
+def _assert_synthetic_ws01d_edge_is_internal(root: Path) -> None:
+    relations = _synthetic_ws01d_publisher_relations(root)
+    assert any(
+        relation.category.value == "INTERNAL_IMPLEMENTATION_EDGE"
+        and relation.target_module == _WS01C_VALIDATOR_MODULE
+        for relation in relations
+    )
+    inventory = gap._scan_production_inventory(root)
+    assert _WS01D_PUBLISHER_PATH not in inventory.observer_external_consumers
+
+
+def _assert_synthetic_ws01d_edge_is_external(root: Path) -> None:
+    relations = _synthetic_ws01d_publisher_relations(root)
+    assert any(
+        relation.category.value == "EXTERNAL_OBSERVER_CONSUMER"
+        and relation.target_module == _WS01C_VALIDATOR_MODULE
+        for relation in relations
+    )
+    inventory = gap._scan_production_inventory(root)
+    assert _WS01D_PUBLISHER_PATH in inventory.observer_external_consumers
 
 
 def _check(report: dict[str, object], check_id: str) -> dict[str, object]:
@@ -1365,6 +1448,7 @@ def test_ws01_internal_edge_declaration_is_one_exact_closed_chain() -> None:
         (_WS01B_BUILDER_PATH, _WS01B_BUILDER_MODULE),
         (_WS01B_ADAPTER_PATH, _WS01B_ADAPTER_MODULE),
         (_WS01C_VALIDATOR_PATH, _WS01C_VALIDATOR_MODULE),
+        (_WS01D_PUBLISHER_PATH, _WS01D_PUBLISHER_MODULE),
     )
     assert tuple(
         (item.importer_module, item.importee_module, item.edge_kind)
@@ -1380,18 +1464,48 @@ def test_ws01_internal_edge_declaration_is_one_exact_closed_chain() -> None:
             _WS01B_BUILDER_MODULE,
             "static_module_binding",
         ),
+        (
+            _WS01D_PUBLISHER_MODULE,
+            _WS01C_VALIDATOR_MODULE,
+            "static_module_binding",
+        ),
     )
     assert _WS01B_BUILDER_PATH not in gap._OBSERVER_INTERNAL_RELATIVE_PATHS
     assert _WS01B_ADAPTER_PATH not in gap._OBSERVER_INTERNAL_RELATIVE_PATHS
     assert _WS01C_VALIDATOR_PATH not in gap._OBSERVER_INTERNAL_RELATIVE_PATHS
+    assert _WS01D_PUBLISHER_PATH not in gap._OBSERVER_INTERNAL_RELATIVE_PATHS
+    declared_relations = {
+        (item.importer_module, item.importee_module, item.edge_kind)
+        for item in suite.allowed_internal_relations
+    }
     assert (
         _WS01C_VALIDATOR_MODULE,
         _WS01B_ADAPTER_MODULE,
         "static_module_binding",
-    ) not in {
-        (item.importer_module, item.importee_module, item.edge_kind)
-        for item in suite.allowed_internal_relations
-    }
+    ) not in declared_relations
+    assert (
+        _WS01D_PUBLISHER_MODULE,
+        _WS01B_BUILDER_MODULE,
+        "static_module_binding",
+    ) not in declared_relations
+    assert (
+        _WS01D_PUBLISHER_MODULE,
+        _WS01B_ADAPTER_MODULE,
+        "static_module_binding",
+    ) not in declared_relations
+    assert all(
+        (importee, importer, edge_kind) not in declared_relations
+        for importer, importee, edge_kind in declared_relations
+    )
+    assert gap._OBSERVER_INTERNAL_RELATIVE_PATHS == frozenset(
+        {
+            "src/investment_orchestrator/observability/__init__.py",
+            "src/investment_orchestrator/observability/"
+            "ltetf_target_architecture_prerequisite_catalog.py",
+            "src/investment_orchestrator/observability/"
+            "ltetf_target_architecture_gap_report.py",
+        }
+    )
     assert all(
         "*" not in value
         for module in suite.modules
@@ -1455,11 +1569,14 @@ def test_declared_ws01c_edge_is_inert_without_source_occurrence(
     assert inventory.weekly_llm_invocation_markers == ()
 
 
-def test_exact_declared_ws01_chain_is_internal_in_synthetic_clean_checkout(
+def test_declared_ws01d_edge_is_inert_without_publisher_source_occurrence(
     tmp_path: Path,
 ) -> None:
     root = _minimal_observer_repository(tmp_path)
     _install_synthetic_ws01c_internal_edge(root)
+    sources = _parsed_production_sources(root)
+    assert _WS01D_PUBLISHER_MODULE not in sources
+    assert not (root / _WS01D_PUBLISHER_PATH).exists()
     _assert_synthetic_ws01b_edge_is_internal(root)
     _assert_synthetic_ws01c_edge_is_internal(root)
     inventory = gap._scan_production_inventory(root)
@@ -1474,6 +1591,529 @@ def test_exact_declared_ws01_chain_is_internal_in_synthetic_clean_checkout(
     assert inventory.broker_capability_imports == ()
     assert inventory.weekly_llm_invocation_markers == ()
     assert gap.build_gap_report(root)["authority"] == gap.AUTHORITY_DECLARATION
+    assert not (root / gap.REPORT_NAMESPACE_RELATIVE_PATH).exists()
+
+
+def test_declared_ws01d_edge_is_inert_in_current_real_inventory() -> None:
+    root = repo_root()
+    assert not (root / _WS01D_PUBLISHER_PATH).exists()
+    sources = _parsed_production_sources(root)
+    assert _WS01D_PUBLISHER_MODULE not in sources
+    inventory = gap._scan_production_inventory(root)
+    assert inventory.observer_external_consumers == (
+        "src/investment_orchestrator/cli/observe_ltetf_target_architecture_gaps.py",
+    )
+    assert inventory.dynamic_findings == ()
+    assert inventory.report_artifact_readers == ()
+    assert inventory.policy_artifact_consumers == ()
+    assert inventory.prohibited_observer_capability_imports == ()
+    assert inventory.p4a_runtime_consumers == ()
+    assert inventory.broker_capability_imports == ()
+    assert inventory.weekly_llm_invocation_markers == ()
+    report = gap.build_gap_report(root)
+    assert report["authority"] == gap.AUTHORITY_DECLARATION
+
+
+def test_exact_declared_ws01_chain_is_internal_in_synthetic_clean_checkout(
+    tmp_path: Path,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01d_internal_edge(root)
+    _assert_synthetic_ws01b_edge_is_internal(root)
+    _assert_synthetic_ws01c_edge_is_internal(root)
+    _assert_synthetic_ws01d_edge_is_internal(root)
+    sources = _parsed_production_sources(root)
+    internal_relations = {
+        (source.module_name, relation.target_module)
+        for source in sources.values()
+        for relation in gap._classify_consumer_relations(source, sources=sources)
+        if relation.category.value == "INTERNAL_IMPLEMENTATION_EDGE"
+    }
+    assert internal_relations == {
+        (_WS01B_BUILDER_MODULE, _WS01B_ADAPTER_MODULE),
+        (_WS01C_VALIDATOR_MODULE, _WS01B_BUILDER_MODULE),
+        (_WS01D_PUBLISHER_MODULE, _WS01C_VALIDATOR_MODULE),
+    }
+    inventory = gap._scan_production_inventory(root)
+    assert inventory.observer_external_consumers == (
+        "src/investment_orchestrator/cli/observe_ltetf_target_architecture_gaps.py",
+    )
+    assert inventory.dynamic_findings == ()
+    assert inventory.report_artifact_readers == ()
+    assert inventory.policy_artifact_consumers == ()
+    assert inventory.prohibited_observer_capability_imports == ()
+    assert inventory.p4a_runtime_consumers == ()
+    assert inventory.broker_capability_imports == ()
+    assert inventory.weekly_llm_invocation_markers == ()
+    assert gap.build_gap_report(root)["authority"] == gap.AUTHORITY_DECLARATION
+
+
+def test_exact_declared_ws01d_edge_is_internal_with_static_module_binding_and_lexical_use(
+    tmp_path: Path,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01d_internal_edge(root)
+    relations = _synthetic_ws01d_publisher_relations(root)
+    assert tuple(
+        (relation.category.value, relation.target_module)
+        for relation in relations
+    ) == (
+        ("INTERNAL_IMPLEMENTATION_EDGE", _WS01C_VALIDATOR_MODULE),
+    )
+    _assert_synthetic_ws01b_edge_is_internal(root)
+    _assert_synthetic_ws01c_edge_is_internal(root)
+    _assert_synthetic_ws01d_edge_is_internal(root)
+
+
+@pytest.mark.parametrize(
+    "publisher_source",
+    (
+        (
+            "from investment_orchestrator.observability."
+            "weekly_shadow_01_response_validator import "
+            "validate_analyst_response\n"
+            "BOUND = validate_analyst_response\n"
+        ),
+        (
+            "from investment_orchestrator.observability import (\n"
+            "    weekly_shadow_01_response_validator as _response_validator,\n"
+            ")\n"
+        ),
+        (
+            "from investment_orchestrator.observability import (\n"
+            "    weekly_shadow_01_response_validator as _response_validator,\n"
+            ")\n"
+            "_response_validator = object()\n"
+            "BOUND = _response_validator.validate_analyst_response\n"
+        ),
+        (
+            "from investment_orchestrator.observability import (\n"
+            "    weekly_shadow_01_response_validator as _response_validator,\n"
+            ")\n"
+            "def only_shadowed(_response_validator):\n"
+            "    return _response_validator.validate_analyst_response\n"
+        ),
+        (
+            "from investment_orchestrator.observability import (\n"
+            "    weekly_shadow_01_response_validator as _response_validator,\n"
+            ")\n"
+            "import json as _response_validator\n"
+            "BOUND = _response_validator.dumps\n"
+        ),
+        (
+            "from investment_orchestrator.observability import (\n"
+            "    weekly_shadow_01_response_validator as _response_validator,\n"
+            ")\n"
+            "from investment_orchestrator.observability import (\n"
+            "    weekly_shadow_01_package_builder as _response_validator,\n"
+            ")\n"
+            "BOUND = "
+            "_response_validator._build_package_from_source_selection\n"
+        ),
+    ),
+    ids=(
+        "direct-symbol",
+        "unused-module-binding",
+        "rebound-module-binding",
+        "shadowed-only-use",
+        "alias-rebound-to-unrelated-module",
+        "alias-redirected-to-declared-module",
+    ),
+)
+def test_nonqualifying_ws01d_bindings_remain_external(
+    tmp_path: Path,
+    publisher_source: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01d_internal_edge(
+        root,
+        publisher_source=publisher_source,
+    )
+    _assert_synthetic_ws01b_edge_is_internal(root)
+    _assert_synthetic_ws01c_edge_is_internal(root)
+    _assert_synthetic_ws01d_edge_is_external(root)
+
+
+def test_dynamic_ws01d_validator_import_remains_external(tmp_path: Path) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01d_internal_edge(
+        root,
+        publisher_source=(
+            "import importlib\n"
+            "VALIDATOR = importlib.import_module(\n"
+            f"    {_WS01C_VALIDATOR_MODULE!r}\n"
+            ")\n"
+        ),
+    )
+    relations = _synthetic_ws01d_publisher_relations(root)
+    assert any(
+        relation.category.value == "EXTERNAL_OBSERVER_CONSUMER"
+        and relation.target_module == _WS01C_VALIDATOR_MODULE
+        for relation in relations
+    )
+    assert not any(
+        relation.category.value == "INTERNAL_IMPLEMENTATION_EDGE"
+        for relation in relations
+    )
+    assert _WS01D_PUBLISHER_PATH in (
+        gap._scan_production_inventory(root).observer_external_consumers
+    )
+
+
+def test_unresolved_dynamic_ws01d_validator_import_remains_fail_closed(
+    tmp_path: Path,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01d_internal_edge(
+        root,
+        publisher_source=(
+            "import importlib\n"
+            "def target_leaf():\n"
+            "    return 'weekly_shadow_01_response_validator'\n"
+            "MODULE = 'investment_orchestrator.observability.' + target_leaf()\n"
+            "VALIDATOR = importlib.import_module(MODULE)\n"
+        ),
+    )
+    relations = _synthetic_ws01d_publisher_relations(root)
+    assert any(
+        relation.category.value == "UNRESOLVED_RELEVANT_CONSUMER"
+        for relation in relations
+    )
+    assert not any(
+        relation.category.value == "INTERNAL_IMPLEMENTATION_EDGE"
+        for relation in relations
+    )
+    with pytest.raises(
+        gap.ObserverIntegrityError,
+        match="CONSUMER_INVENTORY_INCOMPLETE",
+    ):
+        gap._scan_production_inventory(root)
+
+
+@pytest.mark.parametrize(
+    ("target_module", "target_leaf", "target_attribute"),
+    (
+        (
+            _WS01B_BUILDER_MODULE,
+            "weekly_shadow_01_package_builder",
+            "_build_package_from_source_selection",
+        ),
+        (
+            _WS01B_ADAPTER_MODULE,
+            "weekly_shadow_01_source_adapter",
+            "_WS01bResult",
+        ),
+    ),
+    ids=("publisher-to-builder", "publisher-to-adapter"),
+)
+def test_ws01d_undeclared_publisher_relations_remain_external(
+    tmp_path: Path,
+    target_module: str,
+    target_leaf: str,
+    target_attribute: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01d_internal_edge(
+        root,
+        publisher_source=(
+            "from investment_orchestrator.observability import (\n"
+            "    weekly_shadow_01_response_validator as _response_validator,\n"
+            f"    {target_leaf} as _undeclared_target,\n"
+            ")\n"
+            "VALIDATOR = _response_validator.validate_analyst_response\n"
+            f"UNDECLARED = _undeclared_target.{target_attribute}\n"
+        ),
+    )
+    categories = {
+        (relation.target_module, relation.category.value)
+        for relation in _synthetic_ws01d_publisher_relations(root)
+    }
+    assert (
+        _WS01C_VALIDATOR_MODULE,
+        "INTERNAL_IMPLEMENTATION_EDGE",
+    ) in categories
+    assert (target_module, "EXTERNAL_OBSERVER_CONSUMER") in categories
+    assert _WS01D_PUBLISHER_PATH in (
+        gap._scan_production_inventory(root).observer_external_consumers
+    )
+
+
+@pytest.mark.parametrize(
+    "reverse_edge",
+    ("adapter-to-builder", "builder-to-validator", "validator-to-publisher"),
+)
+def test_all_ws01_reverse_edges_remain_external(
+    tmp_path: Path,
+    reverse_edge: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    if reverse_edge == "adapter-to-builder":
+        importer_module = _WS01B_ADAPTER_MODULE
+        importer_path = _WS01B_ADAPTER_PATH
+        target_module = _WS01B_BUILDER_MODULE
+        install_arguments = {
+            "adapter_source": (
+                "from investment_orchestrator.observability import (\n"
+                "    weekly_shadow_01_package_builder as _reverse_target,\n"
+                ")\n"
+                "REVERSE = "
+                "_reverse_target._build_package_from_source_selection\n"
+            )
+        }
+    elif reverse_edge == "builder-to-validator":
+        importer_module = _WS01B_BUILDER_MODULE
+        importer_path = _WS01B_BUILDER_PATH
+        target_module = _WS01C_VALIDATOR_MODULE
+        install_arguments = {
+            "builder_source": (
+                "from investment_orchestrator.observability import (\n"
+                "    weekly_shadow_01_source_adapter as _source_adapter,\n"
+                "    weekly_shadow_01_response_validator as _reverse_target,\n"
+                ")\n"
+                "ADAPTER = _source_adapter._WS01bResult\n"
+                "REVERSE = _reverse_target.validate_analyst_response\n"
+            )
+        }
+    else:
+        importer_module = _WS01C_VALIDATOR_MODULE
+        importer_path = _WS01C_VALIDATOR_PATH
+        target_module = _WS01D_PUBLISHER_MODULE
+        install_arguments = {
+            "validator_source": (
+                "from investment_orchestrator.observability import (\n"
+                "    weekly_shadow_01_package_builder as _package_builder,\n"
+                "    weekly_shadow_01_report_publisher as _reverse_target,\n"
+                ")\n"
+                "BUILDER = "
+                "_package_builder._build_package_from_source_selection\n"
+                "REVERSE = _reverse_target.publish_report\n"
+            )
+        }
+    _install_synthetic_ws01d_internal_edge(root, **install_arguments)
+    relations = _synthetic_module_relations(root, importer_module)
+    assert any(
+        relation.category.value == "EXTERNAL_OBSERVER_CONSUMER"
+        and relation.target_module == target_module
+        for relation in relations
+    )
+    assert importer_path in (
+        gap._scan_production_inventory(root).observer_external_consumers
+    )
+    sources = _parsed_production_sources(root)
+    internal_relations = {
+        (source.module_name, relation.target_module)
+        for source in sources.values()
+        for relation in gap._classify_consumer_relations(source, sources=sources)
+        if relation.category.value == "INTERNAL_IMPLEMENTATION_EDGE"
+    }
+    assert internal_relations == {
+        (_WS01B_BUILDER_MODULE, _WS01B_ADAPTER_MODULE),
+        (_WS01C_VALIDATOR_MODULE, _WS01B_BUILDER_MODULE),
+        (_WS01D_PUBLISHER_MODULE, _WS01C_VALIDATOR_MODULE),
+    }
+
+
+@pytest.mark.parametrize(
+    ("target_leaf", "target_attribute"),
+    (
+        (
+            "weekly_shadow_01_response_validator",
+            "validate_analyst_response",
+        ),
+        ("weekly_shadow_01_report_publisher", "publish_report"),
+    ),
+    ids=("third-validator-importer", "publisher-consumer"),
+)
+def test_ws01d_third_importers_remain_external(
+    tmp_path: Path,
+    target_leaf: str,
+    target_attribute: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01d_internal_edge(root)
+    third_path = (
+        "src/investment_orchestrator/observability/"
+        "weekly_shadow_01_third_consumer.py"
+    )
+    _write(
+        root,
+        third_path,
+        "from investment_orchestrator.observability import (\n"
+        f"    {target_leaf} as _target,\n"
+        ")\n"
+        f"BOUND = _target.{target_attribute}\n",
+    )
+    inventory = gap._scan_production_inventory(root)
+    assert _WS01B_BUILDER_PATH not in inventory.observer_external_consumers
+    assert _WS01C_VALIDATOR_PATH not in inventory.observer_external_consumers
+    assert _WS01D_PUBLISHER_PATH not in inventory.observer_external_consumers
+    assert third_path in inventory.observer_external_consumers
+
+
+@pytest.mark.parametrize(
+    "substitution",
+    (
+        "importer-path",
+        "importee-path",
+        "importer-module",
+        "importee-module",
+    ),
+)
+def test_ws01d_declared_relation_requires_exact_repository_paths_and_modules(
+    tmp_path: Path,
+    substitution: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01d_internal_edge(root)
+    sources = _parsed_production_sources(root)
+    importer_key = _WS01D_PUBLISHER_MODULE
+    if substitution == "importer-path":
+        sources[importer_key] = replace(
+            sources[importer_key],
+            relative_path=(
+                "src/investment_orchestrator/observability/"
+                "substituted_report_publisher.py"
+            ),
+        )
+    elif substitution == "importee-path":
+        sources[_WS01C_VALIDATOR_MODULE] = replace(
+            sources[_WS01C_VALIDATOR_MODULE],
+            relative_path=(
+                "src/investment_orchestrator/observability/"
+                "substituted_response_validator.py"
+            ),
+        )
+    elif substitution == "importer-module":
+        source = sources.pop(importer_key)
+        importer_key = (
+            "investment_orchestrator.observability."
+            "substituted_report_publisher"
+        )
+        sources[importer_key] = replace(source, module_name=importer_key)
+    else:
+        source = sources.pop(_WS01C_VALIDATOR_MODULE)
+        substituted_importee = (
+            "investment_orchestrator.observability."
+            "substituted_response_validator"
+        )
+        sources[substituted_importee] = replace(
+            source,
+            module_name=substituted_importee,
+        )
+    relations = gap._classify_consumer_relations(
+        sources[importer_key],
+        sources=sources,
+    )
+    assert any(
+        relation.category.value == "EXTERNAL_OBSERVER_CONSUMER"
+        and relation.target_module == _WS01C_VALIDATOR_MODULE
+        for relation in relations
+    )
+    assert not any(
+        relation.category.value == "INTERNAL_IMPLEMENTATION_EDGE"
+        and relation.target_module == _WS01C_VALIDATOR_MODULE
+        for relation in relations
+    )
+
+
+def test_ws01d_report_reader_remains_visible_alongside_internal_edge(
+    tmp_path: Path,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01d_internal_edge(
+        root,
+        publisher_source=(
+            "from investment_orchestrator.observability import (\n"
+            "    weekly_shadow_01_response_validator as _response_validator,\n"
+            ")\n"
+            "from pathlib import Path\n"
+            "VALIDATOR = _response_validator.validate_analyst_response\n"
+            "REPORT = Path('artifacts/target_architecture/report_only/ltetf_01/"
+            "reports/report.json').read_text()\n"
+        ),
+    )
+    inventory = gap._scan_production_inventory(root)
+    assert inventory.report_artifact_readers == (_WS01D_PUBLISHER_PATH,)
+    assert _WS01D_PUBLISHER_PATH not in inventory.observer_external_consumers
+    _assert_synthetic_ws01d_edge_is_internal(root)
+    with pytest.raises(
+        gap.ObserverIntegrityError,
+        match="CONSUMER_INVENTORY_INCOMPLETE",
+    ):
+        gap.build_gap_report(root)
+
+
+@pytest.mark.parametrize(
+    "consumer_path",
+    (
+        "src/investment_orchestrator/workflow/ws01d_consumer.py",
+        "src/investment_orchestrator/state/ws01d_consumer.py",
+        "src/investment_orchestrator/permissions/ws01d_consumer.py",
+        "src/investment_orchestrator/gates/ws01d_consumer.py",
+        "src/investment_orchestrator/state/final_safety_ws01d_consumer.py",
+        "src/investment_orchestrator/workflow/step4_ws01d_compiler.py",
+        "src/investment_orchestrator/orders/ws01d_consumer.py",
+        "src/investment_orchestrator/broker/ws01d_consumer.py",
+        "src/investment_orchestrator/execution/ws01d_consumer.py",
+        "src/investment_orchestrator/observability/"
+        "weekly_shadow_01_publisher_consumer.py",
+        "src/investment_orchestrator/cli/ws01d_consumer.py",
+        "src/investment_orchestrator/llm/ws01d_consumer.py",
+    ),
+    ids=(
+        "workflow",
+        "state",
+        "permission",
+        "gate",
+        "final-safety",
+        "compiler",
+        "order",
+        "broker",
+        "execution",
+        "publisher-consumer",
+        "cli",
+        "model",
+    ),
+)
+def test_ws01d_production_consumers_remain_visible(
+    tmp_path: Path,
+    consumer_path: str,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01d_internal_edge(root)
+    _write(
+        root,
+        consumer_path,
+        "from investment_orchestrator.observability import (\n"
+        "    weekly_shadow_01_report_publisher as _report_publisher,\n"
+        ")\n"
+        "BOUND = _report_publisher.publish_report\n",
+    )
+    inventory = gap._scan_production_inventory(root)
+    assert _WS01D_PUBLISHER_PATH not in inventory.observer_external_consumers
+    assert consumer_path in inventory.observer_external_consumers
+
+
+def test_ws01d_weekly_model_capability_marker_remains_visible(
+    tmp_path: Path,
+) -> None:
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01d_internal_edge(root)
+    weekly_path = "src/investment_orchestrator/workflow/weekly_orchestrator.py"
+    _write(
+        root,
+        weekly_path,
+        "import openai\n"
+        "from investment_orchestrator.observability import (\n"
+        "    weekly_shadow_01_report_publisher as _report_publisher,\n"
+        ")\n"
+        "BOUND = _report_publisher.publish_report\n",
+    )
+    inventory = gap._scan_production_inventory(root)
+    assert weekly_path in inventory.observer_external_consumers
+    assert inventory.weekly_llm_invocation_markers == (
+        f"{weekly_path}:openai",
+    )
 
 
 @pytest.mark.parametrize(
