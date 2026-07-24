@@ -31,6 +31,7 @@ if _TYPE_CHECKING:
     from typing import Any, Mapping
 
 
+_CONCRETE_PATH_TYPE = type(_Path())
 _BUILDER_FAILURE_TYPE = _package_builder._PackageBuilderFailure
 _ADAPTER_FAILURE_TYPE = _package_builder._ADAPTER_FAILURE_TYPE
 _PACKAGE_TYPE = _package_builder._AnalystInputPackage
@@ -46,6 +47,14 @@ _DEEP_THAW = _package_builder._deep_thaw
 _RESPONSE_SCHEMA_VERSION = "weekly_shadow_01_analyst_response_v2"
 _CAPTURE_SCHEMA_VERSION = "weekly_shadow_01_response_capture_v2"
 _VALIDATION_SCHEMA_VERSION = "weekly_shadow_01_response_validation_v1"
+_ANALYST_REPORT_SCHEMA_VERSION = "weekly_shadow_01_analyst_report_v1"
+_RUN_SUMMARY_SCHEMA_VERSION = "weekly_shadow_01_run_summary_v1"
+_VALIDATED_ANALYST_CONTENT_FIELDS = (
+    "analyst_conclusion",
+    "analyst_confidence",
+    "analytical_sections",
+    "analyst_limitation_codes",
+)
 _RESPONSE_SCHEMA_VERSIONS = (
     _RESPONSE_SCHEMA_VERSION,
     _CAPTURE_SCHEMA_VERSION,
@@ -73,6 +82,32 @@ _EXPECTED_SCHEMA_ROWS = (
         "2990ad8fc4f22de8b21691f54b3a967aed66e733078bd75ea74bc1330ee02f02",
         "3a41c1b6149aaa471d3dd94bd007b74cfcddbbdd97790bf00c7cdebd9b5000d5",
     ),
+)
+_EXPECTED_DOWNSTREAM_SCHEMA_ROWS = (
+    *_EXPECTED_SCHEMA_ROWS,
+    (
+        _ANALYST_REPORT_SCHEMA_VERSION,
+        "schemas/weekly_shadow_01_analyst_report.schema.json",
+        "1791f934d59607a70df55c80df31d6cbc2e897c86879ab5bf6e24772167a3c53",
+        "7b415fa8eb7cb4ecce92ddf06eb394574f7d1435dd840657396dd2eeb0f4feb8",
+        "195112bf9087b1f63f680c93a77d41487e4bceae4564a621c55c15b6cb684014",
+    ),
+    (
+        _RUN_SUMMARY_SCHEMA_VERSION,
+        "schemas/weekly_shadow_01_run_summary.schema.json",
+        "35fca249f89ecc5294f57daf3577d53158042c2b239163f8794e5d1ba15502b9",
+        "114e92f0d151bba7266a651172cd7dac01f9652a4c6fe47557582b10dcf706a7",
+        "88bc37d815c348fa0791c51fbdc660f2527c2d9975a01ab2bde2b9853c2a99b3",
+    ),
+)
+_EXPECTED_COMPLETE_SCHEMA_VERSIONS = frozenset(
+    {
+        "weekly_shadow_01_analyst_input_v2",
+        *(
+            row[0]
+            for row in _EXPECTED_DOWNSTREAM_SCHEMA_ROWS
+        ),
+    }
 )
 _EXPECTED_RESOURCE_BOUND_ROWS = (
     ("source_artifact_count", 4),
@@ -167,6 +202,9 @@ _EXPECTED_NORMALIZATION_STEPS = (
 )
 _EXPECTED_CATALOG_IDENTITY = (
     "36a0f850a089c3276c62dfe677ebfbce1ee9d1289e0487c3aad358db6cb556d4"
+)
+_EXPECTED_CONTRACT_MODULE_SHA256 = (
+    "cc6659754275991a5d244aec8f26f725dc74d339be766cdf7694e97e6f19792a"
 )
 _CONTRACT_CATALOG_FIELD = b"contract_catalog_identity_sha256".decode("ascii")
 _EXPECTED_RESOURCE_IDENTITY = (
@@ -281,11 +319,111 @@ class _ValidatedAnalystResponse:
         raise TypeError("validated responses are created only by private factories")
 
 
+@_dataclass(frozen=True, slots=True, init=False, repr=False)
+class _AuthenticatedArtifactContract:
+    """One frozen schema/semantic/identity contract for downstream use."""
+
+    schema_version: str
+    schema: "Mapping[str, Any]"
+    schema_identity_sha256: str
+    semantic_contract: "Mapping[str, Any]"
+    semantic_contract_identity_sha256: str
+    identity_domain: bytes
+    maximum_canonical_bytes: int
+
+    def __new__(
+        cls, *_args: object, **_kwargs: object
+    ) -> "_AuthenticatedArtifactContract":
+        raise TypeError("artifact contracts are created only by private factories")
+
+
+@_dataclass(frozen=True, slots=True, init=False, repr=False)
+class _WS01cDownstreamContext:
+    """Minimum immutable report inputs reconstructed for one future call."""
+
+    # weekly_shadow_01_analyst_report_v1: run_id
+    # weekly_shadow_01_run_summary_v1: run_id
+    run_id: str
+    # weekly_shadow_01_analyst_report_v1: input_package_identity_sha256
+    input_package_identity_sha256: str
+    # weekly_shadow_01_analyst_report_v1: response_capture_identity_sha256
+    response_capture_identity_sha256: str
+    # weekly_shadow_01_analyst_report_v1: validation_identity_sha256
+    validation_identity_sha256: str
+    # weekly_shadow_01_analyst_report_v1: validated_analyst_content
+    validated_analyst_content: "Mapping[str, Any]"
+    # Exact schema, semantic record, domain, and bound needed to construct and
+    # validate weekly_shadow_01_analyst_report_v1.
+    analyst_report_contract: _AuthenticatedArtifactContract
+    # Exact schema, semantic record, domain, and bound needed to construct and
+    # validate weekly_shadow_01_run_summary_v1.
+    run_summary_contract: _AuthenticatedArtifactContract
+    # Both output schemas: negative_authority_profile.
+    negative_authority_profile: "Mapping[str, Any]"
+    # Both semantic contracts: required_profile_identities_sha256.
+    negative_authority_profile_identity_sha256: str
+
+    def __new__(
+        cls, *_args: object, **_kwargs: object
+    ) -> "_WS01cDownstreamContext":
+        raise TypeError("downstream contexts are created only by private factories")
+
+    def __reduce__(self) -> object:
+        raise TypeError("downstream contexts are not serializable")
+
+    def __reduce_ex__(self, _protocol: int) -> object:
+        raise TypeError("downstream contexts are not serializable")
+
+
+@_dataclass(frozen=True, slots=True, init=False, repr=False)
+class _WS01cCoreProjections:
+    """Ephemeral public/downstream projections from one validation pipeline."""
+
+    validated_analyst_response: _ValidatedAnalystResponse
+    downstream_context: _WS01cDownstreamContext
+
+    def __new__(
+        cls, *_args: object, **_kwargs: object
+    ) -> "_WS01cCoreProjections":
+        raise TypeError("core projections are created only by private factories")
+
+
+@_dataclass(frozen=True, slots=True, init=False, repr=False)
+class _WS01cCoreResult:
+    """Private reason-only envelope around one ephemeral core projection pair."""
+
+    ok: bool
+    value: _WS01cCoreProjections | None
+    reason_code: str | None
+
+    def __new__(
+        cls, *_args: object, **_kwargs: object
+    ) -> "_WS01cCoreResult":
+        raise TypeError("core results are created only by private factories")
+
+
+@_dataclass(frozen=True, slots=True, init=False)
+class _WS01cDownstreamResult:
+    """Closed private success/failure envelope for the future publisher."""
+
+    ok: bool
+    value: _WS01cDownstreamContext | None
+    reason_code: str | None
+
+    def __new__(
+        cls, *_args: object, **_kwargs: object
+    ) -> "_WS01cDownstreamResult":
+        raise TypeError("downstream results are created only by private factories")
+
+
 @_dataclass(frozen=True, slots=True, init=False)
 class _AuthenticatedResponseContracts:
     """Response schemas and profiles bound to one sealed WS01 surface."""
 
     schemas: "Mapping[str, Any]"
+    semantic_contracts: "Mapping[str, Any]"
+    schema_identities: "Mapping[str, str]"
+    semantic_contract_identities: "Mapping[str, str]"
     resource_profile: "Mapping[str, Any]"
     negative_authority: "Mapping[str, Any]"
     prohibited_key_terms: tuple[str, ...]
@@ -356,6 +494,54 @@ def _result_success(value: object) -> _WS01cResult:
     return result
 
 
+def _core_result_failure(reason_code: object) -> _WS01cCoreResult:
+    code = (
+        reason_code
+        if type(reason_code) is str and reason_code in _BLOCKING_REASON_CODES
+        else "WS01_BR_INTERNAL_INVARIANT_FAILURE"
+    )
+    result = object.__new__(_WS01cCoreResult)
+    object.__setattr__(result, "ok", False)
+    object.__setattr__(result, "value", None)
+    object.__setattr__(result, "reason_code", code)
+    return result
+
+
+def _core_result_success(value: object) -> _WS01cCoreResult:
+    if type(value) is not _WS01cCoreProjections:
+        return _core_result_failure("WS01_BR_INTERNAL_INVARIANT_FAILURE")
+    result = object.__new__(_WS01cCoreResult)
+    object.__setattr__(result, "ok", True)
+    object.__setattr__(result, "value", value)
+    object.__setattr__(result, "reason_code", None)
+    return result
+
+
+def _downstream_result_failure(reason_code: object) -> _WS01cDownstreamResult:
+    code = (
+        reason_code
+        if type(reason_code) is str and reason_code in _BLOCKING_REASON_CODES
+        else "WS01_BR_INTERNAL_INVARIANT_FAILURE"
+    )
+    result = object.__new__(_WS01cDownstreamResult)
+    object.__setattr__(result, "ok", False)
+    object.__setattr__(result, "value", None)
+    object.__setattr__(result, "reason_code", code)
+    return result
+
+
+def _downstream_result_success(
+    value: object,
+) -> _WS01cDownstreamResult:
+    if type(value) is not _WS01cDownstreamContext:
+        return _downstream_result_failure("WS01_BR_INTERNAL_INVARIANT_FAILURE")
+    result = object.__new__(_WS01cDownstreamResult)
+    object.__setattr__(result, "ok", True)
+    object.__setattr__(result, "value", value)
+    object.__setattr__(result, "reason_code", None)
+    return result
+
+
 def validate_analyst_response(
     generation_id: str,
     *,
@@ -363,14 +549,60 @@ def validate_analyst_response(
     repository_root: "str | PathLike[str] | None" = None,
 ) -> _WS01cResult:
     """Validate exact untrusted response bytes against one rebuilt grounding run."""
-    result: _ValidatedAnalystResponse | None = None
-    reason_code: str | None = None
     try:
         normalized_root = _repository_root(repository_root)
-        result = _validate_from_source_selection(
+    except _WS01cFailure as failure:
+        return _result_failure(failure.code)
+    except Exception:
+        return _result_failure("WS01_BR_INTERNAL_INVARIANT_FAILURE")
+    core = _validate_analyst_response_core(
+        generation_id,
+        raw_response_bytes=raw_response_bytes,
+        repository_root=normalized_root,
+    )
+    if not core.ok:
+        return _result_failure(core.reason_code)
+    projections = core.value
+    if type(projections) is not _WS01cCoreProjections:
+        return _result_failure("WS01_BR_INTERNAL_INVARIANT_FAILURE")
+    return _result_success(projections.validated_analyst_response)
+
+
+def _validate_analyst_response_for_downstream(
+    generation_id: str,
+    *,
+    raw_response_bytes: bytes,
+    repository_root: _Path,
+) -> _WS01cDownstreamResult:
+    """Reconstruct one private authenticated context from primitive inputs."""
+    core = _validate_analyst_response_core(
+        generation_id,
+        raw_response_bytes=raw_response_bytes,
+        repository_root=repository_root,
+    )
+    if not core.ok:
+        return _downstream_result_failure(core.reason_code)
+    projections = core.value
+    if type(projections) is not _WS01cCoreProjections:
+        return _downstream_result_failure("WS01_BR_INTERNAL_INVARIANT_FAILURE")
+    return _downstream_result_success(projections.downstream_context)
+
+
+def _validate_analyst_response_core(
+    generation_id: str,
+    *,
+    raw_response_bytes: bytes,
+    repository_root: _Path,
+) -> _WS01cCoreResult:
+    """Run one pipeline and retain both projections only on this call stack."""
+    projections: _WS01cCoreProjections | None = None
+    reason_code: str | None = None
+    try:
+        _require_normalized_repository_root(repository_root)
+        projections = _validate_from_source_selection(
             generation_id,
             raw_response_bytes=raw_response_bytes,
-            repository_root=normalized_root,
+            repository_root=repository_root,
         )
     except _ADAPTER_FAILURE_TYPE as failure:
         reason_code = failure.code
@@ -381,10 +613,10 @@ def validate_analyst_response(
     except Exception:
         reason_code = "WS01_BR_INTERNAL_INVARIANT_FAILURE"
     if reason_code is not None:
-        return _result_failure(reason_code)
-    if result is None:
-        return _result_failure("WS01_BR_INTERNAL_INVARIANT_FAILURE")
-    return _result_success(result)
+        return _core_result_failure(reason_code)
+    if projections is None:
+        return _core_result_failure("WS01_BR_INTERNAL_INVARIANT_FAILURE")
+    return _core_result_success(projections)
 
 
 def _validate_from_source_selection(
@@ -392,7 +624,7 @@ def _validate_from_source_selection(
     *,
     raw_response_bytes: bytes,
     repository_root: _Path,
-) -> _ValidatedAnalystResponse:
+) -> _WS01cCoreProjections:
     package = _BUILD_PACKAGE_FROM_SOURCE_SELECTION(
         generation_id,
         repository_root=repository_root,
@@ -443,13 +675,31 @@ def _validate_from_source_selection(
         capture=capture,
         contracts=contracts,
     )
-    return _new_validated_response(
+    validated_response = _new_validated_response(
         response=response,
         capture=capture,
         capture_canonical=capture_canonical,
         validation=validation,
         validation_canonical=validation_canonical,
     )
+    downstream_context = _new_downstream_context(
+        response=response,
+        capture=capture,
+        validation=validation,
+        contracts=contracts,
+    )
+    projections = object.__new__(_WS01cCoreProjections)
+    object.__setattr__(
+        projections,
+        "validated_analyst_response",
+        validated_response,
+    )
+    object.__setattr__(
+        projections,
+        "downstream_context",
+        downstream_context,
+    )
+    return projections
 
 
 def _new_validated_response(
@@ -487,6 +737,151 @@ def _new_validated_response(
     return value
 
 
+def _new_downstream_context(
+    *,
+    response: object,
+    capture: object,
+    validation: object,
+    contracts: object,
+) -> _WS01cDownstreamContext:
+    if (
+        type(response) is not dict
+        or type(capture) is not dict
+        or type(validation) is not dict
+        or type(contracts) is not _AuthenticatedResponseContracts
+    ):
+        _fail("WS01_BR_INTERNAL_INVARIANT_FAILURE")
+    run_id = response.get("run_id")
+    package_identity = response.get("input_package_identity_sha256")
+    capture_identity = capture.get("response_capture_identity_sha256")
+    validation_identity = validation.get("validation_identity_sha256")
+    if (
+        type(run_id) is not str
+        or type(package_identity) is not str
+        or not _sha256_string(capture_identity)
+        or not _sha256_string(validation_identity)
+        or capture.get("run_id") != run_id
+        or validation.get("run_id") != run_id
+        or capture.get("input_package_identity_sha256") != package_identity
+        or validation.get("input_package_identity_sha256") != package_identity
+        or validation.get("response_capture_identity_sha256") != capture_identity
+    ):
+        _fail("WS01_BR_INTERNAL_INVARIANT_FAILURE")
+    try:
+        validated_analyst_content = {
+            field: response[field]
+            for field in _VALIDATED_ANALYST_CONTENT_FIELDS
+        }
+    except KeyError:
+        _fail("WS01_BR_INTERNAL_INVARIANT_FAILURE")
+    report_contract = _new_artifact_contract(
+        contracts=contracts,
+        schema_version=_ANALYST_REPORT_SCHEMA_VERSION,
+        identity_domain_name="report",
+        maximum_profile_name="analyst_report_max_bytes",
+    )
+    run_summary_contract = _new_artifact_contract(
+        contracts=contracts,
+        schema_version=_RUN_SUMMARY_SCHEMA_VERSION,
+        identity_domain_name="run_summary",
+        maximum_profile_name="run_summary_max_bytes",
+    )
+    context = object.__new__(_WS01cDownstreamContext)
+    object.__setattr__(context, "run_id", run_id)
+    object.__setattr__(
+        context,
+        "input_package_identity_sha256",
+        package_identity,
+    )
+    object.__setattr__(
+        context,
+        "response_capture_identity_sha256",
+        capture_identity,
+    )
+    object.__setattr__(
+        context,
+        "validation_identity_sha256",
+        validation_identity,
+    )
+    object.__setattr__(
+        context,
+        "validated_analyst_content",
+        _deep_freeze(validated_analyst_content),
+    )
+    object.__setattr__(
+        context,
+        "analyst_report_contract",
+        report_contract,
+    )
+    object.__setattr__(
+        context,
+        "run_summary_contract",
+        run_summary_contract,
+    )
+    object.__setattr__(
+        context,
+        "negative_authority_profile",
+        contracts.negative_authority,
+    )
+    object.__setattr__(
+        context,
+        "negative_authority_profile_identity_sha256",
+        _EXPECTED_NEGATIVE_AUTHORITY_IDENTITY,
+    )
+    return context
+
+
+def _new_artifact_contract(
+    *,
+    contracts: _AuthenticatedResponseContracts,
+    schema_version: str,
+    identity_domain_name: str,
+    maximum_profile_name: str,
+) -> _AuthenticatedArtifactContract:
+    schema = contracts.schemas.get(schema_version)
+    semantic_contract = contracts.semantic_contracts.get(schema_version)
+    schema_identity = contracts.schema_identities.get(schema_version)
+    semantic_identity = contracts.semantic_contract_identities.get(schema_version)
+    identity_domain = contracts.domains.get(identity_domain_name)
+    maximum = contracts.resource_profile.get(maximum_profile_name)
+    if (
+        not isinstance(schema, _MappingProxyType)
+        or not isinstance(semantic_contract, _MappingProxyType)
+        or not _sha256_string(schema_identity)
+        or not _sha256_string(semantic_identity)
+        or type(identity_domain) is not bytes
+        or not identity_domain.endswith(b"\0")
+        or type(maximum) is not int
+        or maximum <= 0
+    ):
+        _fail("WS01_BR_INTERNAL_INVARIANT_FAILURE")
+    contract = object.__new__(_AuthenticatedArtifactContract)
+    object.__setattr__(contract, "schema_version", schema_version)
+    object.__setattr__(contract, "schema", schema)
+    object.__setattr__(
+        contract,
+        "schema_identity_sha256",
+        schema_identity,
+    )
+    object.__setattr__(
+        contract,
+        "semantic_contract",
+        semantic_contract,
+    )
+    object.__setattr__(
+        contract,
+        "semantic_contract_identity_sha256",
+        semantic_identity,
+    )
+    object.__setattr__(
+        contract,
+        "identity_domain",
+        bytes(identity_domain),
+    )
+    object.__setattr__(contract, "maximum_canonical_bytes", maximum)
+    return contract
+
+
 def _repository_root(value: "str | PathLike[str] | None") -> _Path:
     if value is None:
         root = _Path(__file__).parents[3]
@@ -500,6 +895,15 @@ def _repository_root(value: "str | PathLike[str] | None") -> _Path:
     ):
         _fail("WS01_BR_SOURCE_GENERATION_INVALID")
     return root
+
+
+def _require_normalized_repository_root(value: object) -> None:
+    if (
+        type(value) is not _CONCRETE_PATH_TYPE
+        or not value.is_absolute()
+        or any(component in ("", ".", "..") for component in value.parts[1:])
+    ):
+        _fail("WS01_BR_SOURCE_GENERATION_INVALID")
 
 
 def _authenticate_response_contracts(
@@ -532,6 +936,8 @@ def _authenticate_response_contracts(
     expected_domain_rows = (
         ("response_capture", b"weekly_shadow_01_response_capture_v1\0"),
         ("validation", b"weekly_shadow_01_validation_v1\0"),
+        ("report", b"weekly_shadow_01_report_v1\0"),
+        ("run_summary", b"weekly_shadow_01_run_summary_v1\0"),
         ("schema_identity", b"weekly_shadow_01_schema_identity_v1\0"),
         (
             "semantic_contract_identity",
@@ -636,10 +1042,17 @@ def _authenticate_response_contracts(
     ):
         _fail("WS01_BR_INTERNAL_INVARIANT_FAILURE")
 
-    raw_schemas = _read_response_schemas_stably(
+    raw_schemas, contract_source = _read_response_schemas_stably(
         root,
         maximum_bytes=resource_profile["source_artifact_max_bytes"],
     )
+    if (
+        _hashlib.sha256(contract_source).hexdigest()
+        != _EXPECTED_CONTRACT_MODULE_SHA256
+        or complete.get("contract_module_sha256")
+        != _EXPECTED_CONTRACT_MODULE_SHA256
+    ):
+        _fail("WS01_BR_INTERNAL_INVARIANT_FAILURE")
     schema_files = complete.get("schema_filename_by_version")
     complete_raw_hashes = complete.get("schema_raw_sha256_by_version")
     complete_schema_identities = complete.get("schema_identity_sha256_by_version")
@@ -664,15 +1077,29 @@ def _authenticate_response_contracts(
         )
     ):
         _fail("WS01_BR_INTERNAL_INVARIANT_FAILURE")
+    if any(
+        set(item) != _EXPECTED_COMPLETE_SCHEMA_VERSIONS
+        for item in (
+            schema_files,
+            complete_raw_hashes,
+            complete_schema_identities,
+            runtime_schema_identities,
+            semantic_records,
+            complete_semantic_identities,
+            runtime_semantic_identities,
+        )
+    ):
+        _fail("WS01_BR_INTERNAL_INVARIANT_FAILURE")
 
     schemas: dict[str, dict[str, object]] = {}
+    semantic_contracts: dict[str, dict[str, object]] = {}
     for (
         version,
         relative_path,
         expected_raw_sha256,
         expected_schema_identity,
         expected_semantic_identity,
-    ) in _EXPECTED_SCHEMA_ROWS:
+    ) in _EXPECTED_DOWNSTREAM_SCHEMA_ROWS:
         raw = raw_schemas.get(version)
         if (
             type(raw) is not bytes
@@ -715,9 +1142,25 @@ def _authenticate_response_contracts(
             _fail("WS01_BR_INTERNAL_INVARIANT_FAILURE")
         _check_schema(schema)
         schemas[version] = schema
+        semantic_contracts[version] = semantic_record
 
     contracts = object.__new__(_AuthenticatedResponseContracts)
     object.__setattr__(contracts, "schemas", _deep_freeze(schemas))
+    object.__setattr__(
+        contracts,
+        "semantic_contracts",
+        _deep_freeze(semantic_contracts),
+    )
+    object.__setattr__(
+        contracts,
+        "schema_identities",
+        _deep_freeze(complete_schema_identities),
+    )
+    object.__setattr__(
+        contracts,
+        "semantic_contract_identities",
+        _deep_freeze(complete_semantic_identities),
+    )
     object.__setattr__(
         contracts,
         "resource_profile",
@@ -753,14 +1196,14 @@ def _read_response_schemas_stably(
     root: _Path,
     *,
     maximum_bytes: int,
-) -> dict[str, bytes]:
+) -> tuple[dict[str, bytes], bytes]:
     if type(maximum_bytes) is not int or maximum_bytes <= 0:
         _fail("WS01_BR_INTERNAL_INVARIANT_FAILURE")
     required_primitives = ("O_CLOEXEC", "O_DIRECTORY", "O_NOFOLLOW")
     if any(not hasattr(_os, name) for name in required_primitives):
         _fail("WS01_BR_INTERNAL_INVARIANT_FAILURE")
     owner = _DescriptorOwner()
-    result: dict[str, bytes] | None = None
+    result: tuple[dict[str, bytes], bytes] | None = None
     failure_code: str | None = None
     try:
         root_fd, chain = _open_absolute_directory_chain(root, owner=owner)
@@ -768,14 +1211,36 @@ def _read_response_schemas_stably(
         chain.append((root_fd, "schemas", schemas_fd))
         schemas_directory_identity = _directory_identity(_os.fstat(schemas_fd))
         first: dict[str, tuple[bytes, _RegularFileWitness]] = {}
-        for version, relative_path, *_ in _EXPECTED_SCHEMA_ROWS:
+        for version, relative_path, *_ in _EXPECTED_DOWNSTREAM_SCHEMA_ROWS:
             filename = relative_path.rsplit("/", 1)[-1]
             first[version] = _read_stable_regular_file_at(
                 schemas_fd,
                 filename,
                 maximum_bytes=maximum_bytes,
             )
-        for version, relative_path, *_ in _EXPECTED_SCHEMA_ROWS:
+        source_fd = _open_directory_at(root_fd, "src", owner=owner)
+        chain.append((root_fd, "src", source_fd))
+        package_fd = _open_directory_at(
+            source_fd,
+            "investment_orchestrator",
+            owner=owner,
+        )
+        chain.append((source_fd, "investment_orchestrator", package_fd))
+        observability_fd = _open_directory_at(
+            package_fd,
+            "observability",
+            owner=owner,
+        )
+        chain.append((package_fd, "observability", observability_fd))
+        observability_directory_identity = _directory_identity(
+            _os.fstat(observability_fd)
+        )
+        first_contract = _read_stable_regular_file_at(
+            observability_fd,
+            "weekly_shadow_01_contracts.py",
+            maximum_bytes=maximum_bytes,
+        )
+        for version, relative_path, *_ in _EXPECTED_DOWNSTREAM_SCHEMA_ROWS:
             filename = relative_path.rsplit("/", 1)[-1]
             current_bytes, current_witness = _read_stable_regular_file_at(
                 schemas_fd,
@@ -789,10 +1254,38 @@ def _read_response_schemas_stably(
                 != (accepted_witness.device, accepted_witness.inode)
             ):
                 _fail("WS01_BR_SOURCE_READ_UNSTABLE")
+        current_contract_bytes, current_contract_witness = (
+            _read_stable_regular_file_at(
+                observability_fd,
+                "weekly_shadow_01_contracts.py",
+                maximum_bytes=maximum_bytes,
+            )
+        )
+        accepted_contract_bytes, accepted_contract_witness = first_contract
+        if (
+            current_contract_bytes != accepted_contract_bytes
+            or (
+                current_contract_witness.device,
+                current_contract_witness.inode,
+            )
+            != (
+                accepted_contract_witness.device,
+                accepted_contract_witness.inode,
+            )
+        ):
+            _fail("WS01_BR_SOURCE_READ_UNSTABLE")
         if _directory_identity(_os.fstat(schemas_fd)) != schemas_directory_identity:
             _fail("WS01_BR_SOURCE_READ_UNSTABLE")
+        if (
+            _directory_identity(_os.fstat(observability_fd))
+            != observability_directory_identity
+        ):
+            _fail("WS01_BR_SOURCE_READ_UNSTABLE")
         _verify_directory_chain(chain)
-        result = {version: value[0] for version, value in first.items()}
+        result = (
+            {version: value[0] for version, value in first.items()},
+            accepted_contract_bytes,
+        )
     except _WS01cFailure as failure:
         failure_code = failure.code
     except Exception:
