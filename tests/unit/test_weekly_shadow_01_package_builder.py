@@ -1467,6 +1467,7 @@ def test_production_dependency_direction_and_no_runtime_consumer_imports() -> No
         "src/investment_orchestrator/observability/weekly_shadow_01_source_adapter.py",
         "src/investment_orchestrator/observability/weekly_shadow_01_package_builder.py",
         "src/investment_orchestrator/observability/weekly_shadow_01_response_validator.py",
+        "src/investment_orchestrator/observability/weekly_shadow_01_report_publisher.py",
     )
     sources: dict[str, gap._ParsedProductionSource] = {}
     for relative_path in relative_paths:
@@ -1495,9 +1496,13 @@ def test_production_dependency_direction_and_no_runtime_consumer_imports() -> No
     validator_module = (
         "investment_orchestrator.observability.weekly_shadow_01_response_validator"
     )
+    publisher_module = (
+        "investment_orchestrator.observability.weekly_shadow_01_report_publisher"
+    )
     adapter_tree = sources[adapter_module].tree
     builder_tree = sources[builder_module].tree
     validator_tree = sources[validator_module].tree
+    publisher_tree = sources[publisher_module].tree
     builder_imports = {
         alias.name
         for node in ast.walk(builder_tree)
@@ -1537,6 +1542,18 @@ def test_production_dependency_direction_and_no_runtime_consumer_imports() -> No
             (("weekly_shadow_01_package_builder", "_package_builder"),),
         )
     ]
+    publisher_module_bindings = [
+        (node.module, tuple((alias.name, alias.asname) for alias in node.names))
+        for node in publisher_tree.body
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "investment_orchestrator.observability"
+    ]
+    assert publisher_module_bindings == [
+        (
+            "investment_orchestrator.observability",
+            (("weekly_shadow_01_response_validator", "_response_validator"),),
+        )
+    ]
 
     def observer_relations(module_name: str) -> tuple[gap._ClassifiedConsumerRelation, ...]:
         return tuple(
@@ -1549,15 +1566,19 @@ def test_production_dependency_direction_and_no_runtime_consumer_imports() -> No
                 adapter_module,
                 builder_module,
                 validator_module,
+                publisher_module,
             }
         )
 
     builder_relations = observer_relations(builder_module)
     validator_relations = observer_relations(validator_module)
+    publisher_relations = observer_relations(publisher_module)
     assert len(builder_relations) == 1
     assert len(validator_relations) == 1
+    assert len(publisher_relations) == 1
     builder_relation = builder_relations[0]
     validator_relation = validator_relations[0]
+    publisher_relation = publisher_relations[0]
     assert (
         builder_relation.category
         is gap._ConsumerRelationCategory.INTERNAL_IMPLEMENTATION_EDGE
@@ -1582,6 +1603,18 @@ def test_production_dependency_direction_and_no_runtime_consumer_imports() -> No
     assert validator_relation.target_module == builder_module
     assert validator_relation.lineno > 0
     assert validator_relation.col_offset == 0
+    assert (
+        publisher_relation.category
+        is gap._ConsumerRelationCategory.INTERNAL_IMPLEMENTATION_EDGE
+    )
+    assert (
+        publisher_relation.importer_relative_path
+        == "src/investment_orchestrator/observability/weekly_shadow_01_report_publisher.py"
+    )
+    assert publisher_relation.importer_module == publisher_module
+    assert publisher_relation.target_module == validator_module
+    assert publisher_relation.lineno > 0
+    assert publisher_relation.col_offset == 0
     assert observer_relations(adapter_module) == ()
 
     inventory = gap._scan_production_inventory(root)

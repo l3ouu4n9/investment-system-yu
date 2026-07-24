@@ -687,15 +687,189 @@ def test_static_import_is_one_exact_builder_module_binding() -> None:
     assert "sys.modules" not in source
 
 
-def test_real_ltetf_inventory_and_absent_publisher_remain_exact() -> None:
+def test_real_ltetf_inventory_and_ws01d_phase_boundary_remain_exact() -> None:
     root = Path(__file__).parents[2]
-    publisher_paths = (
-        root
-        / "src/investment_orchestrator/observability"
-        / "weekly_shadow_01_report_publisher.py",
-        root / "tests/unit/test_weekly_shadow_01_report_publisher.py",
+    authorized_ws01d_paths = (
+        (
+            "src/investment_orchestrator/observability/"
+            "weekly_shadow_01_report_publisher.py",
+            root
+            / "src/investment_orchestrator/observability"
+            / "weekly_shadow_01_report_publisher.py",
+        ),
+        (
+            "tests/unit/test_weekly_shadow_01_report_publisher.py",
+            root / "tests/unit/test_weekly_shadow_01_report_publisher.py",
+        ),
     )
-    assert not any(path.exists() for path in publisher_paths)
+    assert tuple(
+        (relative_path, path.is_file())
+        for relative_path, path in authorized_ws01d_paths
+    ) == (
+        (
+            "src/investment_orchestrator/observability/"
+            "weekly_shadow_01_report_publisher.py",
+            True,
+        ),
+        ("tests/unit/test_weekly_shadow_01_report_publisher.py", True),
+    )
+    future_ws01e_paths = (
+        root
+        / "src/investment_orchestrator/cli/"
+        "weekly_shadow_01_report_publisher_cli.py",
+        root / "tests/unit/test_weekly_shadow_01_report_publisher_cli.py",
+    )
+    assert all(not path.exists() for path in future_ws01e_paths)
+
+    relative_paths = (
+        "src/investment_orchestrator/observability/"
+        "weekly_shadow_01_source_adapter.py",
+        "src/investment_orchestrator/observability/"
+        "weekly_shadow_01_package_builder.py",
+        "src/investment_orchestrator/observability/"
+        "weekly_shadow_01_response_validator.py",
+        "src/investment_orchestrator/observability/"
+        "weekly_shadow_01_report_publisher.py",
+    )
+    sources: dict[str, gap._ParsedProductionSource] = {}
+    for relative_path in relative_paths:
+        module_name = gap._module_name_for_path(relative_path)
+        tree = ast.parse(
+            (root / relative_path).read_text(encoding="utf-8"),
+            filename=relative_path,
+        )
+        imports, findings, dynamic_imports = gap._imports_in_tree(
+            tree,
+            module_name,
+        )
+        sources[module_name] = gap._ParsedProductionSource(
+            relative_path=relative_path,
+            module_name=module_name,
+            tree=tree,
+            imports=imports,
+            dynamic_imports=dynamic_imports,
+            findings=findings,
+            report_reader=False,
+            policy_reader=False,
+            broker_capabilities=(),
+        )
+    relations = {
+        (
+            relation.importer_module.rsplit(".", 1)[-1],
+            relation.target_module.rsplit(".", 1)[-1],
+            relation.category.value,
+        )
+        for source in sources.values()
+        for relation in gap._classify_consumer_relations(
+            source,
+            sources=sources,
+        )
+        if relation.target_module in sources
+    }
+    assert relations == {
+        (
+            "weekly_shadow_01_package_builder",
+            "weekly_shadow_01_source_adapter",
+            "INTERNAL_IMPLEMENTATION_EDGE",
+        ),
+        (
+            "weekly_shadow_01_response_validator",
+            "weekly_shadow_01_package_builder",
+            "INTERNAL_IMPLEMENTATION_EDGE",
+        ),
+        (
+            "weekly_shadow_01_report_publisher",
+            "weekly_shadow_01_response_validator",
+            "INTERNAL_IMPLEMENTATION_EDGE",
+        ),
+    }
+    publisher_source = sources[
+        "investment_orchestrator.observability.weekly_shadow_01_report_publisher"
+    ]
+    forbidden_publisher_import_prefixes = (
+        "investment_orchestrator.workflow",
+        "investment_orchestrator.state",
+        "investment_orchestrator.permissions",
+        "investment_orchestrator.orders",
+        "investment_orchestrator.broker",
+        "investment_orchestrator.llm",
+    )
+    assert not any(
+        imported.startswith(forbidden_publisher_import_prefixes)
+        for imported in publisher_source.imports
+    )
+    assert publisher_source.dynamic_imports == ()
+
+    publisher_module = (
+        "investment_orchestrator.observability."
+        "weekly_shadow_01_report_publisher"
+    )
+    publisher_importers: list[str] = []
+    publisher_call_sites: list[str] = []
+    for path in sorted((root / "src").rglob("*.py")):
+        relative_path = path.relative_to(root).as_posix()
+        if relative_path == authorized_ws01d_paths[0][0]:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=relative_path)
+        imported_publisher_names: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == publisher_module:
+                        publisher_importers.append(relative_path)
+                        imported_publisher_names.add(
+                            alias.asname or alias.name.rsplit(".", 1)[-1]
+                        )
+            elif isinstance(node, ast.ImportFrom):
+                if node.module == publisher_module:
+                    publisher_importers.append(relative_path)
+                    imported_publisher_names.update(
+                        alias.asname or alias.name for alias in node.names
+                    )
+                elif node.module == "investment_orchestrator.observability":
+                    for alias in node.names:
+                        if alias.name == "weekly_shadow_01_report_publisher":
+                            publisher_importers.append(relative_path)
+                            imported_publisher_names.add(
+                                alias.asname or alias.name
+                            )
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                if node.func.id == "publish_weekly_shadow_report":
+                    publisher_call_sites.append(relative_path)
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in imported_publisher_names
+                and node.func.attr == "publish_weekly_shadow_report"
+            ):
+                publisher_call_sites.append(relative_path)
+        if imported_publisher_names:
+            publisher_call_sites.extend(
+                relative_path
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in imported_publisher_names
+                and node.func.attr == "publish_weekly_shadow_report"
+            )
+    assert publisher_importers == []
+    assert publisher_call_sites == []
+
+    public_names = {
+        name for name in vars(validator) if not name.startswith("_")
+    }
+    public_signature = inspect.signature(validator.validate_analyst_response)
+    assert public_names == set(validator.__all__) == {"validate_analyst_response"}
+    assert tuple(public_signature.parameters) == (
+        "generation_id",
+        "raw_response_bytes",
+        "repository_root",
+    )
+    assert "downstream_context" not in public_signature.parameters
+    assert "_validate_analyst_response_for_downstream" not in validator.__all__
+
     inventory = gap._scan_production_inventory(root)
     assert inventory.observer_external_consumers == (
         "src/investment_orchestrator/cli/"
@@ -708,6 +882,15 @@ def test_real_ltetf_inventory_and_absent_publisher_remain_exact() -> None:
     assert inventory.p4a_runtime_consumers == ()
     assert inventory.broker_capability_imports == ()
     assert inventory.weekly_llm_invocation_markers == ()
+    assert all(
+        target
+        != (
+            "investment_orchestrator.observability."
+            "weekly_shadow_01_report_publisher:"
+            "publish_weekly_shadow_report"
+        )
+        for _, target in inventory.entry_points
+    )
 
 
 def test_valid_response_constructs_exact_immutable_capture_and_validation(

@@ -1594,11 +1594,80 @@ def test_declared_ws01d_edge_is_inert_without_publisher_source_occurrence(
     assert not (root / gap.REPORT_NAMESPACE_RELATIVE_PATH).exists()
 
 
-def test_declared_ws01d_edge_is_inert_in_current_real_inventory() -> None:
+def test_declared_ws01d_edge_is_current_in_real_inventory_without_consumers() -> None:
     root = repo_root()
-    assert not (root / _WS01D_PUBLISHER_PATH).exists()
+    assert (root / _WS01D_PUBLISHER_PATH).is_file()
     sources = _parsed_production_sources(root)
-    assert _WS01D_PUBLISHER_MODULE not in sources
+    assert _WS01D_PUBLISHER_MODULE in sources
+    ws01_modules = {
+        _WS01B_ADAPTER_MODULE,
+        _WS01B_BUILDER_MODULE,
+        _WS01C_VALIDATOR_MODULE,
+        _WS01D_PUBLISHER_MODULE,
+    }
+    ws01_relations = {
+        (
+            relation.importer_module,
+            relation.target_module,
+            relation.category.value,
+        )
+        for source in sources.values()
+        for relation in gap._classify_consumer_relations(source, sources=sources)
+        if relation.importer_module in ws01_modules
+        and relation.target_module in ws01_modules
+    }
+    assert ws01_relations == {
+        (
+            _WS01B_BUILDER_MODULE,
+            _WS01B_ADAPTER_MODULE,
+            "INTERNAL_IMPLEMENTATION_EDGE",
+        ),
+        (
+            _WS01C_VALIDATOR_MODULE,
+            _WS01B_BUILDER_MODULE,
+            "INTERNAL_IMPLEMENTATION_EDGE",
+        ),
+        (
+            _WS01D_PUBLISHER_MODULE,
+            _WS01C_VALIDATOR_MODULE,
+            "INTERNAL_IMPLEMENTATION_EDGE",
+        ),
+    }
+    publisher_consumers = {
+        relation.importer_relative_path
+        for source in sources.values()
+        for relation in gap._classify_consumer_relations(source, sources=sources)
+        if relation.target_module == _WS01D_PUBLISHER_MODULE
+        and relation.importer_module != _WS01D_PUBLISHER_MODULE
+    }
+    assert publisher_consumers == set()
+    publisher_callers = {
+        source.relative_path
+        for source in sources.values()
+        if source.module_name != _WS01D_PUBLISHER_MODULE
+        and any(
+            isinstance(node, ast.Call)
+            and (
+                (
+                    isinstance(node.func, ast.Name)
+                    and node.func.id == "publish_weekly_shadow_report"
+                )
+                or (
+                    isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "publish_weekly_shadow_report"
+                )
+            )
+            for node in ast.walk(source.tree)
+        )
+    }
+    assert publisher_callers == set()
+    future_ws01e_paths = (
+        root
+        / "src/investment_orchestrator/cli/"
+        "weekly_shadow_01_report_publisher_cli.py",
+        root / "tests/unit/test_weekly_shadow_01_report_publisher_cli.py",
+    )
+    assert all(not path.exists() for path in future_ws01e_paths)
     inventory = gap._scan_production_inventory(root)
     assert inventory.observer_external_consumers == (
         "src/investment_orchestrator/cli/observe_ltetf_target_architecture_gaps.py",
@@ -1610,6 +1679,7 @@ def test_declared_ws01d_edge_is_inert_in_current_real_inventory() -> None:
     assert inventory.p4a_runtime_consumers == ()
     assert inventory.broker_capability_imports == ()
     assert inventory.weekly_llm_invocation_markers == ()
+    assert inventory.entry_points == ()
     report = gap.build_gap_report(root)
     assert report["authority"] == gap.AUTHORITY_DECLARATION
 
