@@ -61,6 +61,27 @@ _WS01D_PUBLISHER_MODULE = (
     "investment_orchestrator.observability."
     "weekly_shadow_01_report_publisher"
 )
+_OBSERVER_CLI_PATH = (
+    "src/investment_orchestrator/cli/"
+    "observe_ltetf_target_architecture_gaps.py"
+)
+_WS01E_PUBLICATION_CLI_PATH = (
+    "src/investment_orchestrator/cli/"
+    "weekly_shadow_01_report_publisher_cli.py"
+)
+_WS01E_PUBLICATION_CLI_MODULE = (
+    "investment_orchestrator.cli."
+    "weekly_shadow_01_report_publisher_cli"
+)
+_WS01E_PUBLICATION_CLI_TEST_PATH = (
+    "tests/unit/test_weekly_shadow_01_report_publisher_cli.py"
+)
+_WS01E_STATIC_MODULE_BINDING_SOURCE = (
+    "from investment_orchestrator.observability import (\n"
+    "    weekly_shadow_01_report_publisher as _report_publisher,\n"
+    ")\n"
+    "BOUND = _report_publisher.publish_weekly_shadow_report\n"
+)
 
 
 def _write(root: Path, relative_path: str, content: str | bytes) -> Path:
@@ -206,6 +227,16 @@ def _install_synthetic_ws01d_internal_edge(
             "_response_validator.validate_analyst_response\n"
         ),
     )
+
+
+def _install_synthetic_ws01e_publication_cli(
+    root: Path,
+    *,
+    relative_path: str = _WS01E_PUBLICATION_CLI_PATH,
+    source: str = _WS01E_STATIC_MODULE_BINDING_SOURCE,
+) -> None:
+    """Install one synthetic future WS01e consumer without executing it."""
+    _write(root, relative_path, source)
 
 
 def _parsed_production_sources(
@@ -1682,6 +1713,548 @@ def test_declared_ws01d_edge_is_current_in_real_inventory_without_consumers() ->
     assert inventory.entry_points == ()
     report = gap.build_gap_report(root)
     assert report["authority"] == gap.AUTHORITY_DECLARATION
+
+
+def test_declared_ws01e_publication_cli_declaration_is_exact_and_closed() -> None:
+    """The future consumer is authorized by one exact path, nothing broader."""
+    assert (
+        gap._WS01E_PUBLICATION_CLI_RELATIVE_PATH == _WS01E_PUBLICATION_CLI_PATH
+    )
+    assert gap._OBSERVER_CLI_RELATIVE_PATH == _OBSERVER_CLI_PATH
+    assert gap._DECLARED_EXTERNAL_OBSERVER_CONSUMERS == frozenset(
+        {_OBSERVER_CLI_PATH, _WS01E_PUBLICATION_CLI_PATH}
+    )
+    assert gap._MANDATORY_EXTERNAL_OBSERVER_CONSUMERS == frozenset(
+        {_OBSERVER_CLI_PATH}
+    )
+    assert (
+        _WS01E_PUBLICATION_CLI_PATH
+        not in gap._MANDATORY_EXTERNAL_OBSERVER_CONSUMERS
+    )
+    for declared in gap._DECLARED_EXTERNAL_OBSERVER_CONSUMERS:
+        assert type(declared) is str
+        assert declared.startswith("src/investment_orchestrator/cli/")
+        assert declared.endswith(".py")
+        assert declared.count("/") == 3
+        assert not any(character in declared for character in "*?[]")
+    assert (
+        _WS01E_PUBLICATION_CLI_PATH not in gap._OBSERVER_INTERNAL_RELATIVE_PATHS
+    )
+    assert _WS01E_PUBLICATION_CLI_MODULE not in gap._declared_contract_modules()
+    assert not any(
+        _WS01E_PUBLICATION_CLI_MODULE in relation
+        for relation in gap._declared_internal_relations()
+    )
+
+
+def test_declared_ws01e_publication_cli_is_inert_in_real_repository() -> None:
+    """Declaring the future consumer creates no observed consumer today."""
+    root = repo_root()
+    assert not (root / _WS01E_PUBLICATION_CLI_PATH).exists()
+    assert not (root / _WS01E_PUBLICATION_CLI_TEST_PATH).exists()
+    inventory = gap._scan_production_inventory(root)
+    assert inventory.observer_external_consumers == (_OBSERVER_CLI_PATH,)
+    assert _WS01E_PUBLICATION_CLI_PATH not in inventory.production_paths
+    gap._validate_observer_inventory_isolation(inventory)
+    assert inventory.entry_points == ()
+    assert inventory.dynamic_findings == ()
+    assert inventory.report_artifact_readers == ()
+    assert inventory.policy_artifact_consumers == ()
+    assert inventory.prohibited_observer_capability_imports == ()
+    assert inventory.p4a_runtime_consumers == ()
+    assert inventory.broker_capability_imports == ()
+    assert inventory.weekly_llm_invocation_markers == ()
+    assert gap.build_gap_report(root)["authority"] == gap.AUTHORITY_DECLARATION
+    sources = _parsed_production_sources(root)
+    assert _WS01E_PUBLICATION_CLI_MODULE not in sources
+    assert {
+        source.relative_path
+        for source in sources.values()
+        if any(
+            isinstance(node, ast.Call)
+            and (
+                (
+                    isinstance(node.func, ast.Name)
+                    and node.func.id == "publish_weekly_shadow_report"
+                )
+                or (
+                    isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "publish_weekly_shadow_report"
+                )
+            )
+            for node in ast.walk(source.tree)
+        )
+    } == set()
+
+
+def test_exact_ws01e_occurrence_is_the_permitted_second_declared_consumer(
+    tmp_path: Path,
+) -> None:
+    """The exact declared path may become the second external consumer."""
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01d_internal_edge(root)
+    _install_synthetic_ws01e_publication_cli(root)
+    inventory = gap._scan_production_inventory(root)
+    assert inventory.observer_external_consumers == (
+        _OBSERVER_CLI_PATH,
+        _WS01E_PUBLICATION_CLI_PATH,
+    )
+    relations = _synthetic_module_relations(root, _WS01E_PUBLICATION_CLI_MODULE)
+    assert any(
+        relation.category
+        is gap._ConsumerRelationCategory.EXTERNAL_OBSERVER_CONSUMER
+        and relation.target_module == _WS01D_PUBLISHER_MODULE
+        for relation in relations
+    )
+    assert not any(
+        relation.category
+        is gap._ConsumerRelationCategory.INTERNAL_IMPLEMENTATION_EDGE
+        for relation in relations
+    )
+    gap._validate_observer_inventory_isolation(inventory)
+    assert gap.build_gap_report(root)["authority"] == gap.AUTHORITY_DECLARATION
+    _assert_synthetic_ws01b_edge_is_internal(root)
+    _assert_synthetic_ws01c_edge_is_internal(root)
+    _assert_synthetic_ws01d_edge_is_internal(root)
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    (
+        "src/investment_orchestrator/weekly_shadow_01_report_publisher_cli.py",
+        "src/investment_orchestrator/workflow/"
+        "weekly_shadow_01_report_publisher_cli.py",
+        "src/investment_orchestrator/observability/"
+        "weekly_shadow_01_report_publisher_cli.py",
+        "src/investment_orchestrator/cli/nested/"
+        "weekly_shadow_01_report_publisher_cli.py",
+    ),
+)
+def test_ws01e_declaration_rejects_the_same_basename_at_another_path(
+    tmp_path: Path,
+    relative_path: str,
+) -> None:
+    """Only the exact declared path is authorized; the basename never is."""
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01d_internal_edge(root)
+    _install_synthetic_ws01e_publication_cli(
+        root,
+        relative_path=relative_path,
+    )
+    inventory = gap._scan_production_inventory(root)
+    assert relative_path in inventory.observer_external_consumers
+    assert (
+        _WS01E_PUBLICATION_CLI_PATH
+        not in inventory.observer_external_consumers
+    )
+    with pytest.raises(
+        gap.ObserverIntegrityError,
+        match="CONSUMER_INVENTORY_INCOMPLETE",
+    ):
+        gap._validate_observer_inventory_isolation(inventory)
+    with pytest.raises(
+        gap.ObserverIntegrityError,
+        match="CONSUMER_INVENTORY_INCOMPLETE",
+    ):
+        gap.build_gap_report(root)
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    (
+        "src/investment_orchestrator/cli/publish_weekly_shadow_report_cli.py",
+        "src/investment_orchestrator/workflow/weekly_orchestrator.py",
+        "src/investment_orchestrator/state/publication_state_consumer.py",
+        "src/investment_orchestrator/state/permission_consumer.py",
+        "src/investment_orchestrator/research/availability_consumer.py",
+        "src/investment_orchestrator/validators/final_safety_consumer.py",
+        "src/investment_orchestrator/workflow/step4_order_compiler.py",
+        "src/investment_orchestrator/market/broker_consumer.py",
+        "src/investment_orchestrator/llm/model_provider_consumer.py",
+    ),
+)
+def test_undeclared_ws01d_consumer_remains_visible_and_fails_closed(
+    tmp_path: Path,
+    relative_path: str,
+) -> None:
+    """Undeclared consumers stay in the inventory and fail closed."""
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01d_internal_edge(root)
+    _install_synthetic_ws01e_publication_cli(
+        root,
+        relative_path=relative_path,
+    )
+    inventory = gap._scan_production_inventory(root)
+    assert relative_path in inventory.observer_external_consumers
+    with pytest.raises(
+        gap.ObserverIntegrityError,
+        match="CONSUMER_INVENTORY_INCOMPLETE",
+    ):
+        gap._validate_observer_inventory_isolation(inventory)
+    with pytest.raises(
+        gap.ObserverIntegrityError,
+        match="CONSUMER_INVENTORY_INCOMPLETE",
+    ):
+        gap.build_gap_report(root)
+
+
+def test_third_consumer_beside_declared_ws01e_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """A declared pair plus any third consumer is still rejected."""
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01d_internal_edge(root)
+    _install_synthetic_ws01e_publication_cli(root)
+    _install_synthetic_ws01e_publication_cli(
+        root,
+        relative_path=(
+            "src/investment_orchestrator/cli/extra_publication_consumer.py"
+        ),
+    )
+    inventory = gap._scan_production_inventory(root)
+    assert len(inventory.observer_external_consumers) == 3
+    assert _WS01E_PUBLICATION_CLI_PATH in inventory.observer_external_consumers
+    with pytest.raises(
+        gap.ObserverIntegrityError,
+        match="CONSUMER_INVENTORY_INCOMPLETE",
+    ):
+        gap._validate_observer_inventory_isolation(inventory)
+    with pytest.raises(
+        gap.ObserverIntegrityError,
+        match="CONSUMER_INVENTORY_INCOMPLETE",
+    ):
+        gap.build_gap_report(root)
+
+
+@pytest.mark.parametrize("with_declared_ws01e", (False, True))
+def test_missing_observer_cli_consumer_remains_rejected(
+    tmp_path: Path,
+    with_declared_ws01e: bool,
+) -> None:
+    """The LTETF observer CLI stays mandatory with or without WS01e."""
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01d_internal_edge(root)
+    if with_declared_ws01e:
+        _install_synthetic_ws01e_publication_cli(root)
+    (root / _OBSERVER_CLI_PATH).unlink()
+    inventory = gap._scan_production_inventory(root)
+    assert _OBSERVER_CLI_PATH not in inventory.observer_external_consumers
+    with pytest.raises(
+        gap.ObserverIntegrityError,
+        match="CONSUMER_INVENTORY_INCOMPLETE",
+    ):
+        gap._validate_observer_inventory_isolation(inventory)
+    with pytest.raises(
+        gap.ObserverIntegrityError,
+        match="CONSUMER_INVENTORY_INCOMPLETE",
+    ):
+        gap.build_gap_report(root)
+
+
+def test_declared_ws01e_authorized_shape_is_a_proven_static_module_binding(
+    tmp_path: Path,
+) -> None:
+    """Authorization needs path AND publisher target AND proven binding."""
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01d_internal_edge(root)
+    _install_synthetic_ws01e_publication_cli(root)
+    sources = _parsed_production_sources(root)
+    source = sources[_WS01E_PUBLICATION_CLI_MODULE]
+    assert gap._ws01e_publication_consumer_binding_is_authorized(
+        source,
+        sources=sources,
+    )
+    occurrences = tuple(
+        occurrence
+        for occurrence in gap._static_import_occurrences(source, sources=sources)
+        if gap._is_observer_relation_target(occurrence.target_module)
+    )
+    assert len(occurrences) == 1
+    occurrence = occurrences[0]
+    assert occurrence.target_module == _WS01D_PUBLISHER_MODULE
+    assert occurrence.binds_module_object is True
+    assert occurrence.binding_name is not None
+    assert isinstance(occurrence.statement, ast.ImportFrom)
+    assert occurrence.statement.module == "investment_orchestrator.observability"
+    assert occurrence.statement.level == 0
+    assert gap._module_binding_occurrence_has_proven_load(source, occurrence)
+    assert source.dynamic_imports == ()
+    assert source.findings == ()
+    inventory = gap._scan_production_inventory(root)
+    assert inventory.observer_external_consumers == (
+        _OBSERVER_CLI_PATH,
+        _WS01E_PUBLICATION_CLI_PATH,
+    )
+    gap._validate_observer_inventory_isolation(inventory)
+    assert gap.build_gap_report(root)["authority"] == gap.AUTHORITY_DECLARATION
+
+
+def test_declared_ws01e_path_alone_no_longer_authorizes_dynamic_publisher_load(
+    tmp_path: Path,
+) -> None:
+    """Permanent negative for the corrected path-only authorization defect."""
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01d_internal_edge(root)
+    _install_synthetic_ws01e_publication_cli(
+        root,
+        source=(
+            "import importlib\n"
+            "PUBLISHER = importlib.import_module(\n"
+            "    'investment_orchestrator.observability."
+            "weekly_shadow_01_report_publisher'\n"
+            ")\n"
+        ),
+    )
+    sources = _parsed_production_sources(root)
+    source = sources[_WS01E_PUBLICATION_CLI_MODULE]
+    assert source.dynamic_imports == (_WS01D_PUBLISHER_MODULE,)
+    assert any(
+        relation.category
+        is gap._ConsumerRelationCategory.EXTERNAL_OBSERVER_CONSUMER
+        and relation.target_module == _WS01D_PUBLISHER_MODULE
+        for relation in gap._classify_consumer_relations(source, sources=sources)
+    )
+    assert not gap._ws01e_publication_consumer_binding_is_authorized(
+        source,
+        sources=sources,
+    )
+    with pytest.raises(
+        gap.ObserverIntegrityError,
+        match="CONSUMER_INVENTORY_INCOMPLETE",
+    ):
+        gap._scan_production_inventory(root)
+    with pytest.raises(
+        gap.ObserverIntegrityError,
+        match="CONSUMER_INVENTORY_INCOMPLETE",
+    ):
+        gap.build_gap_report(root)
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "from investment_orchestrator.observability."
+        "weekly_shadow_01_report_publisher import (\n"
+        "    publish_weekly_shadow_report,\n"
+        ")\n"
+        "BOUND = publish_weekly_shadow_report\n",
+        "import importlib\n"
+        "PUBLISHER = importlib.import_module(\n"
+        "    'investment_orchestrator.observability."
+        "weekly_shadow_01_report_publisher'\n"
+        ")\n",
+        "import importlib\n"
+        "def target_leaf():\n"
+        "    return 'weekly_shadow_01_report_publisher'\n"
+        "MODULE = 'investment_orchestrator.observability.' + target_leaf()\n"
+        "PUBLISHER = importlib.import_module(MODULE)\n",
+        "from investment_orchestrator.observability import (\n"
+        "    weekly_shadow_01_report_publisher as _unused,\n"
+        ")\n",
+        "from investment_orchestrator.observability import (\n"
+        "    weekly_shadow_01_report_publisher as _publisher,\n"
+        ")\n"
+        "def render(_publisher):\n"
+        "    return _publisher.publish_weekly_shadow_report\n",
+        "from investment_orchestrator.observability import (\n"
+        "    weekly_shadow_01_report_publisher as _publisher,\n"
+        ")\n"
+        "_publisher = None\n"
+        "BOUND = _publisher\n",
+        "import investment_orchestrator.observability."
+        "weekly_shadow_01_report_publisher as _publisher\n"
+        "BOUND = _publisher.publish_weekly_shadow_report\n",
+        "import investment_orchestrator.observability as _observability\n"
+        "BOUND = _observability\n",
+        "from investment_orchestrator.observability import (\n"
+        "    weekly_shadow_01_response_validator as _validator,\n"
+        ")\n"
+        "BOUND = _validator.validate_analyst_response\n",
+        "from investment_orchestrator.observability import (\n"
+        "    weekly_shadow_01_response_validator as _validator,\n"
+        ")\n"
+        "BOUND = _validator\n",
+        _WS01E_STATIC_MODULE_BINDING_SOURCE
+        + "from investment_orchestrator.observability."
+        "weekly_shadow_01_report_publisher import (\n"
+        "    publish_weekly_shadow_report,\n"
+        ")\n"
+        "SECOND = publish_weekly_shadow_report\n",
+        _WS01E_STATIC_MODULE_BINDING_SOURCE
+        + "from investment_orchestrator.observability import (\n"
+        "    weekly_shadow_01_response_validator as _validator,\n"
+        ")\n"
+        "EXTRA = _validator.validate_analyst_response\n",
+    ),
+    ids=(
+        "direct-symbol",
+        "resolved-dynamic",
+        "unresolved-dynamic",
+        "unused-alias",
+        "shadowed-alias",
+        "rebound-alias",
+        "plain-module-import-not-package-relative",
+        "package-level-without-publisher-binding",
+        "different-observability-target",
+        "transitive-only-publisher-access",
+        "conflicting-module-and-symbol-bindings",
+        "additional-observability-dependency",
+    ),
+)
+def test_declared_ws01e_unauthorized_import_shape_fails_closed(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    """Only the one approved dependency shape may use the declared path."""
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01d_internal_edge(root)
+    _install_synthetic_ws01e_publication_cli(root, source=source)
+    sources = _parsed_production_sources(root)
+    assert not gap._ws01e_publication_consumer_binding_is_authorized(
+        sources[_WS01E_PUBLICATION_CLI_MODULE],
+        sources=sources,
+    )
+    with pytest.raises(
+        gap.ObserverIntegrityError,
+        match="CONSUMER_INVENTORY_INCOMPLETE",
+    ):
+        gap._scan_production_inventory(root)
+    with pytest.raises(
+        gap.ObserverIntegrityError,
+        match="CONSUMER_INVENTORY_INCOMPLETE",
+    ):
+        gap.build_gap_report(root)
+
+
+def test_declared_ws01e_rejects_substituted_publisher_module(
+    tmp_path: Path,
+) -> None:
+    """A similarly named substitute module is not the declared publisher."""
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01d_internal_edge(root)
+    _write(
+        root,
+        "src/investment_orchestrator/observability/"
+        "weekly_shadow_01_report_publisher_shim.py",
+        "PUBLISH = None\n",
+    )
+    _install_synthetic_ws01e_publication_cli(
+        root,
+        source=(
+            "from investment_orchestrator.observability import (\n"
+            "    weekly_shadow_01_report_publisher_shim as _publisher,\n"
+            ")\n"
+            "BOUND = _publisher.PUBLISH\n"
+        ),
+    )
+    sources = _parsed_production_sources(root)
+    assert not gap._ws01e_publication_consumer_binding_is_authorized(
+        sources[_WS01E_PUBLICATION_CLI_MODULE],
+        sources=sources,
+    )
+    with pytest.raises(
+        gap.ObserverIntegrityError,
+        match="CONSUMER_INVENTORY_INCOMPLETE",
+    ):
+        gap._scan_production_inventory(root)
+
+
+def test_declared_ws01e_rejects_absent_declared_publisher_target(
+    tmp_path: Path,
+) -> None:
+    """The publisher must exist at its declared relative path."""
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01d_internal_edge(root)
+    _install_synthetic_ws01e_publication_cli(root)
+    (root / _WS01D_PUBLISHER_PATH).unlink()
+    sources = _parsed_production_sources(root)
+    assert _WS01D_PUBLISHER_MODULE not in sources
+    assert not gap._ws01e_publication_consumer_binding_is_authorized(
+        sources[_WS01E_PUBLICATION_CLI_MODULE],
+        sources=sources,
+    )
+    with pytest.raises(
+        gap.ObserverIntegrityError,
+        match="CONSUMER_INVENTORY_INCOMPLETE",
+    ):
+        gap._scan_production_inventory(root)
+
+
+def test_ws01e_binding_contract_does_not_apply_to_the_observer_cli(
+    tmp_path: Path,
+) -> None:
+    """The WS01e-specific contract is per-consumer, not a broad rule."""
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01d_internal_edge(root)
+    sources = _parsed_production_sources(root)
+    observer_module = gap._module_name_for_path(_OBSERVER_CLI_PATH)
+    assert not gap._ws01e_publication_consumer_binding_is_authorized(
+        sources[observer_module],
+        sources=sources,
+    )
+    inventory = gap._scan_production_inventory(root)
+    assert inventory.observer_external_consumers == (_OBSERVER_CLI_PATH,)
+    gap._validate_observer_inventory_isolation(inventory)
+    assert gap.build_gap_report(root)["authority"] == gap.AUTHORITY_DECLARATION
+
+
+def test_declared_ws01e_unresolved_dynamic_import_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """An unresolved dynamic import is rejected even at the declared path."""
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01d_internal_edge(root)
+    _install_synthetic_ws01e_publication_cli(
+        root,
+        source=(
+            "import importlib\n"
+            "def target_leaf():\n"
+            "    return 'weekly_shadow_01_report_publisher'\n"
+            "MODULE = 'investment_orchestrator.observability.' + target_leaf()\n"
+            "PUBLISHER = importlib.import_module(MODULE)\n"
+        ),
+    )
+    relations = _synthetic_module_relations(root, _WS01E_PUBLICATION_CLI_MODULE)
+    assert any(
+        relation.category
+        is gap._ConsumerRelationCategory.UNRESOLVED_RELEVANT_CONSUMER
+        for relation in relations
+    )
+    with pytest.raises(
+        gap.ObserverIntegrityError,
+        match="CONSUMER_INVENTORY_INCOMPLETE",
+    ):
+        gap._scan_production_inventory(root)
+
+
+def test_declared_ws01e_receives_no_report_artifact_reader_exemption(
+    tmp_path: Path,
+) -> None:
+    """The declaration authorizes consumption only, never report reading."""
+    root = _minimal_observer_repository(tmp_path)
+    _install_synthetic_ws01d_internal_edge(root)
+    _install_synthetic_ws01e_publication_cli(
+        root,
+        source=(
+            _WS01E_STATIC_MODULE_BINDING_SOURCE
+            + "from pathlib import Path\n"
+            "REPORT = Path(\n"
+            f"    '{gap.REPORT_NAMESPACE_RELATIVE_PATH}/report.json'\n"
+            ").read_text()\n"
+        ),
+    )
+    inventory = gap._scan_production_inventory(root)
+    assert _WS01E_PUBLICATION_CLI_PATH in inventory.report_artifact_readers
+    with pytest.raises(
+        gap.ObserverIntegrityError,
+        match="CONSUMER_INVENTORY_INCOMPLETE",
+    ):
+        gap._validate_observer_inventory_isolation(inventory)
+    with pytest.raises(
+        gap.ObserverIntegrityError,
+        match="CONSUMER_INVENTORY_INCOMPLETE",
+    ):
+        gap.build_gap_report(root)
 
 
 def test_exact_declared_ws01_chain_is_internal_in_synthetic_clean_checkout(

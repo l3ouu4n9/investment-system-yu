@@ -136,6 +136,32 @@ _OBSERVER_INTERNAL_RELATIVE_PATHS: Final = frozenset(
 _OBSERVER_CLI_RELATIVE_PATH: Final = (
     "src/investment_orchestrator/cli/observe_ltetf_target_architecture_gaps.py"
 )
+# One exact, code-owned future operator CLI that may explicitly invoke the
+# WS01d public report-only publication API.  Authorization is by this exact
+# repository-relative path only: never by directory, package, prefix, suffix,
+# glob, basename, module class, or relation category.  The declaration stays
+# inert while the source is absent, so it creates no observed consumer here.
+_WS01E_PUBLICATION_CLI_RELATIVE_PATH: Final = (
+    "src/investment_orchestrator/cli/"
+    f"{_WS01D_REPORT_PUBLISHER_MODULE_LEAF}_cli.py"
+)
+_WS01D_REPORT_PUBLISHER_MODULE: Final = (
+    "investment_orchestrator.observability."
+    f"{_WS01D_REPORT_PUBLISHER_MODULE_LEAF}"
+)
+_OBSERVABILITY_PACKAGE_MODULE: Final = "investment_orchestrator.observability"
+# Closed declaration: every observed external observability consumer must be
+# one of these exact paths.  Membership is required, not sufficient -- the
+# mandatory set below must always be observed.
+_DECLARED_EXTERNAL_OBSERVER_CONSUMERS: Final = frozenset(
+    {
+        _OBSERVER_CLI_RELATIVE_PATH,
+        _WS01E_PUBLICATION_CLI_RELATIVE_PATH,
+    }
+)
+_MANDATORY_EXTERNAL_OBSERVER_CONSUMERS: Final = frozenset(
+    {_OBSERVER_CLI_RELATIVE_PATH}
+)
 _DECLARED_OBSERVER_CONTRACT_SUITES: Final = (
     _DeclaredObserverContractSuite(
         suite_id="ltetf_02a1_static_evidence_contract",
@@ -4123,6 +4149,59 @@ def _module_binding_occurrence_has_proven_load(
     return False
 
 
+def _ws01e_publication_consumer_binding_is_authorized(
+    source: _ParsedProductionSource,
+    *,
+    sources: Mapping[str, _ParsedProductionSource],
+) -> bool:
+    """Prove the single approved future WS01e -> WS01d dependency shape.
+
+    Exact path alone never authorizes the future publication consumer.  The
+    declared source is authorized only when it declares exactly one
+    observability dependency, that dependency is the exact WS01d publisher
+    module at its declared relative path, and the scanner proves the binding
+    is a used, unshadowed, unrebound static module-object binding.  Direct
+    symbol imports and every dynamic form are rejected.
+    """
+    if (
+        source.relative_path != _WS01E_PUBLICATION_CLI_RELATIVE_PATH
+        or source.module_name != _module_name_for_path(
+            _WS01E_PUBLICATION_CLI_RELATIVE_PATH
+        )
+        or source.dynamic_imports
+        or source.findings
+    ):
+        return False
+    declared_publisher = _declared_contract_modules().get(
+        _WS01D_REPORT_PUBLISHER_MODULE
+    )
+    actual_publisher = sources.get(_WS01D_REPORT_PUBLISHER_MODULE)
+    if (
+        declared_publisher is None
+        or actual_publisher is None
+        or actual_publisher.relative_path != declared_publisher.relative_path
+    ):
+        return False
+    observability_occurrences = tuple(
+        occurrence
+        for occurrence in _static_import_occurrences(source, sources=sources)
+        if _is_observer_relation_target(occurrence.target_module)
+    )
+    if len(observability_occurrences) != 1:
+        return False
+    occurrence = observability_occurrences[0]
+    statement = occurrence.statement
+    return bool(
+        occurrence.target_module == _WS01D_REPORT_PUBLISHER_MODULE
+        and occurrence.binds_module_object
+        and occurrence.binding_name is not None
+        and isinstance(statement, ast.ImportFrom)
+        and statement.level == 0
+        and statement.module == _OBSERVABILITY_PACKAGE_MODULE
+        and _module_binding_occurrence_has_proven_load(source, occurrence)
+    )
+
+
 def _classify_static_import_relations(
     source: _ParsedProductionSource,
     *,
@@ -4411,6 +4490,24 @@ def _scan_production_inventory(root: Path) -> ProductionInventory:
             if (is_internal or is_cli) and imported.startswith(prohibited_observer_prefixes):
                 prohibited_observer_imports.add(f"{relative}:{imported}")
         broker_imports.update(f"{relative}:{capability}" for capability in broker_capabilities)
+
+    # The exact declared future WS01e path authorizes one proven static
+    # module-object dependency on the WS01d publisher and nothing else.  The
+    # occurrence-level evidence only exists here, so the import-shape contract
+    # is enforced beside the existing dynamic-finding gate rather than in the
+    # inventory-membership validator.  Nothing is filtered: an unauthorized
+    # shape fails closed with the existing integrity error.
+    if _WS01E_PUBLICATION_CLI_RELATIVE_PATH in observer_consumers:
+        ws01e_source = parsed_sources.get(
+            _module_name_for_path(_WS01E_PUBLICATION_CLI_RELATIVE_PATH)
+        )
+        if ws01e_source is None or not (
+            _ws01e_publication_consumer_binding_is_authorized(
+                ws01e_source,
+                sources=parsed_sources,
+            )
+        ):
+            raise ObserverIntegrityError("CONSUMER_INVENTORY_INCOMPLETE")
 
     for locator, target in entry_points:
         module_target = target.split(":", 1)[0]
@@ -6099,10 +6196,23 @@ def repository_evidence_identity_sha256(evidence: RepositoryEvidence) -> str:
 
 
 def _validate_observer_inventory_isolation(inventory: ProductionInventory) -> None:
-    expected_cli = (_OBSERVER_CLI_RELATIVE_PATH,)
+    """Require every observed external consumer to be an exact declared path.
+
+    The declared set is closed and path-exact.  The LTETF observer CLI is
+    always mandatory; the declared future WS01e publication CLI is permitted
+    only at its exact path and only once its source actually exists, so the
+    declaration is inert before that source appears.  Undeclared consumers are
+    never filtered from the inventory -- they fail closed here instead.
+    """
+    observed = inventory.observer_external_consumers
     if (
-        inventory.dynamic_findings
-        or inventory.observer_external_consumers != expected_cli
+        type(observed) is not tuple
+        or any(type(entry) is not str or not entry for entry in observed)
+        or len(set(observed)) != len(observed)
+        or observed != tuple(sorted(observed))
+        or not _DECLARED_EXTERNAL_OBSERVER_CONSUMERS.issuperset(observed)
+        or not _MANDATORY_EXTERNAL_OBSERVER_CONSUMERS.issubset(observed)
+        or inventory.dynamic_findings
         or inventory.report_artifact_readers
         or inventory.prohibited_observer_capability_imports
     ):
