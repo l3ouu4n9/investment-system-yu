@@ -138,6 +138,21 @@ See the
 [Operator-Approved Anchor Grounding Runbook](docs/operator_approved_anchor_grounding_runbook.md)
 for source roles, approval workflow, fail-closed outcomes, and safety boundaries.
 
+## WEEKLY-SHADOW-01 Report-Only Publication
+
+WEEKLY-SHADOW-01 report-only artifacts are published by an explicit,
+operator-invoked command. It consumes only a raw-response file the operator
+obtained from an LLM by hand and saved unmodified; it performs no model
+interaction of its own. It publishes report-only artifacts and creates no
+investment or execution authority — no availability, freshness, permission,
+gate passage, order readiness, order, or broker effect. No orchestrator, weekly
+run, or downstream stage invokes it.
+
+See the
+[WEEKLY-SHADOW-01 Report-Only Publication Runbook](docs/weekly_shadow_01_report_publication_runbook.md)
+for the manual handoff boundary, the exact command, exit-code actions, and the
+publication-ambiguity stop rule.
+
 ## Run Status / Blocked-Run Summary
 
 When Step 1 / Deep Research produces no output, invalid research, or a
