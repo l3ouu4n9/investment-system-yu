@@ -713,13 +713,13 @@ def test_real_ltetf_inventory_and_ws01d_phase_boundary_remain_exact() -> None:
         ),
         ("tests/unit/test_weekly_shadow_01_report_publisher.py", True),
     )
-    future_ws01e_paths = (
+    realised_ws01e_paths = (
         root
         / "src/investment_orchestrator/cli/"
         "weekly_shadow_01_report_publisher_cli.py",
         root / "tests/unit/test_weekly_shadow_01_report_publisher_cli.py",
     )
-    assert all(not path.exists() for path in future_ws01e_paths)
+    assert all(path.is_file() for path in realised_ws01e_paths)
 
     relative_paths = (
         "src/investment_orchestrator/observability/"
@@ -854,8 +854,23 @@ def test_real_ltetf_inventory_and_ws01d_phase_boundary_remain_exact() -> None:
                 and node.func.value.id in imported_publisher_names
                 and node.func.attr == "publish_weekly_shadow_report"
             )
-    assert publisher_importers == []
-    assert publisher_call_sites == []
+    assert publisher_importers == [
+        "src/investment_orchestrator/cli/"
+        "weekly_shadow_01_report_publisher_cli.py",
+    ]
+    # The single WS01e attribute call is counted by both the inline pass and
+    # the post-loop pass of this scanner, so exactly one call site appears
+    # exactly twice.  Any additional distinct path would be a new consumer.
+    assert publisher_call_sites == [
+        "src/investment_orchestrator/cli/"
+        "weekly_shadow_01_report_publisher_cli.py",
+        "src/investment_orchestrator/cli/"
+        "weekly_shadow_01_report_publisher_cli.py",
+    ]
+    assert set(publisher_call_sites) == {
+        "src/investment_orchestrator/cli/"
+        "weekly_shadow_01_report_publisher_cli.py",
+    }
 
     public_names = {
         name for name in vars(validator) if not name.startswith("_")
@@ -874,6 +889,8 @@ def test_real_ltetf_inventory_and_ws01d_phase_boundary_remain_exact() -> None:
     assert inventory.observer_external_consumers == (
         "src/investment_orchestrator/cli/"
         "observe_ltetf_target_architecture_gaps.py",
+        "src/investment_orchestrator/cli/"
+        "weekly_shadow_01_report_publisher_cli.py",
     )
     assert inventory.dynamic_findings == ()
     assert inventory.report_artifact_readers == ()

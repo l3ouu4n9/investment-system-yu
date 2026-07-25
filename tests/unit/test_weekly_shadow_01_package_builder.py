@@ -1620,6 +1620,8 @@ def test_production_dependency_direction_and_no_runtime_consumer_imports() -> No
     inventory = gap._scan_production_inventory(root)
     assert inventory.observer_external_consumers == (
         "src/investment_orchestrator/cli/observe_ltetf_target_architecture_gaps.py",
+        "src/investment_orchestrator/cli/"
+        "weekly_shadow_01_report_publisher_cli.py",
     )
     assert inventory.dynamic_findings == ()
     assert inventory.report_artifact_readers == ()

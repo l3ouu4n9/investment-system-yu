@@ -814,6 +814,7 @@ def test_current_repository_report_is_complete_deterministic_and_report_only() -
     ) == tuple(check.check_id for check in CATALOG)
     assert evidence.inventory.observer_external_consumers == (
         "src/investment_orchestrator/cli/observe_ltetf_target_architecture_gaps.py",
+        _WS01E_PUBLICATION_CLI_PATH,
     )
     assert evidence.inventory.report_artifact_readers == ()
     assert evidence.inventory.prohibited_observer_capability_imports == ()
@@ -1671,7 +1672,7 @@ def test_declared_ws01d_edge_is_current_in_real_inventory_without_consumers() ->
         if relation.target_module == _WS01D_PUBLISHER_MODULE
         and relation.importer_module != _WS01D_PUBLISHER_MODULE
     }
-    assert publisher_consumers == set()
+    assert publisher_consumers == {_WS01E_PUBLICATION_CLI_PATH}
     publisher_callers = {
         source.relative_path
         for source in sources.values()
@@ -1691,17 +1692,16 @@ def test_declared_ws01d_edge_is_current_in_real_inventory_without_consumers() ->
             for node in ast.walk(source.tree)
         )
     }
-    assert publisher_callers == set()
-    future_ws01e_paths = (
-        root
-        / "src/investment_orchestrator/cli/"
-        "weekly_shadow_01_report_publisher_cli.py",
-        root / "tests/unit/test_weekly_shadow_01_report_publisher_cli.py",
+    assert publisher_callers == {_WS01E_PUBLICATION_CLI_PATH}
+    realised_ws01e_paths = (
+        root / _WS01E_PUBLICATION_CLI_PATH,
+        root / _WS01E_PUBLICATION_CLI_TEST_PATH,
     )
-    assert all(not path.exists() for path in future_ws01e_paths)
+    assert all(path.is_file() for path in realised_ws01e_paths)
     inventory = gap._scan_production_inventory(root)
     assert inventory.observer_external_consumers == (
         "src/investment_orchestrator/cli/observe_ltetf_target_architecture_gaps.py",
+        _WS01E_PUBLICATION_CLI_PATH,
     )
     assert inventory.dynamic_findings == ()
     assert inventory.report_artifact_readers == ()
@@ -1747,14 +1747,17 @@ def test_declared_ws01e_publication_cli_declaration_is_exact_and_closed() -> Non
     )
 
 
-def test_declared_ws01e_publication_cli_is_inert_in_real_repository() -> None:
-    """Declaring the future consumer creates no observed consumer today."""
+def test_declared_ws01e_publication_cli_is_realised_in_real_repository() -> None:
+    """The declared consumer is now present at exactly its declared path."""
     root = repo_root()
-    assert not (root / _WS01E_PUBLICATION_CLI_PATH).exists()
-    assert not (root / _WS01E_PUBLICATION_CLI_TEST_PATH).exists()
+    assert (root / _WS01E_PUBLICATION_CLI_PATH).is_file()
+    assert (root / _WS01E_PUBLICATION_CLI_TEST_PATH).is_file()
     inventory = gap._scan_production_inventory(root)
-    assert inventory.observer_external_consumers == (_OBSERVER_CLI_PATH,)
-    assert _WS01E_PUBLICATION_CLI_PATH not in inventory.production_paths
+    assert inventory.observer_external_consumers == (
+        _OBSERVER_CLI_PATH,
+        _WS01E_PUBLICATION_CLI_PATH,
+    )
+    assert _WS01E_PUBLICATION_CLI_PATH in inventory.production_paths
     gap._validate_observer_inventory_isolation(inventory)
     assert inventory.entry_points == ()
     assert inventory.dynamic_findings == ()
@@ -1766,7 +1769,11 @@ def test_declared_ws01e_publication_cli_is_inert_in_real_repository() -> None:
     assert inventory.weekly_llm_invocation_markers == ()
     assert gap.build_gap_report(root)["authority"] == gap.AUTHORITY_DECLARATION
     sources = _parsed_production_sources(root)
-    assert _WS01E_PUBLICATION_CLI_MODULE not in sources
+    assert _WS01E_PUBLICATION_CLI_MODULE in sources
+    assert gap._ws01e_publication_consumer_binding_is_authorized(
+        sources[_WS01E_PUBLICATION_CLI_MODULE],
+        sources=sources,
+    )
     assert {
         source.relative_path
         for source in sources.values()
@@ -1784,7 +1791,7 @@ def test_declared_ws01e_publication_cli_is_inert_in_real_repository() -> None:
             )
             for node in ast.walk(source.tree)
         )
-    } == set()
+    } == {_WS01E_PUBLICATION_CLI_PATH}
 
 
 def test_exact_ws01e_occurrence_is_the_permitted_second_declared_consumer(

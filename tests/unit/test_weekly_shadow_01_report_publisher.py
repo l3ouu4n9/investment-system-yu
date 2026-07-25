@@ -2068,6 +2068,8 @@ def test_real_ltetf_inventory_contains_exact_three_internal_edges() -> None:
     inventory = gap._scan_production_inventory(root)
     assert inventory.observer_external_consumers == (
         "src/investment_orchestrator/cli/observe_ltetf_target_architecture_gaps.py",
+        "src/investment_orchestrator/cli/"
+        "weekly_shadow_01_report_publisher_cli.py",
     )
     assert inventory.dynamic_findings == ()
     assert inventory.report_artifact_readers == ()
@@ -2102,7 +2104,10 @@ def test_no_production_consumer_pointer_cli_or_downstream_import_exists() -> Non
                 )
             ):
                 importers.append(path.relative_to(root).as_posix())
-    assert importers == []
+    assert importers == [
+        "src/investment_orchestrator/cli/"
+        "weekly_shadow_01_report_publisher_cli.py",
+    ]
     publisher_tree = ast.parse(
         Path(publisher.__file__).read_text(encoding="utf-8")
     )
