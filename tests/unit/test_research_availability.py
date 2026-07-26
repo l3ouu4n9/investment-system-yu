@@ -5,6 +5,11 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from investment_orchestrator.state.final_execution_safety_gate import (
+    evaluate_final_execution_safety,
+)
 from investment_orchestrator.state.last_good_research_handoff import (
     decision_relevant_settings,
     last_good_research_handoff_metadata_path,
@@ -21,6 +26,9 @@ from investment_orchestrator.state.research_availability import (
     research_availability_result_to_dict,
     research_degraded_mode_decision_to_dict,
     research_freshness_report_to_dict,
+)
+from investment_orchestrator.state.research_degraded_mode_gate import (
+    evaluate_step2_research_gate,
 )
 from investment_orchestrator.validators.validate_research_handoff import (
     ResearchHandoffValidationResult,
@@ -40,13 +48,17 @@ def read_json_fixture(name: str) -> dict[str, Any]:
 
 def settings(
     *,
-    core_universe: list[str] | None = None,
-    satellite_universe: list[str] | None = None,
+    core_universe: Any = None,
+    satellite_universe: Any = None,
     **extra: Any,
 ) -> dict[str, Any]:
     base = {
-        "core_universe": core_universe or ["QQQ", "VOO", "VTI", "VT"],
-        "satellite_universe": satellite_universe or ["SMH", "IGV"],
+        "core_universe": (
+            ["QQQ", "VOO", "VTI", "VT"] if core_universe is None else core_universe
+        ),
+        "satellite_universe": (
+            ["SMH", "IGV"] if satellite_universe is None else satellite_universe
+        ),
         "as_of": NOW,
     }
     base.update(extra)
@@ -79,7 +91,7 @@ def last_good_metadata(
     strategy_settings: dict[str, Any] | None = None,
     universe_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    strategy_settings = strategy_settings or settings()
+    strategy_settings = settings() if strategy_settings is None else strategy_settings
     universe = universe_override or {
         "core_universe": strategy_settings["core_universe"],
         "satellite_universe": strategy_settings["satellite_universe"],
@@ -122,6 +134,208 @@ def test_strict_stale_blocks_new_buy_but_allows_hold_no_trade_sell() -> None:
     assert result.state == "STRICT_STALE"
     assert result.allowed_actions == ["HOLD", "NO_TRADE", "SELL"]
     assert "NEW_BUY" in result.blocked_actions
+
+
+def test_missing_strategy_policy_cannot_produce_fresh_or_stale_authority() -> None:
+    candidate = valid_candidate()
+    validation = validate_research_handoff(candidate, strategy_settings=None)
+
+    assert validation.valid is False
+    assert any(
+        "strategy_settings are unavailable or unusable" in reason
+        for reason in validation.blocker_reasons
+    )
+
+    for source_as_of_date in (NOW, "2026-06-10"):
+        result = evaluate_research_availability(
+            candidate_validation=validation,
+            candidate=candidate,
+            strategy_settings=None,
+            source_as_of_date=source_as_of_date,
+            now_date=NOW,
+        )
+
+        assert result.state == "INVALID_CONTRACT"
+        assert result.state not in {"STRICT_FRESH", "STRICT_STALE"}
+        assert result.handoff_valid is False
+        assert result.fresh_research_available is False
+        assert result.allowed_actions == ["HOLD", "NO_TRADE"]
+        assert result.blocked_actions == [
+            "SELL",
+            "NEW_BUY",
+            "ROTATION",
+            "REBALANCE",
+            "EXTENDED_ETF_ADMISSION",
+            "ORDER_COMPILATION",
+        ]
+
+        decision = research_degraded_mode_decision_to_dict(result)
+        step2_gate = evaluate_step2_research_gate(decision)
+        assert step2_gate.allowed is False
+        assert step2_gate.order_compilation_allowed is False
+        assert step2_gate.new_buy_permission is False
+        assert step2_gate.step3_allowed is False
+        assert step2_gate.step4_allowed is False
+
+        final_gate = evaluate_final_execution_safety(
+            step1_permission=decision,
+            step2_decision_packet=None,
+            step3_audited_packet=None,
+        )
+        assert final_gate.ready_for_order_compilation is False
+        assert final_gate.blocked is True
+        assert final_gate.checked_conditions["step1_state_strict_fresh"] is False
+        assert final_gate.checked_conditions["order_compilation_allowed"] is False
+
+
+@pytest.mark.parametrize(
+    ("invalid_settings", "expected_blockers"),
+    [
+        pytest.param(
+            settings(core_universe=[]),
+            ["strategy_settings core_universe must be a non-empty list."],
+            id="empty-core",
+        ),
+        pytest.param(
+            settings(satellite_universe=[]),
+            ["strategy_settings satellite_universe must be a non-empty list."],
+            id="empty-satellite",
+        ),
+        pytest.param(
+            settings(core_universe=[], satellite_universe=[]),
+            [
+                "strategy_settings core_universe must be a non-empty list.",
+                "strategy_settings satellite_universe must be a non-empty list.",
+            ],
+            id="both-empty",
+        ),
+    ],
+)
+def test_empty_strategy_policy_cannot_produce_fresh_or_stale_authority(
+    invalid_settings: dict[str, Any],
+    expected_blockers: list[str],
+) -> None:
+    candidate = valid_candidate()
+    validation = validate_research_handoff(
+        candidate,
+        strategy_settings=invalid_settings,
+    )
+
+    assert validation.valid is False
+    for reason in expected_blockers:
+        assert reason in validation.blocker_reasons
+
+    for source_as_of_date in (NOW, "2026-06-10"):
+        result = evaluate_research_availability(
+            candidate_validation=validation,
+            candidate=candidate,
+            strategy_settings=invalid_settings,
+            source_as_of_date=source_as_of_date,
+            now_date=NOW,
+        )
+
+        assert result.state == "INVALID_CONTRACT"
+        assert result.state not in {"STRICT_FRESH", "STRICT_STALE"}
+        assert result.handoff_valid is False
+        assert result.fresh_research_available is False
+        assert result.allowed_actions == ["HOLD", "NO_TRADE"]
+        assert result.blocked_actions == [
+            "SELL",
+            "NEW_BUY",
+            "ROTATION",
+            "REBALANCE",
+            "EXTENDED_ETF_ADMISSION",
+            "ORDER_COMPILATION",
+        ]
+
+        decision = research_degraded_mode_decision_to_dict(result)
+        step2_gate = evaluate_step2_research_gate(decision)
+        assert step2_gate.allowed is False
+        assert step2_gate.order_compilation_allowed is False
+        assert step2_gate.new_buy_permission is False
+        assert step2_gate.step3_allowed is False
+        assert step2_gate.step4_allowed is False
+
+        final_gate = evaluate_final_execution_safety(
+            step1_permission=decision,
+            step2_decision_packet=None,
+            step3_audited_packet=None,
+        )
+        assert final_gate.ready_for_order_compilation is False
+        assert final_gate.blocked is True
+        assert final_gate.checked_conditions["step1_state_strict_fresh"] is False
+        assert final_gate.checked_conditions["order_compilation_allowed"] is False
+
+
+@pytest.mark.parametrize(
+    "invalid_settings",
+    [
+        pytest.param(None, id="missing-settings"),
+        pytest.param(settings(core_universe=[]), id="empty-core"),
+        pytest.param(settings(satellite_universe=[]), id="empty-satellite"),
+        pytest.param(
+            settings(core_universe=[], satellite_universe=[]),
+            id="both-empty",
+        ),
+    ],
+)
+def test_missing_or_empty_strategy_policy_with_history_requires_manual_review(
+    invalid_settings: dict[str, Any] | None,
+) -> None:
+    candidate = valid_candidate()
+    validation = validate_research_handoff(
+        candidate,
+        strategy_settings=invalid_settings,
+    )
+    previous_settings = settings()
+
+    assert validation.valid is False
+    result = evaluate_research_availability(
+        candidate_validation=validation,
+        candidate=candidate,
+        strategy_settings=invalid_settings,
+        source_as_of_date=NOW,
+        now_date=NOW,
+        last_good_handoff=valid_candidate(),
+        last_good_metadata=last_good_metadata(
+            as_of="2026-06-15",
+            strategy_settings=previous_settings,
+        ),
+    )
+
+    assert result.state == "MANUAL_REVIEW_REQUIRED"
+    assert result.state not in {"STRICT_FRESH", "STRICT_STALE"}
+    assert result.handoff_valid is False
+    assert result.last_good_usable is False
+    assert result.universe_match is False
+    assert result.settings_hash_match is False
+    assert result.allowed_actions == ["HOLD", "NO_TRADE"]
+    assert result.blocked_actions == [
+        "SELL",
+        "NEW_BUY",
+        "ROTATION",
+        "REBALANCE",
+        "EXTENDED_ETF_ADMISSION",
+        "ORDER_COMPILATION",
+    ]
+
+    decision = research_degraded_mode_decision_to_dict(result)
+    step2_gate = evaluate_step2_research_gate(decision)
+    assert step2_gate.allowed is False
+    assert step2_gate.order_compilation_allowed is False
+    assert step2_gate.new_buy_permission is False
+    assert step2_gate.step3_allowed is False
+    assert step2_gate.step4_allowed is False
+
+    final_gate = evaluate_final_execution_safety(
+        step1_permission=decision,
+        step2_decision_packet=None,
+        step3_audited_packet=None,
+    )
+    assert final_gate.ready_for_order_compilation is False
+    assert final_gate.blocked is True
+    assert final_gate.checked_conditions["step1_state_strict_fresh"] is False
+    assert final_gate.checked_conditions["order_compilation_allowed"] is False
 
 
 def test_invalid_with_usable_last_good_is_degraded_hold_no_trade_only() -> None:

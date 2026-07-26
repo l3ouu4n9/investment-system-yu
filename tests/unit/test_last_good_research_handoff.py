@@ -39,12 +39,16 @@ def valid_candidate() -> dict[str, Any]:
 
 def strategy_settings(
     *,
-    core_universe: list[str] | None = None,
-    satellite_universe: list[str] | None = None,
+    core_universe: Any = None,
+    satellite_universe: Any = None,
 ) -> dict[str, Any]:
     return {
-        "core_universe": core_universe or ["QQQ", "VOO", "VTI", "VT"],
-        "satellite_universe": satellite_universe or ["SMH", "IGV"],
+        "core_universe": (
+            ["QQQ", "VOO", "VTI", "VT"] if core_universe is None else core_universe
+        ),
+        "satellite_universe": (
+            ["SMH", "IGV"] if satellite_universe is None else satellite_universe
+        ),
     }
 
 
@@ -132,7 +136,7 @@ def test_source_run_id_and_as_of_recorded_unknown_when_absent_not_fabricated(tmp
     assert write_result.metadata["source_as_of_date"] == "unknown"
 
 
-def test_strategy_settings_unavailable_is_marked_not_fabricated(tmp_path: Path) -> None:
+def test_strategy_settings_unavailable_blocks_last_good_write(tmp_path: Path) -> None:
     candidate = valid_candidate()
     result = validate_research_handoff(candidate, strategy_settings=None)
     write_result = write_last_good_research_handoff_if_valid(
@@ -145,7 +149,15 @@ def test_strategy_settings_unavailable_is_marked_not_fabricated(tmp_path: Path) 
         now=FIXED_NOW,
     )
 
-    assert write_result.wrote is True
+    assert result.valid is False
+    assert any(
+        "strategy_settings are unavailable or unusable" in reason
+        for reason in result.blocker_reasons
+    )
+    assert write_result.wrote is False
+    assert write_result.handoff_path is None
+    assert write_result.metadata_path is None
+    assert any("valid=false" in reason for reason in write_result.skip_reasons)
     assert write_result.metadata["strategy_settings_available"] is False
     assert write_result.metadata["strategy_settings_hash"] is None
     assert write_result.metadata["strategy_settings_hash_inputs"] == {}
@@ -153,6 +165,78 @@ def test_strategy_settings_unavailable_is_marked_not_fabricated(tmp_path: Path) 
         "core_universe",
         "satellite_universe",
     }
+    assert not last_good_research_handoff_path(tmp_path).exists()
+    assert not last_good_research_handoff_metadata_path(tmp_path).exists()
+
+
+@pytest.mark.parametrize(
+    ("invalid_settings", "expected_blockers"),
+    [
+        pytest.param(
+            strategy_settings(core_universe=[]),
+            ["strategy_settings core_universe must be a non-empty list."],
+            id="empty-core",
+        ),
+        pytest.param(
+            strategy_settings(satellite_universe=[]),
+            ["strategy_settings satellite_universe must be a non-empty list."],
+            id="empty-satellite",
+        ),
+        pytest.param(
+            strategy_settings(core_universe=[], satellite_universe=[]),
+            [
+                "strategy_settings core_universe must be a non-empty list.",
+                "strategy_settings satellite_universe must be a non-empty list.",
+            ],
+            id="both-empty",
+        ),
+    ],
+)
+def test_empty_strategy_universe_does_not_write_or_overwrite_last_good(
+    tmp_path: Path,
+    invalid_settings: dict[str, Any],
+    expected_blockers: list[str],
+) -> None:
+    candidate = valid_candidate()
+    validation = validate_research_handoff(
+        candidate,
+        strategy_settings=invalid_settings,
+    )
+
+    assert validation.valid is False
+    for reason in expected_blockers:
+        assert reason in validation.blocker_reasons
+
+    no_history_write = write_last_good_research_handoff_if_valid(
+        candidate=candidate,
+        candidate_validation=validation,
+        strategy_settings=invalid_settings,
+        source_run_id="empty-policy-no-history",
+        source_as_of_date="2026-06-21",
+        output_dir=tmp_path,
+        now=FIXED_NOW,
+    )
+    assert no_history_write.wrote is False
+    assert not last_good_research_handoff_path(tmp_path).exists()
+    assert not last_good_research_handoff_metadata_path(tmp_path).exists()
+
+    existing = write_valid(tmp_path)
+    assert existing.wrote is True
+    handoff_before = last_good_research_handoff_path(tmp_path).read_bytes()
+    metadata_before = last_good_research_handoff_metadata_path(tmp_path).read_bytes()
+
+    with_history_write = write_last_good_research_handoff_if_valid(
+        candidate=candidate,
+        candidate_validation=validation,
+        strategy_settings=invalid_settings,
+        source_run_id="empty-policy-with-history",
+        source_as_of_date="2026-06-22",
+        output_dir=tmp_path,
+        now=FIXED_NOW,
+    )
+    assert with_history_write.wrote is False
+    assert last_good_research_handoff_path(tmp_path).read_bytes() == handoff_before
+    assert last_good_research_handoff_metadata_path(tmp_path).read_bytes() == metadata_before
 
 
 # --- skip on invalid ---------------------------------------------------------

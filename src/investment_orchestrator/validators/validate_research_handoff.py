@@ -155,10 +155,9 @@ def validate_research_handoff(
         required_buy_tickers,
         collector,
     )
-    scorecard_coverage_tickers = required_buy_tickers if required_buy_tickers is not None else allowed_buy_tickers
     scorecard_items = _validate_buy_universe_scorecard(
         payload.get("buy_universe_scorecard"),
-        scorecard_coverage_tickers,
+        required_buy_tickers,
         collector,
     )
     _validate_top_level_container_types(payload, collector)
@@ -192,19 +191,24 @@ def _validate_schema_version(payload: Mapping[str, Any], collector: _Collector) 
 def _derive_required_buy_universe(
     strategy_settings: Mapping[str, Any] | None,
     collector: _Collector,
-) -> list[str] | None:
-    if strategy_settings is None:
-        collector.non_blocker(
-            "strategy_settings not provided; using RESEARCH_JSON.trade_universe.allowed_buy_tickers "
-            "as the required buy universe for backward-compatible report-only validation."
+) -> list[str]:
+    if not isinstance(strategy_settings, Mapping):
+        collector.blocker(
+            "strategy_settings are unavailable or unusable; deterministic core_universe and "
+            "satellite_universe lists are required for research handoff validation."
         )
-        return None
+        return []
 
     core_universe = strategy_settings.get("core_universe")
     satellite_universe = strategy_settings.get("satellite_universe")
     if not _is_list(core_universe) or not _is_list(satellite_universe):
         collector.blocker("strategy_settings core_universe and satellite_universe must both be lists.")
         return []
+
+    if not core_universe:
+        collector.blocker("strategy_settings core_universe must be a non-empty list.")
+    if not satellite_universe:
+        collector.blocker("strategy_settings satellite_universe must be a non-empty list.")
 
     required = _string_list([*core_universe, *satellite_universe])
     if len(required) != len(core_universe) + len(satellite_universe):
@@ -216,7 +220,7 @@ def _derive_required_buy_universe(
 
 def _validate_trade_universe(
     value: Any,
-    required_buy_tickers: list[str] | None,
+    required_buy_tickers: list[str],
     collector: _Collector,
 ) -> list[str]:
     if not isinstance(value, Mapping):
@@ -238,19 +242,18 @@ def _validate_trade_universe(
         collector.blocker("trade_universe.allowed_buy_tickers must contain only non-empty strings.")
     if len(set(tickers)) != len(tickers):
         collector.blocker("trade_universe.allowed_buy_tickers must not contain duplicates.")
-    if required_buy_tickers is not None:
-        missing_required = sorted(set(required_buy_tickers) - set(tickers))
-        for ticker in missing_required:
-            collector.blocker(
-                "trade_universe.allowed_buy_tickers must cover strategy_settings derived buy universe "
-                f"ticker {ticker}."
-            )
-        extra = sorted(set(tickers) - set(required_buy_tickers))
-        if extra:
-            collector.non_blocker(
-                "trade_universe.allowed_buy_tickers includes tickers outside strategy_settings derived "
-                f"buy universe: {extra}."
-            )
+    missing_required = sorted(set(required_buy_tickers) - set(tickers))
+    for ticker in missing_required:
+        collector.blocker(
+            "trade_universe.allowed_buy_tickers must cover strategy_settings derived buy universe "
+            f"ticker {ticker}."
+        )
+    extra = sorted(set(tickers) - set(required_buy_tickers))
+    if extra:
+        collector.non_blocker(
+            "trade_universe.allowed_buy_tickers includes tickers outside strategy_settings derived "
+            f"buy universe: {extra}."
+        )
     return tickers
 
 

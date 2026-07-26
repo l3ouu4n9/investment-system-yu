@@ -5,12 +5,17 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from investment_orchestrator.parsers.extract_research_json import parse_research_output_text
 from investment_orchestrator.validators.validate_research_handoff import validate_research_handoff
 from investment_orchestrator.validators.validate_research_output import validate_research_output
+from investment_orchestrator.workflow import step1_research
 
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "step1_contract_failures"
+CORE_UNIVERSE_EMPTY = "strategy_settings core_universe must be a non-empty list."
+SATELLITE_UNIVERSE_EMPTY = "strategy_settings satellite_universe must be a non-empty list."
 
 
 def read_fixture(name: str) -> str:
@@ -29,17 +34,21 @@ def valid_handoff() -> dict[str, Any]:
 
 def strategy_settings(
     *,
-    core_universe: list[str] | None = None,
-    satellite_universe: list[str] | None = None,
+    core_universe: Any = None,
+    satellite_universe: Any = None,
 ) -> dict[str, Any]:
     return {
-        "core_universe": core_universe or ["QQQ", "VOO", "VTI", "VT"],
-        "satellite_universe": satellite_universe or ["SMH", "IGV"],
+        "core_universe": (
+            ["QQQ", "VOO", "VTI", "VT"] if core_universe is None else core_universe
+        ),
+        "satellite_universe": (
+            ["SMH", "IGV"] if satellite_universe is None else satellite_universe
+        ),
     }
 
 
 def assert_invalid(payload: Any, expected_reason: str) -> None:
-    result = validate_research_handoff(payload)
+    result = validate_research_handoff(payload, strategy_settings=strategy_settings())
 
     assert result.valid is False
     assert expected_reason in "\n".join(result.fail_reasons)
@@ -49,7 +58,7 @@ def test_regression_fixture_parse_and_research_schema_pass_but_strict_handoff_fa
     payload = parse_research_output_text(read_fixture("current_step1_raw_output_minimal.txt"))
 
     assert validate_research_output(payload) is payload
-    result = validate_research_handoff(payload)
+    result = validate_research_handoff(payload, strategy_settings=strategy_settings())
 
     assert result.valid is False
     assert "trade_universe" in result.missing_fields
@@ -61,7 +70,7 @@ def test_validation_summary_passed_true_does_not_make_handoff_valid() -> None:
     payload = read_json_fixture("current_research_output_minimal.json")
 
     assert payload["validation_summary"]["passed"] is True
-    result = validate_research_handoff(payload)
+    result = validate_research_handoff(payload, strategy_settings=strategy_settings())
 
     assert result.valid is False
     assert "Missing execution handoff field: trade_universe" in result.blocker_reasons
@@ -71,7 +80,7 @@ def test_missing_trade_universe_allowed_buy_tickers_fails() -> None:
     payload = valid_handoff()
     del payload["trade_universe"]["allowed_buy_tickers"]
 
-    result = validate_research_handoff(payload)
+    result = validate_research_handoff(payload, strategy_settings=strategy_settings())
 
     assert result.valid is False
     assert "trade_universe.allowed_buy_tickers" in result.missing_fields
@@ -81,7 +90,7 @@ def test_missing_buy_universe_scorecard_fails() -> None:
     payload = valid_handoff()
     del payload["buy_universe_scorecard"]
 
-    result = validate_research_handoff(payload)
+    result = validate_research_handoff(payload, strategy_settings=strategy_settings())
 
     assert result.valid is False
     assert "buy_universe_scorecard" in result.missing_fields
@@ -91,7 +100,7 @@ def test_missing_scheduled_events_fails() -> None:
     payload = valid_handoff()
     del payload["scheduled_events"]
 
-    result = validate_research_handoff(payload)
+    result = validate_research_handoff(payload, strategy_settings=strategy_settings())
 
     assert result.valid is False
     assert "scheduled_events" in result.missing_fields
@@ -102,21 +111,23 @@ def test_markdown_lane_strings_are_not_structured_handoff() -> None:
         read_fixture("archived_deep_research_markdown_lanes_raw_output_minimal.txt")
     )
 
-    result = validate_research_handoff(payload)
+    result = validate_research_handoff(payload, strategy_settings=strategy_settings())
 
     assert result.valid is False
     assert "buy_universe_scorecard" in result.missing_fields
     assert "strategy_a_research_handoff" in result.missing_fields
 
 
-def test_minimal_valid_handoff_fixture_passes() -> None:
-    result = validate_research_handoff(valid_handoff())
+def test_minimal_valid_handoff_fixture_passes_with_valid_strategy_settings() -> None:
+    result = validate_research_handoff(
+        valid_handoff(),
+        strategy_settings=strategy_settings(),
+    )
 
     assert result.valid is True
     assert result.fail_reasons == []
     assert result.missing_fields == []
     assert result.blocker_reasons == []
-    assert any("strategy_settings not provided" in reason for reason in result.non_blocker_reasons)
 
 
 def test_validator_derives_required_universe_from_strategy_settings() -> None:
@@ -151,11 +162,193 @@ def test_trade_universe_may_cover_more_than_derived_strategy_settings_universe()
     assert any("includes tickers outside strategy_settings derived buy universe" in reason for reason in result.non_blocker_reasons)
 
 
-def test_missing_strategy_settings_uses_payload_universe_with_non_blocker_note() -> None:
+def test_missing_strategy_settings_are_blocking_and_payload_universe_cannot_replace_policy() -> None:
     result = validate_research_handoff(valid_handoff())
 
-    assert result.valid is True
-    assert any("using RESEARCH_JSON.trade_universe.allowed_buy_tickers" in reason for reason in result.non_blocker_reasons)
+    assert result.valid is False
+    assert (
+        "strategy_settings are unavailable or unusable; deterministic core_universe and "
+        "satellite_universe lists are required for research handoff validation."
+        in result.blocker_reasons
+    )
+    assert not any(
+        "using RESEARCH_JSON.trade_universe.allowed_buy_tickers" in reason
+        for reason in result.non_blocker_reasons
+    )
+
+
+def _assert_actual_strategy_settings_source_failure_is_blocking(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(step1_research, "current_inputs_dir", lambda: tmp_path)
+    loaded_settings = step1_research.load_strategy_settings_for_handoff_validation()
+
+    assert loaded_settings is None
+    result = validate_research_handoff(
+        valid_handoff(),
+        strategy_settings=loaded_settings,
+    )
+
+    assert result.valid is False
+    assert any(
+        "strategy_settings are unavailable or unusable" in reason
+        for reason in result.blocker_reasons
+    )
+
+
+def test_missing_strategy_settings_source_is_blocking(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _assert_actual_strategy_settings_source_failure_is_blocking(tmp_path, monkeypatch)
+
+
+def test_nonregular_strategy_settings_source_is_blocking(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "strategy_settings.yaml").mkdir()
+
+    _assert_actual_strategy_settings_source_failure_is_blocking(tmp_path, monkeypatch)
+
+
+def test_malformed_strategy_settings_source_is_blocking(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "strategy_settings.yaml").write_text(
+        "core_universe: [QQQ\n",
+        encoding="utf-8",
+    )
+
+    _assert_actual_strategy_settings_source_failure_is_blocking(tmp_path, monkeypatch)
+
+
+def test_strategy_settings_source_validation_failure_is_blocking(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "strategy_settings.yaml").write_text(
+        "daily_execution_drift_policy: []\n",
+        encoding="utf-8",
+    )
+
+    _assert_actual_strategy_settings_source_failure_is_blocking(tmp_path, monkeypatch)
+
+
+def test_missing_core_universe_policy_is_blocking() -> None:
+    result = validate_research_handoff(
+        valid_handoff(),
+        strategy_settings={"satellite_universe": ["SMH", "IGV"]},
+    )
+
+    assert result.valid is False
+    assert (
+        "strategy_settings core_universe and satellite_universe must both be lists."
+        in result.blocker_reasons
+    )
+
+
+def test_missing_satellite_universe_policy_is_blocking() -> None:
+    result = validate_research_handoff(
+        valid_handoff(),
+        strategy_settings={"core_universe": ["QQQ", "VOO", "VTI", "VT"]},
+    )
+
+    assert result.valid is False
+    assert (
+        "strategy_settings core_universe and satellite_universe must both be lists."
+        in result.blocker_reasons
+    )
+
+
+@pytest.mark.parametrize(
+    ("invalid_settings", "expected_empty_blockers"),
+    [
+        pytest.param(
+            strategy_settings(core_universe=[]),
+            [CORE_UNIVERSE_EMPTY],
+            id="empty-core",
+        ),
+        pytest.param(
+            strategy_settings(satellite_universe=[]),
+            [SATELLITE_UNIVERSE_EMPTY],
+            id="empty-satellite",
+        ),
+        pytest.param(
+            strategy_settings(core_universe=[], satellite_universe=[]),
+            [CORE_UNIVERSE_EMPTY, SATELLITE_UNIVERSE_EMPTY],
+            id="both-empty",
+        ),
+    ],
+)
+def test_empty_strategy_universe_lists_are_blocking_and_payload_cannot_replace_them(
+    invalid_settings: dict[str, Any],
+    expected_empty_blockers: list[str],
+) -> None:
+    payload = valid_handoff()
+    assert payload["trade_universe"]["allowed_buy_tickers"]
+
+    result = validate_research_handoff(
+        payload,
+        strategy_settings=invalid_settings,
+    )
+
+    assert result.valid is False
+    assert [
+        reason
+        for reason in result.blocker_reasons
+        if reason in {CORE_UNIVERSE_EMPTY, SATELLITE_UNIVERSE_EMPTY}
+    ] == expected_empty_blockers
+    for reason in expected_empty_blockers:
+        assert reason in result.fail_reasons
+    assert not any(
+        "using RESEARCH_JSON.trade_universe.allowed_buy_tickers" in reason
+        for reason in result.non_blocker_reasons
+    )
+
+
+@pytest.mark.parametrize(
+    "invalid_settings",
+    [
+        pytest.param(
+            {"core_universe": "QQQ", "satellite_universe": ["SMH"]},
+            id="core-not-list",
+        ),
+        pytest.param(
+            {"core_universe": ["QQQ"], "satellite_universe": {"SMH": True}},
+            id="satellite-not-list",
+        ),
+        pytest.param(
+            {"core_universe": ["QQQ", 7], "satellite_universe": ["SMH"]},
+            id="core-item-not-string",
+        ),
+        pytest.param(
+            {"core_universe": ["QQQ"], "satellite_universe": ["SMH", 7]},
+            id="satellite-item-not-string",
+        ),
+        pytest.param(
+            {"core_universe": ["QQQ", ""], "satellite_universe": ["SMH"]},
+            id="core-item-empty",
+        ),
+        pytest.param(
+            {"core_universe": ["QQQ"], "satellite_universe": ["SMH", " "]},
+            id="satellite-item-empty",
+        ),
+        pytest.param(["not", "a", "mapping"], id="settings-not-mapping"),
+    ],
+)
+def test_invalid_strategy_universe_structure_or_type_is_blocking(
+    invalid_settings: Any,
+) -> None:
+    result = validate_research_handoff(
+        valid_handoff(),
+        strategy_settings=invalid_settings,
+    )
+
+    assert result.valid is False
+    assert any("strategy_settings" in reason for reason in result.blocker_reasons)
 
 
 def test_allowed_buy_tickers_string_type_fails() -> None:
@@ -193,7 +386,7 @@ def test_enabled_extended_etf_requires_scorecard_coverage_and_gate_consistency()
     payload["optional_extended_etf_sleeve"]["enabled"] = True
     payload["optional_extended_etf_sleeve"]["allowed_extended_etf_tickers"] = ["GRID"]
 
-    result = validate_research_handoff(payload)
+    result = validate_research_handoff(payload, strategy_settings=strategy_settings())
 
     assert result.valid is False
     joined = "\n".join(result.fail_reasons)
@@ -349,7 +542,7 @@ def test_actionable_data_gap_marker_is_blocker() -> None:
     first["thesis_12m_plus_summary"] = "DATA_GAP: no linkage"
     payload["strategy_a_research_handoff"]["positive_delta_research_supported"] = [first["ticker"]]
 
-    result = validate_research_handoff(payload)
+    result = validate_research_handoff(payload, strategy_settings=strategy_settings())
 
     assert result.valid is False
     assert any("contains handoff uncertainty marker" in reason for reason in result.blocker_reasons)
@@ -366,7 +559,7 @@ def test_actionable_unknown_marker_is_blocker() -> None:
     first["thesis_12m_plus_summary"] = "unknown thesis support"
     payload["strategy_a_research_handoff"]["positive_delta_research_supported"] = [first["ticker"]]
 
-    result = validate_research_handoff(payload)
+    result = validate_research_handoff(payload, strategy_settings=strategy_settings())
 
     assert result.valid is False
     assert any("contains handoff uncertainty marker" in reason for reason in result.blocker_reasons)
@@ -376,7 +569,7 @@ def test_watch_only_data_gap_marker_is_classified_non_blocker() -> None:
     payload = valid_handoff()
     payload["buy_universe_scorecard"][0]["thesis_12m_plus_summary"] = "DATA_GAP: watch only"
 
-    result = validate_research_handoff(payload)
+    result = validate_research_handoff(payload, strategy_settings=strategy_settings())
 
     assert result.valid is True
     assert any("contains handoff uncertainty marker" in reason for reason in result.non_blocker_reasons)
@@ -387,7 +580,7 @@ def test_compile_blocked_data_gap_marker_is_classified_non_blocker() -> None:
     payload["buy_universe_scorecard"][0]["actionability_status"] = "compile_blocked"
     payload["buy_universe_scorecard"][0]["compile_blocker_if_any"] = "DATA_GAP: compile blocked"
 
-    result = validate_research_handoff(payload)
+    result = validate_research_handoff(payload, strategy_settings=strategy_settings())
 
     assert result.valid is True
     assert any("contains handoff uncertainty marker" in reason for reason in result.non_blocker_reasons)

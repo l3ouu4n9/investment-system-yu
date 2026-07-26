@@ -47,13 +47,21 @@ def write_strategy_settings(
     inputs_dir = tmp_path / "inputs" / "current"
     inputs_dir.mkdir(parents=True, exist_ok=True)
     path = inputs_dir / "strategy_settings.yaml"
-    core = core_universe or ["QQQ", "VOO", "VTI", "VT"]
-    satellite = satellite_universe or ["SMH", "IGV"]
+    core = ["QQQ", "VOO", "VTI", "VT"] if core_universe is None else core_universe
+    satellite = ["SMH", "IGV"] if satellite_universe is None else satellite_universe
+    core_yaml = (
+        "core_universe: []\n"
+        if not core
+        else "core_universe:\n" + "".join(f"  - {ticker}\n" for ticker in core)
+    )
+    satellite_yaml = (
+        "satellite_universe: []\n"
+        if not satellite
+        else "satellite_universe:\n"
+        + "".join(f"  - {ticker}\n" for ticker in satellite)
+    )
     path.write_text(
-        "core_universe:\n"
-        + "".join(f"  - {ticker}\n" for ticker in core)
-        + "satellite_universe:\n"
-        + "".join(f"  - {ticker}\n" for ticker in satellite),
+        core_yaml + satellite_yaml,
         encoding="utf-8",
     )
     return path
@@ -124,7 +132,7 @@ def test_invalid_handoff_does_not_fail_step1_report_only_parse(
     assert Path(result["research_handoff_validation_path"]).exists()
 
 
-def test_minimal_valid_handoff_writes_valid_true_artifact(
+def test_minimal_valid_handoff_without_strategy_settings_fails_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -137,16 +145,28 @@ def test_minimal_valid_handoff_writes_valid_true_artifact(
     validation = json.loads(
         Path(result["research_handoff_validation_path"]).read_text(encoding="utf-8")
     )
-
-    assert result["research_handoff_valid"] == "True"
-    assert validation["valid"] is True
-    assert validation["fail_reasons"] == []
-    assert validation["missing_fields"] == []
-    assert validation["blocker_reasons"] == []
-    assert any(
-        "strategy_settings not provided" in reason
-        for reason in validation["non_blocker_reasons"]
+    candidate_validation = json.loads(
+        Path(result["research_handoff_candidate_validation_path"]).read_text(encoding="utf-8")
     )
+    decision = json.loads(
+        Path(result["research_degraded_mode_decision_path"]).read_text(encoding="utf-8")
+    )
+
+    assert result["research_handoff_valid"] == "False"
+    assert validation["valid"] is False
+    assert validation["missing_fields"] == []
+    assert any(
+        "strategy_settings are unavailable or unusable" in reason
+        for reason in validation["blocker_reasons"]
+    )
+    assert result["research_handoff_candidate_valid"] == "False"
+    assert candidate_validation["valid"] is False
+    assert result["last_good_research_handoff_written"] == "False"
+    assert result["research_availability_state"] == "INVALID_CONTRACT"
+    assert decision["allowed_actions"] == ["HOLD", "NO_TRADE"]
+    assert "SELL" in decision["blocked_actions"]
+    assert "NEW_BUY" in decision["blocked_actions"]
+    assert "ORDER_COMPILATION" in decision["blocked_actions"]
 
 
 def test_step1_handoff_report_uses_strategy_settings_when_available(
@@ -167,9 +187,72 @@ def test_step1_handoff_report_uses_strategy_settings_when_available(
 
     assert validation["valid"] is True
     assert not any(
-        "strategy_settings not provided" in reason
-        for reason in validation["non_blocker_reasons"]
+        "strategy_settings are unavailable or unusable" in reason
+        for reason in validation["blocker_reasons"]
     )
+
+
+@pytest.mark.parametrize(
+    ("core_universe", "satellite_universe", "expected_blockers"),
+    [
+        pytest.param(
+            [],
+            ["SMH", "IGV"],
+            ["strategy_settings core_universe must be a non-empty list."],
+            id="empty-core",
+        ),
+        pytest.param(
+            ["QQQ", "VOO", "VTI", "VT"],
+            [],
+            ["strategy_settings satellite_universe must be a non-empty list."],
+            id="empty-satellite",
+        ),
+        pytest.param(
+            [],
+            [],
+            [
+                "strategy_settings core_universe must be a non-empty list.",
+                "strategy_settings satellite_universe must be a non-empty list.",
+            ],
+            id="both-empty",
+        ),
+    ],
+)
+def test_step1_handoff_report_empty_strategy_universe_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    core_universe: list[str],
+    satellite_universe: list[str],
+    expected_blockers: list[str],
+) -> None:
+    write_strategy_settings(
+        tmp_path,
+        core_universe=core_universe,
+        satellite_universe=satellite_universe,
+    )
+
+    result = parse_with_tmp_repo(
+        tmp_path,
+        monkeypatch,
+        marked_research_json(read_json_fixture("minimal_valid_research_handoff.json")),
+    )
+    validation = json.loads(
+        Path(result["research_handoff_validation_path"]).read_text(encoding="utf-8")
+    )
+    decision = json.loads(
+        Path(result["research_degraded_mode_decision_path"]).read_text(encoding="utf-8")
+    )
+
+    assert result["research_handoff_valid"] == "False"
+    assert validation["valid"] is False
+    for reason in expected_blockers:
+        assert reason in validation["blocker_reasons"]
+    assert result["last_good_research_handoff_written"] == "False"
+    assert result["research_availability_state"] == "INVALID_CONTRACT"
+    assert decision["allowed_actions"] == ["HOLD", "NO_TRADE"]
+    assert "SELL" in decision["blocked_actions"]
+    assert "NEW_BUY" in decision["blocked_actions"]
+    assert "ORDER_COMPILATION" in decision["blocked_actions"]
 
 
 def test_step1_handoff_report_can_reuse_loaded_strategy_settings_argument(
@@ -195,8 +278,8 @@ def test_step1_handoff_report_can_reuse_loaded_strategy_settings_argument(
 
     assert validation["valid"] is True
     assert not any(
-        "strategy_settings not provided" in reason
-        for reason in validation["non_blocker_reasons"]
+        "strategy_settings are unavailable or unusable" in reason
+        for reason in validation["blocker_reasons"]
     )
 
 
@@ -378,12 +461,11 @@ def test_step1_candidate_validation_uses_strategy_settings_context(
     )
 
     assert candidate_validation["valid"] is True
-    # Settings-aware context flows into the candidate validator: with settings
-    # present the backward-compatible "strategy_settings not provided" note is
-    # absent.
+    # Settings-aware context flows into the candidate validator without a
+    # missing-policy blocker.
     assert not any(
-        "strategy_settings not provided" in reason
-        for reason in candidate_validation["non_blocker_reasons"]
+        "strategy_settings are unavailable or unusable" in reason
+        for reason in candidate_validation["blocker_reasons"]
     )
 
 

@@ -155,14 +155,19 @@ def test_role_layer_derivation_uses_settings_role_map() -> None:
     assert roles["SMH"] == "sector_alpha_tilt"
 
 
-def test_role_layer_fallback_without_settings_is_still_valid() -> None:
+def test_role_layer_fallback_without_settings_is_structural_but_validation_blocks() -> None:
     candidate = compile_research_handoff(evidence_packet(), None)
     roles = {r["ticker"]: r["role_layer"] for r in candidate["buy_universe_scorecard"]}
     # Without a role map, core defaults to diversified_core_buffer; satellite to sector tilt.
     assert roles["QQQ"] == "diversified_core_buffer"
     assert roles["SMH"] == "sector_alpha_tilt"
     assert all(role in BASE_ROLE_KEYS for role in roles.values())
-    assert validate_research_handoff(candidate).valid is True
+    validation = validate_research_handoff(candidate)
+    assert validation.valid is False
+    assert any(
+        "strategy_settings are unavailable or unusable" in reason
+        for reason in validation.blocker_reasons
+    )
 
 
 # --- validator pass ----------------------------------------------------------
