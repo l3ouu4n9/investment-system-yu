@@ -1,0 +1,763 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-system.local/schemas/mmi_policy_projection_v1.schema.json",
+  "title": "MMI deterministic policy projection v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "projection_kind",
+    "report_only",
+    "authority_effect",
+    "evaluation_timestamp_utc",
+    "source_record_identity_sha256",
+    "policy_method",
+    "policy_as_of_date",
+    "source_run_timestamp_utc",
+    "universe_projection",
+    "universe_projection_identity_sha256",
+    "hard_open_orders_budget_cap",
+    "per_run_new_buy_budget",
+    "shortlist_size_rules",
+    "maximum_new_ticker_rules",
+    "extended_sleeve_constraints",
+    "rotation_policy",
+    "target_weights_present",
+    "target_weights",
+    "target_weights_absence_reason",
+    "policy_completeness_statuses",
+    "known_policy_gaps",
+    "policy_projection_identity_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mmi_policy_projection_v1"
+    },
+    "projection_kind": {
+      "const": "MMI_POLICY_PROJECTION"
+    },
+    "report_only": {
+      "const": true
+    },
+    "authority_effect": {
+      "const": "NONE"
+    },
+    "evaluation_timestamp_utc": {
+      "$ref": "#/$defs/utc_timestamp"
+    },
+    "source_record_identity_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "policy_method": {
+      "const": "BUDGET_SHORTLIST_ROTATION_WITHOUT_TARGET_WEIGHTS"
+    },
+    "policy_as_of_date": {
+      "$ref": "#/$defs/date"
+    },
+    "source_run_timestamp_utc": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/utc_timestamp"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "universe_projection": {
+      "$ref": "#/$defs/universe_projection"
+    },
+    "universe_projection_identity_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "hard_open_orders_budget_cap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "currency",
+        "amount_decimal",
+        "validation_status",
+        "authority_effect"
+      ],
+      "properties": {
+        "currency": {
+          "const": "USD"
+        },
+        "amount_decimal": {
+          "$ref": "#/$defs/nonnegative_decimal"
+        },
+        "validation_status": {
+          "const": "SOURCE_VALIDATED"
+        },
+        "authority_effect": {
+          "const": "NONE"
+        }
+      }
+    },
+    "per_run_new_buy_budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "currency",
+        "amount_decimal",
+        "authority_effect"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "VALUE_PRESENT_APPLICABILITY_UNVERIFIED",
+            "VALUE_UNAVAILABLE"
+          ]
+        },
+        "currency": {
+          "enum": [
+            "USD",
+            null
+          ]
+        },
+        "amount_decimal": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/nonnegative_decimal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "authority_effect": {
+          "const": "NONE"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "VALUE_PRESENT_APPLICABILITY_UNVERIFIED"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "currency": {
+                "const": "USD"
+              },
+              "amount_decimal": {
+                "$ref": "#/$defs/nonnegative_decimal"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "VALUE_UNAVAILABLE"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "currency": {
+                "type": "null"
+              },
+              "amount_decimal": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "shortlist_size_rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "benchmark_carrier",
+        "diversified_core_buffer_max",
+        "sector_alpha_tilt_max",
+        "extended_etf_minority_sleeve_max"
+      ],
+      "properties": {
+        "benchmark_carrier": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "diversified_core_buffer_max": {
+          "$ref": "#/$defs/bounded_count"
+        },
+        "sector_alpha_tilt_max": {
+          "$ref": "#/$defs/bounded_count"
+        },
+        "extended_etf_minority_sleeve_max": {
+          "$ref": "#/$defs/bounded_count"
+        }
+      }
+    },
+    "maximum_new_ticker_rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "base_universe_new_tickers_per_week",
+        "extended_etf_sleeve_new_tickers_per_week"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "SOURCE_VALIDATED",
+            "UNAVAILABLE"
+          ]
+        },
+        "base_universe_new_tickers_per_week": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/bounded_count"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "extended_etf_sleeve_new_tickers_per_week": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/bounded_count"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "SOURCE_VALIDATED"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "base_universe_new_tickers_per_week": {
+                "$ref": "#/$defs/bounded_count"
+              },
+              "extended_etf_sleeve_new_tickers_per_week": {
+                "$ref": "#/$defs/bounded_count"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "UNAVAILABLE"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "base_universe_new_tickers_per_week": {
+                "type": "null"
+              },
+              "extended_etf_sleeve_new_tickers_per_week": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "extended_sleeve_constraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "sleeve_budget_cap_fraction",
+        "single_etf_budget_cap_fraction",
+        "activation_minimum_effective_budget_fraction",
+        "maximum_same_theme_member_count",
+        "maximum_same_theme_budget_fraction",
+        "require_distinct_theme_buckets"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "SOURCE_VALIDATED",
+            "UNAVAILABLE"
+          ]
+        },
+        "sleeve_budget_cap_fraction": {
+          "$ref": "#/$defs/nullable_decimal"
+        },
+        "single_etf_budget_cap_fraction": {
+          "$ref": "#/$defs/nullable_decimal"
+        },
+        "activation_minimum_effective_budget_fraction": {
+          "$ref": "#/$defs/nullable_decimal"
+        },
+        "maximum_same_theme_member_count": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/bounded_count"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "maximum_same_theme_budget_fraction": {
+          "$ref": "#/$defs/nullable_decimal"
+        },
+        "require_distinct_theme_buckets": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "SOURCE_VALIDATED"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "sleeve_budget_cap_fraction": {
+                "$ref": "#/$defs/unit_interval_decimal"
+              },
+              "single_etf_budget_cap_fraction": {
+                "$ref": "#/$defs/unit_interval_decimal"
+              },
+              "activation_minimum_effective_budget_fraction": {
+                "$ref": "#/$defs/unit_interval_decimal"
+              },
+              "maximum_same_theme_member_count": {
+                "$ref": "#/$defs/bounded_count"
+              },
+              "maximum_same_theme_budget_fraction": {
+                "$ref": "#/$defs/unit_interval_decimal"
+              },
+              "require_distinct_theme_buckets": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "UNAVAILABLE"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "sleeve_budget_cap_fraction": {
+                "type": "null"
+              },
+              "single_etf_budget_cap_fraction": {
+                "type": "null"
+              },
+              "activation_minimum_effective_budget_fraction": {
+                "type": "null"
+              },
+              "maximum_same_theme_member_count": {
+                "type": "null"
+              },
+              "maximum_same_theme_budget_fraction": {
+                "type": "null"
+              },
+              "require_distinct_theme_buckets": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "rotation_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "guardrails"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "guardrails": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "require_same_role_for_rotation",
+            "minimum_score_gap_to_rotate",
+            "do_not_rotate_if_current_holding_still_role_valid",
+            "no_rotation_on_one_rank_change_only"
+          ],
+          "properties": {
+            "require_same_role_for_rotation": {
+              "type": "boolean"
+            },
+            "minimum_score_gap_to_rotate": {
+              "$ref": "#/$defs/bounded_count"
+            },
+            "do_not_rotate_if_current_holding_still_role_valid": {
+              "type": "boolean"
+            },
+            "no_rotation_on_one_rank_change_only": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "target_weights_present": {
+      "const": false
+    },
+    "target_weights": {
+      "type": "array",
+      "maxItems": 0
+    },
+    "target_weights_absence_reason": {
+      "const": "POLICY_METHOD_HAS_NO_TARGET_WEIGHTS"
+    },
+    "policy_completeness_statuses": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "DETERMINISTIC_UNIVERSE_VALIDATED",
+          "HARD_OPEN_ORDERS_BUDGET_CAP_VALIDATED",
+          "ROTATION_POLICY_VALIDATED",
+          "SHORTLIST_RULES_VALIDATED",
+          "TARGET_WEIGHTS_ABSENT_BY_METHOD"
+        ]
+      }
+    },
+    "known_policy_gaps": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/policy_gap"
+      }
+    },
+    "policy_projection_identity_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "ticker": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9.-]{0,15}$"
+    },
+    "ticker_list": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/ticker"
+      }
+    },
+    "nonempty_ticker_list": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/ticker"
+      }
+    },
+    "date": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "utc_timestamp": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{6}Z$"
+    },
+    "nonnegative_decimal": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]{0,47})(?:\\.[0-9]{0,23}[1-9])?$",
+      "maxLength": 64
+    },
+    "unit_interval_decimal": {
+      "type": "string",
+      "pattern": "^(?:0(?:\\.[0-9]{0,23}[1-9])?|1)$",
+      "maxLength": 26
+    },
+    "nullable_decimal": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/nonnegative_decimal"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "bounded_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 256
+    },
+    "universe_gap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "scope",
+        "affected_question_class",
+        "affected_tickers",
+        "source_record_identity_sha256"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "EXTENDED_THEME_MAP_UNAVAILABLE",
+            "EXTENDED_ETF_THEME_MAPPING_INCOMPLETE"
+          ]
+        },
+        "scope": {
+          "const": "UNIVERSE"
+        },
+        "affected_question_class": {
+          "const": "UNIVERSE_THEME_INTERPRETATION"
+        },
+        "affected_tickers": {
+          "$ref": "#/$defs/ticker_list"
+        },
+        "source_record_identity_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "universe_projection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "projection_kind",
+        "report_only",
+        "authority_effect",
+        "source_record_identity_sha256",
+        "core_universe",
+        "satellite_universe",
+        "approved_extended_universe",
+        "benchmark_reference_instruments",
+        "role_by_ticker",
+        "theme_by_ticker",
+        "approved_extended_members_without_theme",
+        "theme_mapping_source_status",
+        "extended_membership_status",
+        "extended_activation_status",
+        "analysis_scope_instruments",
+        "instrument_availability_observation_status",
+        "known_universe_gaps",
+        "universe_projection_identity_sha256"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "mmi_universe_projection_v1"
+        },
+        "projection_kind": {
+          "const": "MMI_UNIVERSE_PROJECTION"
+        },
+        "report_only": {
+          "const": true
+        },
+        "authority_effect": {
+          "const": "NONE"
+        },
+        "source_record_identity_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "core_universe": {
+          "$ref": "#/$defs/nonempty_ticker_list"
+        },
+        "satellite_universe": {
+          "$ref": "#/$defs/nonempty_ticker_list"
+        },
+        "approved_extended_universe": {
+          "$ref": "#/$defs/ticker_list"
+        },
+        "benchmark_reference_instruments": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/ticker"
+          }
+        },
+        "role_by_ticker": {
+          "type": "object",
+          "minProperties": 2,
+          "maxProperties": 256,
+          "propertyNames": {
+            "$ref": "#/$defs/ticker"
+          },
+          "patternProperties": {
+            "^[A-Z][A-Z0-9.-]{0,15}$": {
+              "enum": [
+                "CORE",
+                "SATELLITE",
+                "APPROVED_EXTENDED"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "theme_by_ticker": {
+          "type": "object",
+          "maxProperties": 256,
+          "propertyNames": {
+            "$ref": "#/$defs/ticker"
+          },
+          "patternProperties": {
+            "^[A-Z][A-Z0-9.-]{0,15}$": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$"
+            }
+          },
+          "additionalProperties": false
+        },
+        "approved_extended_members_without_theme": {
+          "$ref": "#/$defs/ticker_list"
+        },
+        "theme_mapping_source_status": {
+          "enum": [
+            "SOURCE_MAP_PRESENT",
+            "SOURCE_MAP_UNAVAILABLE"
+          ]
+        },
+        "extended_membership_status": {
+          "enum": [
+            "APPROVED_STATIC_MEMBERS_PRESENT",
+            "APPROVED_STATIC_MEMBERS_EMPTY"
+          ]
+        },
+        "extended_activation_status": {
+          "const": "NOT_EVALUATED_REPORT_ONLY"
+        },
+        "analysis_scope_instruments": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/ticker"
+          }
+        },
+        "instrument_availability_observation_status": {
+          "const": "NOT_DETERMINISTICALLY_AVAILABLE"
+        },
+        "known_universe_gaps": {
+          "type": "array",
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/universe_gap"
+          }
+        },
+        "universe_projection_identity_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "policy_gap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "scope",
+        "affected_question_class",
+        "affected_tickers",
+        "source_record_identity_sha256"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "EXTENDED_THEME_MAP_UNAVAILABLE",
+            "EXTENDED_ETF_THEME_MAPPING_INCOMPLETE",
+            "POLICY_EXTENDED_ACTIVATION_CONSTRAINTS_UNAVAILABLE",
+            "POLICY_MAX_NEW_TICKER_RULE_UNAVAILABLE",
+            "POLICY_PER_RUN_NEW_BUY_BUDGET_UNAVAILABLE",
+            "POLICY_PER_RUN_BUDGET_APPLICABILITY_UNVERIFIED",
+            "POLICY_CASH_MODEL_UNAVAILABLE",
+            "POLICY_PORTFOLIO_NAV_CONCENTRATION_UNAVAILABLE",
+            "POLICY_LOOKTHROUGH_EXPOSURE_UNAVAILABLE",
+            "POLICY_TURNOVER_ENFORCEMENT_INCOMPLETE",
+            "POLICY_MINIMUM_HOLDING_ENFORCEMENT_INCOMPLETE",
+            "POLICY_TAX_LOT_ENFORCEMENT_UNAVAILABLE",
+            "POLICY_SELL_ELIGIBILITY_INCOMPLETE"
+          ]
+        },
+        "scope": {
+          "enum": [
+            "UNIVERSE",
+            "POLICY"
+          ]
+        },
+        "affected_question_class": {
+          "enum": [
+            "UNIVERSE_THEME_INTERPRETATION",
+            "EXTENDED_ACTIVATION",
+            "MAXIMUM_NEW_TICKERS",
+            "PER_RUN_BUDGET",
+            "CASH_AND_DEPLOYMENT",
+            "CONCENTRATION",
+            "LOOKTHROUGH_EXPOSURE",
+            "TURNOVER",
+            "MINIMUM_HOLDING",
+            "TAX_LOTS",
+            "SELL_ELIGIBILITY"
+          ]
+        },
+        "affected_tickers": {
+          "$ref": "#/$defs/ticker_list"
+        },
+        "source_record_identity_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}

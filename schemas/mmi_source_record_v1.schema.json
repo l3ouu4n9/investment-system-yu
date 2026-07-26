@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-system.local/schemas/mmi_source_record_v1.schema.json",
+  "title": "MMI source record v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "source_role",
+    "source_id",
+    "repository_relative_locator",
+    "maximum_bytes",
+    "observed_size_bytes",
+    "expected_sha256",
+    "observed_sha256",
+    "content_binding_status",
+    "operator_origin_authentication",
+    "stable_read_status",
+    "regular_file_status",
+    "authority_effect",
+    "source_record_identity_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mmi_source_record_v1"
+    },
+    "source_role": {
+      "const": "STRATEGY_SETTINGS"
+    },
+    "source_id": {
+      "const": "MMI_STRATEGY_SETTINGS"
+    },
+    "repository_relative_locator": {
+      "const": "inputs/current/strategy_settings.yaml"
+    },
+    "maximum_bytes": {
+      "const": 262144
+    },
+    "observed_size_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 262144
+    },
+    "expected_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "observed_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "content_binding_status": {
+      "const": "EXPECTED_SHA256_MATCHED"
+    },
+    "operator_origin_authentication": {
+      "const": "NOT_ESTABLISHED"
+    },
+    "stable_read_status": {
+      "const": "STABLE_BEFORE_AND_AFTER"
+    },
+    "regular_file_status": {
+      "const": "REGULAR_FILE"
+    },
+    "authority_effect": {
+      "const": "NONE"
+    },
+    "source_record_identity_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

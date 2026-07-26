@@ -1,0 +1,194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-system.local/schemas/mmi_universe_projection_v1.schema.json",
+  "title": "MMI deterministic universe projection v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "projection_kind",
+    "report_only",
+    "authority_effect",
+    "source_record_identity_sha256",
+    "core_universe",
+    "satellite_universe",
+    "approved_extended_universe",
+    "benchmark_reference_instruments",
+    "role_by_ticker",
+    "theme_by_ticker",
+    "approved_extended_members_without_theme",
+    "theme_mapping_source_status",
+    "extended_membership_status",
+    "extended_activation_status",
+    "analysis_scope_instruments",
+    "instrument_availability_observation_status",
+    "known_universe_gaps",
+    "universe_projection_identity_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mmi_universe_projection_v1"
+    },
+    "projection_kind": {
+      "const": "MMI_UNIVERSE_PROJECTION"
+    },
+    "report_only": {
+      "const": true
+    },
+    "authority_effect": {
+      "const": "NONE"
+    },
+    "source_record_identity_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "core_universe": {
+      "$ref": "#/$defs/nonempty_ticker_list"
+    },
+    "satellite_universe": {
+      "$ref": "#/$defs/nonempty_ticker_list"
+    },
+    "approved_extended_universe": {
+      "$ref": "#/$defs/ticker_list"
+    },
+    "benchmark_reference_instruments": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/ticker"
+      }
+    },
+    "role_by_ticker": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 256,
+      "propertyNames": {
+        "$ref": "#/$defs/ticker"
+      },
+      "patternProperties": {
+        "^[A-Z][A-Z0-9.-]{0,15}$": {
+          "enum": [
+            "CORE",
+            "SATELLITE",
+            "APPROVED_EXTENDED"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "theme_by_ticker": {
+      "type": "object",
+      "maxProperties": 256,
+      "propertyNames": {
+        "$ref": "#/$defs/ticker"
+      },
+      "patternProperties": {
+        "^[A-Z][A-Z0-9.-]{0,15}$": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "approved_extended_members_without_theme": {
+      "$ref": "#/$defs/ticker_list"
+    },
+    "theme_mapping_source_status": {
+      "enum": [
+        "SOURCE_MAP_PRESENT",
+        "SOURCE_MAP_UNAVAILABLE"
+      ]
+    },
+    "extended_membership_status": {
+      "enum": [
+        "APPROVED_STATIC_MEMBERS_PRESENT",
+        "APPROVED_STATIC_MEMBERS_EMPTY"
+      ]
+    },
+    "extended_activation_status": {
+      "const": "NOT_EVALUATED_REPORT_ONLY"
+    },
+    "analysis_scope_instruments": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/ticker"
+      }
+    },
+    "instrument_availability_observation_status": {
+      "const": "NOT_DETERMINISTICALLY_AVAILABLE"
+    },
+    "known_universe_gaps": {
+      "type": "array",
+      "maxItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/universe_gap"
+      }
+    },
+    "universe_projection_identity_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "ticker": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9.-]{0,15}$"
+    },
+    "ticker_list": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/ticker"
+      }
+    },
+    "nonempty_ticker_list": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/ticker"
+      }
+    },
+    "universe_gap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "scope",
+        "affected_question_class",
+        "affected_tickers",
+        "source_record_identity_sha256"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "EXTENDED_THEME_MAP_UNAVAILABLE",
+            "EXTENDED_ETF_THEME_MAPPING_INCOMPLETE"
+          ]
+        },
+        "scope": {
+          "const": "UNIVERSE"
+        },
+        "affected_question_class": {
+          "const": "UNIVERSE_THEME_INTERPRETATION"
+        },
+        "affected_tickers": {
+          "$ref": "#/$defs/ticker_list"
+        },
+        "source_record_identity_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}
