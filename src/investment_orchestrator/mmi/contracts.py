@@ -11,11 +11,39 @@ import json
 from pathlib import PurePosixPath
 import secrets
 from types import MappingProxyType
-from typing import Final, Mapping, Protocol
+from typing import Final, Mapping, NoReturn, Protocol
+
+from investment_orchestrator.mmi.canonical import (
+    MAXIMUM_AUTHENTICATED_EVIDENCE_BUNDLE_CANONICAL_BYTES,
+    MMI_AUTHENTICATED_EVIDENCE_BUNDLE_IDENTITY_DOMAIN,
+    MmiCanonicalizationError,
+    record_identity_sha256,
+)
 
 
 AUTHORITY_EFFECT_NONE: Final = "NONE"
 CANONICAL_UTC_TIMESTAMP_FORMAT: Final = "%Y-%m-%dT%H:%M:%S.%fZ"
+MMI_AUTHENTICATED_EVIDENCE_BUNDLE_SCHEMA_VERSION: Final = (
+    "mmi_authenticated_evidence_bundle_v1"
+)
+MMI_AUTHENTICATED_EVIDENCE_BUNDLE_ARTIFACT_KIND: Final = (
+    "MMI_AUTHENTICATED_EVIDENCE_BUNDLE"
+)
+MMI_EVIDENCE_POLICY_COMPONENT_PRESENCE_STATUS: Final = (
+    "PRESENT_SOURCE_BOUND_VALIDATED"
+)
+MMI_EVIDENCE_PORTFOLIO_NOT_SUPPLIED_STATUS: Final = "NOT_SUPPLIED"
+MMI_EVIDENCE_PORTFOLIO_SOURCE_ABSENT_STATUS: Final = (
+    "PRESENT_VALIDATED_SOURCE_ABSENT"
+)
+MMI_EVIDENCE_PORTFOLIO_SOURCE_BOUND_STATUS: Final = (
+    "PRESENT_SOURCE_BOUND_VALIDATED"
+)
+MMI_EVIDENCE_PORTFOLIO_NOT_SUPPLIED_GAP_CODE: Final = (
+    "EVIDENCE_PORTFOLIO_COMPONENT_NOT_SUPPLIED"
+)
+MMI_EVIDENCE_ASSEMBLY_GAP_SCOPE: Final = "EVIDENCE_ASSEMBLY"
+MMI_EVIDENCE_PORTFOLIO_GAP_COMPONENT: Final = "PORTFOLIO_PROJECTION"
 _MMI_RUN_CONTEXT_PROVENANCE_KEY: Final = secrets.token_bytes(32)
 _MMI_CAPTURED_SOURCE_PROVENANCE_KEY: Final = secrets.token_bytes(32)
 _MMI_RUN_CONTEXT_PROVENANCE_INSTANCES: Final[dict[bytes, object]] = {}
@@ -272,6 +300,280 @@ class MmiProjectionResultCategory(str, Enum):
     PROJECTION_VALID_WITH_GAPS = "PROJECTION_VALID_WITH_GAPS"
     PROJECTION_BLOCKED = "PROJECTION_BLOCKED"
     PROJECTION_CONTRACT_FAILURE = "PROJECTION_CONTRACT_FAILURE"
+
+
+_EVIDENCE_TOP_LEVEL_FIELDS: Final = frozenset(
+    {
+        "schema_version",
+        "artifact_kind",
+        "report_only",
+        "authority_effect",
+        "evaluation_timestamp_utc",
+        "policy_component",
+        "portfolio_component",
+        "known_evidence_gaps",
+        "evidence_completeness_status",
+        "evidence_bundle_identity_sha256",
+    }
+)
+_EVIDENCE_POLICY_COMPONENT_FIELDS: Final = frozenset(
+    {
+        "presence_status",
+        "strategy_source_schema_version",
+        "strategy_source_role",
+        "strategy_source_record_identity_sha256",
+        "universe_schema_version",
+        "universe_artifact_kind",
+        "universe_projection_identity_sha256",
+        "policy_schema_version",
+        "policy_artifact_kind",
+        "policy_projection_identity_sha256",
+        "validation_result_category",
+    }
+)
+_EVIDENCE_PORTFOLIO_SOURCE_ABSENT_FIELDS: Final = frozenset(
+    {
+        "presence_status",
+        "portfolio_schema_version",
+        "portfolio_artifact_kind",
+        "portfolio_projection_identity_sha256",
+        "policy_projection_identity_sha256",
+        "portfolio_source_status",
+        "validation_result_category",
+    }
+)
+_EVIDENCE_PORTFOLIO_SOURCE_BOUND_FIELDS: Final = frozenset(
+    {
+        *_EVIDENCE_PORTFOLIO_SOURCE_ABSENT_FIELDS,
+        "portfolio_source_schema_version",
+        "portfolio_source_role",
+        "portfolio_source_record_identity_sha256",
+    }
+)
+_EVIDENCE_GAP_FIELDS: Final = frozenset(
+    {
+        "code",
+        "scope",
+        "component",
+    }
+)
+_LOWER_HEX_CHARACTERS: Final = frozenset("0123456789abcdef")
+
+
+def _evidence_bundle_contract_failure() -> NoReturn:
+    raise MmiCanonicalizationError(
+        "MMI_AUTHENTICATED_EVIDENCE_BUNDLE_CONTRACT_INVALID"
+    )
+
+
+def _require_exact_dict(
+    value: object,
+    expected_fields: frozenset[str],
+) -> dict[str, object]:
+    if type(value) is not dict or set(value) != expected_fields:
+        _evidence_bundle_contract_failure()
+    return value
+
+
+def _is_sha256(value: object) -> bool:
+    return (
+        type(value) is str
+        and len(value) == 64
+        and set(value) <= _LOWER_HEX_CHARACTERS
+    )
+
+
+def _require_sha256(value: object) -> None:
+    if not _is_sha256(value):
+        _evidence_bundle_contract_failure()
+
+
+def _require_canonical_utc_timestamp(value: object) -> None:
+    if type(value) is not str or len(value) != 27:
+        _evidence_bundle_contract_failure()
+    try:
+        parsed = datetime.strptime(
+            value,
+            CANONICAL_UTC_TIMESTAMP_FORMAT,
+        )
+    except ValueError:
+        _evidence_bundle_contract_failure()
+    if parsed.strftime(CANONICAL_UTC_TIMESTAMP_FORMAT) != value:
+        _evidence_bundle_contract_failure()
+
+
+def _validate_evidence_policy_component(
+    value: object,
+) -> dict[str, object]:
+    component = _require_exact_dict(
+        value,
+        _EVIDENCE_POLICY_COMPONENT_FIELDS,
+    )
+    expected_constants = {
+        "presence_status": (
+            MMI_EVIDENCE_POLICY_COMPONENT_PRESENCE_STATUS
+        ),
+        "strategy_source_schema_version": "mmi_source_record_v1",
+        "strategy_source_role": MmiSourceRole.STRATEGY_SETTINGS.value,
+        "universe_schema_version": "mmi_universe_projection_v1",
+        "universe_artifact_kind": "MMI_UNIVERSE_PROJECTION",
+        "policy_schema_version": "mmi_policy_projection_v1",
+        "policy_artifact_kind": "MMI_POLICY_PROJECTION",
+        "validation_result_category": (
+            MmiProjectionResultCategory.PROJECTION_VALID_WITH_GAPS.value
+        ),
+    }
+    if any(
+        component.get(field) != expected
+        for field, expected in expected_constants.items()
+    ):
+        _evidence_bundle_contract_failure()
+    for field in (
+        "strategy_source_record_identity_sha256",
+        "universe_projection_identity_sha256",
+        "policy_projection_identity_sha256",
+    ):
+        _require_sha256(component.get(field))
+    return component
+
+
+def _validate_evidence_portfolio_component(
+    value: object,
+    *,
+    policy_identity: object,
+) -> str:
+    if type(value) is not dict:
+        _evidence_bundle_contract_failure()
+    presence_status = value.get("presence_status")
+    if presence_status == MMI_EVIDENCE_PORTFOLIO_NOT_SUPPLIED_STATUS:
+        _require_exact_dict(value, frozenset({"presence_status"}))
+        return presence_status
+
+    if presence_status == MMI_EVIDENCE_PORTFOLIO_SOURCE_ABSENT_STATUS:
+        component = _require_exact_dict(
+            value,
+            _EVIDENCE_PORTFOLIO_SOURCE_ABSENT_FIELDS,
+        )
+        expected_source_status = "SOURCE_ABSENT"
+    elif presence_status == MMI_EVIDENCE_PORTFOLIO_SOURCE_BOUND_STATUS:
+        component = _require_exact_dict(
+            value,
+            _EVIDENCE_PORTFOLIO_SOURCE_BOUND_FIELDS,
+        )
+        expected_source_status = "SOURCE_PRESENT_CONTENT_BOUND"
+        if (
+            component.get("portfolio_source_schema_version")
+            != "mmi_source_record_v1"
+            or component.get("portfolio_source_role")
+            != MmiSourceRole.PORTFOLIO_SNAPSHOT.value
+        ):
+            _evidence_bundle_contract_failure()
+        _require_sha256(
+            component.get("portfolio_source_record_identity_sha256")
+        )
+    else:
+        _evidence_bundle_contract_failure()
+
+    if (
+        component.get("portfolio_schema_version")
+        != "mmi_portfolio_snapshot_projection_v1"
+        or component.get("portfolio_artifact_kind")
+        != "MMI_PORTFOLIO_SNAPSHOT_PROJECTION"
+        or component.get("portfolio_source_status")
+        != expected_source_status
+        or component.get("validation_result_category")
+        != (
+            MmiProjectionResultCategory.PROJECTION_VALID_WITH_GAPS.value
+        )
+        or component.get("policy_projection_identity_sha256")
+        != policy_identity
+    ):
+        _evidence_bundle_contract_failure()
+    _require_sha256(
+        component.get("portfolio_projection_identity_sha256")
+    )
+    _require_sha256(
+        component.get("policy_projection_identity_sha256")
+    )
+    return presence_status
+
+
+def _validate_evidence_gaps(
+    value: object,
+    *,
+    portfolio_presence_status: str,
+) -> None:
+    if type(value) is not list:
+        _evidence_bundle_contract_failure()
+    if (
+        portfolio_presence_status
+        == MMI_EVIDENCE_PORTFOLIO_NOT_SUPPLIED_STATUS
+    ):
+        if len(value) != 1:
+            _evidence_bundle_contract_failure()
+        gap = _require_exact_dict(value[0], _EVIDENCE_GAP_FIELDS)
+        if gap != {
+            "code": MMI_EVIDENCE_PORTFOLIO_NOT_SUPPLIED_GAP_CODE,
+            "scope": MMI_EVIDENCE_ASSEMBLY_GAP_SCOPE,
+            "component": MMI_EVIDENCE_PORTFOLIO_GAP_COMPONENT,
+        }:
+            _evidence_bundle_contract_failure()
+    elif value:
+        _evidence_bundle_contract_failure()
+
+
+def mmi_authenticated_evidence_bundle_identity_sha256(
+    value: Mapping[str, object],
+) -> str:
+    """Calculate structural bundle identity without authenticating inputs."""
+    if not isinstance(value, Mapping):
+        _evidence_bundle_contract_failure()
+    try:
+        manifest = dict(value)
+    except (TypeError, ValueError):
+        _evidence_bundle_contract_failure()
+    if set(manifest) != _EVIDENCE_TOP_LEVEL_FIELDS:
+        _evidence_bundle_contract_failure()
+    if (
+        manifest.get("schema_version")
+        != MMI_AUTHENTICATED_EVIDENCE_BUNDLE_SCHEMA_VERSION
+        or manifest.get("artifact_kind")
+        != MMI_AUTHENTICATED_EVIDENCE_BUNDLE_ARTIFACT_KIND
+        or manifest.get("report_only") is not True
+        or manifest.get("authority_effect") != AUTHORITY_EFFECT_NONE
+        or manifest.get("evidence_completeness_status")
+        != (
+            MmiProjectionResultCategory.PROJECTION_VALID_WITH_GAPS.value
+        )
+    ):
+        _evidence_bundle_contract_failure()
+    _require_canonical_utc_timestamp(
+        manifest.get("evaluation_timestamp_utc")
+    )
+    policy_component = _validate_evidence_policy_component(
+        manifest.get("policy_component")
+    )
+    portfolio_presence_status = (
+        _validate_evidence_portfolio_component(
+            manifest.get("portfolio_component"),
+            policy_identity=policy_component.get(
+                "policy_projection_identity_sha256"
+            ),
+        )
+    )
+    _validate_evidence_gaps(
+        manifest.get("known_evidence_gaps"),
+        portfolio_presence_status=portfolio_presence_status,
+    )
+    _require_sha256(manifest.get("evidence_bundle_identity_sha256"))
+    return record_identity_sha256(
+        manifest,
+        identity_field="evidence_bundle_identity_sha256",
+        domain=MMI_AUTHENTICATED_EVIDENCE_BUNDLE_IDENTITY_DOMAIN,
+        maximum_bytes=(
+            MAXIMUM_AUTHENTICATED_EVIDENCE_BUNDLE_CANONICAL_BYTES
+        ),
+    )
 
 
 @dataclass(frozen=True, slots=True, init=False)

@@ -1,0 +1,280 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-system.local/schemas/mmi_authenticated_evidence_bundle_v1.schema.json",
+  "title": "MMI authenticated evidence bundle v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "report_only",
+    "authority_effect",
+    "evaluation_timestamp_utc",
+    "policy_component",
+    "portfolio_component",
+    "known_evidence_gaps",
+    "evidence_completeness_status",
+    "evidence_bundle_identity_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mmi_authenticated_evidence_bundle_v1"
+    },
+    "artifact_kind": {
+      "const": "MMI_AUTHENTICATED_EVIDENCE_BUNDLE"
+    },
+    "report_only": {
+      "const": true
+    },
+    "authority_effect": {
+      "const": "NONE"
+    },
+    "evaluation_timestamp_utc": {
+      "$ref": "#/$defs/utc_timestamp"
+    },
+    "policy_component": {
+      "$ref": "#/$defs/policy_component"
+    },
+    "portfolio_component": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/portfolio_not_supplied"
+        },
+        {
+          "$ref": "#/$defs/portfolio_source_absent"
+        },
+        {
+          "$ref": "#/$defs/portfolio_source_bound"
+        }
+      ]
+    },
+    "known_evidence_gaps": {
+      "type": "array",
+      "maxItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/portfolio_not_supplied_gap"
+      }
+    },
+    "evidence_completeness_status": {
+      "const": "PROJECTION_VALID_WITH_GAPS"
+    },
+    "evidence_bundle_identity_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "portfolio_component": {
+            "properties": {
+              "presence_status": {
+                "const": "NOT_SUPPLIED"
+              }
+            },
+            "required": [
+              "presence_status"
+            ]
+          }
+        },
+        "required": [
+          "portfolio_component"
+        ]
+      },
+      "then": {
+        "properties": {
+          "known_evidence_gaps": {
+            "minItems": 1,
+            "maxItems": 1
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "known_evidence_gaps": {
+            "maxItems": 0
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "utc_timestamp": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{6}Z$"
+    },
+    "policy_component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "presence_status",
+        "strategy_source_schema_version",
+        "strategy_source_role",
+        "strategy_source_record_identity_sha256",
+        "universe_schema_version",
+        "universe_artifact_kind",
+        "universe_projection_identity_sha256",
+        "policy_schema_version",
+        "policy_artifact_kind",
+        "policy_projection_identity_sha256",
+        "validation_result_category"
+      ],
+      "properties": {
+        "presence_status": {
+          "const": "PRESENT_SOURCE_BOUND_VALIDATED"
+        },
+        "strategy_source_schema_version": {
+          "const": "mmi_source_record_v1"
+        },
+        "strategy_source_role": {
+          "const": "STRATEGY_SETTINGS"
+        },
+        "strategy_source_record_identity_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "universe_schema_version": {
+          "const": "mmi_universe_projection_v1"
+        },
+        "universe_artifact_kind": {
+          "const": "MMI_UNIVERSE_PROJECTION"
+        },
+        "universe_projection_identity_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "policy_schema_version": {
+          "const": "mmi_policy_projection_v1"
+        },
+        "policy_artifact_kind": {
+          "const": "MMI_POLICY_PROJECTION"
+        },
+        "policy_projection_identity_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "validation_result_category": {
+          "const": "PROJECTION_VALID_WITH_GAPS"
+        }
+      }
+    },
+    "portfolio_not_supplied": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "presence_status"
+      ],
+      "properties": {
+        "presence_status": {
+          "const": "NOT_SUPPLIED"
+        }
+      }
+    },
+    "portfolio_source_absent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "presence_status",
+        "portfolio_schema_version",
+        "portfolio_artifact_kind",
+        "portfolio_projection_identity_sha256",
+        "policy_projection_identity_sha256",
+        "portfolio_source_status",
+        "validation_result_category"
+      ],
+      "properties": {
+        "presence_status": {
+          "const": "PRESENT_VALIDATED_SOURCE_ABSENT"
+        },
+        "portfolio_schema_version": {
+          "const": "mmi_portfolio_snapshot_projection_v1"
+        },
+        "portfolio_artifact_kind": {
+          "const": "MMI_PORTFOLIO_SNAPSHOT_PROJECTION"
+        },
+        "portfolio_projection_identity_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "policy_projection_identity_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "portfolio_source_status": {
+          "const": "SOURCE_ABSENT"
+        },
+        "validation_result_category": {
+          "const": "PROJECTION_VALID_WITH_GAPS"
+        }
+      }
+    },
+    "portfolio_source_bound": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "presence_status",
+        "portfolio_schema_version",
+        "portfolio_artifact_kind",
+        "portfolio_projection_identity_sha256",
+        "policy_projection_identity_sha256",
+        "portfolio_source_status",
+        "portfolio_source_schema_version",
+        "portfolio_source_role",
+        "portfolio_source_record_identity_sha256",
+        "validation_result_category"
+      ],
+      "properties": {
+        "presence_status": {
+          "const": "PRESENT_SOURCE_BOUND_VALIDATED"
+        },
+        "portfolio_schema_version": {
+          "const": "mmi_portfolio_snapshot_projection_v1"
+        },
+        "portfolio_artifact_kind": {
+          "const": "MMI_PORTFOLIO_SNAPSHOT_PROJECTION"
+        },
+        "portfolio_projection_identity_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "policy_projection_identity_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "portfolio_source_status": {
+          "const": "SOURCE_PRESENT_CONTENT_BOUND"
+        },
+        "portfolio_source_schema_version": {
+          "const": "mmi_source_record_v1"
+        },
+        "portfolio_source_role": {
+          "const": "PORTFOLIO_SNAPSHOT"
+        },
+        "portfolio_source_record_identity_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "validation_result_category": {
+          "const": "PROJECTION_VALID_WITH_GAPS"
+        }
+      }
+    },
+    "portfolio_not_supplied_gap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "scope",
+        "component"
+      ],
+      "properties": {
+        "code": {
+          "const": "EVIDENCE_PORTFOLIO_COMPONENT_NOT_SUPPLIED"
+        },
+        "scope": {
+          "const": "EVIDENCE_ASSEMBLY"
+        },
+        "component": {
+          "const": "PORTFOLIO_PROJECTION"
+        }
+      }
+    }
+  }
+}
