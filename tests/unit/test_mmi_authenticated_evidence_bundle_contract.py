@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from copy import deepcopy
 import hashlib
 import inspect
@@ -1050,8 +1051,12 @@ def test_new_constants_carry_only_contract_identity_relationships() -> None:
         assert forbidden not in serialized
 
 
-def test_e1b_adds_no_builder_validator_module_or_production_consumer() -> None:
+def test_e1b_contract_and_e1c_runtime_have_exact_phase_ownership() -> None:
     root = repo_root()
+    production_root = root / "src/investment_orchestrator"
+    production_paths = tuple(sorted(production_root.rglob("*.py")))
+    assert len(production_paths) == 130
+
     mmi_paths = tuple(
         sorted(
             path.relative_to(root).as_posix()
@@ -1064,21 +1069,225 @@ def test_e1b_adds_no_builder_validator_module_or_production_consumer() -> None:
         "src/investment_orchestrator/mmi/__init__.py",
         "src/investment_orchestrator/mmi/canonical.py",
         "src/investment_orchestrator/mmi/contracts.py",
+        "src/investment_orchestrator/mmi/evidence_bundle.py",
         "src/investment_orchestrator/mmi/policy_projection.py",
         "src/investment_orchestrator/mmi/portfolio_projection.py",
         "src/investment_orchestrator/mmi/source_capture.py",
     )
-    production_sources = {
-        path: path.read_text(encoding="utf-8")
-        for path in (root / "src/investment_orchestrator").rglob("*.py")
+
+    relative_paths = {
+        path: path.relative_to(root).as_posix()
+        for path in production_paths
     }
-    joined = "\n".join(production_sources.values())
-    assert "build_mmi_authenticated_evidence_bundle" not in joined
-    assert "validate_mmi_authenticated_evidence_bundle" not in joined
-    assert joined.count(
-        "def mmi_authenticated_evidence_bundle_identity_sha256"
-    ) == 1
-    assert joined.count(
+    trees = {
+        path: ast.parse(path.read_text(encoding="utf-8"))
+        for path in production_paths
+    }
+    evidence_relative_path = (
+        "src/investment_orchestrator/mmi/evidence_bundle.py"
+    )
+    evidence_path = root / evidence_relative_path
+    contracts_path = (
+        root / "src/investment_orchestrator/mmi/contracts.py"
+    )
+    canonical_path = (
+        root / "src/investment_orchestrator/mmi/canonical.py"
+    )
+    init_path = root / "src/investment_orchestrator/mmi/__init__.py"
+
+    evidence_named_paths = tuple(
+        relative_paths[path]
+        for path in production_paths
+        if "evidence_bundle" in path.stem
+    )
+    assert evidence_named_paths == (evidence_relative_path,)
+
+    public_surface_names = (
+        "build_mmi_authenticated_evidence_bundle",
+        "validate_mmi_authenticated_evidence_bundle",
+    )
+
+    def top_level_function_names(path: Path) -> tuple[str, ...]:
+        return tuple(
+            node.name
+            for node in trees[path].body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        )
+
+    public_surface_owners = {
+        name: tuple(
+            relative_paths[path]
+            for path in production_paths
+            if name in top_level_function_names(path)
+        )
+        for name in public_surface_names
+    }
+    assert public_surface_owners == {
+        name: (evidence_relative_path,)
+        for name in public_surface_names
+    }
+    for contract_path in (contracts_path, canonical_path):
+        assert not (
+            set(top_level_function_names(contract_path))
+            & set(public_surface_names)
+        )
+
+    evidence_tree = trees[evidence_path]
+    evidence_public_functions = tuple(
+        name
+        for name in top_level_function_names(evidence_path)
+        if not name.startswith("_")
+    )
+    evidence_public_classes = tuple(
+        node.name
+        for node in evidence_tree.body
+        if isinstance(node, ast.ClassDef)
+        and not node.name.startswith("_")
+    )
+    assert evidence_public_functions == public_surface_names
+    assert evidence_public_classes == ()
+
+    all_assignments = tuple(
+        node
+        for node in evidence_tree.body
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        and any(
+            isinstance(target, ast.Name) and target.id == "__all__"
+            for target in (
+                node.targets
+                if isinstance(node, ast.Assign)
+                else (node.target,)
+            )
+        )
+    )
+    assert len(all_assignments) == 1
+    all_value = all_assignments[0].value
+    assert ast.literal_eval(all_value) == public_surface_names
+
+    public_assignments = tuple(
+        target.id
+        for node in evidence_tree.body
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        for target in (
+            node.targets
+            if isinstance(node, ast.Assign)
+            else (node.target,)
+        )
+        if isinstance(target, ast.Name)
+        and not target.id.startswith("_")
+    )
+    assert public_assignments == ()
+
+    evidence_module_name = (
+        "investment_orchestrator.mmi.evidence_bundle"
+    )
+
+    def imported_modules(path: Path) -> tuple[str, ...]:
+        relative_module_path = path.relative_to(root / "src")
+        module_parts = list(relative_module_path.with_suffix("").parts)
+        package_parts = module_parts[:-1]
+        modules: list[str] = []
+        for node in ast.walk(trees[path]):
+            if isinstance(node, ast.Import):
+                modules.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                if node.level == 0:
+                    base_parts = (
+                        node.module.split(".")
+                        if node.module is not None
+                        else []
+                    )
+                else:
+                    retained = len(package_parts) - (node.level - 1)
+                    base_parts = package_parts[: max(retained, 0)]
+                    if node.module is not None:
+                        base_parts.extend(node.module.split("."))
+                base = ".".join(base_parts)
+                if base:
+                    modules.append(base)
+                modules.extend(
+                    ".".join((*base_parts, alias.name))
+                    for alias in node.names
+                    if alias.name != "*"
+                )
+        return tuple(modules)
+
+    evidence_importers = tuple(
+        relative_paths[path]
+        for path in production_paths
+        if path != evidence_path
+        and any(
+            module == evidence_module_name
+            or module.startswith(f"{evidence_module_name}.")
+            for module in imported_modules(path)
+        )
+    )
+    assert evidence_importers == ()
+
+    init_tree = trees[init_path]
+    assert not any(
+        isinstance(node, (ast.Import, ast.ImportFrom))
+        for node in ast.walk(init_tree)
+    )
+    assert not any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name in {"__getattr__", "__dir__"}
+        for node in init_tree.body
+    )
+    init_all = tuple(
+        node
+        for node in init_tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "__all__"
+            for target in node.targets
+        )
+    )
+    assert len(init_all) == 1
+    assert ast.literal_eval(init_all[0].value) == ()
+
+    identity_helper_name = (
         "mmi_authenticated_evidence_bundle_identity_sha256"
-    ) == 1
-    assert SCHEMA_NAME not in joined
+    )
+    identity_helper_definitions = tuple(
+        relative_paths[path]
+        for path in production_paths
+        if identity_helper_name in top_level_function_names(path)
+    )
+    assert identity_helper_definitions == (
+        "src/investment_orchestrator/mmi/contracts.py",
+    )
+
+    def loads_name(path: Path, name: str) -> bool:
+        return any(
+            (
+                isinstance(node, ast.Name)
+                and isinstance(node.ctx, ast.Load)
+                and node.id == name
+            )
+            or (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.ctx, ast.Load)
+                and node.attr == name
+            )
+            for node in ast.walk(trees[path])
+        )
+
+    identity_helper_consumers = tuple(
+        relative_paths[path]
+        for path in production_paths
+        if path != contracts_path
+        and loads_name(path, identity_helper_name)
+    )
+    assert identity_helper_consumers == (evidence_relative_path,)
+
+    schema_name_owners = tuple(
+        relative_paths[path]
+        for path in production_paths
+        if any(
+            isinstance(node, ast.Constant)
+            and node.value == SCHEMA_NAME
+            for node in ast.walk(trees[path])
+        )
+    )
+    assert schema_name_owners == (evidence_relative_path,)
