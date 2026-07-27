@@ -15,6 +15,9 @@ MMI_UNIVERSE_PROJECTION_IDENTITY_DOMAIN: Final = (
     b"mmi_universe_projection_v1\0"
 )
 MMI_POLICY_PROJECTION_IDENTITY_DOMAIN: Final = b"mmi_policy_projection_v1\0"
+MMI_PORTFOLIO_SNAPSHOT_PROJECTION_IDENTITY_DOMAIN: Final = (
+    b"mmi_portfolio_snapshot_projection_v1\0"
+)
 
 MAXIMUM_CANONICAL_JSON_BYTES: Final = 1_048_576
 MAXIMUM_CANONICAL_DEPTH: Final = 32

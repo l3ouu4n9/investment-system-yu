@@ -17,6 +17,9 @@ from investment_orchestrator.mmi.contracts import (
 from investment_orchestrator.mmi.policy_projection import (
     build_mmi_policy_projection,
 )
+from investment_orchestrator.mmi.portfolio_projection import (
+    build_mmi_portfolio_snapshot_projection,
+)
 from investment_orchestrator.mmi.source_capture import (
     capture_current_mmi_source,
 )
@@ -35,6 +38,7 @@ MMI_PRODUCTION_PATHS = (
     "src/investment_orchestrator/mmi/canonical.py",
     "src/investment_orchestrator/mmi/contracts.py",
     "src/investment_orchestrator/mmi/policy_projection.py",
+    "src/investment_orchestrator/mmi/portfolio_projection.py",
     "src/investment_orchestrator/mmi/source_capture.py",
 )
 EXPECTED_EXTERNAL_CONSUMERS = (
@@ -142,6 +146,25 @@ def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -
                     "investment_orchestrator.common.schema_validation."
                     "validate_artifact_schema"
                 )
+                or imported
+                == (
+                    "investment_orchestrator.parsers."
+                    "portfolio_snapshot_existing_orders"
+                )
+                or imported
+                == (
+                    "investment_orchestrator.parsers."
+                    "portfolio_snapshot_existing_orders."
+                    "parse_existing_buy_open_orders_summary"
+                )
+                or (
+                    path
+                    == (
+                        "src/investment_orchestrator/mmi/"
+                        "source_capture.py"
+                    )
+                    and imported == "ctypes"
+                )
                 or imported.startswith("investment_orchestrator.mmi.")
             ), (path, imported)
 
@@ -154,10 +177,72 @@ def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -
             )
 
 
+def test_ctypes_authority_is_exactly_source_capture_openat2_only() -> None:
+    inventory = ltetf._scan_production_inventory(repo_root())
+    ctypes_importers = tuple(
+        path
+        for path, imports in inventory.imports_by_path
+        if path in MMI_PRODUCTION_PATHS and "ctypes" in imports
+    )
+    assert ctypes_importers == (
+        "src/investment_orchestrator/mmi/source_capture.py",
+    )
+    for path, imports in inventory.imports_by_path:
+        if path not in MMI_PRODUCTION_PATHS:
+            continue
+        assert "ctypes.util" not in imports
+        assert not {
+            imported.split(".", 1)[0]
+            for imported in imports
+        } & {
+            "_ctypes",
+            "cffi",
+            "cffi_backend",
+        }
+    source = _mmi_sources()[
+        "src/investment_orchestrator/mmi/source_capture.py"
+    ]
+    tree = ast.parse(source)
+    ctypes_calls = {
+        _call_name(node)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and _call_name(node).startswith("ctypes.")
+    }
+    assert ctypes_calls <= {
+        "ctypes.CDLL",
+        "ctypes.byref",
+        "ctypes.c_char_p",
+        "ctypes.c_int",
+        "ctypes.c_long",
+        "ctypes.c_size_t",
+        "ctypes.get_errno",
+        "ctypes.sizeof",
+    }
+    cdll_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and _call_name(node) == "ctypes.CDLL"
+    ]
+    assert len(cdll_calls) == 1
+    assert len(cdll_calls[0].args) == 1
+    assert isinstance(cdll_calls[0].args[0], ast.Constant)
+    assert cdll_calls[0].args[0].value is None
+    assert [
+        (keyword.arg, keyword.value.value)
+        for keyword in cdll_calls[0].keywords
+        if isinstance(keyword.value, ast.Constant)
+    ] == [("use_errno", True)]
+    assert "ctypes.util" not in source
+    assert "find_library" not in source
+
+
 def test_schema_helper_is_imported_by_exact_symbol_only() -> None:
     for relative in (
         "src/investment_orchestrator/mmi/source_capture.py",
         "src/investment_orchestrator/mmi/policy_projection.py",
+        "src/investment_orchestrator/mmi/portfolio_projection.py",
     ):
         tree = ast.parse(_mmi_sources()[relative])
         imports = [
@@ -171,6 +256,26 @@ def test_schema_helper_is_imported_by_exact_symbol_only() -> None:
         assert [(alias.name, alias.asname) for alias in imports[0].names] == [
             ("validate_artifact_schema", None)
         ]
+    portfolio_tree = ast.parse(
+        _mmi_sources()[
+            "src/investment_orchestrator/mmi/portfolio_projection.py"
+        ]
+    )
+    parser_imports = [
+        node
+        for node in portfolio_tree.body
+        if isinstance(node, ast.ImportFrom)
+        and node.module
+        == (
+            "investment_orchestrator.parsers."
+            "portfolio_snapshot_existing_orders"
+        )
+    ]
+    assert len(parser_imports) == 1
+    assert [
+        (alias.name, alias.asname)
+        for alias in parser_imports[0].names
+    ] == [("parse_existing_buy_open_orders_summary", None)]
     all_source = "\n".join(_mmi_sources().values())
     assert "write_validated_json" not in all_source
     assert "write_json" not in all_source
@@ -282,16 +387,36 @@ def test_reachable_schema_validation_call_graph_does_not_write(
     )
     assert capture.valid
     assert capture.source is not None
+    run_context = begin_mmi_projection_run()
     result = build_mmi_policy_projection(
         capture.source,
-        run_context=begin_mmi_projection_run(),
+        run_context=run_context,
     )
     assert result.valid
+    assert result.projection is not None
+    portfolio_raw = (
+        repo_root() / "inputs/current/portfolio_snapshot.txt"
+    ).read_bytes()
+    portfolio_capture = capture_current_mmi_source(
+        MmiSourceRole.PORTFOLIO_SNAPSHOT,
+        expected_source_sha256=hashlib.sha256(
+            portfolio_raw
+        ).hexdigest(),
+    )
+    assert portfolio_capture.valid
+    assert portfolio_capture.source is not None
+    portfolio_result = build_mmi_portfolio_snapshot_projection(
+        portfolio_capture.source,
+        policy_projection=result.projection,
+        policy_source=capture.source,
+        run_context=run_context,
+    )
+    assert portfolio_result.valid
 
 
 def test_ltetf_inventory_classification_is_unchanged_except_inventory_content() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
-    assert len(inventory.production_paths) == 128
+    assert len(inventory.production_paths) == 129
     assert inventory.dynamic_findings == ()
     assert inventory.observer_external_consumers == EXPECTED_EXTERNAL_CONSUMERS
     assert inventory.report_artifact_readers == ()

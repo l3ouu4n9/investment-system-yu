@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 import copy
 from dataclasses import replace
+import errno
 import hashlib
 import inspect
 import os
@@ -48,6 +50,32 @@ def _capture(root: Path, raw: bytes):
     )
 
 
+def _install_portfolio_source(root: Path, raw: bytes) -> Path:
+    path = root / "inputs" / "current" / "portfolio_snapshot.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(raw)
+    return path
+
+
+def _capture_portfolio(root: Path, raw: bytes):
+    return _capture_mmi_source_at_root(
+        root,
+        role=MmiSourceRole.PORTFOLIO_SNAPSHOT,
+        expected_source_sha256=hashlib.sha256(raw).hexdigest(),
+    )
+
+
+def _install_role_source(
+    root: Path,
+    role: MmiSourceRole,
+    raw: bytes,
+) -> Path:
+    if role is MmiSourceRole.STRATEGY_SETTINGS:
+        return _install_source(root, raw)
+    assert role is MmiSourceRole.PORTFOLIO_SNAPSHOT
+    return _install_portfolio_source(root, raw)
+
+
 def _install_checkout(root: Path, raw: bytes) -> Path:
     (root / "pyproject.toml").parent.mkdir(parents=True, exist_ok=True)
     (root / "pyproject.toml").write_bytes(
@@ -72,6 +100,135 @@ def _install_checkout(root: Path, raw: bytes) -> Path:
     )
     _install_source(root, raw)
     return module
+
+
+def _track_capture_descriptors(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    before_openat2: Callable[[], None] | None = None,
+    after_openat2: Callable[[int], None] | None = None,
+) -> tuple[list[int], list[int]]:
+    original_root = source_capture._open_root
+    original_relative = source_capture._open_relative
+    original_openat2 = source_capture._invoke_fixed_source_openat2
+    original_close = source_capture.os.close
+    opened: list[int] = []
+    closed: list[int] = []
+
+    def tracked_root(repository_root: Path, flags: int) -> int:
+        descriptor = original_root(repository_root, flags)
+        opened.append(descriptor)
+        return descriptor
+
+    def tracked_relative(
+        name: str,
+        *,
+        directory_fd: int,
+        flags: int,
+        unstable_code: str,
+    ) -> int:
+        descriptor = original_relative(
+            name,
+            directory_fd=directory_fd,
+            flags=flags,
+            unstable_code=unstable_code,
+        )
+        opened.append(descriptor)
+        return descriptor
+
+    def tracked_openat2(
+        *,
+        root_fd: int,
+        root_relative_path: bytes,
+        how: source_capture._OpenHow,
+    ) -> int:
+        if before_openat2 is not None:
+            before_openat2()
+        descriptor = original_openat2(
+            root_fd=root_fd,
+            root_relative_path=root_relative_path,
+            how=how,
+        )
+        opened.append(descriptor)
+        if after_openat2 is not None:
+            after_openat2(descriptor)
+        return descriptor
+
+    def tracked_close(file_fd: int) -> None:
+        closed.append(file_fd)
+        original_close(file_fd)
+
+    monkeypatch.setattr(source_capture, "_open_root", tracked_root)
+    monkeypatch.setattr(source_capture, "_open_relative", tracked_relative)
+    monkeypatch.setattr(
+        source_capture,
+        "_invoke_fixed_source_openat2",
+        tracked_openat2,
+    )
+    monkeypatch.setattr(source_capture.os, "close", tracked_close)
+    return opened, closed
+
+
+def _replace_fixed_path_before_openat2(
+    repository_root: Path,
+    role: MmiSourceRole,
+    raw: bytes,
+    case: str,
+) -> None:
+    leaf = (
+        repository_root
+        / MMI_SOURCE_CATALOG[role].repository_relative_locator
+    )
+    if case == "repository-root":
+        repository_root.rename(
+            repository_root.with_name(f"{repository_root.name}.detached")
+        )
+        _install_role_source(repository_root, role, raw)
+    elif case == "authenticated-ancestor":
+        ancestor = repository_root.parent
+        ancestor.rename(ancestor.with_name(f"{ancestor.name}.detached"))
+        _install_role_source(repository_root, role, raw)
+    elif case == "current":
+        current = leaf.parent
+        current.rename(current.with_name("current.detached"))
+        _install_role_source(repository_root, role, raw)
+    elif case == "leaf":
+        leaf.rename(leaf.with_name(f"{leaf.name}.detached"))
+        leaf.write_bytes(raw)
+    elif case == "repository-root-symlink":
+        detached = repository_root.with_name(
+            f"{repository_root.name}.detached"
+        )
+        repository_root.rename(detached)
+        repository_root.symlink_to(detached, target_is_directory=True)
+    elif case == "authenticated-ancestor-symlink":
+        ancestor = repository_root.parent
+        detached = ancestor.with_name(f"{ancestor.name}.detached")
+        ancestor.rename(detached)
+        ancestor.symlink_to(detached, target_is_directory=True)
+    elif case == "current-symlink":
+        current = leaf.parent
+        detached = current.with_name("current.detached")
+        current.rename(detached)
+        current.symlink_to(detached, target_is_directory=True)
+    elif case == "leaf-symlink":
+        detached = leaf.with_name(f"{leaf.name}.detached")
+        leaf.rename(detached)
+        leaf.symlink_to(detached)
+    elif case == "missing-component":
+        leaf.parent.rename(leaf.parent.with_name("current.detached"))
+    elif case == "intermediate-regular":
+        current = leaf.parent
+        current.rename(current.with_name("current.detached"))
+        current.write_bytes(b"not a directory\n")
+    elif case == "leaf-nonregular":
+        leaf.rename(leaf.with_name(f"{leaf.name}.detached"))
+        leaf.mkdir()
+    elif case == "leaf-fifo":
+        leaf.rename(leaf.with_name(f"{leaf.name}.detached"))
+        os.mkfifo(leaf)
+    else:
+        raise AssertionError(case)
 
 
 def test_source_catalog_is_exact_closed_and_code_owned() -> None:
@@ -119,16 +276,305 @@ def test_p1a_capture_surface_has_no_root_path_source_id_or_bound_parameters() ->
         )
 
 
-def test_portfolio_role_is_reserved_but_not_capturable_in_p1a(tmp_path: Path) -> None:
+def test_portfolio_role_capture_is_exact_hash_bound_and_provenance_valid(
+    tmp_path: Path,
+) -> None:
+    raw = b"# updated 2026-07-25\n"
+    path = _install_portfolio_source(tmp_path, raw)
+    (path.parent / "portfolio_snapshot.backup.txt").write_bytes(
+        b"different source must not be discovered\n"
+    )
     result = _capture_mmi_source_at_root(
         tmp_path,
         role=MmiSourceRole.PORTFOLIO_SNAPSHOT,
-        expected_source_sha256="0" * 64,
+        expected_source_sha256=hashlib.sha256(raw).hexdigest(),
     )
-    assert result.status is MmiProjectionResultCategory.PROJECTION_BLOCKED
-    assert result.reason_codes == ("MMI_SOURCE_ROLE_NOT_AVAILABLE_IN_P1A",)
+    assert result.status is MmiProjectionResultCategory.PROJECTION_VALID_COMPLETE
+    assert result.reason_codes == ()
+    assert result.source is not None
+    assert result.authority_effect == "NONE"
+    assert result.source.role is MmiSourceRole.PORTFOLIO_SNAPSHOT
+    assert result.source.raw_bytes == raw
+    assert _mmi_captured_source_provenance_is_valid(result.source)
+    record = dict(result.source.source_record)
+    assert record["source_role"] == "PORTFOLIO_SNAPSHOT"
+    assert record["source_id"] == "MMI_PORTFOLIO_SNAPSHOT"
+    assert record["repository_relative_locator"] == (
+        "inputs/current/portfolio_snapshot.txt"
+    )
+    assert record["maximum_bytes"] == 1_048_576
+    assert record["observed_size_bytes"] == len(raw)
+    assert record["expected_sha256"] == hashlib.sha256(raw).hexdigest()
+    assert record["observed_sha256"] == hashlib.sha256(raw).hexdigest()
+    assert record["operator_origin_authentication"] == "NOT_ESTABLISHED"
+    assert record["authority_effect"] == "NONE"
+    assert record["source_record_identity_sha256"] == record_identity_sha256(
+        record,
+        identity_field="source_record_identity_sha256",
+        domain=MMI_SOURCE_RECORD_IDENTITY_DOMAIN,
+        maximum_bytes=8_192,
+    )
+    validate_artifact_schema(
+        record,
+        schema_name="mmi_source_record_v1.schema.json",
+    )
+
+
+def test_formal_source_record_schema_accepts_only_two_correlated_variants(
+    tmp_path: Path,
+) -> None:
+    strategy_raw = b"as_of: '2026-07-25'\n"
+    portfolio_raw = b"# updated 2026-07-25\n"
+    _install_source(tmp_path, strategy_raw)
+    _install_portfolio_source(tmp_path, portfolio_raw)
+    strategy_capture = _capture(tmp_path, strategy_raw)
+    portfolio_capture = _capture_portfolio(tmp_path, portfolio_raw)
+    assert strategy_capture.source is not None
+    assert portfolio_capture.source is not None
+    strategy_record = dict(strategy_capture.source.source_record)
+    portfolio_record = dict(portfolio_capture.source.source_record)
+    for record in (strategy_record, portfolio_record):
+        validate_artifact_schema(
+            record,
+            schema_name="mmi_source_record_v1.schema.json",
+        )
+
+    correlated_fields = (
+        (
+            "source_role",
+            "STRATEGY_SETTINGS",
+            "PORTFOLIO_SNAPSHOT",
+        ),
+        (
+            "source_id",
+            "MMI_STRATEGY_SETTINGS",
+            "MMI_PORTFOLIO_SNAPSHOT",
+        ),
+        (
+            "repository_relative_locator",
+            "inputs/current/strategy_settings.yaml",
+            "inputs/current/portfolio_snapshot.txt",
+        ),
+        ("maximum_bytes", 262_144, 1_048_576),
+    )
+    for selection in range(1, (1 << len(correlated_fields)) - 1):
+        candidate = copy.deepcopy(strategy_record)
+        for index, (
+            field,
+            strategy_value,
+            portfolio_value,
+        ) in enumerate(correlated_fields):
+            candidate[field] = (
+                portfolio_value
+                if selection & (1 << index)
+                else strategy_value
+            )
+        candidate["source_record_identity_sha256"] = (
+            record_identity_sha256(
+                candidate,
+                identity_field="source_record_identity_sha256",
+                domain=MMI_SOURCE_RECORD_IDENTITY_DOMAIN,
+                maximum_bytes=8_192,
+            )
+        )
+        with pytest.raises(schema_validation.ArtifactSchemaError):
+            validate_artifact_schema(
+                candidate,
+                schema_name="mmi_source_record_v1.schema.json",
+            )
+
+    unknown_cases = (
+        ("source_role", "UNKNOWN_SOURCE_ROLE"),
+        ("source_id", "MMI_UNKNOWN_SOURCE"),
+        (
+            "repository_relative_locator",
+            "inputs/current/arbitrary.txt",
+        ),
+        ("maximum_bytes", 123_456),
+    )
+    for field, replacement in unknown_cases:
+        candidate = copy.deepcopy(strategy_record)
+        candidate[field] = replacement
+        candidate["source_record_identity_sha256"] = (
+            record_identity_sha256(
+                candidate,
+                identity_field="source_record_identity_sha256",
+                domain=MMI_SOURCE_RECORD_IDENTITY_DOMAIN,
+                maximum_bytes=8_192,
+            )
+        )
+        with pytest.raises(schema_validation.ArtifactSchemaError):
+            validate_artifact_schema(
+                candidate,
+                schema_name="mmi_source_record_v1.schema.json",
+            )
+
+
+def test_every_successful_role_capture_uses_the_formal_source_schema(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    strategy_raw = b"as_of: '2026-07-25'\n"
+    portfolio_raw = b"# updated 2026-07-25\n"
+    _install_source(tmp_path, strategy_raw)
+    _install_portfolio_source(tmp_path, portfolio_raw)
+    original_validate = source_capture.validate_artifact_schema
+    validated_roles: list[str] = []
+
+    def tracked_validate(
+        payload: object,
+        *,
+        schema_name: str,
+    ) -> None:
+        assert schema_name == "mmi_source_record_v1.schema.json"
+        assert type(payload) is dict
+        role = payload.get("source_role")
+        assert type(role) is str
+        validated_roles.append(role)
+        original_validate(payload, schema_name=schema_name)
+
+    monkeypatch.setattr(
+        source_capture,
+        "validate_artifact_schema",
+        tracked_validate,
+    )
+    strategy_capture = _capture(tmp_path, strategy_raw)
+    portfolio_capture = _capture_portfolio(tmp_path, portfolio_raw)
+    assert strategy_capture.valid
+    assert portfolio_capture.valid
+    assert validated_roles == [
+        "STRATEGY_SETTINGS",
+        "PORTFOLIO_SNAPSHOT",
+    ]
+    assert strategy_capture.source is not None
+    assert portfolio_capture.source is not None
+    for captured in (
+        strategy_capture.source,
+        portfolio_capture.source,
+    ):
+        original_validate(
+            dict(captured.source_record),
+            schema_name="mmi_source_record_v1.schema.json",
+        )
+
+
+def test_portfolio_formal_schema_failure_cannot_establish_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = b"# updated 2026-07-25\n"
+    _install_portfolio_source(tmp_path, raw)
+
+    def reject_formal_schema(
+        _payload: object,
+        *,
+        schema_name: str,
+    ) -> None:
+        assert schema_name == "mmi_source_record_v1.schema.json"
+        raise schema_validation.ArtifactSchemaError(
+            "forced portfolio schema rejection"
+        )
+
+    monkeypatch.setattr(
+        source_capture,
+        "validate_artifact_schema",
+        reject_formal_schema,
+    )
+    result = _capture_portfolio(tmp_path, raw)
+    assert result.status is (
+        MmiProjectionResultCategory.PROJECTION_CONTRACT_FAILURE
+    )
+    assert result.reason_codes == ("MMI_SOURCE_RECORD_CONTRACT_FAILURE",)
     assert result.source is None
     assert result.authority_effect == "NONE"
+
+
+def test_portfolio_capture_retains_mandatory_hash_and_one_mib_bound(
+    tmp_path: Path,
+) -> None:
+    missing_hash = _capture_mmi_source_at_root(
+        tmp_path,
+        role=MmiSourceRole.PORTFOLIO_SNAPSHOT,
+        expected_source_sha256="",
+    )
+    assert missing_hash.reason_codes == (
+        "MMI_SOURCE_EXPECTED_SHA256_REQUIRED",
+    )
+    oversized = b"x" * 1_048_577
+    _install_portfolio_source(tmp_path, oversized)
+    result = _capture_portfolio(tmp_path, oversized)
+    assert result.status is MmiProjectionResultCategory.PROJECTION_BLOCKED
+    assert result.reason_codes == ("MMI_SOURCE_OVERSIZED",)
+    assert result.source is None
+
+
+def test_portfolio_capture_rejects_symlink_and_unstable_leaf(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = b"# updated 2026-07-25\n"
+    external = tmp_path / "external-portfolio.txt"
+    external.write_bytes(raw)
+    leaf = tmp_path / "symlink" / "inputs/current/portfolio_snapshot.txt"
+    leaf.parent.mkdir(parents=True)
+    leaf.symlink_to(external)
+    symlinked = _capture_mmi_source_at_root(
+        tmp_path / "symlink",
+        role=MmiSourceRole.PORTFOLIO_SNAPSHOT,
+        expected_source_sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    assert symlinked.status is (
+        MmiProjectionResultCategory.PROJECTION_BLOCKED
+    )
+    assert symlinked.reason_codes == ("MMI_SOURCE_SYMLINK_REJECTED",)
+    assert symlinked.source is None
+
+    unstable_root = tmp_path / "unstable"
+    unstable_leaf = _install_portfolio_source(unstable_root, raw)
+    original_read = source_capture._read_exact_bounded
+    first_source_read = True
+
+    def mutate_after_first_read(
+        file_fd: int,
+        *,
+        expected_size: int,
+    ) -> bytes:
+        nonlocal first_source_read
+        observed = original_read(
+            file_fd,
+            expected_size=expected_size,
+        )
+        if first_source_read:
+            first_source_read = False
+            unstable_leaf.write_bytes(b"# updated 2026-07-24\n")
+        return observed
+
+    monkeypatch.setattr(
+        source_capture,
+        "_read_exact_bounded",
+        mutate_after_first_read,
+    )
+    unstable = _capture_portfolio(unstable_root, raw)
+    assert unstable.status is (
+        MmiProjectionResultCategory.PROJECTION_BLOCKED
+    )
+    assert unstable.reason_codes == ("MMI_SOURCE_UNSTABLE",)
+    assert unstable.source is None
+    assert unstable.authority_effect == "NONE"
+
+
+def test_unknown_and_caller_coerced_source_roles_remain_blocked(
+    tmp_path: Path,
+) -> None:
+    for role in ("PORTFOLIO_SNAPSHOT", object()):
+        result = _capture_mmi_source_at_root(
+            tmp_path,
+            role=role,  # type: ignore[arg-type]
+            expected_source_sha256="0" * 64,
+        )
+        assert result.status is MmiProjectionResultCategory.PROJECTION_BLOCKED
+        assert result.reason_codes == ("MMI_SOURCE_ROLE_INVALID",)
+        assert result.source is None
 
 
 @pytest.mark.parametrize(
@@ -505,6 +951,260 @@ def test_every_opened_descriptor_is_closed_on_failure(
     )
 
 
+def test_unrelated_directory_churn_preserves_the_bound_production_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = b"as_of: '2026-07-25'\n"
+    checkout = tmp_path / "checkout"
+    module = _install_checkout(checkout, raw)
+    sibling = checkout / "unrelated-existing-sibling"
+    sibling.mkdir()
+    original_verify = source_capture._verify_complete_opened_path
+    original_root = source_capture._open_root
+    original_relative = source_capture._open_relative
+    original_complete = source_capture._open_complete_fixed_source_path
+    original_close = source_capture.os.close
+    opened: list[int] = []
+    closed: list[int] = []
+    mutable_changes: set[str] = set()
+    churned = False
+
+    def tracked_root(repository_root: Path, flags: int) -> int:
+        descriptor = original_root(repository_root, flags)
+        opened.append(descriptor)
+        return descriptor
+
+    def tracked_relative(
+        name: str,
+        *,
+        directory_fd: int,
+        flags: int,
+        unstable_code: str,
+    ) -> int:
+        descriptor = original_relative(
+            name,
+            directory_fd=directory_fd,
+            flags=flags,
+            unstable_code=unstable_code,
+        )
+        opened.append(descriptor)
+        return descriptor
+
+    def tracked_close(file_fd: int) -> None:
+        closed.append(file_fd)
+        original_close(file_fd)
+
+    def tracked_complete(
+        root_anchor: source_capture._RootAnchor,
+        *,
+        repository_root: Path,
+        spec: object,
+        leaf_flags: int,
+    ) -> int:
+        descriptor = original_complete(
+            root_anchor,
+            repository_root=repository_root,
+            spec=spec,
+            leaf_flags=leaf_flags,
+        )
+        opened.append(descriptor)
+        return descriptor
+
+    def churn_then_verify(
+        root_anchor: source_capture._RootAnchor,
+        opened_components: list[source_capture._OpenedComponent],
+    ) -> None:
+        nonlocal churned
+        child = sibling / "mutable-child"
+        child.write_bytes(b"first")
+        child.write_bytes(b"second")
+        child.unlink()
+        transient = checkout / "unrelated-transient-sibling"
+        transient.mkdir()
+        transient.rmdir()
+        for index in range(64):
+            (checkout / f"unrelated-retained-{index:03d}").mkdir()
+        checkout_component = next(
+            component
+            for component in opened_components
+            if component.name == "checkout"
+            and component.expected_kind == "DIRECTORY"
+        )
+        entry = source_capture._witness(
+            os.stat(
+                checkout_component.name,
+                dir_fd=checkout_component.parent_fd,
+                follow_symlinks=False,
+            )
+        )
+        opened_witness = source_capture._witness(
+            os.fstat(checkout_component.opened_fd)
+        )
+        assert source_capture._same_directory_binding(
+            checkout_component.witness,
+            entry,
+        )
+        assert source_capture._same_directory_binding(
+            checkout_component.witness,
+            opened_witness,
+        )
+        for field_name in (
+            "size",
+            "modification_time_ns",
+            "change_time_ns",
+        ):
+            if getattr(
+                checkout_component.witness,
+                field_name,
+            ) != getattr(entry, field_name):
+                mutable_changes.add(field_name)
+        assert mutable_changes
+        churned = True
+        original_verify(
+            root_anchor,
+            opened_components,
+        )
+
+    monkeypatch.setattr(
+        source_capture,
+        "_verify_complete_opened_path",
+        churn_then_verify,
+    )
+    monkeypatch.setattr(source_capture, "_open_root", tracked_root)
+    monkeypatch.setattr(source_capture, "_open_relative", tracked_relative)
+    monkeypatch.setattr(
+        source_capture,
+        "_open_complete_fixed_source_path",
+        tracked_complete,
+    )
+    monkeypatch.setattr(source_capture.os, "close", tracked_close)
+
+    result = source_capture._capture_current_mmi_source_from_module_path(
+        module,
+        MmiSourceRole.STRATEGY_SETTINGS,
+        expected_source_sha256=hashlib.sha256(raw).hexdigest(),
+    )
+
+    assert churned
+    assert mutable_changes <= {
+        "size",
+        "modification_time_ns",
+        "change_time_ns",
+    }
+    assert result.status is (
+        MmiProjectionResultCategory.PROJECTION_VALID_COMPLETE
+    )
+    assert result.source is not None
+    assert result.source.raw_bytes == raw
+    assert result.authority_effect == "NONE"
+    assert sorted(opened) == sorted(closed)
+    assert len(closed) == len(set(closed))
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    (
+        "repository-root",
+        "repository-root-symlink",
+        "current-directory",
+        "source-leaf",
+    ),
+)
+def test_directory_churn_tolerance_does_not_weaken_path_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement: str,
+) -> None:
+    raw = b"as_of: '2026-07-25'\n"
+    checkout = tmp_path / "checkout"
+    detached_checkout = tmp_path / "checkout.detached"
+    module = _install_checkout(checkout, raw)
+    leaf = checkout / "inputs/current/strategy_settings.yaml"
+    original_verify = source_capture._verify_complete_opened_path
+    original_root = source_capture._open_root
+    original_relative = source_capture._open_relative
+    original_close = source_capture.os.close
+    opened: list[int] = []
+    closed: list[int] = []
+    replaced = False
+
+    def tracked_root(repository_root: Path, flags: int) -> int:
+        descriptor = original_root(repository_root, flags)
+        opened.append(descriptor)
+        return descriptor
+
+    def tracked_relative(
+        name: str,
+        *,
+        directory_fd: int,
+        flags: int,
+        unstable_code: str,
+    ) -> int:
+        descriptor = original_relative(
+            name,
+            directory_fd=directory_fd,
+            flags=flags,
+            unstable_code=unstable_code,
+        )
+        opened.append(descriptor)
+        return descriptor
+
+    def tracked_close(file_fd: int) -> None:
+        closed.append(file_fd)
+        original_close(file_fd)
+
+    def replace_then_verify(
+        root_anchor: source_capture._RootAnchor,
+        opened_components: list[source_capture._OpenedComponent],
+    ) -> None:
+        nonlocal replaced
+        if replacement == "repository-root":
+            checkout.rename(detached_checkout)
+            _install_checkout(checkout, raw)
+        elif replacement == "repository-root-symlink":
+            checkout.rename(detached_checkout)
+            checkout.symlink_to(
+                detached_checkout,
+                target_is_directory=True,
+            )
+        elif replacement == "current-directory":
+            current = checkout / "inputs/current"
+            current.rename(checkout / "inputs/current.detached")
+            _install_source(checkout, raw)
+        else:
+            leaf.rename(leaf.with_suffix(".detached"))
+            leaf.write_bytes(raw)
+        replaced = True
+        original_verify(
+            root_anchor,
+            opened_components,
+        )
+
+    monkeypatch.setattr(
+        source_capture,
+        "_verify_complete_opened_path",
+        replace_then_verify,
+    )
+    monkeypatch.setattr(source_capture, "_open_root", tracked_root)
+    monkeypatch.setattr(source_capture, "_open_relative", tracked_relative)
+    monkeypatch.setattr(source_capture.os, "close", tracked_close)
+
+    result = source_capture._capture_current_mmi_source_from_module_path(
+        module,
+        MmiSourceRole.STRATEGY_SETTINGS,
+        expected_source_sha256=hashlib.sha256(raw).hexdigest(),
+    )
+
+    assert replaced
+    assert result.status is MmiProjectionResultCategory.PROJECTION_BLOCKED
+    assert result.reason_codes == ("MMI_SOURCE_PATH_UNSTABLE",)
+    assert result.source is None
+    assert result.authority_effect == "NONE"
+    assert sorted(opened) == sorted(closed)
+    assert len(closed) == len(set(closed))
+
+
 def test_schema_failure_precedes_final_verification_and_closes_all_fds(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -529,12 +1229,10 @@ def test_schema_failure_precedes_final_verification_and_closes_all_fds(
     def fail_if_verified(
         _root_anchor: source_capture._RootAnchor,
         _opened_components: list[source_capture._OpenedComponent],
-        *,
-        source_content_stable: bool,
     ) -> None:
         nonlocal verify_calls
         verify_calls += 1
-        raise AssertionError(source_content_stable)
+        raise AssertionError("final path verification unexpectedly ran")
 
     def tracked_root(repository_root: Path, flags: int) -> int:
         descriptor = original_root(repository_root, flags)
@@ -814,8 +1512,6 @@ def test_final_chain_verification_rejects_checkout_replacement(
     def replace_then_verify(
         root_anchor: source_capture._RootAnchor,
         opened_components: list[source_capture._OpenedComponent],
-        *,
-        source_content_stable: bool,
     ) -> None:
         nonlocal mutated
         if replacement == "copied-ancestor":
@@ -835,7 +1531,6 @@ def test_final_chain_verification_rejects_checkout_replacement(
         original_verify(
             root_anchor,
             opened_components,
-            source_content_stable=source_content_stable,
         )
 
     monkeypatch.setattr(
@@ -861,19 +1556,45 @@ def test_final_chain_verification_rejects_checkout_replacement(
 
 
 @pytest.mark.parametrize("schema_cache_mode", ("cold", "warm", "disabled"))
+@pytest.mark.parametrize(
+    "role",
+    (
+        MmiSourceRole.STRATEGY_SETTINGS,
+        MmiSourceRole.PORTFOLIO_SNAPSHOT,
+    ),
+)
 def test_complete_chain_verification_is_final_path_operation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     schema_cache_mode: str,
+    role: MmiSourceRole,
 ) -> None:
-    raw = b"as_of: '2026-07-25'\n"
+    raw = (
+        b"as_of: '2026-07-25'\n"
+        if role is MmiSourceRole.STRATEGY_SETTINGS
+        else b"# updated 2026-07-25\n"
+    )
     checkout = tmp_path / "checkout"
-    module = _install_checkout(checkout, raw)
+    module = _install_checkout(
+        checkout,
+        (
+            raw
+            if role is MmiSourceRole.STRATEGY_SETTINGS
+            else b"as_of: '2026-07-25'\n"
+        ),
+    )
+    if role is MmiSourceRole.PORTFOLIO_SNAPSHOT:
+        _install_portfolio_source(checkout, raw)
     original_available = (
         source_capture._required_filesystem_primitives_available
     )
     original_capture = source_capture._capture_fixed_source_bytes
-    original_verify = source_capture._verify_complete_opened_path
+    original_final_snapshot = (
+        source_capture._capture_final_bound_source_snapshot
+    )
+    original_openat2 = source_capture._invoke_fixed_source_openat2
+    original_read = source_capture._read_exact_bounded
+    original_relative = source_capture._open_relative
     original_os_stat = source_capture.os.stat
     original_validate = source_capture.validate_artifact_schema
     original_cached_load = schema_validation.load_artifact_schema
@@ -883,7 +1604,7 @@ def test_complete_chain_verification_is_final_path_operation(
     original_path_stat = Path.stat
     original_path_exists = Path.exists
     capture_active = False
-    final_verification_complete = False
+    final_binding_complete = False
     operations: list[tuple[str, bool]] = []
 
     assert original_available()
@@ -899,10 +1620,10 @@ def test_complete_chain_verification_is_final_path_operation(
     def observe(name: str) -> None:
         if not capture_active:
             return
-        operations.append((name, final_verification_complete))
-        if final_verification_complete:
+        operations.append((name, final_binding_complete))
+        if final_binding_complete:
             raise AssertionError(
-                f"{name} occurred after final chain verification"
+                f"{name} occurred after final source binding"
             )
 
     def tracked_capture(*args: object, **kwargs: object):
@@ -913,19 +1634,31 @@ def test_complete_chain_verification_is_final_path_operation(
         finally:
             capture_active = False
 
-    def tracked_verify(
-        root_anchor: source_capture._RootAnchor,
-        opened_components: list[source_capture._OpenedComponent],
+    def tracked_final_snapshot(
+        *args: object,
+        **kwargs: object,
+    ) -> source_capture._FinalSourceSnapshot:
+        nonlocal final_binding_complete
+        snapshot = original_final_snapshot(*args, **kwargs)
+        final_binding_complete = True
+        return snapshot
+
+    def guarded_openat2(
         *,
-        source_content_stable: bool,
-    ) -> None:
-        nonlocal final_verification_complete
-        original_verify(
-            root_anchor,
-            opened_components,
-            source_content_stable=source_content_stable,
+        root_fd: int,
+        root_relative_path: bytes,
+        how: source_capture._OpenHow,
+    ) -> int:
+        observe("openat2")
+        return original_openat2(
+            root_fd=root_fd,
+            root_relative_path=root_relative_path,
+            how=how,
         )
-        final_verification_complete = True
+
+    def guarded_read(file_fd: int, *, expected_size: int) -> bytes:
+        observe("bounded descriptor read")
+        return original_read(file_fd, expected_size=expected_size)
 
     def guarded_os_stat(
         path: object,
@@ -934,6 +1667,21 @@ def test_complete_chain_verification_is_final_path_operation(
     ):
         observe("os.stat")
         return original_os_stat(path, *args, **kwargs)
+
+    def guarded_open_relative(
+        name: str,
+        *,
+        directory_fd: int,
+        flags: int,
+        unstable_code: str,
+    ) -> int:
+        observe("descriptor-relative os.open")
+        return original_relative(
+            name,
+            directory_fd=directory_fd,
+            flags=flags,
+            unstable_code=unstable_code,
+        )
 
     def guarded_path_resolve(
         path: Path,
@@ -991,8 +1739,23 @@ def test_complete_chain_verification_is_final_path_operation(
     )
     monkeypatch.setattr(
         source_capture,
-        "_verify_complete_opened_path",
-        tracked_verify,
+        "_capture_final_bound_source_snapshot",
+        tracked_final_snapshot,
+    )
+    monkeypatch.setattr(
+        source_capture,
+        "_invoke_fixed_source_openat2",
+        guarded_openat2,
+    )
+    monkeypatch.setattr(
+        source_capture,
+        "_read_exact_bounded",
+        guarded_read,
+    )
+    monkeypatch.setattr(
+        source_capture,
+        "_open_relative",
+        guarded_open_relative,
     )
     monkeypatch.setattr(source_capture.os, "stat", guarded_os_stat)
     monkeypatch.setattr(Path, "resolve", guarded_path_resolve)
@@ -1017,11 +1780,11 @@ def test_complete_chain_verification_is_final_path_operation(
 
     result = source_capture._capture_current_mmi_source_from_module_path(
         module,
-        MmiSourceRole.STRATEGY_SETTINGS,
+        role,
         expected_source_sha256=hashlib.sha256(raw).hexdigest(),
     )
 
-    assert final_verification_complete
+    assert final_binding_complete
     assert not [
         name for name, after_final in operations if after_final
     ]
@@ -1051,6 +1814,11 @@ def test_complete_chain_verification_is_final_path_operation(
     else:
         assert schema_path_calls == ["schema_path"]
         assert path_open_calls == ["Path.open"]
+    assert [
+        name
+        for name, _after_final in operations
+        if name == "openat2"
+    ] == ["openat2"]
     assert result.status is MmiProjectionResultCategory.PROJECTION_VALID_COMPLETE
     assert result.source is not None
     assert result.source.raw_bytes == raw
@@ -1068,6 +1836,7 @@ def test_cold_cache_checkout_race_blocks_before_any_later_schema_lookup(
     original_validate = source_capture.validate_artifact_schema
     original_root = source_capture._open_root
     original_relative = source_capture._open_relative
+    original_complete = source_capture._open_complete_fixed_source_path
     original_close = source_capture.os.close
     opened: list[int] = []
     closed: list[int] = []
@@ -1086,8 +1855,6 @@ def test_cold_cache_checkout_race_blocks_before_any_later_schema_lookup(
     def replace_checkout_then_verify(
         root_anchor: source_capture._RootAnchor,
         opened_components: list[source_capture._OpenedComponent],
-        *,
-        source_content_stable: bool,
     ) -> None:
         nonlocal mutated
         assert validation_calls == 1
@@ -1097,7 +1864,6 @@ def test_cold_cache_checkout_race_blocks_before_any_later_schema_lookup(
         original_verify(
             root_anchor,
             opened_components,
-            source_content_stable=source_content_stable,
         )
 
     def tracked_root(repository_root: Path, flags: int) -> int:
@@ -1125,6 +1891,22 @@ def test_cold_cache_checkout_race_blocks_before_any_later_schema_lookup(
         closed.append(file_fd)
         original_close(file_fd)
 
+    def tracked_complete(
+        root_anchor: source_capture._RootAnchor,
+        *,
+        repository_root: Path,
+        spec: object,
+        leaf_flags: int,
+    ) -> int:
+        descriptor = original_complete(
+            root_anchor,
+            repository_root=repository_root,
+            spec=spec,
+            leaf_flags=leaf_flags,
+        )
+        opened.append(descriptor)
+        return descriptor
+
     schema_validation.load_artifact_schema.cache_clear()
     monkeypatch.setattr(
         source_capture,
@@ -1138,6 +1920,11 @@ def test_cold_cache_checkout_race_blocks_before_any_later_schema_lookup(
     )
     monkeypatch.setattr(source_capture, "_open_root", tracked_root)
     monkeypatch.setattr(source_capture, "_open_relative", tracked_relative)
+    monkeypatch.setattr(
+        source_capture,
+        "_open_complete_fixed_source_path",
+        tracked_complete,
+    )
     monkeypatch.setattr(source_capture.os, "close", tracked_close)
 
     race_open_start = len(opened)
@@ -1188,6 +1975,355 @@ def test_cold_cache_checkout_race_blocks_before_any_later_schema_lookup(
     assert raced.status is MmiProjectionResultCategory.PROJECTION_BLOCKED
     assert raced.source is None
     assert sorted(opened) == sorted(closed)
+
+
+@pytest.mark.parametrize(
+    "role",
+    (
+        MmiSourceRole.STRATEGY_SETTINGS,
+        MmiSourceRole.PORTFOLIO_SNAPSHOT,
+    ),
+)
+def test_final_bound_read_rejects_100_same_size_boundary_mutations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    role: MmiSourceRole,
+) -> None:
+    original_verify = source_capture._verify_complete_opened_path
+    original_root = source_capture._open_root
+    original_relative = source_capture._open_relative
+    original_complete = source_capture._open_complete_fixed_source_path
+    original_close = source_capture.os.close
+    opened: list[int] = []
+    closed: list[int] = []
+    active_leaf: Path | None = None
+    active_mutated = b""
+    mutation_done = False
+
+    def mutate_at_old_verification_boundary(
+        root_anchor: source_capture._RootAnchor,
+        opened_components: list[source_capture._OpenedComponent],
+    ) -> None:
+        nonlocal mutation_done
+        original_verify(root_anchor, opened_components)
+        assert active_leaf is not None
+        assert not mutation_done
+        active_leaf.write_bytes(active_mutated)
+        mutation_done = True
+
+    def tracked_root(repository_root: Path, flags: int) -> int:
+        descriptor = original_root(repository_root, flags)
+        opened.append(descriptor)
+        return descriptor
+
+    def tracked_relative(
+        name: str,
+        *,
+        directory_fd: int,
+        flags: int,
+        unstable_code: str,
+    ) -> int:
+        descriptor = original_relative(
+            name,
+            directory_fd=directory_fd,
+            flags=flags,
+            unstable_code=unstable_code,
+        )
+        opened.append(descriptor)
+        return descriptor
+
+    def tracked_close(file_fd: int) -> None:
+        closed.append(file_fd)
+        original_close(file_fd)
+
+    def tracked_complete(
+        root_anchor: source_capture._RootAnchor,
+        *,
+        repository_root: Path,
+        spec: object,
+        leaf_flags: int,
+    ) -> int:
+        descriptor = original_complete(
+            root_anchor,
+            repository_root=repository_root,
+            spec=spec,
+            leaf_flags=leaf_flags,
+        )
+        opened.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(
+        source_capture,
+        "_verify_complete_opened_path",
+        mutate_at_old_verification_boundary,
+    )
+    monkeypatch.setattr(source_capture, "_open_root", tracked_root)
+    monkeypatch.setattr(source_capture, "_open_relative", tracked_relative)
+    monkeypatch.setattr(
+        source_capture,
+        "_open_complete_fixed_source_path",
+        tracked_complete,
+    )
+    monkeypatch.setattr(source_capture.os, "close", tracked_close)
+
+    totals = {"MMI_SOURCE_UNSTABLE": 0}
+    for iteration in range(100):
+        root = tmp_path / role.value.casefold() / f"run-{iteration:03d}"
+        raw = f"value: {iteration:04d}\n".encode("ascii")
+        mutated = f"value: {iteration + 1000:04d}\n".encode("ascii")
+        assert len(mutated) == len(raw)
+        if role is MmiSourceRole.STRATEGY_SETTINGS:
+            active_leaf = _install_source(root, raw)
+        else:
+            active_leaf = _install_portfolio_source(root, raw)
+        active_mutated = mutated
+        mutation_done = False
+        open_start = len(opened)
+        close_start = len(closed)
+
+        result = _capture_mmi_source_at_root(
+            root,
+            role=role,
+            expected_source_sha256=hashlib.sha256(raw).hexdigest(),
+        )
+
+        run_opened = opened[open_start:]
+        run_closed = closed[close_start:]
+        assert mutation_done
+        assert active_leaf.read_bytes() == mutated
+        assert result.status is (
+            MmiProjectionResultCategory.PROJECTION_BLOCKED
+        )
+        assert result.reason_codes == ("MMI_SOURCE_UNSTABLE",)
+        assert result.source is None
+        assert result.authority_effect == "NONE"
+        assert sorted(run_opened) == sorted(run_closed)
+        assert len(run_closed) == len(set(run_closed))
+        totals["MMI_SOURCE_UNSTABLE"] += 1
+
+    assert totals == {"MMI_SOURCE_UNSTABLE": 100}
+
+
+@pytest.mark.parametrize(
+    "role",
+    (
+        MmiSourceRole.STRATEGY_SETTINGS,
+        MmiSourceRole.PORTFOLIO_SNAPSHOT,
+    ),
+)
+def test_final_bound_read_accepts_exact_same_inode_restoration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    role: MmiSourceRole,
+) -> None:
+    raw = b"value: 0001\n"
+    mutated = b"value: 9001\n"
+    assert len(mutated) == len(raw)
+    if role is MmiSourceRole.STRATEGY_SETTINGS:
+        leaf = _install_source(tmp_path, raw)
+    else:
+        leaf = _install_portfolio_source(tmp_path, raw)
+    original_verify = source_capture._verify_complete_opened_path
+    original_root = source_capture._open_root
+    original_relative = source_capture._open_relative
+    original_complete = source_capture._open_complete_fixed_source_path
+    original_close = source_capture.os.close
+    opened: list[int] = []
+    closed: list[int] = []
+    restored = False
+
+    def mutate_restore_at_old_verification_boundary(
+        root_anchor: source_capture._RootAnchor,
+        opened_components: list[source_capture._OpenedComponent],
+    ) -> None:
+        nonlocal restored
+        original_verify(root_anchor, opened_components)
+        leaf.write_bytes(mutated)
+        leaf.write_bytes(raw)
+        restored = True
+
+    def tracked_root(repository_root: Path, flags: int) -> int:
+        descriptor = original_root(repository_root, flags)
+        opened.append(descriptor)
+        return descriptor
+
+    def tracked_relative(
+        name: str,
+        *,
+        directory_fd: int,
+        flags: int,
+        unstable_code: str,
+    ) -> int:
+        descriptor = original_relative(
+            name,
+            directory_fd=directory_fd,
+            flags=flags,
+            unstable_code=unstable_code,
+        )
+        opened.append(descriptor)
+        return descriptor
+
+    def tracked_close(file_fd: int) -> None:
+        closed.append(file_fd)
+        original_close(file_fd)
+
+    def tracked_complete(
+        root_anchor: source_capture._RootAnchor,
+        *,
+        repository_root: Path,
+        spec: object,
+        leaf_flags: int,
+    ) -> int:
+        descriptor = original_complete(
+            root_anchor,
+            repository_root=repository_root,
+            spec=spec,
+            leaf_flags=leaf_flags,
+        )
+        opened.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(
+        source_capture,
+        "_verify_complete_opened_path",
+        mutate_restore_at_old_verification_boundary,
+    )
+    monkeypatch.setattr(source_capture, "_open_root", tracked_root)
+    monkeypatch.setattr(source_capture, "_open_relative", tracked_relative)
+    monkeypatch.setattr(
+        source_capture,
+        "_open_complete_fixed_source_path",
+        tracked_complete,
+    )
+    monkeypatch.setattr(source_capture.os, "close", tracked_close)
+
+    result = _capture_mmi_source_at_root(
+        tmp_path,
+        role=role,
+        expected_source_sha256=hashlib.sha256(raw).hexdigest(),
+    )
+
+    assert restored
+    assert leaf.read_bytes() == raw
+    assert result.status is (
+        MmiProjectionResultCategory.PROJECTION_VALID_COMPLETE
+    )
+    assert result.reason_codes == ()
+    assert result.source is not None
+    assert result.source.raw_bytes == raw
+    assert result.source.source_record["observed_size_bytes"] == len(raw)
+    assert result.source.source_record["observed_sha256"] == (
+        hashlib.sha256(raw).hexdigest()
+    )
+    assert result.authority_effect == "NONE"
+    assert sorted(opened) == sorted(closed)
+    assert len(closed) == len(set(closed))
+
+
+@pytest.mark.parametrize(
+    "role",
+    (
+        MmiSourceRole.STRATEGY_SETTINGS,
+        MmiSourceRole.PORTFOLIO_SNAPSHOT,
+    ),
+)
+def test_final_bound_open_rejects_leaf_replacement_after_path_verification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    role: MmiSourceRole,
+) -> None:
+    raw = b"value: stable\n"
+    if role is MmiSourceRole.STRATEGY_SETTINGS:
+        leaf = _install_source(tmp_path, raw)
+    else:
+        leaf = _install_portfolio_source(tmp_path, raw)
+    original_verify = source_capture._verify_complete_opened_path
+    original_root = source_capture._open_root
+    original_relative = source_capture._open_relative
+    original_complete = source_capture._open_complete_fixed_source_path
+    original_close = source_capture.os.close
+    opened: list[int] = []
+    closed: list[int] = []
+    replaced = False
+
+    def replace_at_old_verification_boundary(
+        root_anchor: source_capture._RootAnchor,
+        opened_components: list[source_capture._OpenedComponent],
+    ) -> None:
+        nonlocal replaced
+        original_verify(root_anchor, opened_components)
+        leaf.rename(leaf.with_suffix(".detached"))
+        leaf.write_bytes(raw)
+        replaced = True
+
+    def tracked_root(repository_root: Path, flags: int) -> int:
+        descriptor = original_root(repository_root, flags)
+        opened.append(descriptor)
+        return descriptor
+
+    def tracked_relative(
+        name: str,
+        *,
+        directory_fd: int,
+        flags: int,
+        unstable_code: str,
+    ) -> int:
+        descriptor = original_relative(
+            name,
+            directory_fd=directory_fd,
+            flags=flags,
+            unstable_code=unstable_code,
+        )
+        opened.append(descriptor)
+        return descriptor
+
+    def tracked_close(file_fd: int) -> None:
+        closed.append(file_fd)
+        original_close(file_fd)
+
+    def tracked_complete(
+        root_anchor: source_capture._RootAnchor,
+        *,
+        repository_root: Path,
+        spec: object,
+        leaf_flags: int,
+    ) -> int:
+        descriptor = original_complete(
+            root_anchor,
+            repository_root=repository_root,
+            spec=spec,
+            leaf_flags=leaf_flags,
+        )
+        opened.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(
+        source_capture,
+        "_verify_complete_opened_path",
+        replace_at_old_verification_boundary,
+    )
+    monkeypatch.setattr(source_capture, "_open_root", tracked_root)
+    monkeypatch.setattr(source_capture, "_open_relative", tracked_relative)
+    monkeypatch.setattr(
+        source_capture,
+        "_open_complete_fixed_source_path",
+        tracked_complete,
+    )
+    monkeypatch.setattr(source_capture.os, "close", tracked_close)
+
+    result = _capture_mmi_source_at_root(
+        tmp_path,
+        role=role,
+        expected_source_sha256=hashlib.sha256(raw).hexdigest(),
+    )
+
+    assert replaced
+    assert result.status is MmiProjectionResultCategory.PROJECTION_BLOCKED
+    assert result.reason_codes == ("MMI_SOURCE_PATH_UNSTABLE",)
+    assert result.source is None
+    assert result.authority_effect == "NONE"
+    assert sorted(opened) == sorted(closed)
+    assert len(closed) == len(set(closed))
 
 
 @pytest.mark.parametrize(
@@ -1308,6 +2444,7 @@ def test_repeated_races_have_frozen_reason_precedence_and_no_fd_leaks(
     original_read = source_capture._read_exact_bounded
     original_root = source_capture._open_root
     original_relative = source_capture._open_relative
+    original_complete = source_capture._open_complete_fixed_source_path
     original_close = source_capture.os.close
     opened: list[int] = []
     closed: list[int] = []
@@ -1356,6 +2493,22 @@ def test_repeated_races_have_frozen_reason_precedence_and_no_fd_leaks(
         closed.append(file_fd)
         original_close(file_fd)
 
+    def tracked_complete(
+        root_anchor: source_capture._RootAnchor,
+        *,
+        repository_root: Path,
+        spec: object,
+        leaf_flags: int,
+    ) -> int:
+        descriptor = original_complete(
+            root_anchor,
+            repository_root=repository_root,
+            spec=spec,
+            leaf_flags=leaf_flags,
+        )
+        opened.append(descriptor)
+        return descriptor
+
     monkeypatch.setattr(
         source_capture,
         "_read_exact_bounded",
@@ -1363,6 +2516,11 @@ def test_repeated_races_have_frozen_reason_precedence_and_no_fd_leaks(
     )
     monkeypatch.setattr(source_capture, "_open_root", tracked_root)
     monkeypatch.setattr(source_capture, "_open_relative", tracked_relative)
+    monkeypatch.setattr(
+        source_capture,
+        "_open_complete_fixed_source_path",
+        tracked_complete,
+    )
     monkeypatch.setattr(source_capture.os, "close", tracked_close)
 
     expected_by_case = {
@@ -1409,6 +2567,531 @@ def test_repeated_races_have_frozen_reason_precedence_and_no_fd_leaks(
         "parent": {"MMI_SOURCE_PATH_UNSTABLE": 100},
         "combined": {"MMI_SOURCE_PATH_UNSTABLE": 100},
     }
+
+
+def test_openat2_wrapper_uses_exact_root_anchored_kernel_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = b"value: exact\n"
+    leaf = _install_source(tmp_path, raw)
+    root_flags = (
+        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+    )
+    root_fd = os.open(os.path.sep, root_flags)
+    final_fd: int | None = None
+    observations: dict[str, object] = {}
+
+    class FakeSyscall:
+        restype: object = None
+
+        def __call__(self, *args: object) -> int:
+            observations["syscall_number"] = args[0].value
+            observations["root_fd"] = args[1].value
+            observations["path"] = args[2].value
+            observations["how"] = args[3]._obj
+            observations["size"] = args[4].value
+            return os.open(
+                leaf,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            )
+
+    fake_syscall = FakeSyscall()
+    fake_libc = SimpleNamespace(syscall=fake_syscall)
+
+    def fake_cdll(name: object, *, use_errno: bool) -> object:
+        observations["cdll"] = (name, use_errno)
+        return fake_libc
+
+    monkeypatch.setattr(source_capture.ctypes, "CDLL", fake_cdll)
+    try:
+        root_anchor = source_capture._RootAnchor(
+            opened_fd=root_fd,
+            witness=source_capture._witness(os.fstat(root_fd)),
+        )
+        final_fd = source_capture._open_complete_fixed_source_path(
+            root_anchor,
+            repository_root=tmp_path,
+            spec=MMI_SOURCE_CATALOG[MmiSourceRole.STRATEGY_SETTINGS],
+            leaf_flags=(
+                os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+            ),
+        )
+        how = observations["how"]
+        assert type(how) is source_capture._OpenHow
+        assert source_capture.ctypes.sizeof(how) == 24
+        assert how.flags == (
+            os.O_RDONLY
+            | os.O_CLOEXEC
+            | os.O_NOFOLLOW
+            | os.O_NONBLOCK
+        )
+        assert how.mode == 0
+        assert how.resolve == (
+            source_capture._RESOLVE_IN_ROOT
+            | source_capture._RESOLVE_NO_SYMLINKS
+            | source_capture._RESOLVE_NO_MAGICLINKS
+        )
+        assert observations == {
+            "cdll": (None, True),
+            "syscall_number": 437,
+            "root_fd": root_fd,
+            "path": os.fsencode(os.fspath(leaf).lstrip(os.path.sep)),
+            "how": how,
+            "size": 24,
+        }
+        assert os.get_inheritable(final_fd) is False
+        assert os.read(final_fd, len(raw) + 1) == raw
+    finally:
+        if final_fd is not None:
+            os.close(final_fd)
+        os.close(root_fd)
+
+
+@pytest.mark.parametrize(
+    "capability_errno",
+    (
+        errno.ENOSYS,
+        errno.E2BIG,
+        errno.EINVAL,
+        errno.EOPNOTSUPP,
+        errno.EPERM,
+    ),
+)
+def test_openat2_capability_errors_fail_closed_without_sequential_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capability_errno: int,
+) -> None:
+    raw = b"value: exact\n"
+    _install_source(tmp_path, raw)
+    opened, closed = _track_capture_descriptors(monkeypatch)
+    original_relative = source_capture._open_relative
+    relative_calls: list[str] = []
+    relative_calls_at_syscall: list[int] = []
+
+    def tracked_relative(
+        name: str,
+        *,
+        directory_fd: int,
+        flags: int,
+        unstable_code: str,
+    ) -> int:
+        relative_calls.append(name)
+        return original_relative(
+            name,
+            directory_fd=directory_fd,
+            flags=flags,
+            unstable_code=unstable_code,
+        )
+
+    class FailingSyscall:
+        restype: object = None
+
+        def __call__(self, *_args: object) -> int:
+            relative_calls_at_syscall.append(len(relative_calls))
+            return -1
+
+    monkeypatch.setattr(source_capture, "_open_relative", tracked_relative)
+    monkeypatch.setattr(
+        source_capture.ctypes,
+        "CDLL",
+        lambda _name, *, use_errno: SimpleNamespace(
+            syscall=FailingSyscall()
+        ),
+    )
+    monkeypatch.setattr(
+        source_capture.ctypes,
+        "get_errno",
+        lambda: capability_errno,
+    )
+
+    result = _capture(tmp_path, raw)
+
+    assert result.status is MmiProjectionResultCategory.PROJECTION_BLOCKED
+    assert result.reason_codes == (
+        "MMI_SOURCE_FILESYSTEM_PRIMITIVES_UNAVAILABLE",
+    )
+    assert result.source is None
+    assert result.authority_effect == "NONE"
+    assert relative_calls_at_syscall == [len(relative_calls)]
+    assert sorted(opened) == sorted(closed)
+    assert len(closed) == len(set(closed))
+
+
+def test_openat2_missing_syscall_symbol_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = b"value: exact\n"
+    _install_source(tmp_path, raw)
+    opened, closed = _track_capture_descriptors(monkeypatch)
+    monkeypatch.setattr(
+        source_capture.ctypes,
+        "CDLL",
+        lambda _name, *, use_errno: SimpleNamespace(),
+    )
+
+    result = _capture(tmp_path, raw)
+
+    assert result.status is MmiProjectionResultCategory.PROJECTION_BLOCKED
+    assert result.reason_codes == (
+        "MMI_SOURCE_FILESYSTEM_PRIMITIVES_UNAVAILABLE",
+    )
+    assert result.source is None
+    assert result.authority_effect == "NONE"
+    assert sorted(opened) == sorted(closed)
+    assert len(closed) == len(set(closed))
+
+
+@pytest.mark.parametrize("inheritable_result", ("error", "true"))
+def test_openat2_final_descriptor_closes_when_cloexec_cannot_be_established(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    inheritable_result: str,
+) -> None:
+    raw = b"value: exact\n"
+    _install_source(tmp_path, raw)
+    opened, closed = _track_capture_descriptors(monkeypatch)
+    original_get_inheritable = source_capture.os.get_inheritable
+
+    def failing_get_inheritable(file_fd: int) -> bool:
+        if file_fd == opened[-1]:
+            if inheritable_result == "error":
+                raise OSError(errno.EBADF, "injected inheritable failure")
+            return True
+        return original_get_inheritable(file_fd)
+
+    monkeypatch.setattr(
+        source_capture.os,
+        "get_inheritable",
+        failing_get_inheritable,
+    )
+
+    result = _capture(tmp_path, raw)
+
+    assert result.status is MmiProjectionResultCategory.PROJECTION_BLOCKED
+    assert result.reason_codes == (
+        "MMI_SOURCE_FILESYSTEM_PRIMITIVES_UNAVAILABLE",
+    )
+    assert result.source is None
+    assert result.authority_effect == "NONE"
+    assert sorted(opened) == sorted(closed)
+    assert len(closed) == len(set(closed))
+
+
+@pytest.mark.parametrize(
+    ("system_name", "machine"),
+    (("Linux", "unsupported"), ("NotLinux", "x86_64")),
+)
+def test_openat2_unsupported_platform_fails_before_any_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    system_name: str,
+    machine: str,
+) -> None:
+    raw = b"value: exact\n"
+    _install_source(tmp_path, raw)
+    root_opened = False
+
+    def forbidden_root_open(_repository_root: Path, _flags: int) -> int:
+        nonlocal root_opened
+        root_opened = True
+        raise AssertionError("unsupported architecture opened a path")
+
+    monkeypatch.setattr(
+        source_capture.os,
+        "uname",
+        lambda: SimpleNamespace(
+            sysname=system_name,
+            machine=machine,
+        ),
+    )
+    monkeypatch.setattr(source_capture, "_open_root", forbidden_root_open)
+
+    result = _capture(tmp_path, raw)
+
+    assert not root_opened
+    assert result.status is MmiProjectionResultCategory.PROJECTION_BLOCKED
+    assert result.reason_codes == (
+        "MMI_SOURCE_FILESYSTEM_PRIMITIVES_UNAVAILABLE",
+    )
+    assert result.source is None
+    assert result.authority_effect == "NONE"
+
+
+@pytest.mark.parametrize(
+    "role",
+    (
+        MmiSourceRole.STRATEGY_SETTINGS,
+        MmiSourceRole.PORTFOLIO_SNAPSHOT,
+    ),
+)
+@pytest.mark.parametrize(
+    "replacement",
+    (
+        "repository-root",
+        "authenticated-ancestor",
+        "current",
+        "leaf",
+    ),
+)
+def test_complete_path_open_rejects_each_fixed_entry_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    role: MmiSourceRole,
+    replacement: str,
+) -> None:
+    raw = b"value: fixed\n"
+    root = (
+        tmp_path
+        / replacement
+        / "authenticated-ancestor"
+        / "repository"
+    )
+    _install_role_source(root, role, raw)
+    mutated = False
+
+    def mutate() -> None:
+        nonlocal mutated
+        _replace_fixed_path_before_openat2(
+            root,
+            role,
+            raw,
+            replacement,
+        )
+        mutated = True
+
+    opened, closed = _track_capture_descriptors(
+        monkeypatch,
+        before_openat2=mutate,
+    )
+
+    result = _capture_mmi_source_at_root(
+        root,
+        role=role,
+        expected_source_sha256=hashlib.sha256(raw).hexdigest(),
+    )
+
+    assert mutated
+    assert result.status is MmiProjectionResultCategory.PROJECTION_BLOCKED
+    assert result.reason_codes == ("MMI_SOURCE_PATH_UNSTABLE",)
+    assert result.source is None
+    assert result.authority_effect == "NONE"
+    assert sorted(opened) == sorted(closed)
+    assert len(closed) == len(set(closed))
+
+
+@pytest.mark.parametrize(
+    "role",
+    (
+        MmiSourceRole.STRATEGY_SETTINGS,
+        MmiSourceRole.PORTFOLIO_SNAPSHOT,
+    ),
+)
+@pytest.mark.parametrize(
+    "replacement",
+    ("repository-root", "current"),
+)
+def test_complete_path_open_rejects_100_detached_tree_races_per_role(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    role: MmiSourceRole,
+    replacement: str,
+) -> None:
+    active_root: Path | None = None
+    active_raw = b""
+    mutation_count = 0
+
+    def mutate() -> None:
+        nonlocal mutation_count
+        assert active_root is not None
+        _replace_fixed_path_before_openat2(
+            active_root,
+            role,
+            active_raw,
+            replacement,
+        )
+        mutation_count += 1
+
+    opened, closed = _track_capture_descriptors(
+        monkeypatch,
+        before_openat2=mutate,
+    )
+    totals = {"MMI_SOURCE_PATH_UNSTABLE": 0}
+    successes = 0
+
+    for iteration in range(100):
+        active_root = (
+            tmp_path
+            / role.value.casefold()
+            / replacement
+            / f"run-{iteration:03d}"
+            / "repository"
+        )
+        active_raw = f"value: {iteration:04d}\n".encode("ascii")
+        _install_role_source(active_root, role, active_raw)
+        open_start = len(opened)
+        close_start = len(closed)
+
+        result = _capture_mmi_source_at_root(
+            active_root,
+            role=role,
+            expected_source_sha256=hashlib.sha256(active_raw).hexdigest(),
+        )
+
+        if result.source is not None:
+            successes += 1
+        run_opened = opened[open_start:]
+        run_closed = closed[close_start:]
+        assert result.status is MmiProjectionResultCategory.PROJECTION_BLOCKED
+        assert result.reason_codes == ("MMI_SOURCE_PATH_UNSTABLE",)
+        assert result.source is None
+        assert result.authority_effect == "NONE"
+        assert sorted(run_opened) == sorted(run_closed)
+        assert len(run_closed) == len(set(run_closed))
+        totals["MMI_SOURCE_PATH_UNSTABLE"] += 1
+
+    assert mutation_count == 100
+    assert totals == {"MMI_SOURCE_PATH_UNSTABLE": 100}
+    assert successes == 0
+    assert sorted(opened) == sorted(closed)
+
+
+@pytest.mark.parametrize(
+    "role",
+    (
+        MmiSourceRole.STRATEGY_SETTINGS,
+        MmiSourceRole.PORTFOLIO_SNAPSHOT,
+    ),
+)
+@pytest.mark.parametrize(
+    "replacement",
+    (
+        "repository-root-symlink",
+        "authenticated-ancestor-symlink",
+        "current-symlink",
+        "leaf-symlink",
+        "missing-component",
+        "intermediate-regular",
+        "leaf-nonregular",
+        "leaf-fifo",
+    ),
+)
+def test_complete_path_open_rejects_symlink_missing_and_wrong_kind_components(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    role: MmiSourceRole,
+    replacement: str,
+) -> None:
+    raw = b"value: fixed\n"
+    root = (
+        tmp_path
+        / replacement
+        / "authenticated-ancestor"
+        / "repository"
+    )
+    _install_role_source(root, role, raw)
+    mutated = False
+
+    def mutate() -> None:
+        nonlocal mutated
+        _replace_fixed_path_before_openat2(
+            root,
+            role,
+            raw,
+            replacement,
+        )
+        mutated = True
+
+    opened, closed = _track_capture_descriptors(
+        monkeypatch,
+        before_openat2=mutate,
+    )
+
+    result = _capture_mmi_source_at_root(
+        root,
+        role=role,
+        expected_source_sha256=hashlib.sha256(raw).hexdigest(),
+    )
+
+    assert mutated
+    assert result.status is MmiProjectionResultCategory.PROJECTION_BLOCKED
+    assert result.reason_codes == ("MMI_SOURCE_PATH_UNSTABLE",)
+    assert result.source is None
+    assert result.authority_effect == "NONE"
+    assert sorted(opened) == sorted(closed)
+    assert len(closed) == len(set(closed))
+
+
+@pytest.mark.parametrize(
+    "role",
+    (
+        MmiSourceRole.STRATEGY_SETTINGS,
+        MmiSourceRole.PORTFOLIO_SNAPSHOT,
+    ),
+)
+@pytest.mark.parametrize(
+    "read_case",
+    ("during-read-mutation", "short", "overlong", "error"),
+)
+def test_final_openat2_descriptor_read_failures_are_all_or_none(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    role: MmiSourceRole,
+    read_case: str,
+) -> None:
+    raw = (
+        b"A" * (source_capture._READ_CHUNK_BYTES + 17)
+        if read_case == "during-read-mutation"
+        else b"value: exact\n"
+    )
+    mutated = b"B" * len(raw)
+    leaf = _install_role_source(tmp_path, role, raw)
+    final_descriptor: int | None = None
+    final_read_calls = 0
+    original_read = source_capture.os.read
+
+    def remember_final_descriptor(file_fd: int) -> None:
+        nonlocal final_descriptor
+        final_descriptor = file_fd
+
+    def controlled_read(file_fd: int, count: int) -> bytes:
+        nonlocal final_read_calls
+        if file_fd != final_descriptor:
+            return original_read(file_fd, count)
+        final_read_calls += 1
+        if read_case == "short":
+            return b""
+        if read_case == "overlong":
+            return raw + b"x"
+        if read_case == "error":
+            raise OSError(errno.EIO, "injected final read error")
+        observed = original_read(file_fd, count)
+        if final_read_calls == 1:
+            leaf.write_bytes(mutated)
+        return observed
+
+    opened, closed = _track_capture_descriptors(
+        monkeypatch,
+        after_openat2=remember_final_descriptor,
+    )
+    monkeypatch.setattr(source_capture.os, "read", controlled_read)
+
+    result = _capture_mmi_source_at_root(
+        tmp_path,
+        role=role,
+        expected_source_sha256=hashlib.sha256(raw).hexdigest(),
+    )
+
+    assert final_descriptor is not None
+    assert final_read_calls >= 1
+    assert result.status is MmiProjectionResultCategory.PROJECTION_BLOCKED
+    assert result.reason_codes == ("MMI_SOURCE_UNSTABLE",)
+    assert result.source is None
+    assert result.authority_effect == "NONE"
+    assert sorted(opened) == sorted(closed)
+    assert len(closed) == len(set(closed))
 
 
 def test_unsupported_required_filesystem_primitives_have_no_fallback(

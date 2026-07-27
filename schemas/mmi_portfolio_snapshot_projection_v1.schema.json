@@ -1,0 +1,479 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-system.local/schemas/mmi_portfolio_snapshot_projection_v1.schema.json",
+  "title": "MMI deterministic portfolio snapshot projection v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "projection_kind",
+    "report_only",
+    "authority_effect",
+    "evaluation_timestamp_utc",
+    "policy_projection_identity_sha256",
+    "portfolio_source_status",
+    "portfolio_source_record_identity_sha256",
+    "portfolio_source_date",
+    "holdings",
+    "open_buy_orders",
+    "cash",
+    "deployable_cash",
+    "open_sell_orders",
+    "tax_lots",
+    "holding_dates",
+    "gains_losses",
+    "weights",
+    "nav_concentration",
+    "lookthrough_exposure",
+    "known_gaps",
+    "completeness_status",
+    "portfolio_projection_identity_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mmi_portfolio_snapshot_projection_v1"
+    },
+    "projection_kind": {
+      "const": "MMI_PORTFOLIO_SNAPSHOT_PROJECTION"
+    },
+    "report_only": {
+      "const": true
+    },
+    "authority_effect": {
+      "const": "NONE"
+    },
+    "evaluation_timestamp_utc": {
+      "$ref": "#/$defs/utc_timestamp"
+    },
+    "policy_projection_identity_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "portfolio_source_status": {
+      "enum": [
+        "SOURCE_ABSENT",
+        "SOURCE_PRESENT_CONTENT_BOUND"
+      ]
+    },
+    "portfolio_source_record_identity_sha256": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "portfolio_source_date": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/date"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "holdings": {
+      "$ref": "#/$defs/unstructured_records_area"
+    },
+    "open_buy_orders": {
+      "$ref": "#/$defs/open_buy_area"
+    },
+    "cash": {
+      "$ref": "#/$defs/unavailable_area"
+    },
+    "deployable_cash": {
+      "$ref": "#/$defs/unavailable_area"
+    },
+    "open_sell_orders": {
+      "$ref": "#/$defs/unstructured_records_area"
+    },
+    "tax_lots": {
+      "$ref": "#/$defs/unstructured_records_area"
+    },
+    "holding_dates": {
+      "$ref": "#/$defs/unavailable_area"
+    },
+    "gains_losses": {
+      "$ref": "#/$defs/unavailable_area"
+    },
+    "weights": {
+      "$ref": "#/$defs/unavailable_area"
+    },
+    "nav_concentration": {
+      "$ref": "#/$defs/unavailable_area"
+    },
+    "lookthrough_exposure": {
+      "$ref": "#/$defs/unavailable_area"
+    },
+    "known_gaps": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 11,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/gap"
+      }
+    },
+    "completeness_status": {
+      "const": "PROJECTION_VALID_WITH_GAPS"
+    },
+    "portfolio_projection_identity_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "portfolio_source_status": {
+            "const": "SOURCE_ABSENT"
+          }
+        },
+        "required": [
+          "portfolio_source_status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "portfolio_source_record_identity_sha256": {
+            "type": "null"
+          },
+          "portfolio_source_date": {
+            "type": "null"
+          },
+          "open_buy_orders": {
+            "properties": {
+              "status": {
+                "const": "SOURCE_ABSENT"
+              },
+              "records": {
+                "maxItems": 0
+              },
+              "total_reserved_budget_decimal": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "portfolio_source_status": {
+            "const": "SOURCE_PRESENT_CONTENT_BOUND"
+          }
+        },
+        "required": [
+          "portfolio_source_status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "portfolio_source_record_identity_sha256": {
+            "$ref": "#/$defs/sha256"
+          },
+          "open_buy_orders": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "SOURCE_VALIDATED",
+                  "PARSE_FAILED"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "date": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "utc_timestamp": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{6}Z$"
+    },
+    "ticker": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9.-]{0,15}$"
+    },
+    "ticker_list": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/ticker"
+      }
+    },
+    "nonnegative_decimal": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]{0,47})(?:\\.[0-9]{0,23}[1-9])?$",
+      "maxLength": 64
+    },
+    "nullable_decimal": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/nonnegative_decimal"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "unstructured_records_area": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "records"
+      ],
+      "properties": {
+        "status": {
+          "const": "UNSTRUCTURED_NOT_PROJECTED"
+        },
+        "records": {
+          "type": "array",
+          "maxItems": 0
+        }
+      }
+    },
+    "unavailable_area": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "const": "UNAVAILABLE_NOT_PROJECTED"
+        }
+      }
+    },
+    "open_buy_area": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "records",
+        "total_reserved_budget_decimal"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "SOURCE_ABSENT",
+            "SOURCE_VALIDATED",
+            "PARSE_FAILED"
+          ]
+        },
+        "records": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/open_buy_record"
+          }
+        },
+        "total_reserved_budget_decimal": {
+          "$ref": "#/$defs/nullable_decimal"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "SOURCE_VALIDATED"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "total_reserved_budget_decimal": {
+                "$ref": "#/$defs/nonnegative_decimal"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "SOURCE_ABSENT",
+                  "PARSE_FAILED"
+                ]
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "records": {
+                "maxItems": 0
+              },
+              "total_reserved_budget_decimal": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "open_buy_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ticker",
+        "reserved_budget_decimal",
+        "stated_compiled_notional_decimal",
+        "policy_membership_classification",
+        "policy_role_annotation",
+        "outside_policy_universe"
+      ],
+      "properties": {
+        "ticker": {
+          "$ref": "#/$defs/ticker"
+        },
+        "reserved_budget_decimal": {
+          "$ref": "#/$defs/nonnegative_decimal"
+        },
+        "stated_compiled_notional_decimal": {
+          "$ref": "#/$defs/nullable_decimal"
+        },
+        "policy_membership_classification": {
+          "enum": [
+            "CORE",
+            "SATELLITE",
+            "APPROVED_EXTENDED",
+            "OUTSIDE_POLICY_UNIVERSE"
+          ]
+        },
+        "policy_role_annotation": {
+          "enum": [
+            "CORE",
+            "SATELLITE",
+            "APPROVED_EXTENDED",
+            null
+          ]
+        },
+        "outside_policy_universe": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "outside_policy_universe": {
+                "const": true
+              }
+            },
+            "required": [
+              "outside_policy_universe"
+            ]
+          },
+          "then": {
+            "properties": {
+              "policy_membership_classification": {
+                "const": "OUTSIDE_POLICY_UNIVERSE"
+              },
+              "policy_role_annotation": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "outside_policy_universe": {
+                "const": false
+              }
+            },
+            "required": [
+              "outside_policy_universe"
+            ]
+          },
+          "then": {
+            "properties": {
+              "policy_membership_classification": {
+                "enum": [
+                  "CORE",
+                  "SATELLITE",
+                  "APPROVED_EXTENDED"
+                ]
+              },
+              "policy_role_annotation": {
+                "enum": [
+                  "CORE",
+                  "SATELLITE",
+                  "APPROVED_EXTENDED"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "gap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "scope",
+        "affected_tickers",
+        "policy_projection_identity_sha256",
+        "portfolio_source_record_identity_sha256"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "PORTFOLIO_SOURCE_MISSING",
+            "PORTFOLIO_SOURCE_TIMESTAMP_UNAVAILABLE",
+            "PORTFOLIO_HOLDINGS_UNSTRUCTURED",
+            "PORTFOLIO_OPEN_BUY_ORDERS_PARSE_FAILED",
+            "PORTFOLIO_OPEN_BUY_ORDER_OUTSIDE_POLICY_UNIVERSE",
+            "PORTFOLIO_OPEN_SELL_ORDERS_UNSTRUCTURED",
+            "PORTFOLIO_TAX_LOTS_UNSTRUCTURED",
+            "PORTFOLIO_DEPLOYABLE_CASH_UNAVAILABLE",
+            "PORTFOLIO_WEIGHTS_UNAVAILABLE",
+            "PORTFOLIO_NAV_CONCENTRATION_UNAVAILABLE",
+            "PORTFOLIO_LOOKTHROUGH_EXPOSURE_UNAVAILABLE"
+          ]
+        },
+        "scope": {
+          "const": "PORTFOLIO_SNAPSHOT"
+        },
+        "affected_tickers": {
+          "$ref": "#/$defs/ticker_list"
+        },
+        "policy_projection_identity_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "portfolio_source_record_identity_sha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

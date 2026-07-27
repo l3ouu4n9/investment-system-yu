@@ -461,3 +461,36 @@ class MmiPolicyProjectionValidationResult:
             MmiProjectionResultCategory.PROJECTION_VALID_COMPLETE,
             MmiProjectionResultCategory.PROJECTION_VALID_WITH_GAPS,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class MmiPortfolioProjectionBuildResult:
+    """No-write outcome of portfolio snapshot projection construction."""
+
+    status: MmiProjectionResultCategory
+    authority_effect: str
+    reason_codes: tuple[str, ...]
+    projection: Mapping[str, object] | None
+
+    @property
+    def valid(self) -> bool:
+        return self.status in {
+            MmiProjectionResultCategory.PROJECTION_VALID_COMPLETE,
+            MmiProjectionResultCategory.PROJECTION_VALID_WITH_GAPS,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class MmiPortfolioProjectionValidationResult:
+    """Source-bound validation result for an in-memory portfolio projection."""
+
+    status: MmiProjectionResultCategory
+    authority_effect: str
+    reason_codes: tuple[str, ...]
+
+    @property
+    def valid(self) -> bool:
+        return self.status in {
+            MmiProjectionResultCategory.PROJECTION_VALID_COMPLETE,
+            MmiProjectionResultCategory.PROJECTION_VALID_WITH_GAPS,
+        }

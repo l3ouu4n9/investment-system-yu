@@ -25,21 +25,21 @@
       "const": "mmi_source_record_v1"
     },
     "source_role": {
-      "const": "STRATEGY_SETTINGS"
+      "type": "string"
     },
     "source_id": {
-      "const": "MMI_STRATEGY_SETTINGS"
+      "type": "string"
     },
     "repository_relative_locator": {
-      "const": "inputs/current/strategy_settings.yaml"
+      "type": "string"
     },
     "maximum_bytes": {
-      "const": 262144
+      "type": "integer"
     },
     "observed_size_bytes": {
       "type": "integer",
       "minimum": 0,
-      "maximum": 262144
+      "maximum": 1048576
     },
     "expected_sha256": {
       "$ref": "#/$defs/sha256"
@@ -66,6 +66,62 @@
       "$ref": "#/$defs/sha256"
     }
   },
+  "oneOf": [
+    {
+      "title": "Strategy settings source record",
+      "required": [
+        "source_role",
+        "source_id",
+        "repository_relative_locator",
+        "maximum_bytes",
+        "observed_size_bytes"
+      ],
+      "properties": {
+        "source_role": {
+          "const": "STRATEGY_SETTINGS"
+        },
+        "source_id": {
+          "const": "MMI_STRATEGY_SETTINGS"
+        },
+        "repository_relative_locator": {
+          "const": "inputs/current/strategy_settings.yaml"
+        },
+        "maximum_bytes": {
+          "const": 262144
+        },
+        "observed_size_bytes": {
+          "maximum": 262144
+        }
+      }
+    },
+    {
+      "title": "Portfolio snapshot source record",
+      "required": [
+        "source_role",
+        "source_id",
+        "repository_relative_locator",
+        "maximum_bytes",
+        "observed_size_bytes"
+      ],
+      "properties": {
+        "source_role": {
+          "const": "PORTFOLIO_SNAPSHOT"
+        },
+        "source_id": {
+          "const": "MMI_PORTFOLIO_SNAPSHOT"
+        },
+        "repository_relative_locator": {
+          "const": "inputs/current/portfolio_snapshot.txt"
+        },
+        "maximum_bytes": {
+          "const": 1048576
+        },
+        "observed_size_bytes": {
+          "maximum": 1048576
+        }
+      }
+    }
+  ],
   "$defs": {
     "sha256": {
       "type": "string",
