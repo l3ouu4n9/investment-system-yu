@@ -253,6 +253,7 @@ def test_ctypes_authority_is_exactly_source_capture_openat2_only() -> None:
 
 def test_schema_helper_is_imported_by_exact_symbol_only() -> None:
     for relative in (
+        "src/investment_orchestrator/mmi/contracts.py",
         "src/investment_orchestrator/mmi/source_capture.py",
         "src/investment_orchestrator/mmi/policy_projection.py",
         "src/investment_orchestrator/mmi/portfolio_projection.py",

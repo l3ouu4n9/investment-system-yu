@@ -28,6 +28,8 @@ from investment_orchestrator.mmi import (
 from investment_orchestrator.mmi.canonical import (
     MAXIMUM_ANALYST_VISIBLE_EVIDENCE_VIEW_CANONICAL_BYTES,
     _MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_IDENTITY_DOMAIN,
+    _MMI_GROUNDED_PROMPT_ARTIFACT_IDENTITY_DOMAIN,
+    _MMI_GROUNDED_PROMPT_CONTEXT_BINDING_DOMAIN,
     MMI_AUTHENTICATED_EVIDENCE_BUNDLE_IDENTITY_DOMAIN,
     MMI_POLICY_PROJECTION_IDENTITY_DOMAIN,
     MMI_PORTFOLIO_SNAPSHOT_PROJECTION_IDENTITY_DOMAIN,
@@ -1806,7 +1808,7 @@ def test_resealed_structural_identity_is_not_source_authentication() -> None:
     )
 
 
-def test_exactly_six_persistent_mmi_identity_domains_exist() -> None:
+def test_exactly_eight_persistent_mmi_identity_domains_exist() -> None:
     domains_by_name = {
         name: value
         for name, value in canonical.__dict__.items()
@@ -1833,11 +1835,19 @@ def test_exactly_six_persistent_mmi_identity_domains_exist() -> None:
     assert _MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_IDENTITY_DOMAIN == (
         b"mmi_analyst_visible_evidence_view_v1\0"
     )
+    assert _MMI_GROUNDED_PROMPT_CONTEXT_BINDING_DOMAIN == (
+        b"mmi_grounded_prompt_context_binding_v1\0"
+    )
+    assert _MMI_GROUNDED_PROMPT_ARTIFACT_IDENTITY_DOMAIN == (
+        b"mmi_grounded_prompt_artifact_v1\0"
+    )
     domains = (
         *domains_by_name.values(),
         _MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_IDENTITY_DOMAIN,
+        _MMI_GROUNDED_PROMPT_CONTEXT_BINDING_DOMAIN,
+        _MMI_GROUNDED_PROMPT_ARTIFACT_IDENTITY_DOMAIN,
     )
-    assert len(domains) == len(set(domains)) == 6
+    assert len(domains) == len(set(domains)) == 8
 
 
 def test_first_five_domains_and_existing_fixed_identities_are_unchanged() -> None:
@@ -2290,7 +2300,10 @@ def test_v1b_contract_and_v1c_runtime_have_exact_phase_ownership() -> None:
             for node in ast.walk(tree)
         )
     )
-    assert schema_name_owners == (view_relative_path,)
+    assert schema_name_owners == (
+        view_relative_path,
+        contracts_relative_path,
+    )
 
     def imported_modules(path: Path) -> tuple[str, ...]:
         relative_module_path = path.relative_to(root / "src")
@@ -2408,7 +2421,11 @@ def test_contract_surface_is_structural_only_and_has_no_runtime_access() -> None
         "httpx",
         "openai",
     } & imports
-    assert "validate_artifact_schema" not in source
+    assert source.count("validate_artifact_schema(") == 1
+    assert (
+        "mmi_analyst_visible_evidence_view_v1.schema.json"
+        in source
+    )
     assert "capture_current_mmi_source" not in source
     assert "build_mmi_authenticated_evidence_bundle" not in source
 

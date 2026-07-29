@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-system.local/schemas/mmi_grounded_prompt_v1.schema.json",
+  "title": "MMI grounded prompt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "report_only",
+    "authority_effect",
+    "analyst_visible_evidence_view_identity_sha256",
+    "instruction_set_version",
+    "expected_response_schema_version",
+    "manual_handoff_required",
+    "prompt_context_binding_sha256",
+    "prompt_text",
+    "grounded_prompt_artifact_identity_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mmi_grounded_prompt_v1"
+    },
+    "artifact_kind": {
+      "const": "MMI_GROUNDED_PROMPT"
+    },
+    "report_only": {
+      "const": true
+    },
+    "authority_effect": {
+      "const": "NONE"
+    },
+    "analyst_visible_evidence_view_identity_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "instruction_set_version": {
+      "const": "mmi_grounded_prompt_instruction_set_v1"
+    },
+    "expected_response_schema_version": {
+      "const": "mmi_grounded_analysis_response_v1"
+    },
+    "manual_handoff_required": {
+      "const": true
+    },
+    "prompt_context_binding_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "prompt_text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 65536,
+      "pattern": "^(?:[!-~](?:[ -~]*[!-~])?\\n)+(?![\\s\\S])"
+    },
+    "grounded_prompt_artifact_identity_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}
