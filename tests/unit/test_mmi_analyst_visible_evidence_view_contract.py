@@ -2151,11 +2151,11 @@ def test_exact_schema_property_ownership_has_no_private_value_channel() -> None:
     }
 
 
-def test_v1b_has_no_builder_validator_module_export_or_consumer() -> None:
+def test_v1b_contract_and_v1c_runtime_have_exact_phase_ownership() -> None:
     root = repo_root()
     production_root = root / "src/investment_orchestrator"
     production_paths = tuple(sorted(production_root.rglob("*.py")))
-    assert len(production_paths) == 130
+    assert len(production_paths) == 131
     relative = {
         path: path.relative_to(root).as_posix()
         for path in production_paths
@@ -2164,23 +2164,91 @@ def test_v1b_has_no_builder_validator_module_export_or_consumer() -> None:
         path: ast.parse(path.read_text(encoding="utf-8"))
         for path in production_paths
     }
-    assert not tuple(
+    view_relative_path = (
+        "src/investment_orchestrator/mmi/"
+        "analyst_visible_evidence_view.py"
+    )
+    view_path = root / view_relative_path
+    contracts_relative_path = (
+        "src/investment_orchestrator/mmi/contracts.py"
+    )
+    contracts_path = root / contracts_relative_path
+    assert tuple(
         relative[path]
         for path in production_paths
         if "analyst_visible_evidence_view" in path.stem
-    )
+    ) == (view_relative_path,)
 
-    prohibited_surfaces = {
+    public_surfaces = (
         "build_mmi_analyst_visible_evidence_view",
         "validate_mmi_analyst_visible_evidence_view",
+    )
+
+    def top_level_function_names(path: Path) -> tuple[str, ...]:
+        return tuple(
+            node.name
+            for node in trees[path].body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        )
+
+    owners = {
+        name: tuple(
+            relative[path]
+            for path in production_paths
+            if name in top_level_function_names(path)
+        )
+        for name in public_surfaces
     }
-    defined = {
+    assert owners == {
+        name: (view_relative_path,) for name in public_surfaces
+    }
+    view_tree = trees[view_path]
+    assert tuple(
+        name
+        for name in top_level_function_names(view_path)
+        if not name.startswith("_")
+    ) == public_surfaces
+    assert not tuple(
         node.name
-        for tree in trees.values()
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    }
-    assert not defined & prohibited_surfaces
+        for node in view_tree.body
+        if isinstance(node, ast.ClassDef)
+        and not node.name.startswith("_")
+    )
+    all_assignments = tuple(
+        node
+        for node in view_tree.body
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        and any(
+            isinstance(target, ast.Name) and target.id == "__all__"
+            for target in (
+                node.targets
+                if isinstance(node, ast.Assign)
+                else (node.target,)
+            )
+        )
+    )
+    assert len(all_assignments) == 1
+    assert ast.literal_eval(all_assignments[0].value) == public_surfaces
+    public_assignments = tuple(
+        target.id
+        for node in view_tree.body
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        for target in (
+            node.targets
+            if isinstance(node, ast.Assign)
+            else (node.target,)
+        )
+        if isinstance(target, ast.Name)
+        and not target.id.startswith("_")
+    )
+    assert public_assignments == ()
+    for path in (
+        contracts_path,
+        root / "src/investment_orchestrator/mmi/canonical.py",
+    ):
+        assert not set(top_level_function_names(path)) & set(
+            public_surfaces
+        )
 
     helper_name = "mmi_analyst_visible_evidence_view_identity_sha256"
     helper_definitions = tuple(
@@ -2192,14 +2260,11 @@ def test_v1b_has_no_builder_validator_module_export_or_consumer() -> None:
             for node in tree.body
         )
     )
-    assert helper_definitions == (
-        "src/investment_orchestrator/mmi/contracts.py",
-    )
+    assert helper_definitions == (contracts_relative_path,)
     helper_consumers = tuple(
         relative[path]
         for path, tree in trees.items()
-        if relative[path]
-        != "src/investment_orchestrator/mmi/contracts.py"
+        if relative[path] != contracts_relative_path
         and any(
             (
                 isinstance(node, ast.Name)
@@ -2214,7 +2279,7 @@ def test_v1b_has_no_builder_validator_module_export_or_consumer() -> None:
             for node in ast.walk(tree)
         )
     )
-    assert helper_consumers == ()
+    assert helper_consumers == (view_relative_path,)
 
     schema_name_owners = tuple(
         relative[path]
@@ -2225,7 +2290,67 @@ def test_v1b_has_no_builder_validator_module_export_or_consumer() -> None:
             for node in ast.walk(tree)
         )
     )
-    assert schema_name_owners == ()
+    assert schema_name_owners == (view_relative_path,)
+
+    def imported_modules(path: Path) -> tuple[str, ...]:
+        relative_module_path = path.relative_to(root / "src")
+        module_parts = list(relative_module_path.with_suffix("").parts)
+        package_parts = module_parts[:-1]
+        modules: list[str] = []
+        for node in ast.walk(trees[path]):
+            if isinstance(node, ast.Import):
+                modules.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                if node.level == 0:
+                    base_parts = (
+                        node.module.split(".")
+                        if node.module is not None
+                        else []
+                    )
+                else:
+                    retained = len(package_parts) - (node.level - 1)
+                    base_parts = package_parts[: max(retained, 0)]
+                    if node.module is not None:
+                        base_parts.extend(node.module.split("."))
+                base = ".".join(base_parts)
+                if base:
+                    modules.append(base)
+                modules.extend(
+                    ".".join((*base_parts, alias.name))
+                    for alias in node.names
+                    if alias.name != "*"
+                )
+        return tuple(modules)
+
+    view_module_name = (
+        "investment_orchestrator.mmi."
+        "analyst_visible_evidence_view"
+    )
+    view_importers = tuple(
+        relative[path]
+        for path in production_paths
+        if path != view_path
+        and any(
+            module == view_module_name
+            or module.startswith(f"{view_module_name}.")
+            for module in imported_modules(path)
+        )
+    )
+    assert view_importers == ()
+
+    evidence_module_name = (
+        "investment_orchestrator.mmi.evidence_bundle"
+    )
+    evidence_importers = tuple(
+        relative[path]
+        for path in production_paths
+        if any(
+            module == evidence_module_name
+            or module.startswith(f"{evidence_module_name}.")
+            for module in imported_modules(path)
+        )
+    )
+    assert evidence_importers == (view_relative_path,)
 
     init_path = root / "src/investment_orchestrator/mmi/__init__.py"
     init_tree = trees[init_path]
@@ -2238,6 +2363,17 @@ def test_v1b_has_no_builder_validator_module_export_or_consumer() -> None:
         and node.name in {"__getattr__", "__dir__"}
         for node in init_tree.body
     )
+    init_all = tuple(
+        node
+        for node in init_tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "__all__"
+            for target in node.targets
+        )
+    )
+    assert len(init_all) == 1
+    assert ast.literal_eval(init_all[0].value) == ()
 
 
 def test_contract_surface_is_structural_only_and_has_no_runtime_access() -> None:

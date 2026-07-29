@@ -1055,7 +1055,7 @@ def test_e1b_contract_and_e1c_runtime_have_exact_phase_ownership() -> None:
     root = repo_root()
     production_root = root / "src/investment_orchestrator"
     production_paths = tuple(sorted(production_root.rglob("*.py")))
-    assert len(production_paths) == 130
+    assert len(production_paths) == 131
 
     mmi_paths = tuple(
         sorted(
@@ -1067,6 +1067,10 @@ def test_e1b_contract_and_e1c_runtime_have_exact_phase_ownership() -> None:
     )
     assert mmi_paths == (
         "src/investment_orchestrator/mmi/__init__.py",
+        (
+            "src/investment_orchestrator/mmi/"
+            "analyst_visible_evidence_view.py"
+        ),
         "src/investment_orchestrator/mmi/canonical.py",
         "src/investment_orchestrator/mmi/contracts.py",
         "src/investment_orchestrator/mmi/evidence_bundle.py",
@@ -1085,6 +1089,10 @@ def test_e1b_contract_and_e1c_runtime_have_exact_phase_ownership() -> None:
     }
     evidence_relative_path = (
         "src/investment_orchestrator/mmi/evidence_bundle.py"
+    )
+    analyst_view_relative_path = (
+        "src/investment_orchestrator/mmi/"
+        "analyst_visible_evidence_view.py"
     )
     evidence_path = root / evidence_relative_path
     contracts_path = (
@@ -1222,7 +1230,7 @@ def test_e1b_contract_and_e1c_runtime_have_exact_phase_ownership() -> None:
             for module in imported_modules(path)
         )
     )
-    assert evidence_importers == ()
+    assert evidence_importers == (analyst_view_relative_path,)
 
     init_tree = trees[init_path]
     assert not any(
