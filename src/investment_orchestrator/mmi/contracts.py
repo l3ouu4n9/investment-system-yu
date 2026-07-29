@@ -9,14 +9,18 @@ import hashlib
 import hmac
 import json
 from pathlib import PurePosixPath
+import re
 import secrets
 from types import MappingProxyType
 from typing import Final, Mapping, NoReturn, Protocol
 
 from investment_orchestrator.mmi.canonical import (
+    MAXIMUM_ANALYST_VISIBLE_EVIDENCE_VIEW_CANONICAL_BYTES,
     MAXIMUM_AUTHENTICATED_EVIDENCE_BUNDLE_CANONICAL_BYTES,
+    _MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_IDENTITY_DOMAIN,
     MMI_AUTHENTICATED_EVIDENCE_BUNDLE_IDENTITY_DOMAIN,
     MmiCanonicalizationError,
+    canonical_json_bytes,
     record_identity_sha256,
 )
 
@@ -44,6 +48,96 @@ MMI_EVIDENCE_PORTFOLIO_NOT_SUPPLIED_GAP_CODE: Final = (
 )
 MMI_EVIDENCE_ASSEMBLY_GAP_SCOPE: Final = "EVIDENCE_ASSEMBLY"
 MMI_EVIDENCE_PORTFOLIO_GAP_COMPONENT: Final = "PORTFOLIO_PROJECTION"
+MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_SCHEMA_VERSION: Final = (
+    "mmi_analyst_visible_evidence_view_v1"
+)
+MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_ARTIFACT_KIND: Final = (
+    "MMI_ANALYST_VISIBLE_EVIDENCE_VIEW"
+)
+MMI_ANALYST_VIEW_LIMITATION_TRANSLATIONS: Final[
+    tuple[tuple[str, str, str], ...]
+] = (
+    (
+        "POLICY_PROJECTION",
+        "POLICY_CASH_MODEL_UNAVAILABLE",
+        "VIEW_POLICY_CASH_MODEL_UNAVAILABLE",
+    ),
+    (
+        "POLICY_PROJECTION",
+        "POLICY_EXTENDED_ACTIVATION_CONSTRAINTS_UNAVAILABLE",
+        "VIEW_POLICY_EXTENDED_ACTIVATION_CONSTRAINTS_UNAVAILABLE",
+    ),
+    (
+        "POLICY_PROJECTION",
+        "POLICY_LOOKTHROUGH_EXPOSURE_UNAVAILABLE",
+        "VIEW_POLICY_LOOKTHROUGH_EXPOSURE_UNAVAILABLE",
+    ),
+    (
+        "POLICY_PROJECTION",
+        "POLICY_MAX_NEW_TICKER_RULE_UNAVAILABLE",
+        "VIEW_POLICY_MAX_NEW_TICKER_RULE_UNAVAILABLE",
+    ),
+    (
+        "POLICY_PROJECTION",
+        "POLICY_MINIMUM_HOLDING_ENFORCEMENT_INCOMPLETE",
+        "VIEW_POLICY_MINIMUM_HOLDING_ENFORCEMENT_INCOMPLETE",
+    ),
+    (
+        "POLICY_PROJECTION",
+        "POLICY_PER_RUN_BUDGET_APPLICABILITY_UNVERIFIED",
+        "VIEW_POLICY_PER_RUN_BUDGET_APPLICABILITY_UNVERIFIED",
+    ),
+    (
+        "POLICY_PROJECTION",
+        "POLICY_PER_RUN_NEW_BUY_BUDGET_UNAVAILABLE",
+        "VIEW_POLICY_PER_RUN_NEW_BUY_BUDGET_UNAVAILABLE",
+    ),
+    (
+        "POLICY_PROJECTION",
+        "POLICY_PORTFOLIO_NAV_CONCENTRATION_UNAVAILABLE",
+        "VIEW_POLICY_PORTFOLIO_NAV_CONCENTRATION_UNAVAILABLE",
+    ),
+    (
+        "POLICY_PROJECTION",
+        "POLICY_SELL_ELIGIBILITY_INCOMPLETE",
+        "VIEW_POLICY_SELL_ELIGIBILITY_INCOMPLETE",
+    ),
+    (
+        "POLICY_PROJECTION",
+        "POLICY_TAX_LOT_ENFORCEMENT_UNAVAILABLE",
+        "VIEW_POLICY_TAX_LOT_ENFORCEMENT_UNAVAILABLE",
+    ),
+    (
+        "POLICY_PROJECTION",
+        "POLICY_TURNOVER_ENFORCEMENT_INCOMPLETE",
+        "VIEW_POLICY_TURNOVER_ENFORCEMENT_INCOMPLETE",
+    ),
+    (
+        "EVIDENCE_BUNDLE",
+        "EVIDENCE_PORTFOLIO_COMPONENT_NOT_SUPPLIED",
+        "VIEW_EVIDENCE_PORTFOLIO_COMPONENT_NOT_SUPPLIED",
+    ),
+    (
+        "PORTFOLIO_PROJECTION",
+        "PORTFOLIO_SOURCE_MISSING",
+        "VIEW_PORTFOLIO_SOURCE_MISSING",
+    ),
+    (
+        "PORTFOLIO_PROJECTION",
+        "PORTFOLIO_SOURCE_TIMESTAMP_UNAVAILABLE",
+        "VIEW_PORTFOLIO_SOURCE_TIMESTAMP_UNAVAILABLE",
+    ),
+    (
+        "PORTFOLIO_PROJECTION",
+        "PORTFOLIO_OPEN_BUY_ORDERS_PARSE_FAILED",
+        "VIEW_PORTFOLIO_OPEN_BUY_ORDERS_PARSE_FAILED",
+    ),
+    (
+        "PORTFOLIO_PROJECTION",
+        "PORTFOLIO_OPEN_BUY_ORDER_OUTSIDE_POLICY_UNIVERSE",
+        "VIEW_PORTFOLIO_OPEN_BUY_ORDER_OUTSIDE_POLICY_UNIVERSE",
+    ),
+)
 _MMI_RUN_CONTEXT_PROVENANCE_KEY: Final = secrets.token_bytes(32)
 _MMI_CAPTURED_SOURCE_PROVENANCE_KEY: Final = secrets.token_bytes(32)
 _MMI_RUN_CONTEXT_PROVENANCE_INSTANCES: Final[dict[bytes, object]] = {}
@@ -572,6 +666,428 @@ def mmi_authenticated_evidence_bundle_identity_sha256(
         domain=MMI_AUTHENTICATED_EVIDENCE_BUNDLE_IDENTITY_DOMAIN,
         maximum_bytes=(
             MAXIMUM_AUTHENTICATED_EVIDENCE_BUNDLE_CANONICAL_BYTES
+        ),
+    )
+
+
+_ANALYST_VIEW_TOP_LEVEL_FIELDS: Final = frozenset(
+    {
+        "schema_version",
+        "artifact_kind",
+        "report_only",
+        "authority_effect",
+        "evaluation_timestamp_utc",
+        "evidence_bundle_identity_sha256",
+        "policy_view",
+        "portfolio_view",
+        "known_view_limitations",
+        "view_completeness_status",
+        "analyst_visible_evidence_view_identity_sha256",
+    }
+)
+_ANALYST_VIEW_POLICY_FIELDS: Final = frozenset(
+    {
+        "policy_as_of_date",
+        "policy_method",
+        "benchmark_reference_instruments",
+        "analysis_instruments",
+        "extended_activation_status",
+        "instrument_availability_observation_status",
+        "target_weights_absence_reason",
+    }
+)
+_ANALYST_VIEW_INSTRUMENT_FIELDS: Final = frozenset(
+    {
+        "ticker",
+        "policy_role",
+    }
+)
+_ANALYST_VIEW_PORTFOLIO_PRESENT_FIELDS: Final = frozenset(
+    {
+        "presence_status",
+        "portfolio_source_date",
+        "open_buy_status",
+        "open_buy_observations",
+        "fact_coverage_statuses",
+    }
+)
+_ANALYST_VIEW_OBSERVATION_FIELDS: Final = frozenset(
+    {
+        "ticker",
+        "policy_membership_classification",
+    }
+)
+_ANALYST_VIEW_COVERAGE_FIELDS: Final = frozenset(
+    {
+        "holdings",
+        "cash",
+        "deployable_cash",
+        "open_sells",
+        "tax_lots",
+        "holding_dates",
+        "gains_losses",
+        "weights",
+        "nav_concentration",
+        "look_through_exposure",
+    }
+)
+_ANALYST_VIEW_LIMITATION_FIELDS: Final = frozenset(
+    {
+        "owner",
+        "code",
+        "affected_tickers",
+    }
+)
+_ANALYST_VIEW_POLICY_ROLE_ORDER: Final = MappingProxyType(
+    {
+        "CORE": 0,
+        "SATELLITE": 1,
+        "APPROVED_EXTENDED": 2,
+    }
+)
+_ANALYST_VIEW_MEMBERSHIP_CLASSIFICATIONS: Final = frozenset(
+    {
+        "CORE",
+        "SATELLITE",
+        "APPROVED_EXTENDED",
+        "OUTSIDE_POLICY_UNIVERSE",
+    }
+)
+_ANALYST_VIEW_COVERAGE_VALUES: Final = MappingProxyType(
+    {
+        "holdings": "UNSTRUCTURED_NOT_PROJECTED",
+        "cash": "UNAVAILABLE_NOT_PROJECTED",
+        "deployable_cash": "UNAVAILABLE_NOT_PROJECTED",
+        "open_sells": "UNSTRUCTURED_NOT_PROJECTED",
+        "tax_lots": "UNSTRUCTURED_NOT_PROJECTED",
+        "holding_dates": "UNAVAILABLE_NOT_PROJECTED",
+        "gains_losses": "UNAVAILABLE_NOT_PROJECTED",
+        "weights": "UNAVAILABLE_NOT_PROJECTED",
+        "nav_concentration": "UNAVAILABLE_NOT_PROJECTED",
+        "look_through_exposure": "UNAVAILABLE_NOT_PROJECTED",
+    }
+)
+_ANALYST_VIEW_LIMITATION_BY_CODE: Final = MappingProxyType(
+    {
+        output_code: (index, owner)
+        for index, (owner, _upstream_code, output_code) in enumerate(
+            MMI_ANALYST_VIEW_LIMITATION_TRANSLATIONS
+        )
+    }
+)
+_ANALYST_VIEW_OUTSIDE_POLICY_LIMITATION_CODE: Final = (
+    "VIEW_PORTFOLIO_OPEN_BUY_ORDER_OUTSIDE_POLICY_UNIVERSE"
+)
+_ANALYST_VIEW_TICKER_RE: Final = re.compile(
+    r"^[A-Z][A-Z0-9.-]{0,15}$"
+)
+_ANALYST_VIEW_DATE_RE: Final = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _analyst_view_contract_failure() -> NoReturn:
+    raise MmiCanonicalizationError(
+        "MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_CONTRACT_INVALID"
+    )
+
+
+def _analyst_view_exact_dict(
+    value: object,
+    expected_fields: frozenset[str],
+) -> dict[str, object]:
+    if type(value) is not dict or set(value) != expected_fields:
+        _analyst_view_contract_failure()
+    return value
+
+
+def _analyst_view_require_sha256(value: object) -> None:
+    if not _is_sha256(value):
+        _analyst_view_contract_failure()
+
+
+def _analyst_view_require_timestamp(value: object) -> None:
+    if type(value) is not str or len(value) != 27:
+        _analyst_view_contract_failure()
+    try:
+        parsed = datetime.strptime(
+            value,
+            CANONICAL_UTC_TIMESTAMP_FORMAT,
+        )
+    except ValueError:
+        _analyst_view_contract_failure()
+    if parsed.strftime(CANONICAL_UTC_TIMESTAMP_FORMAT) != value:
+        _analyst_view_contract_failure()
+
+
+def _analyst_view_require_date(value: object) -> None:
+    if (
+        type(value) is not str
+        or not _ANALYST_VIEW_DATE_RE.fullmatch(value)
+    ):
+        _analyst_view_contract_failure()
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        _analyst_view_contract_failure()
+    if parsed.strftime("%Y-%m-%d") != value:
+        _analyst_view_contract_failure()
+
+
+def _analyst_view_require_ticker(value: object) -> str:
+    if (
+        type(value) is not str
+        or not _ANALYST_VIEW_TICKER_RE.fullmatch(value)
+    ):
+        _analyst_view_contract_failure()
+    return value
+
+
+def _validate_analyst_view_policy(
+    value: object,
+) -> frozenset[str]:
+    policy = _analyst_view_exact_dict(
+        value,
+        _ANALYST_VIEW_POLICY_FIELDS,
+    )
+    _analyst_view_require_date(policy.get("policy_as_of_date"))
+    if (
+        policy.get("policy_method")
+        != "BUDGET_SHORTLIST_ROTATION_WITHOUT_TARGET_WEIGHTS"
+        or policy.get("extended_activation_status")
+        != "NOT_EVALUATED_REPORT_ONLY"
+        or policy.get("instrument_availability_observation_status")
+        != "NOT_DETERMINISTICALLY_AVAILABLE"
+        or policy.get("target_weights_absence_reason")
+        != "POLICY_METHOD_HAS_NO_TARGET_WEIGHTS"
+    ):
+        _analyst_view_contract_failure()
+
+    instruments = policy.get("analysis_instruments")
+    if (
+        type(instruments) is not list
+        or not 2 <= len(instruments) <= 256
+    ):
+        _analyst_view_contract_failure()
+    role_by_ticker: dict[str, str] = {}
+    previous_role_order = -1
+    observed_roles: set[str] = set()
+    for item in instruments:
+        instrument = _analyst_view_exact_dict(
+            item,
+            _ANALYST_VIEW_INSTRUMENT_FIELDS,
+        )
+        ticker = _analyst_view_require_ticker(instrument.get("ticker"))
+        role = instrument.get("policy_role")
+        if type(role) is not str:
+            _analyst_view_contract_failure()
+        role_order = _ANALYST_VIEW_POLICY_ROLE_ORDER.get(role)
+        if (
+            role_order is None
+            or role_order < previous_role_order
+            or ticker in role_by_ticker
+        ):
+            _analyst_view_contract_failure()
+        previous_role_order = role_order
+        observed_roles.add(role)
+        role_by_ticker[ticker] = role
+    if not {"CORE", "SATELLITE"} <= observed_roles:
+        _analyst_view_contract_failure()
+
+    benchmark = policy.get("benchmark_reference_instruments")
+    if type(benchmark) is not list or len(benchmark) != 1:
+        _analyst_view_contract_failure()
+    benchmark_ticker = _analyst_view_require_ticker(benchmark[0])
+    if role_by_ticker.get(benchmark_ticker) != "CORE":
+        _analyst_view_contract_failure()
+    return frozenset(role_by_ticker)
+
+
+def _validate_analyst_view_coverage(value: object) -> None:
+    coverage = _analyst_view_exact_dict(
+        value,
+        _ANALYST_VIEW_COVERAGE_FIELDS,
+    )
+    if coverage != dict(_ANALYST_VIEW_COVERAGE_VALUES):
+        _analyst_view_contract_failure()
+
+
+def _validate_analyst_view_observations(
+    value: object,
+) -> frozenset[str]:
+    if type(value) is not list or len(value) > 256:
+        _analyst_view_contract_failure()
+    observed_tickers: set[str] = set()
+    for item in value:
+        observation = _analyst_view_exact_dict(
+            item,
+            _ANALYST_VIEW_OBSERVATION_FIELDS,
+        )
+        ticker = _analyst_view_require_ticker(observation.get("ticker"))
+        classification = observation.get(
+            "policy_membership_classification"
+        )
+        if (
+            type(classification) is not str
+            or classification
+            not in _ANALYST_VIEW_MEMBERSHIP_CLASSIFICATIONS
+            or ticker in observed_tickers
+        ):
+            _analyst_view_contract_failure()
+        observed_tickers.add(ticker)
+    return frozenset(observed_tickers)
+
+
+def _validate_analyst_view_portfolio(
+    value: object,
+) -> frozenset[str]:
+    if type(value) is not dict:
+        _analyst_view_contract_failure()
+    presence_status = value.get("presence_status")
+    if type(presence_status) is not str:
+        _analyst_view_contract_failure()
+    if presence_status == MMI_EVIDENCE_PORTFOLIO_NOT_SUPPLIED_STATUS:
+        _analyst_view_exact_dict(
+            value,
+            frozenset({"presence_status"}),
+        )
+        return frozenset()
+    if presence_status not in {
+        MMI_EVIDENCE_PORTFOLIO_SOURCE_ABSENT_STATUS,
+        MMI_EVIDENCE_PORTFOLIO_SOURCE_BOUND_STATUS,
+    }:
+        _analyst_view_contract_failure()
+    portfolio = _analyst_view_exact_dict(
+        value,
+        _ANALYST_VIEW_PORTFOLIO_PRESENT_FIELDS,
+    )
+    source_date = portfolio.get("portfolio_source_date")
+    open_buy_status = portfolio.get("open_buy_status")
+    observations = portfolio.get("open_buy_observations")
+    _validate_analyst_view_coverage(
+        portfolio.get("fact_coverage_statuses")
+    )
+    observed_tickers = _validate_analyst_view_observations(observations)
+    if presence_status == MMI_EVIDENCE_PORTFOLIO_SOURCE_ABSENT_STATUS:
+        if (
+            source_date is not None
+            or open_buy_status != "SOURCE_ABSENT"
+            or observations != []
+        ):
+            _analyst_view_contract_failure()
+        return observed_tickers
+    if source_date is not None:
+        _analyst_view_require_date(source_date)
+    if open_buy_status == "PARSE_FAILED":
+        if observations != []:
+            _analyst_view_contract_failure()
+    elif open_buy_status != "SOURCE_VALIDATED":
+        _analyst_view_contract_failure()
+    return observed_tickers
+
+
+def _validate_analyst_view_limitations(
+    value: object,
+    *,
+    visible_tickers: frozenset[str],
+) -> None:
+    if type(value) is not list or not 1 <= len(value) <= 14:
+        _analyst_view_contract_failure()
+    previous_rank = -1
+    observed_codes: set[str] = set()
+    for item in value:
+        limitation = _analyst_view_exact_dict(
+            item,
+            _ANALYST_VIEW_LIMITATION_FIELDS,
+        )
+        code = limitation.get("code")
+        if type(code) is not str:
+            _analyst_view_contract_failure()
+        contract = _ANALYST_VIEW_LIMITATION_BY_CODE.get(code)
+        if contract is None:
+            _analyst_view_contract_failure()
+        rank, expected_owner = contract
+        affected_tickers = limitation.get("affected_tickers")
+        if (
+            limitation.get("owner") != expected_owner
+            or code in observed_codes
+            or rank <= previous_rank
+            or type(affected_tickers) is not list
+            or len(affected_tickers) > 256
+        ):
+            _analyst_view_contract_failure()
+        checked_tickers = [
+            _analyst_view_require_ticker(ticker)
+            for ticker in affected_tickers
+        ]
+        if (
+            len(checked_tickers) != len(set(checked_tickers))
+            or not set(checked_tickers) <= visible_tickers
+        ):
+            _analyst_view_contract_failure()
+        if code == _ANALYST_VIEW_OUTSIDE_POLICY_LIMITATION_CODE:
+            if not checked_tickers:
+                _analyst_view_contract_failure()
+        elif checked_tickers:
+            _analyst_view_contract_failure()
+        previous_rank = rank
+        observed_codes.add(code)
+
+
+def mmi_analyst_visible_evidence_view_identity_sha256(
+    value: Mapping[str, object],
+) -> str:
+    """Calculate structural view identity without authenticating inputs."""
+    if not isinstance(value, Mapping):
+        _analyst_view_contract_failure()
+    try:
+        view = dict(value)
+    except (TypeError, ValueError):
+        _analyst_view_contract_failure()
+    if set(view) != _ANALYST_VIEW_TOP_LEVEL_FIELDS:
+        _analyst_view_contract_failure()
+    if (
+        view.get("schema_version")
+        != MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_SCHEMA_VERSION
+        or view.get("artifact_kind")
+        != MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_ARTIFACT_KIND
+        or view.get("report_only") is not True
+        or view.get("authority_effect") != AUTHORITY_EFFECT_NONE
+        or view.get("view_completeness_status")
+        != MmiProjectionResultCategory.PROJECTION_VALID_WITH_GAPS.value
+    ):
+        _analyst_view_contract_failure()
+    _analyst_view_require_timestamp(
+        view.get("evaluation_timestamp_utc")
+    )
+    _analyst_view_require_sha256(
+        view.get("evidence_bundle_identity_sha256")
+    )
+    policy_tickers = _validate_analyst_view_policy(
+        view.get("policy_view")
+    )
+    portfolio_tickers = _validate_analyst_view_portfolio(
+        view.get("portfolio_view")
+    )
+    _validate_analyst_view_limitations(
+        view.get("known_view_limitations"),
+        visible_tickers=policy_tickers | portfolio_tickers,
+    )
+    _analyst_view_require_sha256(
+        view.get("analyst_visible_evidence_view_identity_sha256")
+    )
+    canonical_json_bytes(
+        view,
+        maximum_bytes=(
+            MAXIMUM_ANALYST_VISIBLE_EVIDENCE_VIEW_CANONICAL_BYTES
+        ),
+    )
+    return record_identity_sha256(
+        view,
+        identity_field=(
+            "analyst_visible_evidence_view_identity_sha256"
+        ),
+        domain=_MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_IDENTITY_DOMAIN,
+        maximum_bytes=(
+            MAXIMUM_ANALYST_VISIBLE_EVIDENCE_VIEW_CANONICAL_BYTES
         ),
     )
 
