@@ -167,6 +167,14 @@ def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -
                     path
                     == (
                         "src/investment_orchestrator/mmi/"
+                        "contracts.py"
+                    )
+                    and imported == "base64"
+                )
+                or (
+                    path
+                    == (
+                        "src/investment_orchestrator/mmi/"
                         "source_capture.py"
                     )
                     and imported == "ctypes"

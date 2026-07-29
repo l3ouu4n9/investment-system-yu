@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -21,10 +22,12 @@ from investment_orchestrator.mmi.canonical import (
     MAXIMUM_ANALYST_VISIBLE_EVIDENCE_VIEW_CANONICAL_BYTES,
     MAXIMUM_AUTHENTICATED_EVIDENCE_BUNDLE_CANONICAL_BYTES,
     MAXIMUM_GROUNDED_PROMPT_TEXT_BYTES,
+    MAXIMUM_MMI_RAW_RESPONSE_BYTES,
     _MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_IDENTITY_DOMAIN,
     _MAXIMUM_GROUNDED_PROMPT_CANONICAL_BYTES,
     _MMI_GROUNDED_PROMPT_ARTIFACT_IDENTITY_DOMAIN,
     _MMI_GROUNDED_PROMPT_CONTEXT_BINDING_DOMAIN,
+    _MMI_RAW_RESPONSE_ENVELOPE_IDENTITY_DOMAIN,
     MMI_AUTHENTICATED_EVIDENCE_BUNDLE_IDENTITY_DOMAIN,
     MmiCanonicalizationError,
     canonical_json_bytes,
@@ -69,6 +72,12 @@ MMI_GROUNDED_PROMPT_INSTRUCTION_SET_VERSION: Final = (
 )
 MMI_GROUNDED_PROMPT_EXPECTED_RESPONSE_SCHEMA_VERSION: Final = (
     "mmi_grounded_analysis_response_v1"
+)
+MMI_RAW_RESPONSE_ENVELOPE_SCHEMA_VERSION: Final = (
+    "mmi_raw_response_envelope_v1"
+)
+MMI_RAW_RESPONSE_ENVELOPE_ARTIFACT_KIND: Final = (
+    "MMI_RAW_RESPONSE_ENVELOPE"
 )
 _MMI_GROUNDED_PROMPT_MANUAL_HANDOFF_REQUIRED: Final = True
 _MMI_GROUNDED_PROMPT_EVIDENCE_FRAME_START: Final = (
@@ -1556,6 +1565,175 @@ def mmi_grounded_prompt_artifact_identity_sha256(
     if calculated_artifact_identity != artifact_identity:
         _grounded_prompt_contract_failure()
     return calculated_artifact_identity
+
+
+_RAW_RESPONSE_ENVELOPE_TOP_LEVEL_FIELDS: Final = frozenset(
+    {
+        "schema_version",
+        "artifact_kind",
+        "report_only",
+        "authority_effect",
+        "manual_handoff_required",
+        "grounded_prompt_artifact_identity_sha256",
+        "raw_response_byte_length",
+        "raw_response_sha256",
+        "raw_response_base64",
+        "raw_response_envelope_identity_sha256",
+    }
+)
+_RAW_RESPONSE_ENVELOPE_IDENTITY_FIELD: Final = (
+    "raw_response_envelope_identity_sha256"
+)
+_MINIMUM_RAW_RESPONSE_BASE64_CHARACTERS: Final = 4
+_MAXIMUM_RAW_RESPONSE_BASE64_CHARACTERS: Final = (
+    4 * ((MAXIMUM_MMI_RAW_RESPONSE_BYTES + 2) // 3)
+)
+
+
+def _raw_response_envelope_failure(code: str) -> NoReturn:
+    raise MmiCanonicalizationError(code)
+
+
+def _snapshot_raw_response_envelope(
+    value: Mapping[str, object],
+) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        _raw_response_envelope_failure(
+            "MMI_RAW_RESPONSE_ENVELOPE_REPRESENTATION_INVALID"
+        )
+    try:
+        keys = tuple(value.keys())
+        if (
+            any(type(key) is not str for key in keys)
+            or len(keys) != len(set(keys))
+        ):
+            _raw_response_envelope_failure(
+                "MMI_RAW_RESPONSE_ENVELOPE_REPRESENTATION_INVALID"
+            )
+        artifact = {key: value[key] for key in keys}
+    except MmiCanonicalizationError:
+        raise
+    except Exception:
+        _raw_response_envelope_failure(
+            "MMI_RAW_RESPONSE_ENVELOPE_REPRESENTATION_INVALID"
+        )
+    if len(artifact) != len(keys):
+        _raw_response_envelope_failure(
+            "MMI_RAW_RESPONSE_ENVELOPE_REPRESENTATION_INVALID"
+        )
+    return artifact
+
+
+def _decode_canonical_raw_response_base64(value: object) -> bytes:
+    if (
+        type(value) is not str
+        or not (
+            _MINIMUM_RAW_RESPONSE_BASE64_CHARACTERS
+            <= len(value)
+            <= _MAXIMUM_RAW_RESPONSE_BASE64_CHARACTERS
+        )
+    ):
+        _raw_response_envelope_failure(
+            "MMI_RAW_RESPONSE_ENVELOPE_REPRESENTATION_INVALID"
+        )
+    try:
+        encoded = value.encode("ascii")
+        decoded = base64.b64decode(encoded, validate=True)
+    except (UnicodeEncodeError, ValueError):
+        _raw_response_envelope_failure(
+            "MMI_RAW_RESPONSE_ENVELOPE_REPRESENTATION_INVALID"
+        )
+    if not 1 <= len(decoded) <= MAXIMUM_MMI_RAW_RESPONSE_BYTES:
+        _raw_response_envelope_failure(
+            "MMI_RAW_RESPONSE_ENVELOPE_REPRESENTATION_INVALID"
+        )
+    try:
+        canonical = base64.b64encode(decoded).decode("ascii")
+    except Exception:
+        _raw_response_envelope_failure(
+            "MMI_RAW_RESPONSE_ENVELOPE_INTERNAL_INVARIANT_FAILED"
+        )
+    if canonical != value:
+        _raw_response_envelope_failure(
+            "MMI_RAW_RESPONSE_ENVELOPE_REPRESENTATION_INVALID"
+        )
+    return decoded
+
+
+def mmi_raw_response_envelope_identity_sha256(
+    value: Mapping[str, object],
+) -> str:
+    """Validate and identify one complete structural response envelope."""
+    artifact = _snapshot_raw_response_envelope(value)
+    if set(artifact) != _RAW_RESPONSE_ENVELOPE_TOP_LEVEL_FIELDS:
+        _raw_response_envelope_failure(
+            "MMI_RAW_RESPONSE_ENVELOPE_REPRESENTATION_INVALID"
+        )
+    raw_response_byte_length = artifact.get(
+        "raw_response_byte_length"
+    )
+    if (
+        artifact.get("schema_version")
+        != MMI_RAW_RESPONSE_ENVELOPE_SCHEMA_VERSION
+        or artifact.get("artifact_kind")
+        != MMI_RAW_RESPONSE_ENVELOPE_ARTIFACT_KIND
+        or artifact.get("report_only") is not True
+        or artifact.get("authority_effect") != AUTHORITY_EFFECT_NONE
+        or artifact.get("manual_handoff_required") is not True
+        or not _is_sha256(
+            artifact.get("grounded_prompt_artifact_identity_sha256")
+        )
+        or type(raw_response_byte_length) is not int
+        or not (
+            1
+            <= raw_response_byte_length
+            <= MAXIMUM_MMI_RAW_RESPONSE_BYTES
+        )
+        or not _is_sha256(artifact.get("raw_response_sha256"))
+        or not _is_sha256(
+            artifact.get(_RAW_RESPONSE_ENVELOPE_IDENTITY_FIELD)
+        )
+    ):
+        _raw_response_envelope_failure(
+            "MMI_RAW_RESPONSE_ENVELOPE_REPRESENTATION_INVALID"
+        )
+
+    decoded = _decode_canonical_raw_response_base64(
+        artifact.get("raw_response_base64")
+    )
+    if len(decoded) != raw_response_byte_length:
+        _raw_response_envelope_failure(
+            "MMI_RAW_RESPONSE_ENVELOPE_LENGTH_CONTRADICTION"
+        )
+    try:
+        raw_response_sha256 = hashlib.sha256(decoded).hexdigest()
+    except Exception:
+        _raw_response_envelope_failure(
+            "MMI_RAW_RESPONSE_ENVELOPE_INTERNAL_INVARIANT_FAILED"
+        )
+    if raw_response_sha256 != artifact.get("raw_response_sha256"):
+        _raw_response_envelope_failure(
+            "MMI_RAW_RESPONSE_ENVELOPE_DIGEST_CONTRADICTION"
+        )
+
+    try:
+        canonical_json_bytes(artifact)
+        calculated_identity = record_identity_sha256(
+            artifact,
+            identity_field=_RAW_RESPONSE_ENVELOPE_IDENTITY_FIELD,
+            domain=_MMI_RAW_RESPONSE_ENVELOPE_IDENTITY_DOMAIN,
+        )
+    except MmiCanonicalizationError:
+        _raw_response_envelope_failure(
+            "MMI_RAW_RESPONSE_ENVELOPE_INTERNAL_INVARIANT_FAILED"
+        )
+    if calculated_identity != artifact.get(
+        _RAW_RESPONSE_ENVELOPE_IDENTITY_FIELD
+    ):
+        _raw_response_envelope_failure(
+            "MMI_RAW_RESPONSE_ENVELOPE_IDENTITY_CONTRADICTION"
+        )
+    return calculated_identity
 
 
 @dataclass(frozen=True, slots=True, init=False)
