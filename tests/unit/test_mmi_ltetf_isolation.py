@@ -42,6 +42,7 @@ MMI_PRODUCTION_PATHS = (
     "src/investment_orchestrator/mmi/canonical.py",
     "src/investment_orchestrator/mmi/contracts.py",
     "src/investment_orchestrator/mmi/evidence_bundle.py",
+    "src/investment_orchestrator/mmi/grounded_prompt.py",
     "src/investment_orchestrator/mmi/policy_projection.py",
     "src/investment_orchestrator/mmi/portfolio_projection.py",
     "src/investment_orchestrator/mmi/source_capture.py",
@@ -258,6 +259,7 @@ def test_schema_helper_is_imported_by_exact_symbol_only() -> None:
         "src/investment_orchestrator/mmi/policy_projection.py",
         "src/investment_orchestrator/mmi/portfolio_projection.py",
         "src/investment_orchestrator/mmi/evidence_bundle.py",
+        "src/investment_orchestrator/mmi/grounded_prompt.py",
         (
             "src/investment_orchestrator/mmi/"
             "analyst_visible_evidence_view.py"
@@ -435,7 +437,7 @@ def test_reachable_schema_validation_call_graph_does_not_write(
 
 def test_ltetf_inventory_classification_is_unchanged_except_inventory_content() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
-    assert len(inventory.production_paths) == 131
+    assert len(inventory.production_paths) == 132
     assert inventory.dynamic_findings == ()
     assert inventory.observer_external_consumers == EXPECTED_EXTERNAL_CONSUMERS
     assert inventory.report_artifact_readers == ()

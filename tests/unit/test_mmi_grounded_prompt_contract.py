@@ -1830,16 +1830,18 @@ def _loaded_name(tree: ast.AST, name: str) -> bool:
     )
 
 
-def test_no_grounded_prompt_module_builder_renderer_or_consumer_exists() -> None:
+def test_grounded_prompt_runtime_has_exact_phase_ownership() -> None:
     root = repo_root()
     mmi_root = root / "src/investment_orchestrator/mmi"
-    assert not (mmi_root / "grounded_prompt.py").exists()
+    grounded_prompt_path = mmi_root / "grounded_prompt.py"
+    assert grounded_prompt_path.is_file()
     assert tuple(sorted(path.name for path in mmi_root.glob("*.py"))) == (
         "__init__.py",
         "analyst_visible_evidence_view.py",
         "canonical.py",
         "contracts.py",
         "evidence_bundle.py",
+        "grounded_prompt.py",
         "policy_projection.py",
         "portfolio_projection.py",
         "source_capture.py",
@@ -1847,7 +1849,7 @@ def test_no_grounded_prompt_module_builder_renderer_or_consumer_exists() -> None
     production_paths = tuple(
         sorted((root / "src/investment_orchestrator").rglob("*.py"))
     )
-    assert len(production_paths) == 131
+    assert len(production_paths) == 132
     relative = {
         path: path.relative_to(root).as_posix()
         for path in production_paths
@@ -1874,7 +1876,9 @@ def test_no_grounded_prompt_module_builder_renderer_or_consumer_exists() -> None
                 function_name,
             )
         )
-        assert consumers == ()
+        assert consumers == (
+            "src/investment_orchestrator/mmi/grounded_prompt.py",
+        )
     grounded_public_names = tuple(
         name
         for name in _top_level_function_names(contracts_path)
@@ -1884,6 +1888,33 @@ def test_no_grounded_prompt_module_builder_renderer_or_consumer_exists() -> None
         "mmi_grounded_prompt_context_binding_sha256",
         "mmi_grounded_prompt_artifact_identity_sha256",
     )
+    grounded_tree = ast.parse(
+        grounded_prompt_path.read_text(encoding="utf-8")
+    )
+    grounded_functions = tuple(
+        node.name
+        for node in grounded_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and not node.name.startswith("_")
+    )
+    assert grounded_functions == (
+        "build_mmi_grounded_prompt",
+        "validate_mmi_grounded_prompt",
+    )
+    grounded_importers = tuple(
+        relative[path]
+        for path in production_paths
+        if path != grounded_prompt_path
+        and any(
+            isinstance(node, ast.ImportFrom)
+            and node.module
+            == "investment_orchestrator.mmi.grounded_prompt"
+            for node in ast.walk(
+                ast.parse(path.read_text(encoding="utf-8"))
+            )
+        )
+    )
+    assert grounded_importers == ()
 
 
 def test_no_package_export_or_prohibited_capability_import() -> None:

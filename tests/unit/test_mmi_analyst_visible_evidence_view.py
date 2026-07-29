@@ -2299,7 +2299,7 @@ def test_no_source_capture_is_reachable_for_any_branch_or_failure(
     assert not invalid.valid
 
 
-def test_view_module_is_dormant_and_has_no_production_consumer() -> None:
+def test_view_module_has_exact_grounded_prompt_consumer() -> None:
     root = repo_root()
     production_paths = tuple(
         sorted((root / "src/investment_orchestrator").rglob("*.py"))
@@ -2338,8 +2338,10 @@ def test_view_module_is_dormant_and_has_no_production_consumer() -> None:
             if imported is not None:
                 importers.append(path.relative_to(root).as_posix())
                 break
-    assert importers == []
-    assert len(production_paths) == 131
+    assert importers == [
+        "src/investment_orchestrator/mmi/grounded_prompt.py",
+    ]
+    assert len(production_paths) == 132
 
 
 def test_normal_build_and_validation_do_not_change_upstream_inputs(

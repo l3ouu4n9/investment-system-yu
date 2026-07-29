@@ -2165,7 +2165,7 @@ def test_v1b_contract_and_v1c_runtime_have_exact_phase_ownership() -> None:
     root = repo_root()
     production_root = root / "src/investment_orchestrator"
     production_paths = tuple(sorted(production_root.rglob("*.py")))
-    assert len(production_paths) == 131
+    assert len(production_paths) == 132
     relative = {
         path: path.relative_to(root).as_posix()
         for path in production_paths
@@ -2349,7 +2349,9 @@ def test_v1b_contract_and_v1c_runtime_have_exact_phase_ownership() -> None:
             for module in imported_modules(path)
         )
     )
-    assert view_importers == ()
+    assert view_importers == (
+        "src/investment_orchestrator/mmi/grounded_prompt.py",
+    )
 
     evidence_module_name = (
         "investment_orchestrator.mmi.evidence_bundle"
