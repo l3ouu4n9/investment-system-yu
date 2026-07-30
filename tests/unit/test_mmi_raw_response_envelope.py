@@ -1150,12 +1150,12 @@ def test_reason_codes_never_expose_raw_or_candidate_values(
     assert "/" not in serialized and "\\" not in serialized
 
 
-def test_r1c_has_exact_phase_ownership_and_no_consumer() -> None:
+def test_r1c_has_exact_r2c_consumer_and_phase_ownership() -> None:
     root = repo_root()
     production_paths = tuple(
         sorted((root / "src/investment_orchestrator").rglob("*.py"))
     )
-    assert len(production_paths) == 133
+    assert len(production_paths) == 134
     relative = {
         path: path.relative_to(root).as_posix()
         for path in production_paths
@@ -1170,6 +1170,14 @@ def test_r1c_has_exact_phase_ownership_and_no_consumer() -> None:
     )
     raw_relative = (
         "src/investment_orchestrator/mmi/raw_response_envelope.py"
+    )
+    response_module = (
+        "investment_orchestrator.mmi."
+        "validated_grounded_analysis_response"
+    )
+    response_relative = (
+        "src/investment_orchestrator/mmi/"
+        "validated_grounded_analysis_response.py"
     )
     grounded_importers = tuple(
         relative[path]
@@ -1189,9 +1197,20 @@ def test_r1c_has_exact_phase_ownership_and_no_consumer() -> None:
             for node in ast.walk(tree)
         )
     )
+    response_importers = tuple(
+        relative[path]
+        for path, tree in trees.items()
+        if any(
+            isinstance(node, ast.ImportFrom)
+            and node.module == response_module
+            for node in ast.walk(tree)
+        )
+    )
     assert grounded_importers == (raw_relative,)
-    assert raw_importers == ()
+    assert raw_importers == (response_relative,)
+    assert response_importers == ()
     assert (root / raw_relative).is_file()
+    assert (root / response_relative).is_file()
     assert (
         root / "src/investment_orchestrator/mmi/__init__.py"
     ).read_text(encoding="utf-8") == (

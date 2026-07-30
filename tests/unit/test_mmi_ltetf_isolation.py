@@ -47,6 +47,10 @@ MMI_PRODUCTION_PATHS = (
     "src/investment_orchestrator/mmi/portfolio_projection.py",
     "src/investment_orchestrator/mmi/raw_response_envelope.py",
     "src/investment_orchestrator/mmi/source_capture.py",
+    (
+        "src/investment_orchestrator/mmi/"
+        "validated_grounded_analysis_response.py"
+    ),
 )
 EXPECTED_EXTERNAL_CONSUMERS = (
     "src/investment_orchestrator/cli/observe_ltetf_target_architecture_gaps.py",
@@ -199,6 +203,20 @@ def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -
                 or imported.startswith("investment_orchestrator.mmi.")
             ), (path, imported)
 
+    json_importers = tuple(
+        path
+        for path, imports in inventory.imports_by_path
+        if path in MMI_PRODUCTION_PATHS and "json" in imports
+    )
+    assert json_importers == (
+        "src/investment_orchestrator/mmi/canonical.py",
+        "src/investment_orchestrator/mmi/contracts.py",
+        (
+            "src/investment_orchestrator/mmi/"
+            "validated_grounded_analysis_response.py"
+        ),
+    )
+
     for path, imports in inventory.imports_by_path:
         if path not in MMI_PRODUCTION_PATHS:
             assert not any(
@@ -284,6 +302,10 @@ def test_schema_helper_is_imported_by_exact_symbol_only() -> None:
         (
             "src/investment_orchestrator/mmi/"
             "analyst_visible_evidence_view.py"
+        ),
+        (
+            "src/investment_orchestrator/mmi/"
+            "validated_grounded_analysis_response.py"
         ),
     ):
         tree = ast.parse(_mmi_sources()[relative])
@@ -458,7 +480,7 @@ def test_reachable_schema_validation_call_graph_does_not_write(
 
 def test_ltetf_inventory_classification_is_unchanged_except_inventory_content() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
-    assert len(inventory.production_paths) == 133
+    assert len(inventory.production_paths) == 134
     assert inventory.dynamic_findings == ()
     assert inventory.observer_external_consumers == EXPECTED_EXTERNAL_CONSUMERS
     assert inventory.report_artifact_readers == ()

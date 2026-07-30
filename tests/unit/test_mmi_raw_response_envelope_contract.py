@@ -601,7 +601,7 @@ def test_r1b_contract_and_r1c_runtime_have_exact_phase_ownership() -> None:
     production_paths = tuple(
         sorted((root / "src/investment_orchestrator").rglob("*.py"))
     )
-    assert len(production_paths) == 133
+    assert len(production_paths) == 134
     relative = {
         path: path.relative_to(root).as_posix()
         for path in production_paths
@@ -610,6 +610,10 @@ def test_r1b_contract_and_r1c_runtime_have_exact_phase_ownership() -> None:
         "src/investment_orchestrator/mmi/raw_response_envelope.py"
     )
     runtime_path = root / runtime_relative
+    response_relative = (
+        "src/investment_orchestrator/mmi/"
+        "validated_grounded_analysis_response.py"
+    )
     assert tuple(
         relative[path]
         for path in production_paths
@@ -649,7 +653,7 @@ def test_r1b_contract_and_r1c_runtime_have_exact_phase_ownership() -> None:
         relative[path]
         for path, tree in trees.items()
         if raw_response_module in imported_modules(tree)
-    ) == ()
+    ) == (response_relative,)
 
     contracts_path = (
         root / "src/investment_orchestrator/mmi/contracts.py"

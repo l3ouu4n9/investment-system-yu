@@ -1055,7 +1055,7 @@ def test_e1b_contract_and_e1c_runtime_have_exact_phase_ownership() -> None:
     root = repo_root()
     production_root = root / "src/investment_orchestrator"
     production_paths = tuple(sorted(production_root.rglob("*.py")))
-    assert len(production_paths) == 133
+    assert len(production_paths) == 134
 
     mmi_paths = tuple(
         sorted(
@@ -1079,6 +1079,10 @@ def test_e1b_contract_and_e1c_runtime_have_exact_phase_ownership() -> None:
         "src/investment_orchestrator/mmi/portfolio_projection.py",
         "src/investment_orchestrator/mmi/raw_response_envelope.py",
         "src/investment_orchestrator/mmi/source_capture.py",
+        (
+            "src/investment_orchestrator/mmi/"
+            "validated_grounded_analysis_response.py"
+        ),
     )
 
     relative_paths = {

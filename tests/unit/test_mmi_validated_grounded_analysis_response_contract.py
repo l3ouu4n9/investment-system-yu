@@ -990,18 +990,18 @@ def test_raw_action_shaped_prose_remains_inert_report_only_data() -> None:
     )
 
 
-def test_contract_is_dormant_with_exact_phase_and_inventory() -> None:
+def test_contract_and_runtime_have_exact_phase_and_inventory() -> None:
     root = repo_root()
     production_paths = tuple(
         sorted((root / "src/investment_orchestrator").rglob("*.py"))
     )
-    assert len(production_paths) == 133
+    assert len(production_paths) == 134
     runtime_path = (
         root
         / "src/investment_orchestrator/mmi/"
         "validated_grounded_analysis_response.py"
     )
-    assert not runtime_path.exists()
+    assert runtime_path.is_file()
     module_name = (
         "investment_orchestrator.mmi."
         "validated_grounded_analysis_response"
@@ -1024,8 +1024,10 @@ def test_contract_is_dormant_with_exact_phase_and_inventory() -> None:
             importers.append(path.relative_to(root).as_posix())
     assert importers == []
     raw_module = "investment_orchestrator.mmi.raw_response_envelope"
-    assert not any(
-        raw_module
+    raw_importers = tuple(
+        path.relative_to(root).as_posix()
+        for path in production_paths
+        if raw_module
         in {
             node.module
             for node in ast.walk(
@@ -1034,7 +1036,10 @@ def test_contract_is_dormant_with_exact_phase_and_inventory() -> None:
             if isinstance(node, ast.ImportFrom)
             and node.module is not None
         }
-        for path in production_paths
+    )
+    assert raw_importers == (
+        "src/investment_orchestrator/mmi/"
+        "validated_grounded_analysis_response.py",
     )
     assert (
         root / "src/investment_orchestrator/mmi/__init__.py"
