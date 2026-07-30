@@ -25,6 +25,7 @@ from investment_orchestrator.mmi.canonical import (
     _MMI_GROUNDED_PROMPT_ARTIFACT_IDENTITY_DOMAIN,
     _MMI_GROUNDED_PROMPT_CONTEXT_BINDING_DOMAIN,
     _MMI_RAW_RESPONSE_ENVELOPE_IDENTITY_DOMAIN,
+    _MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_IDENTITY_DOMAIN,
     MMI_AUTHENTICATED_EVIDENCE_BUNDLE_IDENTITY_DOMAIN,
     MMI_POLICY_PROJECTION_IDENTITY_DOMAIN,
     MMI_PORTFOLIO_SNAPSHOT_PROJECTION_IDENTITY_DOMAIN,
@@ -1429,7 +1430,7 @@ def test_structurally_valid_evidence_mutations_change_both_identities() -> None:
     assert _payload(changed) != _payload(original)
 
 
-def test_exactly_nine_unique_persistent_identity_domains_exist() -> None:
+def test_exactly_ten_unique_persistent_identity_domains_exist() -> None:
     public_domains = {
         name: value
         for name, value in canonical.__dict__.items()
@@ -1458,15 +1459,17 @@ def test_exactly_nine_unique_persistent_identity_domains_exist() -> None:
         _MMI_GROUNDED_PROMPT_CONTEXT_BINDING_DOMAIN,
         _MMI_GROUNDED_PROMPT_ARTIFACT_IDENTITY_DOMAIN,
         _MMI_RAW_RESPONSE_ENVELOPE_IDENTITY_DOMAIN,
+        _MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_IDENTITY_DOMAIN,
     )
     assert private_domains == (
         b"mmi_analyst_visible_evidence_view_v1\0",
         b"mmi_grounded_prompt_context_binding_v1\0",
         b"mmi_grounded_prompt_artifact_v1\0",
         b"mmi_raw_response_envelope_v1\0",
+        b"mmi_validated_grounded_analysis_response_v1\0",
     )
     domains = (*public_domains.values(), *private_domains)
-    assert len(domains) == len(set(domains)) == 9
+    assert len(domains) == len(set(domains)) == 10
     assert all(
         domain.endswith(b"\0")
         and b"\0" not in domain[:-1]

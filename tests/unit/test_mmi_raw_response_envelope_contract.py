@@ -25,6 +25,7 @@ from investment_orchestrator.mmi.canonical import (
     _MMI_GROUNDED_PROMPT_ARTIFACT_IDENTITY_DOMAIN,
     _MMI_GROUNDED_PROMPT_CONTEXT_BINDING_DOMAIN,
     _MMI_RAW_RESPONSE_ENVELOPE_IDENTITY_DOMAIN,
+    _MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_IDENTITY_DOMAIN,
     MMI_AUTHENTICATED_EVIDENCE_BUNDLE_IDENTITY_DOMAIN,
     MMI_POLICY_PROJECTION_IDENTITY_DOMAIN,
     MMI_PORTFOLIO_SNAPSHOT_PROJECTION_IDENTITY_DOMAIN,
@@ -514,7 +515,7 @@ def test_one_decoded_byte_over_maximum_fails_when_independently_resealed() -> No
     _assert_structural_rejection(candidate)
 
 
-def test_first_eight_domains_are_unchanged_and_ninth_is_unique() -> None:
+def test_first_nine_domains_are_unchanged_and_tenth_is_unique() -> None:
     first_eight = (
         MMI_SOURCE_RECORD_IDENTITY_DOMAIN,
         MMI_UNIVERSE_PROJECTION_IDENTITY_DOMAIN,
@@ -536,8 +537,15 @@ def test_first_eight_domains_are_unchanged_and_ninth_is_unique() -> None:
         b"mmi_grounded_prompt_artifact_v1\0",
     )
     assert _MMI_RAW_RESPONSE_ENVELOPE_IDENTITY_DOMAIN == IDENTITY_DOMAIN
-    all_domains = (*first_eight, IDENTITY_DOMAIN)
-    assert len(all_domains) == len(set(all_domains)) == 9
+    first_nine = (*first_eight, IDENTITY_DOMAIN)
+    assert _MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_IDENTITY_DOMAIN == (
+        b"mmi_validated_grounded_analysis_response_v1\0"
+    )
+    all_domains = (
+        *first_nine,
+        _MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_IDENTITY_DOMAIN,
+    )
+    assert len(all_domains) == len(set(all_domains)) == 10
 
 
 @pytest.mark.parametrize(

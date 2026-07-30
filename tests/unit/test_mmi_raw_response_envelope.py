@@ -1200,7 +1200,7 @@ def test_r1c_has_exact_phase_ownership_and_no_consumer() -> None:
     )
 
 
-def test_nine_domains_and_g1_artifact_are_unchanged(
+def test_ten_domains_and_g1_artifact_are_unchanged(
     trusted_inputs: _TrustedInputs,
 ) -> None:
     public = {
@@ -1214,9 +1214,10 @@ def test_nine_domains_and_g1_artifact_are_unchanged(
         canonical._MMI_GROUNDED_PROMPT_CONTEXT_BINDING_DOMAIN,
         canonical._MMI_GROUNDED_PROMPT_ARTIFACT_IDENTITY_DOMAIN,
         canonical._MMI_RAW_RESPONSE_ENVELOPE_IDENTITY_DOMAIN,
+        canonical._MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_IDENTITY_DOMAIN,
     )
     domains = (*public.values(), *private)
-    assert len(domains) == len(set(domains)) == 9
+    assert len(domains) == len(set(domains)) == 10
     prompt_before = deepcopy(trusted_inputs.grounded_prompt)
     artifact = _valid_envelope(trusted_inputs)
     validation = _validate(artifact, trusted_inputs)

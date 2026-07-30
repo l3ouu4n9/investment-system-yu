@@ -28,6 +28,7 @@ from investment_orchestrator.mmi.canonical import (
     _MMI_GROUNDED_PROMPT_ARTIFACT_IDENTITY_DOMAIN,
     _MMI_GROUNDED_PROMPT_CONTEXT_BINDING_DOMAIN,
     _MMI_RAW_RESPONSE_ENVELOPE_IDENTITY_DOMAIN,
+    _MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_IDENTITY_DOMAIN,
     MMI_AUTHENTICATED_EVIDENCE_BUNDLE_IDENTITY_DOMAIN,
     MmiCanonicalizationError,
     canonical_json_bytes,
@@ -78,6 +79,12 @@ MMI_RAW_RESPONSE_ENVELOPE_SCHEMA_VERSION: Final = (
 )
 MMI_RAW_RESPONSE_ENVELOPE_ARTIFACT_KIND: Final = (
     "MMI_RAW_RESPONSE_ENVELOPE"
+)
+MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_SCHEMA_VERSION: Final = (
+    "mmi_validated_grounded_analysis_response_v1"
+)
+MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_ARTIFACT_KIND: Final = (
+    "MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE"
 )
 _MMI_GROUNDED_PROMPT_MANUAL_HANDOFF_REQUIRED: Final = True
 _MMI_GROUNDED_PROMPT_EVIDENCE_FRAME_START: Final = (
@@ -1732,6 +1739,338 @@ def mmi_raw_response_envelope_identity_sha256(
     ):
         _raw_response_envelope_failure(
             "MMI_RAW_RESPONSE_ENVELOPE_IDENTITY_CONTRADICTION"
+        )
+    return calculated_identity
+
+
+_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_TOP_LEVEL_FIELDS: Final = (
+    frozenset(
+        {
+            "schema_version",
+            "artifact_kind",
+            "report_only",
+            "authority_effect",
+            "manual_handoff_required",
+            "raw_response_envelope_identity_sha256",
+            "response_payload",
+            "validated_grounded_analysis_response_identity_sha256",
+        }
+    )
+)
+_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_IDENTITY_FIELD: Final = (
+    "validated_grounded_analysis_response_identity_sha256"
+)
+_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_PAYLOAD_FIELDS: Final = (
+    frozenset(
+        {
+            "response_schema_version",
+            "prompt_context_binding_sha256",
+            "analysis_status",
+            "evidence_observations",
+            "risks",
+            "uncertainties",
+            "contradictions",
+            "research_questions",
+            "summary",
+        }
+    )
+)
+_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_ITEM_FIELDS: Final = frozenset(
+    {
+        "text",
+        "references",
+        "hypothesis",
+    }
+)
+_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_STATUSES: Final = frozenset(
+    {
+        "QUALITATIVE_ANALYSIS_PROVIDED",
+        "INSUFFICIENT_EVIDENCE",
+        "EVIDENCE_CONTRADICTIONS_IDENTIFIED",
+    }
+)
+_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_ARRAY_LIMITS: Final = (
+    (
+        "evidence_observations",
+        12,
+    ),
+    (
+        "risks",
+        12,
+    ),
+    (
+        "uncertainties",
+        12,
+    ),
+    (
+        "contradictions",
+        8,
+    ),
+    (
+        "research_questions",
+        12,
+    ),
+)
+_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_SCALAR_REFERENCES: Final = (
+    frozenset(
+        {
+            "VIEW.EVALUATION_TIMESTAMP",
+            "VIEW.COMPLETENESS_STATUS",
+            "POLICY.AS_OF_DATE",
+            "POLICY.METHOD",
+            "POLICY.BENCHMARK.0001",
+            "POLICY.EXTENDED_ACTIVATION_STATUS",
+            "POLICY.INSTRUMENT_AVAILABILITY_STATUS",
+            "POLICY.TARGET_WEIGHTS_ABSENCE_REASON",
+            "PORTFOLIO.PRESENCE_STATUS",
+            "PORTFOLIO.SOURCE_DATE",
+            "PORTFOLIO.OPEN_BUY_STATUS",
+            "PORTFOLIO.COVERAGE.HOLDINGS",
+            "PORTFOLIO.COVERAGE.CASH",
+            "PORTFOLIO.COVERAGE.DEPLOYABLE_CASH",
+            "PORTFOLIO.COVERAGE.OPEN_SELLS",
+            "PORTFOLIO.COVERAGE.TAX_LOTS",
+            "PORTFOLIO.COVERAGE.HOLDING_DATES",
+            "PORTFOLIO.COVERAGE.GAINS_LOSSES",
+            "PORTFOLIO.COVERAGE.WEIGHTS",
+            "PORTFOLIO.COVERAGE.NAV_CONCENTRATION",
+            "PORTFOLIO.COVERAGE.LOOK_THROUGH_EXPOSURE",
+        }
+    )
+)
+_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_NUMBERED_REFERENCE_RE: Final = (
+    re.compile(
+        r"^(?:"
+        r"(?:POLICY\.INSTRUMENT|PORTFOLIO\.OBSERVATION)\."
+        r"(?:000[1-9]|00[1-9][0-9]|01[0-9]{2}|02[0-4][0-9]|025[0-6])"
+        r"|LIMITATION\.00(?:0[1-9]|1[0-4])"
+        r")$"
+    )
+)
+_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_ITEM_TEXT_BYTES: Final = 2_000
+_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_SUMMARY_TEXT_BYTES: Final = 4_000
+_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_MINIMUM_REFERENCES: Final = 1
+_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_MAXIMUM_REFERENCES: Final = 8
+
+
+def _validated_grounded_analysis_response_failure(
+    code: str,
+) -> NoReturn:
+    raise MmiCanonicalizationError(code)
+
+
+def _snapshot_validated_grounded_analysis_response(
+    value: Mapping[str, object],
+) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        _validated_grounded_analysis_response_failure(
+            "MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_WRAPPER_INVALID"
+        )
+    try:
+        keys = tuple(value.keys())
+        if (
+            any(type(key) is not str for key in keys)
+            or len(keys) != len(set(keys))
+        ):
+            _validated_grounded_analysis_response_failure(
+                "MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_WRAPPER_INVALID"
+            )
+        artifact = {key: value[key] for key in keys}
+    except MmiCanonicalizationError:
+        raise
+    except Exception:
+        _validated_grounded_analysis_response_failure(
+            "MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_WRAPPER_INVALID"
+        )
+    if len(artifact) != len(keys):
+        _validated_grounded_analysis_response_failure(
+            "MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_WRAPPER_INVALID"
+        )
+    return artifact
+
+
+def _validated_grounded_analysis_response_exact_dict(
+    value: object,
+    expected_fields: frozenset[str],
+) -> dict[str, object]:
+    if type(value) is not dict or set(value) != expected_fields:
+        _validated_grounded_analysis_response_failure(
+            "MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_PAYLOAD_INVALID"
+        )
+    return value
+
+
+def _validate_grounded_analysis_response_text(
+    value: object,
+    *,
+    maximum_bytes: int,
+) -> None:
+    if type(value) is not str or not value:
+        _validated_grounded_analysis_response_failure(
+            "MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_PAYLOAD_INVALID"
+        )
+    try:
+        encoded = value.encode("utf-8", errors="strict")
+    except UnicodeEncodeError:
+        _validated_grounded_analysis_response_failure(
+            "MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_TEXT_BYTES_INVALID"
+        )
+    if len(encoded) > maximum_bytes:
+        _validated_grounded_analysis_response_failure(
+            "MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_TEXT_BYTES_INVALID"
+        )
+
+
+def _validate_grounded_analysis_response_reference(
+    value: object,
+) -> None:
+    if (
+        type(value) is not str
+        or (
+            value
+            not in _VALIDATED_GROUNDED_ANALYSIS_RESPONSE_SCALAR_REFERENCES
+            and _VALIDATED_GROUNDED_ANALYSIS_RESPONSE_NUMBERED_REFERENCE_RE.fullmatch(
+                value
+            )
+            is None
+        )
+    ):
+        _validated_grounded_analysis_response_failure(
+            "MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_REFERENCE_INVALID"
+        )
+
+
+def _validate_grounded_analysis_response_item(
+    value: object,
+    *,
+    maximum_text_bytes: int,
+) -> None:
+    item = _validated_grounded_analysis_response_exact_dict(
+        value,
+        _VALIDATED_GROUNDED_ANALYSIS_RESPONSE_ITEM_FIELDS,
+    )
+    _validate_grounded_analysis_response_text(
+        item.get("text"),
+        maximum_bytes=maximum_text_bytes,
+    )
+    references = item.get("references")
+    if (
+        type(references) is not list
+        or not (
+            _VALIDATED_GROUNDED_ANALYSIS_RESPONSE_MINIMUM_REFERENCES
+            <= len(references)
+            <= _VALIDATED_GROUNDED_ANALYSIS_RESPONSE_MAXIMUM_REFERENCES
+        )
+    ):
+        _validated_grounded_analysis_response_failure(
+            "MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_PAYLOAD_INVALID"
+        )
+    for reference in references:
+        _validate_grounded_analysis_response_reference(reference)
+    if len(references) != len(set(references)):
+        _validated_grounded_analysis_response_failure(
+            "MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_REFERENCE_INVALID"
+        )
+    if type(item.get("hypothesis")) is not bool:
+        _validated_grounded_analysis_response_failure(
+            "MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_PAYLOAD_INVALID"
+        )
+
+
+def _validate_grounded_analysis_response_payload(
+    value: object,
+) -> None:
+    payload = _validated_grounded_analysis_response_exact_dict(
+        value,
+        _VALIDATED_GROUNDED_ANALYSIS_RESPONSE_PAYLOAD_FIELDS,
+    )
+    analysis_status = payload.get("analysis_status")
+    if (
+        payload.get("response_schema_version")
+        != MMI_GROUNDED_PROMPT_EXPECTED_RESPONSE_SCHEMA_VERSION
+        or not _is_sha256(
+            payload.get("prompt_context_binding_sha256")
+        )
+        or type(analysis_status) is not str
+        or analysis_status
+        not in _VALIDATED_GROUNDED_ANALYSIS_RESPONSE_STATUSES
+    ):
+        _validated_grounded_analysis_response_failure(
+            "MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_PAYLOAD_INVALID"
+        )
+    for field, maximum_items in (
+        _VALIDATED_GROUNDED_ANALYSIS_RESPONSE_ARRAY_LIMITS
+    ):
+        items = payload.get(field)
+        if type(items) is not list or len(items) > maximum_items:
+            _validated_grounded_analysis_response_failure(
+                "MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_PAYLOAD_INVALID"
+            )
+        for item in items:
+            _validate_grounded_analysis_response_item(
+                item,
+                maximum_text_bytes=(
+                    _VALIDATED_GROUNDED_ANALYSIS_RESPONSE_ITEM_TEXT_BYTES
+                ),
+            )
+    _validate_grounded_analysis_response_item(
+        payload.get("summary"),
+        maximum_text_bytes=(
+            _VALIDATED_GROUNDED_ANALYSIS_RESPONSE_SUMMARY_TEXT_BYTES
+        ),
+    )
+
+
+def mmi_validated_grounded_analysis_response_identity_sha256(
+    value: Mapping[str, object],
+) -> str:
+    """Validate and identify one complete structural response artifact."""
+    artifact = _snapshot_validated_grounded_analysis_response(value)
+    if (
+        set(artifact)
+        != _VALIDATED_GROUNDED_ANALYSIS_RESPONSE_TOP_LEVEL_FIELDS
+        or artifact.get("schema_version")
+        != MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_SCHEMA_VERSION
+        or artifact.get("artifact_kind")
+        != MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_ARTIFACT_KIND
+        or artifact.get("report_only") is not True
+        or artifact.get("authority_effect") != AUTHORITY_EFFECT_NONE
+        or artifact.get("manual_handoff_required") is not True
+        or not _is_sha256(
+            artifact.get("raw_response_envelope_identity_sha256")
+        )
+        or not _is_sha256(
+            artifact.get(
+                _VALIDATED_GROUNDED_ANALYSIS_RESPONSE_IDENTITY_FIELD
+            )
+        )
+    ):
+        _validated_grounded_analysis_response_failure(
+            "MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_WRAPPER_INVALID"
+        )
+    _validate_grounded_analysis_response_payload(
+        artifact.get("response_payload")
+    )
+    try:
+        canonical_json_bytes(artifact)
+        calculated_identity = record_identity_sha256(
+            artifact,
+            identity_field=(
+                _VALIDATED_GROUNDED_ANALYSIS_RESPONSE_IDENTITY_FIELD
+            ),
+            domain=(
+                _MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_IDENTITY_DOMAIN
+            ),
+        )
+    except MmiCanonicalizationError:
+        _validated_grounded_analysis_response_failure(
+            "MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_INTERNAL_INVARIANT_FAILED"
+        )
+    if calculated_identity != artifact.get(
+        _VALIDATED_GROUNDED_ANALYSIS_RESPONSE_IDENTITY_FIELD
+    ):
+        _validated_grounded_analysis_response_failure(
+            "MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_IDENTITY_CONTRADICTION"
         )
     return calculated_identity
 

@@ -31,6 +31,7 @@ from investment_orchestrator.mmi.canonical import (
     _MMI_GROUNDED_PROMPT_ARTIFACT_IDENTITY_DOMAIN,
     _MMI_GROUNDED_PROMPT_CONTEXT_BINDING_DOMAIN,
     _MMI_RAW_RESPONSE_ENVELOPE_IDENTITY_DOMAIN,
+    _MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_IDENTITY_DOMAIN,
     MMI_AUTHENTICATED_EVIDENCE_BUNDLE_IDENTITY_DOMAIN,
     MMI_POLICY_PROJECTION_IDENTITY_DOMAIN,
     MMI_PORTFOLIO_SNAPSHOT_PROJECTION_IDENTITY_DOMAIN,
@@ -1809,7 +1810,7 @@ def test_resealed_structural_identity_is_not_source_authentication() -> None:
     )
 
 
-def test_exactly_nine_persistent_mmi_identity_domains_exist() -> None:
+def test_exactly_ten_persistent_mmi_identity_domains_exist() -> None:
     domains_by_name = {
         name: value
         for name, value in canonical.__dict__.items()
@@ -1845,14 +1846,18 @@ def test_exactly_nine_persistent_mmi_identity_domains_exist() -> None:
     assert _MMI_RAW_RESPONSE_ENVELOPE_IDENTITY_DOMAIN == (
         b"mmi_raw_response_envelope_v1\0"
     )
+    assert _MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_IDENTITY_DOMAIN == (
+        b"mmi_validated_grounded_analysis_response_v1\0"
+    )
     domains = (
         *domains_by_name.values(),
         _MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_IDENTITY_DOMAIN,
         _MMI_GROUNDED_PROMPT_CONTEXT_BINDING_DOMAIN,
         _MMI_GROUNDED_PROMPT_ARTIFACT_IDENTITY_DOMAIN,
         _MMI_RAW_RESPONSE_ENVELOPE_IDENTITY_DOMAIN,
+        _MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_IDENTITY_DOMAIN,
     )
-    assert len(domains) == len(set(domains)) == 9
+    assert len(domains) == len(set(domains)) == 10
 
 
 def test_first_five_domains_and_existing_fixed_identities_are_unchanged() -> None:
