@@ -588,18 +588,61 @@ def test_raw_response_data_is_inert_and_creates_no_authority() -> None:
     assert set(value) == EXPECTED_FIELDS
 
 
-def test_r1b_is_dormant_with_exact_phase_inventory() -> None:
+def test_r1b_contract_and_r1c_runtime_have_exact_phase_ownership() -> None:
     root = repo_root()
     production_paths = tuple(
         sorted((root / "src/investment_orchestrator").rglob("*.py"))
     )
-    assert len(production_paths) == 132
-    runtime_path = (
-        root
-        / "src/investment_orchestrator/mmi/"
-        "raw_response_envelope.py"
+    assert len(production_paths) == 133
+    relative = {
+        path: path.relative_to(root).as_posix()
+        for path in production_paths
+    }
+    runtime_relative = (
+        "src/investment_orchestrator/mmi/raw_response_envelope.py"
     )
-    assert not runtime_path.exists()
+    runtime_path = root / runtime_relative
+    assert tuple(
+        relative[path]
+        for path in production_paths
+        if path.name == "raw_response_envelope.py"
+    ) == (runtime_relative,)
+    assert runtime_path.is_file()
+
+    def imported_modules(tree: ast.AST) -> set[str]:
+        return {
+            node.module
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom)
+            and node.module is not None
+        } | {
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        }
+
+    trees = {
+        path: ast.parse(path.read_text(encoding="utf-8"))
+        for path in production_paths
+    }
+    grounded_prompt_module = (
+        "investment_orchestrator.mmi.grounded_prompt"
+    )
+    raw_response_module = (
+        "investment_orchestrator.mmi.raw_response_envelope"
+    )
+    assert tuple(
+        relative[path]
+        for path, tree in trees.items()
+        if grounded_prompt_module in imported_modules(tree)
+    ) == (runtime_relative,)
+    assert tuple(
+        relative[path]
+        for path, tree in trees.items()
+        if raw_response_module in imported_modules(tree)
+    ) == ()
+
     contracts_path = (
         root / "src/investment_orchestrator/mmi/contracts.py"
     )
@@ -623,7 +666,7 @@ def test_r1b_is_dormant_with_exact_phase_inventory() -> None:
             for node in ast.walk(tree)
         ):
             consumers.append(path.relative_to(root).as_posix())
-    assert consumers == []
+    assert consumers == [runtime_relative]
 
 
 def test_no_parser_writer_transport_or_action_surface_is_added() -> None:
@@ -664,9 +707,75 @@ def test_no_parser_writer_transport_or_action_surface_is_added() -> None:
         for imported_name in imported
         for prefix in prohibited
     )
-    assert "raw_response_envelope.py" not in {
+    runtime_path = (
+        root
+        / "src/investment_orchestrator/mmi/"
+        "raw_response_envelope.py"
+    )
+    assert tuple(
         path.name
-        for path in (
-            root / "src/investment_orchestrator/mmi"
-        ).glob("*.py")
+        for path in sorted(
+            (root / "src/investment_orchestrator/mmi").glob("*.py")
+        )
+        if path.name == "raw_response_envelope.py"
+    ) == ("raw_response_envelope.py",)
+    runtime_tree = ast.parse(runtime_path.read_text(encoding="utf-8"))
+    assert tuple(
+        node.name
+        for node in runtime_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and not node.name.startswith("_")
+    ) == (
+        "build_mmi_raw_response_envelope",
+        "validate_mmi_raw_response_envelope",
+    )
+    runtime_imports = {
+        node.module
+        for node in ast.walk(runtime_tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    } | {
+        alias.name
+        for node in ast.walk(runtime_tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
     }
+    assert {"base64", "hashlib"} <= runtime_imports
+    assert not {
+        "json",
+        "codecs",
+        "os",
+        "pathlib",
+        "pickle",
+        "subprocess",
+        "socket",
+        "requests",
+        "httpx",
+        "openai",
+        "anthropic",
+        "investment_orchestrator.cli",
+        "investment_orchestrator.workflow",
+        "investment_orchestrator.state",
+        "investment_orchestrator.permissions",
+        "investment_orchestrator.orders",
+        "investment_orchestrator.broker",
+    } & runtime_imports
+    calls = {
+        node.func.attr
+        for node in ast.walk(runtime_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+    }
+    assert "b64decode" not in calls
+    assert not {
+        "open",
+        "read_bytes",
+        "read_text",
+        "write_bytes",
+        "write_text",
+    } & calls
+    assert (
+        root / "src/investment_orchestrator/mmi/__init__.py"
+    ).read_text(encoding="utf-8") == (
+        '"""Manual-model-interface report-only deterministic '
+        'projection contracts."""\n\n__all__ = ()\n'
+    )

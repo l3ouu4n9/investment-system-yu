@@ -1847,12 +1847,13 @@ def test_grounded_prompt_runtime_has_exact_phase_ownership() -> None:
         "grounded_prompt.py",
         "policy_projection.py",
         "portfolio_projection.py",
+        "raw_response_envelope.py",
         "source_capture.py",
     )
     production_paths = tuple(
         sorted((root / "src/investment_orchestrator").rglob("*.py"))
     )
-    assert len(production_paths) == 132
+    assert len(production_paths) == 133
     relative = {
         path: path.relative_to(root).as_posix()
         for path in production_paths
@@ -1917,7 +1918,9 @@ def test_grounded_prompt_runtime_has_exact_phase_ownership() -> None:
             )
         )
     )
-    assert grounded_importers == ()
+    assert grounded_importers == (
+        "src/investment_orchestrator/mmi/raw_response_envelope.py",
+    )
 
 
 def test_no_package_export_or_prohibited_capability_import() -> None:

@@ -1540,7 +1540,7 @@ def test_phase_ownership_inventory_and_no_consumer_are_exact() -> None:
     production_paths = tuple(
         sorted((root / "src/investment_orchestrator").rglob("*.py"))
     )
-    assert len(production_paths) == 132
+    assert len(production_paths) == 133
     relative = {
         path: path.relative_to(root).as_posix()
         for path in production_paths
@@ -1551,6 +1551,9 @@ def test_phase_ownership_inventory_and_no_consumer_are_exact() -> None:
     }
     grounded_relative = (
         "src/investment_orchestrator/mmi/grounded_prompt.py"
+    )
+    raw_response_relative = (
+        "src/investment_orchestrator/mmi/raw_response_envelope.py"
     )
     grounded_path = root / grounded_relative
     view_module = (
@@ -1585,7 +1588,7 @@ def test_phase_ownership_inventory_and_no_consumer_are_exact() -> None:
         if grounded_module in imported_modules(tree)
     )
     assert view_importers == (grounded_relative,)
-    assert grounded_importers == ()
+    assert grounded_importers == (raw_response_relative,)
     assert grounded_path.is_file()
     assert (
         root / "src/investment_orchestrator/mmi/__init__.py"
