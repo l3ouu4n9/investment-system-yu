@@ -960,6 +960,8 @@ def test_unrelated_directory_churn_preserves_the_bound_production_path(
     module = _install_checkout(checkout, raw)
     sibling = checkout / "unrelated-existing-sibling"
     sibling.mkdir()
+    retained_name = "unrelated-retained-sibling"
+    retained = checkout / retained_name
     original_verify = source_capture._verify_complete_opened_path
     original_root = source_capture._open_root
     original_relative = source_capture._open_relative
@@ -967,7 +969,9 @@ def test_unrelated_directory_churn_preserves_the_bound_production_path(
     original_close = source_capture.os.close
     opened: list[int] = []
     closed: list[int] = []
-    mutable_changes: set[str] = set()
+    initial_checkout_entries: frozenset[str] | None = None
+    observed_checkout_entries: frozenset[str] | None = None
+    retained_created = False
     churned = False
 
     def tracked_root(repository_root: Path, flags: int) -> int:
@@ -1016,6 +1020,19 @@ def test_unrelated_directory_churn_preserves_the_bound_production_path(
         opened_components: list[source_capture._OpenedComponent],
     ) -> None:
         nonlocal churned
+        nonlocal initial_checkout_entries
+        nonlocal observed_checkout_entries
+        nonlocal retained_created
+        checkout_component = next(
+            component
+            for component in opened_components
+            if component.name == "checkout"
+            and component.expected_kind == "DIRECTORY"
+        )
+        initial_checkout_entries = frozenset(
+            os.listdir(checkout_component.opened_fd)
+        )
+        assert retained_name not in initial_checkout_entries
         child = sibling / "mutable-child"
         child.write_bytes(b"first")
         child.write_bytes(b"second")
@@ -1023,43 +1040,46 @@ def test_unrelated_directory_churn_preserves_the_bound_production_path(
         transient = checkout / "unrelated-transient-sibling"
         transient.mkdir()
         transient.rmdir()
-        for index in range(64):
-            (checkout / f"unrelated-retained-{index:03d}").mkdir()
-        checkout_component = next(
-            component
-            for component in opened_components
-            if component.name == "checkout"
-            and component.expected_kind == "DIRECTORY"
+        os.mkdir(
+            retained_name,
+            dir_fd=checkout_component.opened_fd,
         )
-        entry = source_capture._witness(
+        retained_created = True
+        retained_entry = os.stat(
+            retained_name,
+            dir_fd=checkout_component.opened_fd,
+            follow_symlinks=False,
+        )
+        observed_checkout_entries = frozenset(
+            os.listdir(checkout_component.opened_fd)
+        )
+        assert stat.S_ISDIR(retained_entry.st_mode)
+        assert retained_name in observed_checkout_entries
+        assert observed_checkout_entries - initial_checkout_entries == {
+            retained_name
+        }
+        assert initial_checkout_entries - observed_checkout_entries == set()
+        source_spec = MMI_SOURCE_CATALOG[MmiSourceRole.STRATEGY_SETTINGS]
+        assert retained_name != source_spec.path_components[0]
+
+        checkout_entry = source_capture._witness(
             os.stat(
                 checkout_component.name,
                 dir_fd=checkout_component.parent_fd,
                 follow_symlinks=False,
             )
         )
-        opened_witness = source_capture._witness(
+        checkout_opened = source_capture._witness(
             os.fstat(checkout_component.opened_fd)
         )
         assert source_capture._same_directory_binding(
             checkout_component.witness,
-            entry,
+            checkout_entry,
         )
         assert source_capture._same_directory_binding(
             checkout_component.witness,
-            opened_witness,
+            checkout_opened,
         )
-        for field_name in (
-            "size",
-            "modification_time_ns",
-            "change_time_ns",
-        ):
-            if getattr(
-                checkout_component.witness,
-                field_name,
-            ) != getattr(entry, field_name):
-                mutable_changes.add(field_name)
-        assert mutable_changes
         churned = True
         original_verify(
             root_anchor,
@@ -1080,26 +1100,62 @@ def test_unrelated_directory_churn_preserves_the_bound_production_path(
     )
     monkeypatch.setattr(source_capture.os, "close", tracked_close)
 
-    result = source_capture._capture_current_mmi_source_from_module_path(
-        module,
-        MmiSourceRole.STRATEGY_SETTINGS,
-        expected_source_sha256=hashlib.sha256(raw).hexdigest(),
-    )
+    expected_sha256 = hashlib.sha256(raw).hexdigest()
+    primary_failure: BaseException | None = None
+    try:
+        result = source_capture._capture_current_mmi_source_from_module_path(
+            module,
+            MmiSourceRole.STRATEGY_SETTINGS,
+            expected_source_sha256=expected_sha256,
+        )
 
-    assert churned
-    assert mutable_changes <= {
-        "size",
-        "modification_time_ns",
-        "change_time_ns",
-    }
-    assert result.status is (
-        MmiProjectionResultCategory.PROJECTION_VALID_COMPLETE
-    )
-    assert result.source is not None
-    assert result.source.raw_bytes == raw
-    assert result.authority_effect == "NONE"
-    assert sorted(opened) == sorted(closed)
-    assert len(closed) == len(set(closed))
+        assert churned
+        assert initial_checkout_entries is not None
+        assert observed_checkout_entries == (
+            initial_checkout_entries | {retained_name}
+        )
+        assert retained.is_dir()
+        assert result.status is (
+            MmiProjectionResultCategory.PROJECTION_VALID_COMPLETE
+        )
+        assert result.source is not None
+        assert result.source.raw_bytes == raw
+        record = dict(result.source.source_record)
+        assert record["repository_relative_locator"] == (
+            "inputs/current/strategy_settings.yaml"
+        )
+        assert record["expected_sha256"] == expected_sha256
+        assert record["observed_sha256"] == expected_sha256
+        assert record["operator_origin_authentication"] == (
+            "NOT_ESTABLISHED"
+        )
+        validate_artifact_schema(
+            record,
+            schema_name="mmi_source_record_v1.schema.json",
+        )
+        assert record["source_record_identity_sha256"] == (
+            record_identity_sha256(
+                record,
+                identity_field="source_record_identity_sha256",
+                domain=MMI_SOURCE_RECORD_IDENTITY_DOMAIN,
+                maximum_bytes=8_192,
+            )
+        )
+        assert _mmi_captured_source_provenance_is_valid(result.source)
+        assert result.authority_effect == "NONE"
+        assert sorted(opened) == sorted(closed)
+        assert len(closed) == len(set(closed))
+    except BaseException as exc:
+        primary_failure = exc
+        raise
+    finally:
+        if retained_created:
+            try:
+                retained.rmdir()
+            except OSError:
+                if primary_failure is None:
+                    raise
+    assert not retained.exists()
 
 
 @pytest.mark.parametrize(
