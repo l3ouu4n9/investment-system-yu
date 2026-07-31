@@ -74,14 +74,27 @@ MMI_GROUNDED_PROMPT_INSTRUCTION_SET_VERSION: Final = (
 MMI_GROUNDED_PROMPT_EXPECTED_RESPONSE_SCHEMA_VERSION: Final = (
     "mmi_grounded_analysis_response_v1"
 )
+_MMI_GROUNDED_PROMPT_V2_SCHEMA_VERSION: Final = "mmi_grounded_prompt_v2"
+_MMI_GROUNDED_PROMPT_V2_INSTRUCTION_SET_VERSION: Final = (
+    "mmi_grounded_prompt_instruction_set_v2"
+)
+_MMI_GROUNDED_ANALYSIS_RESPONSE_V2_SCHEMA_VERSION: Final = (
+    "mmi_grounded_analysis_response_v2"
+)
 MMI_RAW_RESPONSE_ENVELOPE_SCHEMA_VERSION: Final = (
     "mmi_raw_response_envelope_v1"
+)
+_MMI_RAW_RESPONSE_ENVELOPE_V2_SCHEMA_VERSION: Final = (
+    "mmi_raw_response_envelope_v2"
 )
 MMI_RAW_RESPONSE_ENVELOPE_ARTIFACT_KIND: Final = (
     "MMI_RAW_RESPONSE_ENVELOPE"
 )
 MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_SCHEMA_VERSION: Final = (
     "mmi_validated_grounded_analysis_response_v1"
+)
+_MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_V2_SCHEMA_VERSION: Final = (
+    "mmi_validated_grounded_analysis_response_v2"
 )
 MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_ARTIFACT_KIND: Final = (
     "MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE"
