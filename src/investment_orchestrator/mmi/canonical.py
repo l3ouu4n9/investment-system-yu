@@ -24,6 +24,9 @@ MMI_AUTHENTICATED_EVIDENCE_BUNDLE_IDENTITY_DOMAIN: Final = (
 _MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_IDENTITY_DOMAIN: Final = (
     b"mmi_analyst_visible_evidence_view_v1\0"
 )
+_MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_IDENTITY_DOMAIN: Final = (
+    b"mmi_analyst_visible_evidence_view_v2\0"
+)
 _MMI_GROUNDED_PROMPT_CONTEXT_BINDING_DOMAIN: Final = (
     b"mmi_grounded_prompt_context_binding_v1\0"
 )

@@ -1540,7 +1540,7 @@ def test_phase_ownership_inventory_and_no_consumer_are_exact() -> None:
     production_paths = tuple(
         sorted((root / "src/investment_orchestrator").rglob("*.py"))
     )
-    assert len(production_paths) == 134
+    assert len(production_paths) == 135
     relative = {
         path: path.relative_to(root).as_posix()
         for path in production_paths

@@ -1949,7 +1949,7 @@ def test_r2c_has_exact_phase_ownership_and_no_consumer() -> None:
     production_paths = tuple(
         sorted((root / "src/investment_orchestrator").rglob("*.py"))
     )
-    assert len(production_paths) == 134
+    assert len(production_paths) == 135
     relative = {
         path: path.relative_to(root).as_posix()
         for path in production_paths

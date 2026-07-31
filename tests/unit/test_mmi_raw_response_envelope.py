@@ -1155,7 +1155,7 @@ def test_r1c_has_exact_r2c_consumer_and_phase_ownership() -> None:
     production_paths = tuple(
         sorted((root / "src/investment_orchestrator").rglob("*.py"))
     )
-    assert len(production_paths) == 134
+    assert len(production_paths) == 135
     relative = {
         path: path.relative_to(root).as_posix()
         for path in production_paths
@@ -1219,7 +1219,7 @@ def test_r1c_has_exact_r2c_consumer_and_phase_ownership() -> None:
     )
 
 
-def test_ten_domains_and_g1_artifact_are_unchanged(
+def test_eleven_domains_and_g1_artifact_are_unchanged(
     trusted_inputs: _TrustedInputs,
 ) -> None:
     public = {
@@ -1230,13 +1230,14 @@ def test_ten_domains_and_g1_artifact_are_unchanged(
     }
     private = (
         canonical._MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_IDENTITY_DOMAIN,
+        canonical._MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_IDENTITY_DOMAIN,
         canonical._MMI_GROUNDED_PROMPT_CONTEXT_BINDING_DOMAIN,
         canonical._MMI_GROUNDED_PROMPT_ARTIFACT_IDENTITY_DOMAIN,
         canonical._MMI_RAW_RESPONSE_ENVELOPE_IDENTITY_DOMAIN,
         canonical._MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_IDENTITY_DOMAIN,
     )
     domains = (*public.values(), *private)
-    assert len(domains) == len(set(domains)) == 10
+    assert len(domains) == len(set(domains)) == 11
     prompt_before = deepcopy(trusted_inputs.grounded_prompt)
     artifact = _valid_envelope(trusted_inputs)
     validation = _validate(artifact, trusted_inputs)

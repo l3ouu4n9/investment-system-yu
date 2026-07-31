@@ -1,0 +1,628 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-system.local/schemas/mmi_analyst_visible_evidence_view_v2.schema.json",
+  "title": "MMI analyst-visible evidence view v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "report_only",
+    "authority_effect",
+    "evaluation_timestamp_utc",
+    "evidence_bundle_identity_sha256",
+    "policy_view",
+    "portfolio_view",
+    "research_component_statuses",
+    "known_view_limitations",
+    "view_completeness_status",
+    "analyst_visible_evidence_view_identity_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mmi_analyst_visible_evidence_view_v2"
+    },
+    "artifact_kind": {
+      "const": "MMI_ANALYST_VISIBLE_EVIDENCE_VIEW"
+    },
+    "report_only": {
+      "const": true
+    },
+    "authority_effect": {
+      "const": "NONE"
+    },
+    "evaluation_timestamp_utc": {
+      "$ref": "#/$defs/utc_timestamp"
+    },
+    "evidence_bundle_identity_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "policy_view": {
+      "$ref": "#/$defs/policy_view"
+    },
+    "portfolio_view": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/portfolio_not_supplied"
+        },
+        {
+          "$ref": "#/$defs/portfolio_source_absent"
+        },
+        {
+          "$ref": "#/$defs/portfolio_source_bound"
+        }
+      ]
+    },
+    "research_component_statuses": {
+      "$ref": "#/$defs/research_component_statuses"
+    },
+    "known_view_limitations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 14,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/view_limitation"
+      }
+    },
+    "view_completeness_status": {
+      "const": "PROJECTION_VALID_WITH_GAPS"
+    },
+    "analyst_visible_evidence_view_identity_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "utc_timestamp": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{6}Z$"
+    },
+    "date": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "ticker": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9.-]{0,15}$"
+    },
+    "ticker_list": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/ticker"
+      }
+    },
+    "research_component_statuses": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "per_instrument_research",
+        "anchor_associations",
+        "scheduled_events",
+        "regime_inputs"
+      ],
+      "properties": {
+        "per_instrument_research": {
+          "const": "LIMITED_TO_VISIBLE_EVIDENCE"
+        },
+        "anchor_associations": {
+          "const": "UNAVAILABLE"
+        },
+        "scheduled_events": {
+          "const": "UNAVAILABLE"
+        },
+        "regime_inputs": {
+          "const": "UNAVAILABLE"
+        }
+      }
+    },
+    "policy_view": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy_as_of_date",
+        "policy_method",
+        "benchmark_reference_instruments",
+        "analysis_instruments",
+        "extended_activation_status",
+        "instrument_availability_observation_status",
+        "target_weights_absence_reason"
+      ],
+      "properties": {
+        "policy_as_of_date": {
+          "$ref": "#/$defs/date"
+        },
+        "policy_method": {
+          "const": "BUDGET_SHORTLIST_ROTATION_WITHOUT_TARGET_WEIGHTS"
+        },
+        "benchmark_reference_instruments": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/ticker"
+          }
+        },
+        "analysis_instruments": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/analysis_instrument"
+          },
+          "allOf": [
+            {
+              "contains": {
+                "properties": {
+                  "policy_role": {
+                    "const": "CORE"
+                  }
+                },
+                "required": [
+                  "policy_role"
+                ]
+              },
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "policy_role": {
+                    "const": "SATELLITE"
+                  }
+                },
+                "required": [
+                  "policy_role"
+                ]
+              },
+              "minContains": 1
+            }
+          ]
+        },
+        "extended_activation_status": {
+          "const": "NOT_EVALUATED_REPORT_ONLY"
+        },
+        "instrument_availability_observation_status": {
+          "const": "NOT_DETERMINISTICALLY_AVAILABLE"
+        },
+        "target_weights_absence_reason": {
+          "const": "POLICY_METHOD_HAS_NO_TARGET_WEIGHTS"
+        }
+      }
+    },
+    "analysis_instrument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ticker",
+        "policy_role"
+      ],
+      "properties": {
+        "ticker": {
+          "$ref": "#/$defs/ticker"
+        },
+        "policy_role": {
+          "enum": [
+            "CORE",
+            "SATELLITE",
+            "APPROVED_EXTENDED"
+          ]
+        }
+      }
+    },
+    "portfolio_not_supplied": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "presence_status"
+      ],
+      "properties": {
+        "presence_status": {
+          "const": "NOT_SUPPLIED"
+        }
+      }
+    },
+    "portfolio_source_absent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "presence_status",
+        "portfolio_source_date",
+        "open_buy_status",
+        "open_buy_observations",
+        "fact_coverage_statuses"
+      ],
+      "properties": {
+        "presence_status": {
+          "const": "PRESENT_VALIDATED_SOURCE_ABSENT"
+        },
+        "portfolio_source_date": {
+          "type": "null"
+        },
+        "open_buy_status": {
+          "const": "SOURCE_ABSENT"
+        },
+        "open_buy_observations": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "fact_coverage_statuses": {
+          "$ref": "#/$defs/fact_coverage_statuses"
+        }
+      }
+    },
+    "portfolio_source_bound": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "presence_status",
+        "portfolio_source_date",
+        "open_buy_status",
+        "open_buy_observations",
+        "fact_coverage_statuses"
+      ],
+      "properties": {
+        "presence_status": {
+          "const": "PRESENT_SOURCE_BOUND_VALIDATED"
+        },
+        "portfolio_source_date": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/date"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "open_buy_status": {
+          "enum": [
+            "SOURCE_VALIDATED",
+            "PARSE_FAILED"
+          ]
+        },
+        "open_buy_observations": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/open_buy_observation"
+          }
+        },
+        "fact_coverage_statuses": {
+          "$ref": "#/$defs/fact_coverage_statuses"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "open_buy_status": {
+                "const": "PARSE_FAILED"
+              }
+            },
+            "required": [
+              "open_buy_status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "open_buy_observations": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    "open_buy_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ticker",
+        "policy_membership_classification"
+      ],
+      "properties": {
+        "ticker": {
+          "$ref": "#/$defs/ticker"
+        },
+        "policy_membership_classification": {
+          "enum": [
+            "CORE",
+            "SATELLITE",
+            "APPROVED_EXTENDED",
+            "OUTSIDE_POLICY_UNIVERSE"
+          ]
+        }
+      }
+    },
+    "fact_coverage_statuses": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "holdings",
+        "cash",
+        "deployable_cash",
+        "open_sells",
+        "tax_lots",
+        "holding_dates",
+        "gains_losses",
+        "weights",
+        "nav_concentration",
+        "look_through_exposure"
+      ],
+      "properties": {
+        "holdings": {
+          "const": "UNSTRUCTURED_NOT_PROJECTED"
+        },
+        "cash": {
+          "const": "UNAVAILABLE_NOT_PROJECTED"
+        },
+        "deployable_cash": {
+          "const": "UNAVAILABLE_NOT_PROJECTED"
+        },
+        "open_sells": {
+          "const": "UNSTRUCTURED_NOT_PROJECTED"
+        },
+        "tax_lots": {
+          "const": "UNSTRUCTURED_NOT_PROJECTED"
+        },
+        "holding_dates": {
+          "const": "UNAVAILABLE_NOT_PROJECTED"
+        },
+        "gains_losses": {
+          "const": "UNAVAILABLE_NOT_PROJECTED"
+        },
+        "weights": {
+          "const": "UNAVAILABLE_NOT_PROJECTED"
+        },
+        "nav_concentration": {
+          "const": "UNAVAILABLE_NOT_PROJECTED"
+        },
+        "look_through_exposure": {
+          "const": "UNAVAILABLE_NOT_PROJECTED"
+        }
+      }
+    },
+    "view_limitation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "owner",
+        "code",
+        "affected_tickers"
+      ],
+      "properties": {
+        "owner": {
+          "enum": [
+            "POLICY_PROJECTION",
+            "EVIDENCE_BUNDLE",
+            "PORTFOLIO_PROJECTION"
+          ]
+        },
+        "code": {
+          "enum": [
+            "VIEW_POLICY_CASH_MODEL_UNAVAILABLE",
+            "VIEW_POLICY_EXTENDED_ACTIVATION_CONSTRAINTS_UNAVAILABLE",
+            "VIEW_POLICY_LOOKTHROUGH_EXPOSURE_UNAVAILABLE",
+            "VIEW_POLICY_MAX_NEW_TICKER_RULE_UNAVAILABLE",
+            "VIEW_POLICY_MINIMUM_HOLDING_ENFORCEMENT_INCOMPLETE",
+            "VIEW_POLICY_PER_RUN_BUDGET_APPLICABILITY_UNVERIFIED",
+            "VIEW_POLICY_PER_RUN_NEW_BUY_BUDGET_UNAVAILABLE",
+            "VIEW_POLICY_PORTFOLIO_NAV_CONCENTRATION_UNAVAILABLE",
+            "VIEW_POLICY_SELL_ELIGIBILITY_INCOMPLETE",
+            "VIEW_POLICY_TAX_LOT_ENFORCEMENT_UNAVAILABLE",
+            "VIEW_POLICY_TURNOVER_ENFORCEMENT_INCOMPLETE",
+            "VIEW_EVIDENCE_PORTFOLIO_COMPONENT_NOT_SUPPLIED",
+            "VIEW_PORTFOLIO_SOURCE_MISSING",
+            "VIEW_PORTFOLIO_SOURCE_TIMESTAMP_UNAVAILABLE",
+            "VIEW_PORTFOLIO_OPEN_BUY_ORDERS_PARSE_FAILED",
+            "VIEW_PORTFOLIO_OPEN_BUY_ORDER_OUTSIDE_POLICY_UNIVERSE"
+          ]
+        },
+        "affected_tickers": {
+          "$ref": "#/$defs/ticker_list"
+        }
+      },
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "owner": {
+                  "const": "POLICY_PROJECTION"
+                },
+                "code": {
+                  "const": "VIEW_POLICY_CASH_MODEL_UNAVAILABLE"
+                }
+              }
+            },
+            {
+              "properties": {
+                "owner": {
+                  "const": "POLICY_PROJECTION"
+                },
+                "code": {
+                  "const": "VIEW_POLICY_EXTENDED_ACTIVATION_CONSTRAINTS_UNAVAILABLE"
+                }
+              }
+            },
+            {
+              "properties": {
+                "owner": {
+                  "const": "POLICY_PROJECTION"
+                },
+                "code": {
+                  "const": "VIEW_POLICY_LOOKTHROUGH_EXPOSURE_UNAVAILABLE"
+                }
+              }
+            },
+            {
+              "properties": {
+                "owner": {
+                  "const": "POLICY_PROJECTION"
+                },
+                "code": {
+                  "const": "VIEW_POLICY_MAX_NEW_TICKER_RULE_UNAVAILABLE"
+                }
+              }
+            },
+            {
+              "properties": {
+                "owner": {
+                  "const": "POLICY_PROJECTION"
+                },
+                "code": {
+                  "const": "VIEW_POLICY_MINIMUM_HOLDING_ENFORCEMENT_INCOMPLETE"
+                }
+              }
+            },
+            {
+              "properties": {
+                "owner": {
+                  "const": "POLICY_PROJECTION"
+                },
+                "code": {
+                  "const": "VIEW_POLICY_PER_RUN_BUDGET_APPLICABILITY_UNVERIFIED"
+                }
+              }
+            },
+            {
+              "properties": {
+                "owner": {
+                  "const": "POLICY_PROJECTION"
+                },
+                "code": {
+                  "const": "VIEW_POLICY_PER_RUN_NEW_BUY_BUDGET_UNAVAILABLE"
+                }
+              }
+            },
+            {
+              "properties": {
+                "owner": {
+                  "const": "POLICY_PROJECTION"
+                },
+                "code": {
+                  "const": "VIEW_POLICY_PORTFOLIO_NAV_CONCENTRATION_UNAVAILABLE"
+                }
+              }
+            },
+            {
+              "properties": {
+                "owner": {
+                  "const": "POLICY_PROJECTION"
+                },
+                "code": {
+                  "const": "VIEW_POLICY_SELL_ELIGIBILITY_INCOMPLETE"
+                }
+              }
+            },
+            {
+              "properties": {
+                "owner": {
+                  "const": "POLICY_PROJECTION"
+                },
+                "code": {
+                  "const": "VIEW_POLICY_TAX_LOT_ENFORCEMENT_UNAVAILABLE"
+                }
+              }
+            },
+            {
+              "properties": {
+                "owner": {
+                  "const": "POLICY_PROJECTION"
+                },
+                "code": {
+                  "const": "VIEW_POLICY_TURNOVER_ENFORCEMENT_INCOMPLETE"
+                }
+              }
+            },
+            {
+              "properties": {
+                "owner": {
+                  "const": "EVIDENCE_BUNDLE"
+                },
+                "code": {
+                  "const": "VIEW_EVIDENCE_PORTFOLIO_COMPONENT_NOT_SUPPLIED"
+                }
+              }
+            },
+            {
+              "properties": {
+                "owner": {
+                  "const": "PORTFOLIO_PROJECTION"
+                },
+                "code": {
+                  "const": "VIEW_PORTFOLIO_SOURCE_MISSING"
+                }
+              }
+            },
+            {
+              "properties": {
+                "owner": {
+                  "const": "PORTFOLIO_PROJECTION"
+                },
+                "code": {
+                  "const": "VIEW_PORTFOLIO_SOURCE_TIMESTAMP_UNAVAILABLE"
+                }
+              }
+            },
+            {
+              "properties": {
+                "owner": {
+                  "const": "PORTFOLIO_PROJECTION"
+                },
+                "code": {
+                  "const": "VIEW_PORTFOLIO_OPEN_BUY_ORDERS_PARSE_FAILED"
+                }
+              }
+            },
+            {
+              "properties": {
+                "owner": {
+                  "const": "PORTFOLIO_PROJECTION"
+                },
+                "code": {
+                  "const": "VIEW_PORTFOLIO_OPEN_BUY_ORDER_OUTSIDE_POLICY_UNIVERSE"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "VIEW_PORTFOLIO_OPEN_BUY_ORDER_OUTSIDE_POLICY_UNIVERSE"
+              }
+            },
+            "required": [
+              "code"
+            ]
+          },
+          "then": {
+            "properties": {
+              "affected_tickers": {
+                "minItems": 1
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "affected_tickers": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

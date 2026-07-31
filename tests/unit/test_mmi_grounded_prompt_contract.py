@@ -21,6 +21,7 @@ from investment_orchestrator.mmi.canonical import (
     MAXIMUM_ANALYST_VISIBLE_EVIDENCE_VIEW_CANONICAL_BYTES,
     MAXIMUM_GROUNDED_PROMPT_TEXT_BYTES,
     _MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_IDENTITY_DOMAIN,
+    _MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_IDENTITY_DOMAIN,
     _MAXIMUM_GROUNDED_PROMPT_CANONICAL_BYTES,
     _MMI_GROUNDED_PROMPT_ARTIFACT_IDENTITY_DOMAIN,
     _MMI_GROUNDED_PROMPT_CONTEXT_BINDING_DOMAIN,
@@ -1430,7 +1431,7 @@ def test_structurally_valid_evidence_mutations_change_both_identities() -> None:
     assert _payload(changed) != _payload(original)
 
 
-def test_exactly_ten_unique_persistent_identity_domains_exist() -> None:
+def test_exactly_eleven_unique_persistent_identity_domains_exist() -> None:
     public_domains = {
         name: value
         for name, value in canonical.__dict__.items()
@@ -1456,6 +1457,7 @@ def test_exactly_ten_unique_persistent_identity_domains_exist() -> None:
     }
     private_domains = (
         _MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_IDENTITY_DOMAIN,
+        _MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_IDENTITY_DOMAIN,
         _MMI_GROUNDED_PROMPT_CONTEXT_BINDING_DOMAIN,
         _MMI_GROUNDED_PROMPT_ARTIFACT_IDENTITY_DOMAIN,
         _MMI_RAW_RESPONSE_ENVELOPE_IDENTITY_DOMAIN,
@@ -1463,13 +1465,14 @@ def test_exactly_ten_unique_persistent_identity_domains_exist() -> None:
     )
     assert private_domains == (
         b"mmi_analyst_visible_evidence_view_v1\0",
+        b"mmi_analyst_visible_evidence_view_v2\0",
         b"mmi_grounded_prompt_context_binding_v1\0",
         b"mmi_grounded_prompt_artifact_v1\0",
         b"mmi_raw_response_envelope_v1\0",
         b"mmi_validated_grounded_analysis_response_v1\0",
     )
     domains = (*public_domains.values(), *private_domains)
-    assert len(domains) == len(set(domains)) == 10
+    assert len(domains) == len(set(domains)) == 11
     assert all(
         domain.endswith(b"\0")
         and b"\0" not in domain[:-1]
@@ -1842,9 +1845,10 @@ def test_grounded_prompt_runtime_has_exact_phase_ownership() -> None:
     grounded_prompt_path = mmi_root / "grounded_prompt.py"
     assert grounded_prompt_path.is_file()
     assert tuple(sorted(path.name for path in mmi_root.glob("*.py"))) == (
-        "__init__.py",
-        "analyst_visible_evidence_view.py",
-        "canonical.py",
+            "__init__.py",
+            "analyst_visible_evidence_view.py",
+            "analyst_visible_evidence_view_v2.py",
+            "canonical.py",
         "contracts.py",
         "evidence_bundle.py",
         "grounded_prompt.py",
@@ -1857,7 +1861,7 @@ def test_grounded_prompt_runtime_has_exact_phase_ownership() -> None:
     production_paths = tuple(
         sorted((root / "src/investment_orchestrator").rglob("*.py"))
     )
-    assert len(production_paths) == 134
+    assert len(production_paths) == 135
     relative = {
         path: path.relative_to(root).as_posix()
         for path in production_paths

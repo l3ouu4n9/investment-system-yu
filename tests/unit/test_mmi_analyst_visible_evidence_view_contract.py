@@ -28,6 +28,7 @@ from investment_orchestrator.mmi import (
 from investment_orchestrator.mmi.canonical import (
     MAXIMUM_ANALYST_VISIBLE_EVIDENCE_VIEW_CANONICAL_BYTES,
     _MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_IDENTITY_DOMAIN,
+    _MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_IDENTITY_DOMAIN,
     _MMI_GROUNDED_PROMPT_ARTIFACT_IDENTITY_DOMAIN,
     _MMI_GROUNDED_PROMPT_CONTEXT_BINDING_DOMAIN,
     _MMI_RAW_RESPONSE_ENVELOPE_IDENTITY_DOMAIN,
@@ -1810,7 +1811,7 @@ def test_resealed_structural_identity_is_not_source_authentication() -> None:
     )
 
 
-def test_exactly_ten_persistent_mmi_identity_domains_exist() -> None:
+def test_exactly_eleven_persistent_mmi_identity_domains_exist() -> None:
     domains_by_name = {
         name: value
         for name, value in canonical.__dict__.items()
@@ -1837,6 +1838,9 @@ def test_exactly_ten_persistent_mmi_identity_domains_exist() -> None:
     assert _MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_IDENTITY_DOMAIN == (
         b"mmi_analyst_visible_evidence_view_v1\0"
     )
+    assert _MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_IDENTITY_DOMAIN == (
+        b"mmi_analyst_visible_evidence_view_v2\0"
+    )
     assert _MMI_GROUNDED_PROMPT_CONTEXT_BINDING_DOMAIN == (
         b"mmi_grounded_prompt_context_binding_v1\0"
     )
@@ -1852,12 +1856,13 @@ def test_exactly_ten_persistent_mmi_identity_domains_exist() -> None:
     domains = (
         *domains_by_name.values(),
         _MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_IDENTITY_DOMAIN,
+        _MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_IDENTITY_DOMAIN,
         _MMI_GROUNDED_PROMPT_CONTEXT_BINDING_DOMAIN,
         _MMI_GROUNDED_PROMPT_ARTIFACT_IDENTITY_DOMAIN,
         _MMI_RAW_RESPONSE_ENVELOPE_IDENTITY_DOMAIN,
         _MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_IDENTITY_DOMAIN,
     )
-    assert len(domains) == len(set(domains)) == 10
+    assert len(domains) == len(set(domains)) == 11
 
 
 def test_first_five_domains_and_existing_fixed_identities_are_unchanged() -> None:
@@ -2175,7 +2180,7 @@ def test_v1b_contract_and_v1c_runtime_have_exact_phase_ownership() -> None:
     root = repo_root()
     production_root = root / "src/investment_orchestrator"
     production_paths = tuple(sorted(production_root.rglob("*.py")))
-    assert len(production_paths) == 134
+    assert len(production_paths) == 135
     relative = {
         path: path.relative_to(root).as_posix()
         for path in production_paths
@@ -2188,6 +2193,10 @@ def test_v1b_contract_and_v1c_runtime_have_exact_phase_ownership() -> None:
         "src/investment_orchestrator/mmi/"
         "analyst_visible_evidence_view.py"
     )
+    view_v2_relative_path = (
+        "src/investment_orchestrator/mmi/"
+        "analyst_visible_evidence_view_v2.py"
+    )
     view_path = root / view_relative_path
     contracts_relative_path = (
         "src/investment_orchestrator/mmi/contracts.py"
@@ -2197,7 +2206,7 @@ def test_v1b_contract_and_v1c_runtime_have_exact_phase_ownership() -> None:
         relative[path]
         for path in production_paths
         if "analyst_visible_evidence_view" in path.stem
-    ) == (view_relative_path,)
+    ) == (view_relative_path, view_v2_relative_path)
 
     public_surfaces = (
         "build_mmi_analyst_visible_evidence_view",
@@ -2375,7 +2384,10 @@ def test_v1b_contract_and_v1c_runtime_have_exact_phase_ownership() -> None:
             for module in imported_modules(path)
         )
     )
-    assert evidence_importers == (view_relative_path,)
+    assert evidence_importers == (
+        view_relative_path,
+        view_v2_relative_path,
+    )
 
     init_path = root / "src/investment_orchestrator/mmi/__init__.py"
     init_tree = trees[init_path]

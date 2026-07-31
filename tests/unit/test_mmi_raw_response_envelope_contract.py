@@ -22,6 +22,7 @@ from investment_orchestrator.mmi.canonical import (
     MAXIMUM_CANONICAL_JSON_BYTES,
     MAXIMUM_MMI_RAW_RESPONSE_BYTES,
     _MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_IDENTITY_DOMAIN,
+    _MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_IDENTITY_DOMAIN,
     _MMI_GROUNDED_PROMPT_ARTIFACT_IDENTITY_DOMAIN,
     _MMI_GROUNDED_PROMPT_CONTEXT_BINDING_DOMAIN,
     _MMI_RAW_RESPONSE_ENVELOPE_IDENTITY_DOMAIN,
@@ -515,7 +516,7 @@ def test_one_decoded_byte_over_maximum_fails_when_independently_resealed() -> No
     _assert_structural_rejection(candidate)
 
 
-def test_first_nine_domains_are_unchanged_and_tenth_is_unique() -> None:
+def test_existing_ten_domains_are_unchanged_and_v2_is_unique() -> None:
     first_eight = (
         MMI_SOURCE_RECORD_IDENTITY_DOMAIN,
         MMI_UNIVERSE_PROJECTION_IDENTITY_DOMAIN,
@@ -544,8 +545,12 @@ def test_first_nine_domains_are_unchanged_and_tenth_is_unique() -> None:
     all_domains = (
         *first_nine,
         _MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_IDENTITY_DOMAIN,
+        _MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_IDENTITY_DOMAIN,
     )
-    assert len(all_domains) == len(set(all_domains)) == 10
+    assert _MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_IDENTITY_DOMAIN == (
+        b"mmi_analyst_visible_evidence_view_v2\0"
+    )
+    assert len(all_domains) == len(set(all_domains)) == 11
 
 
 @pytest.mark.parametrize(
@@ -601,7 +606,7 @@ def test_r1b_contract_and_r1c_runtime_have_exact_phase_ownership() -> None:
     production_paths = tuple(
         sorted((root / "src/investment_orchestrator").rglob("*.py"))
     )
-    assert len(production_paths) == 134
+    assert len(production_paths) == 135
     relative = {
         path: path.relative_to(root).as_posix()
         for path in production_paths

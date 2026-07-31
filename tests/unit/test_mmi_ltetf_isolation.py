@@ -39,6 +39,10 @@ MMI_PRODUCTION_PATHS = (
         "src/investment_orchestrator/mmi/"
         "analyst_visible_evidence_view.py"
     ),
+    (
+        "src/investment_orchestrator/mmi/"
+        "analyst_visible_evidence_view_v2.py"
+    ),
     "src/investment_orchestrator/mmi/canonical.py",
     "src/investment_orchestrator/mmi/contracts.py",
     "src/investment_orchestrator/mmi/evidence_bundle.py",
@@ -193,11 +197,16 @@ def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -
                     and imported == "ctypes"
                 )
                 or (
-                    path
-                    == (
-                        "src/investment_orchestrator/mmi/"
-                        "analyst_visible_evidence_view.py"
-                    )
+                    path in {
+                        (
+                            "src/investment_orchestrator/mmi/"
+                            "analyst_visible_evidence_view.py"
+                        ),
+                        (
+                            "src/investment_orchestrator/mmi/"
+                            "analyst_visible_evidence_view_v2.py"
+                        ),
+                    }
                     and imported == "investment_orchestrator.mmi"
                 )
                 or imported.startswith("investment_orchestrator.mmi.")
@@ -302,6 +311,10 @@ def test_schema_helper_is_imported_by_exact_symbol_only() -> None:
         (
             "src/investment_orchestrator/mmi/"
             "analyst_visible_evidence_view.py"
+        ),
+        (
+            "src/investment_orchestrator/mmi/"
+            "analyst_visible_evidence_view_v2.py"
         ),
         (
             "src/investment_orchestrator/mmi/"
@@ -480,7 +493,7 @@ def test_reachable_schema_validation_call_graph_does_not_write(
 
 def test_ltetf_inventory_classification_is_unchanged_except_inventory_content() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
-    assert len(inventory.production_paths) == 134
+    assert len(inventory.production_paths) == 135
     assert inventory.dynamic_findings == ()
     assert inventory.observer_external_consumers == EXPECTED_EXTERNAL_CONSUMERS
     assert inventory.report_artifact_readers == ()
