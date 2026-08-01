@@ -171,20 +171,18 @@ def test_schema_rejects_provider_path_payload_and_authority_fields() -> None:
             validate_artifact_schema(candidate, schema_name=SCHEMA_NAME)
 
 
-def test_h02b2_has_r1c_v2_runtime_but_no_r2c_v2_runtime_or_domain() -> None:
+def test_h02c_has_exact_r1c_v2_and_r2c_v2_phase_ownership() -> None:
     root = repo_root()
     assert (
         root / "src/investment_orchestrator/mmi/raw_response_envelope_v2.py"
     ).exists()
     domains = _identity_domains()
-    assert len(domains) == len(set(domains)) == 14
+    assert len(domains) == len(set(domains)) == 15
     assert b"mmi_raw_response_envelope_v2\0" in domains
-    assert not (
+    assert (
         root
         / "src/investment_orchestrator/mmi/"
         "validated_grounded_analysis_response_v2.py"
     ).exists()
-    assert (
-        b"mmi_validated_grounded_analysis_response_v2\0" not in domains
-    )
+    assert b"mmi_validated_grounded_analysis_response_v2\0" in domains
     assert mmi.__all__ == ()

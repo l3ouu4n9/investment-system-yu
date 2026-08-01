@@ -57,6 +57,10 @@ MMI_PRODUCTION_PATHS = (
         "src/investment_orchestrator/mmi/"
         "validated_grounded_analysis_response.py"
     ),
+    (
+        "src/investment_orchestrator/mmi/"
+        "validated_grounded_analysis_response_v2.py"
+    ),
 )
 EXPECTED_EXTERNAL_CONSUMERS = (
     "src/investment_orchestrator/cli/observe_ltetf_target_architecture_gaps.py",
@@ -228,6 +232,10 @@ def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -
             "src/investment_orchestrator/mmi/"
             "validated_grounded_analysis_response.py"
         ),
+        (
+            "src/investment_orchestrator/mmi/"
+            "validated_grounded_analysis_response_v2.py"
+        ),
     )
 
     for path, imports in inventory.imports_by_path:
@@ -328,6 +336,10 @@ def test_schema_helper_is_imported_by_exact_symbol_only() -> None:
         (
             "src/investment_orchestrator/mmi/"
             "validated_grounded_analysis_response.py"
+        ),
+        (
+            "src/investment_orchestrator/mmi/"
+            "validated_grounded_analysis_response_v2.py"
         ),
     ):
         tree = ast.parse(_mmi_sources()[relative])
@@ -436,7 +448,7 @@ def test_mmi_modules_have_no_dynamic_execution_scan_or_write_capability() -> Non
         ), relative
 
 
-def test_v2_prompt_and_envelope_graph_is_exact_and_dormant() -> None:
+def test_v2_prompt_envelope_and_response_graph_is_exact_and_dormant() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
     imports_by_path = dict(inventory.imports_by_path)
 
@@ -459,6 +471,13 @@ def test_v2_prompt_and_envelope_graph_is_exact_and_dormant() -> None:
     )
     assert consumers(
         "investment_orchestrator.mmi.raw_response_envelope_v2"
+    ) == (
+        "src/investment_orchestrator/mmi/"
+        "validated_grounded_analysis_response_v2.py",
+    )
+    assert consumers(
+        "investment_orchestrator.mmi."
+        "validated_grounded_analysis_response_v2"
     ) == ()
     assert consumers(
         "investment_orchestrator.mmi.analyst_visible_evidence_view"
@@ -476,9 +495,10 @@ def test_v2_prompt_and_envelope_graph_is_exact_and_dormant() -> None:
         "src/investment_orchestrator/mmi/"
         "validated_grounded_analysis_response.py",
     )
-    assert not any(
-        "validated_grounded_analysis_response_v2" in path
-        for path in inventory.production_paths
+    assert (
+        "src/investment_orchestrator/mmi/"
+        "validated_grounded_analysis_response_v2.py"
+        in inventory.production_paths
     )
 
 
@@ -548,7 +568,7 @@ def test_reachable_schema_validation_call_graph_does_not_write(
 
 def test_ltetf_inventory_classification_is_unchanged_except_inventory_content() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
-    assert len(inventory.production_paths) == 137
+    assert len(inventory.production_paths) == 138
     assert inventory.dynamic_findings == ()
     assert inventory.observer_external_consumers == EXPECTED_EXTERNAL_CONSUMERS
     assert inventory.report_artifact_readers == ()

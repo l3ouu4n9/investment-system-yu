@@ -49,6 +49,7 @@ EXPECTED_IDENTITY_DOMAINS = {
     b"mmi_raw_response_envelope_v1\0",
     b"mmi_raw_response_envelope_v2\0",
     b"mmi_validated_grounded_analysis_response_v1\0",
+    b"mmi_validated_grounded_analysis_response_v2\0",
 }
 
 
@@ -171,17 +172,15 @@ def test_schema_rejects_extension_and_authority_fields() -> None:
             validate_artifact_schema(candidate, schema_name=SCHEMA_NAME)
 
 
-def test_h02b2_has_only_the_accepted_new_runtime_identity_domains() -> None:
+def test_h02c_has_only_the_accepted_runtime_identity_domains() -> None:
     root = repo_root()
     assert (
         root / "src/investment_orchestrator/mmi/grounded_prompt_v2.py"
     ).exists()
     domains = _identity_domains()
     assert set(domains) == EXPECTED_IDENTITY_DOMAINS
-    assert len(domains) == len(set(domains)) == 14
-    assert (
-        b"mmi_validated_grounded_analysis_response_v2\0" not in domains
-    )
+    assert len(domains) == len(set(domains)) == 15
+    assert b"mmi_validated_grounded_analysis_response_v2\0" in domains
     assert mmi.__all__ == ()
 
 

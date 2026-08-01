@@ -455,9 +455,9 @@ def test_resource_contract_is_strictly_below_existing_global_limits() -> None:
     assert MAXIMUM_CANONICAL_NODES == 16_384
 
 
-def test_phase_has_no_r2c_runtime_r2b_artifact_or_identity_domain() -> None:
+def test_h02c_has_r2c_runtime_without_standalone_r2b_artifact() -> None:
     root = repo_root()
-    assert not (
+    assert (
         root
         / "src/investment_orchestrator/mmi/"
         "validated_grounded_analysis_response_v2.py"
@@ -466,6 +466,6 @@ def test_phase_has_no_r2c_runtime_r2b_artifact_or_identity_domain() -> None:
         root / "schemas/mmi_grounded_analysis_response_v2.schema.json"
     ).exists()
     domains = _identity_domains()
-    assert len(domains) == len(set(domains)) == 14
-    assert b"mmi_validated_grounded_analysis_response_v2\0" not in domains
+    assert len(domains) == len(set(domains)) == 15
+    assert b"mmi_validated_grounded_analysis_response_v2\0" in domains
     assert mmi.__all__ == ()

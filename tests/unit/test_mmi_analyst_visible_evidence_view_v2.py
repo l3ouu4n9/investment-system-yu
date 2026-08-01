@@ -699,14 +699,14 @@ def test_v2_has_exact_g2_consumer_and_no_side_effect_surface() -> None:
 
 def test_inventory_and_persistent_identity_domain_counts_are_exact() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
-    assert len(inventory.production_paths) == 137
+    assert len(inventory.production_paths) == 138
     domains = {
         name: value
         for name, value in vars(canonical).items()
         if name.endswith("_DOMAIN")
         and type(value) is bytes
     }
-    assert len(domains) == len(set(domains.values())) == 14
+    assert len(domains) == len(set(domains.values())) == 15
     assert domains[
         "_MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_IDENTITY_DOMAIN"
     ] == IDENTITY_DOMAIN

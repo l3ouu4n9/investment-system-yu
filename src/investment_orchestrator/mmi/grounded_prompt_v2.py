@@ -13,6 +13,7 @@ from investment_orchestrator.mmi.analyst_visible_evidence_view_v2 import (
     MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_ARTIFACT_KIND,
     MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_RESEARCH_COMPONENT_STATUSES,
     MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_SCHEMA_VERSION,
+    build_mmi_analyst_visible_evidence_view_v2,
     validate_mmi_analyst_visible_evidence_view_v2,
 )
 from investment_orchestrator.mmi.canonical import (
@@ -606,6 +607,50 @@ def build_mmi_grounded_prompt_v2(
         portfolio_source=portfolio_source,
         run_context=run_context,
     )
+
+
+def _build_source_bound_grounded_prompt_v2(
+    *,
+    evidence_bundle: Mapping[str, object],
+    policy_projection: Mapping[str, object],
+    policy_source: MmiCapturedSource,
+    portfolio_projection: Mapping[str, object] | None,
+    portfolio_source: MmiCapturedSource | None,
+    run_context: MmiProjectionRunContext,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Reconstruct the exact source-bound V2 view and its G2 artifact."""
+    try:
+        result = build_mmi_analyst_visible_evidence_view_v2(
+            evidence_bundle=evidence_bundle,
+            policy_projection=policy_projection,
+            policy_source=policy_source,
+            portfolio_projection=portfolio_projection,
+            portfolio_source=portfolio_source,
+            run_context=run_context,
+        )
+        valid = (
+            result.status
+            is MmiProjectionResultCategory.PROJECTION_VALID_WITH_GAPS
+            and result.authority_effect == AUTHORITY_EFFECT_NONE
+            and isinstance(result.projection, Mapping)
+        )
+        if not valid:
+            _fail("MMI_GROUNDED_PROMPT_V2_VIEW_SOURCE_FIDELITY_INVALID")
+        view = _validated_view_snapshot(result.projection)
+        prompt = build_mmi_grounded_prompt_v2(
+            analyst_visible_evidence_view=view,
+            evidence_bundle=evidence_bundle,
+            policy_projection=policy_projection,
+            policy_source=policy_source,
+            portfolio_projection=portfolio_projection,
+            portfolio_source=portfolio_source,
+            run_context=run_context,
+        )
+    except MmiGroundedPromptV2Error:
+        raise
+    except Exception:
+        _fail("MMI_GROUNDED_PROMPT_V2_VIEW_SOURCE_FIDELITY_INVALID")
+    return view, prompt
 
 
 def validate_mmi_grounded_prompt_v2(
