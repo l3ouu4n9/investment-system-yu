@@ -47,9 +47,11 @@ MMI_PRODUCTION_PATHS = (
     "src/investment_orchestrator/mmi/contracts.py",
     "src/investment_orchestrator/mmi/evidence_bundle.py",
     "src/investment_orchestrator/mmi/grounded_prompt.py",
+    "src/investment_orchestrator/mmi/grounded_prompt_v2.py",
     "src/investment_orchestrator/mmi/policy_projection.py",
     "src/investment_orchestrator/mmi/portfolio_projection.py",
     "src/investment_orchestrator/mmi/raw_response_envelope.py",
+    "src/investment_orchestrator/mmi/raw_response_envelope_v2.py",
     "src/investment_orchestrator/mmi/source_capture.py",
     (
         "src/investment_orchestrator/mmi/"
@@ -181,11 +183,12 @@ def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -
                     and imported == "base64"
                 )
                 or (
-                    path
-                    == (
+                    path in {
                         "src/investment_orchestrator/mmi/"
-                        "raw_response_envelope.py"
-                    )
+                        "raw_response_envelope.py",
+                        "src/investment_orchestrator/mmi/"
+                        "raw_response_envelope_v2.py",
+                    }
                     and imported == "base64"
                 )
                 or (
@@ -220,6 +223,7 @@ def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -
     assert json_importers == (
         "src/investment_orchestrator/mmi/canonical.py",
         "src/investment_orchestrator/mmi/contracts.py",
+        "src/investment_orchestrator/mmi/grounded_prompt_v2.py",
         (
             "src/investment_orchestrator/mmi/"
             "validated_grounded_analysis_response.py"
@@ -304,9 +308,14 @@ def test_schema_helper_is_imported_by_exact_symbol_only() -> None:
         "src/investment_orchestrator/mmi/portfolio_projection.py",
         "src/investment_orchestrator/mmi/evidence_bundle.py",
         "src/investment_orchestrator/mmi/grounded_prompt.py",
+        "src/investment_orchestrator/mmi/grounded_prompt_v2.py",
         (
             "src/investment_orchestrator/mmi/"
             "raw_response_envelope.py"
+        ),
+        (
+            "src/investment_orchestrator/mmi/"
+            "raw_response_envelope_v2.py"
         ),
         (
             "src/investment_orchestrator/mmi/"
@@ -427,6 +436,52 @@ def test_mmi_modules_have_no_dynamic_execution_scan_or_write_capability() -> Non
         ), relative
 
 
+def test_v2_prompt_and_envelope_graph_is_exact_and_dormant() -> None:
+    inventory = ltetf._scan_production_inventory(repo_root())
+    imports_by_path = dict(inventory.imports_by_path)
+
+    def consumers(module: str) -> tuple[str, ...]:
+        return tuple(
+            path
+            for path, imports in imports_by_path.items()
+            if module in imports
+        )
+
+    assert consumers(
+        "investment_orchestrator.mmi.analyst_visible_evidence_view_v2"
+    ) == (
+        "src/investment_orchestrator/mmi/grounded_prompt_v2.py",
+    )
+    assert consumers(
+        "investment_orchestrator.mmi.grounded_prompt_v2"
+    ) == (
+        "src/investment_orchestrator/mmi/raw_response_envelope_v2.py",
+    )
+    assert consumers(
+        "investment_orchestrator.mmi.raw_response_envelope_v2"
+    ) == ()
+    assert consumers(
+        "investment_orchestrator.mmi.analyst_visible_evidence_view"
+    ) == (
+        "src/investment_orchestrator/mmi/grounded_prompt.py",
+    )
+    assert consumers(
+        "investment_orchestrator.mmi.grounded_prompt"
+    ) == (
+        "src/investment_orchestrator/mmi/raw_response_envelope.py",
+    )
+    assert consumers(
+        "investment_orchestrator.mmi.raw_response_envelope"
+    ) == (
+        "src/investment_orchestrator/mmi/"
+        "validated_grounded_analysis_response.py",
+    )
+    assert not any(
+        "validated_grounded_analysis_response_v2" in path
+        for path in inventory.production_paths
+    )
+
+
 def test_source_roles_resolve_only_exact_approved_inputs() -> None:
     assert {
         role: (
@@ -493,7 +548,7 @@ def test_reachable_schema_validation_call_graph_does_not_write(
 
 def test_ltetf_inventory_classification_is_unchanged_except_inventory_content() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
-    assert len(inventory.production_paths) == 135
+    assert len(inventory.production_paths) == 137
     assert inventory.dynamic_findings == ()
     assert inventory.observer_external_consumers == EXPECTED_EXTERNAL_CONSUMERS
     assert inventory.report_artifact_readers == ()

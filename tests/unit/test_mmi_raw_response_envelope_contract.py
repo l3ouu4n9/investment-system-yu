@@ -606,7 +606,7 @@ def test_r1b_contract_and_r1c_runtime_have_exact_phase_ownership() -> None:
     production_paths = tuple(
         sorted((root / "src/investment_orchestrator").rglob("*.py"))
     )
-    assert len(production_paths) == 135
+    assert len(production_paths) == 137
     relative = {
         path: path.relative_to(root).as_posix()
         for path in production_paths

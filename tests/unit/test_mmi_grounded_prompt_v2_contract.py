@@ -34,6 +34,22 @@ EXPECTED_FIELDS = {
     "prompt_text",
     "grounded_prompt_artifact_identity_sha256",
 }
+EXPECTED_IDENTITY_DOMAINS = {
+    b"mmi_source_record_v1\0",
+    b"mmi_universe_projection_v1\0",
+    b"mmi_policy_projection_v1\0",
+    b"mmi_portfolio_snapshot_projection_v1\0",
+    b"mmi_authenticated_evidence_bundle_v1\0",
+    b"mmi_analyst_visible_evidence_view_v1\0",
+    b"mmi_analyst_visible_evidence_view_v2\0",
+    b"mmi_grounded_prompt_context_binding_v1\0",
+    b"mmi_grounded_prompt_artifact_v1\0",
+    b"mmi_grounded_prompt_context_binding_v2\0",
+    b"mmi_grounded_prompt_artifact_v2\0",
+    b"mmi_raw_response_envelope_v1\0",
+    b"mmi_raw_response_envelope_v2\0",
+    b"mmi_validated_grounded_analysis_response_v1\0",
+}
 
 
 def _schema() -> dict[str, object]:
@@ -155,15 +171,17 @@ def test_schema_rejects_extension_and_authority_fields() -> None:
             validate_artifact_schema(candidate, schema_name=SCHEMA_NAME)
 
 
-def test_phase_has_no_g2_runtime_or_identity_domain() -> None:
+def test_h02b2_has_only_the_accepted_new_runtime_identity_domains() -> None:
     root = repo_root()
-    assert not (
+    assert (
         root / "src/investment_orchestrator/mmi/grounded_prompt_v2.py"
     ).exists()
     domains = _identity_domains()
-    assert len(domains) == len(set(domains)) == 11
-    assert b"mmi_grounded_prompt_context_binding_v2\0" not in domains
-    assert b"mmi_grounded_prompt_artifact_v2\0" not in domains
+    assert set(domains) == EXPECTED_IDENTITY_DOMAINS
+    assert len(domains) == len(set(domains)) == 14
+    assert (
+        b"mmi_validated_grounded_analysis_response_v2\0" not in domains
+    )
     assert mmi.__all__ == ()
 
 

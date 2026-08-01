@@ -33,8 +33,17 @@ _MMI_GROUNDED_PROMPT_CONTEXT_BINDING_DOMAIN: Final = (
 _MMI_GROUNDED_PROMPT_ARTIFACT_IDENTITY_DOMAIN: Final = (
     b"mmi_grounded_prompt_artifact_v1\0"
 )
+_MMI_GROUNDED_PROMPT_V2_CONTEXT_BINDING_DOMAIN: Final = (
+    b"mmi_grounded_prompt_context_binding_v2\0"
+)
+_MMI_GROUNDED_PROMPT_V2_ARTIFACT_IDENTITY_DOMAIN: Final = (
+    b"mmi_grounded_prompt_artifact_v2\0"
+)
 _MMI_RAW_RESPONSE_ENVELOPE_IDENTITY_DOMAIN: Final = (
     b"mmi_raw_response_envelope_v1\0"
+)
+_MMI_RAW_RESPONSE_ENVELOPE_V2_IDENTITY_DOMAIN: Final = (
+    b"mmi_raw_response_envelope_v2\0"
 )
 _MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_IDENTITY_DOMAIN: Final = (
     b"mmi_validated_grounded_analysis_response_v1\0"

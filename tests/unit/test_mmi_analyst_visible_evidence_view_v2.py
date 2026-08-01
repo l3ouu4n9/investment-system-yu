@@ -617,7 +617,7 @@ def test_no_authority_or_future_research_fields_enter_v2(
         assert forbidden not in serialized
 
 
-def test_v2_has_zero_production_consumers_and_no_side_effect_surface() -> None:
+def test_v2_has_exact_g2_consumer_and_no_side_effect_surface() -> None:
     root = repo_root()
     module_path = (
         root
@@ -692,19 +692,21 @@ def test_v2_has_zero_production_consumers_and_no_side_effect_surface() -> None:
             for node in ast.walk(candidate_tree)
         ):
             importers.append(path.relative_to(root).as_posix())
-    assert importers == []
+    assert importers == [
+        "src/investment_orchestrator/mmi/grounded_prompt_v2.py"
+    ]
 
 
 def test_inventory_and_persistent_identity_domain_counts_are_exact() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
-    assert len(inventory.production_paths) == 135
+    assert len(inventory.production_paths) == 137
     domains = {
         name: value
         for name, value in vars(canonical).items()
         if name.endswith("_DOMAIN")
         and type(value) is bytes
     }
-    assert len(domains) == len(set(domains.values())) == 11
+    assert len(domains) == len(set(domains.values())) == 14
     assert domains[
         "_MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_IDENTITY_DOMAIN"
     ] == IDENTITY_DOMAIN

@@ -466,6 +466,6 @@ def test_phase_has_no_r2c_runtime_r2b_artifact_or_identity_domain() -> None:
         root / "schemas/mmi_grounded_analysis_response_v2.schema.json"
     ).exists()
     domains = _identity_domains()
-    assert len(domains) == len(set(domains)) == 11
+    assert len(domains) == len(set(domains)) == 14
     assert b"mmi_validated_grounded_analysis_response_v2\0" not in domains
     assert mmi.__all__ == ()
