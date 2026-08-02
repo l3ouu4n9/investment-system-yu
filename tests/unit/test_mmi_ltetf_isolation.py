@@ -48,6 +48,10 @@ MMI_PRODUCTION_PATHS = (
     "src/investment_orchestrator/mmi/evidence_bundle.py",
     "src/investment_orchestrator/mmi/grounded_prompt.py",
     "src/investment_orchestrator/mmi/grounded_prompt_v2.py",
+    (
+        "src/investment_orchestrator/mmi/"
+        "legacy_step1_compatibility_candidate_v1.py"
+    ),
     "src/investment_orchestrator/mmi/policy_projection.py",
     "src/investment_orchestrator/mmi/portfolio_projection.py",
     "src/investment_orchestrator/mmi/raw_response_envelope.py",
@@ -319,6 +323,10 @@ def test_schema_helper_is_imported_by_exact_symbol_only() -> None:
         "src/investment_orchestrator/mmi/grounded_prompt_v2.py",
         (
             "src/investment_orchestrator/mmi/"
+            "legacy_step1_compatibility_candidate_v1.py"
+        ),
+        (
+            "src/investment_orchestrator/mmi/"
             "raw_response_envelope.py"
         ),
         (
@@ -463,6 +471,8 @@ def test_v2_prompt_envelope_and_response_graph_is_exact_and_dormant() -> None:
         "investment_orchestrator.mmi.analyst_visible_evidence_view_v2"
     ) == (
         "src/investment_orchestrator/mmi/grounded_prompt_v2.py",
+        "src/investment_orchestrator/mmi/"
+        "legacy_step1_compatibility_candidate_v1.py",
     )
     assert consumers(
         "investment_orchestrator.mmi.grounded_prompt_v2"
@@ -478,6 +488,13 @@ def test_v2_prompt_envelope_and_response_graph_is_exact_and_dormant() -> None:
     assert consumers(
         "investment_orchestrator.mmi."
         "validated_grounded_analysis_response_v2"
+    ) == (
+        "src/investment_orchestrator/mmi/"
+        "legacy_step1_compatibility_candidate_v1.py",
+    )
+    assert consumers(
+        "investment_orchestrator.mmi."
+        "legacy_step1_compatibility_candidate_v1"
     ) == ()
     assert consumers(
         "investment_orchestrator.mmi.analyst_visible_evidence_view"
@@ -568,7 +585,7 @@ def test_reachable_schema_validation_call_graph_does_not_write(
 
 def test_ltetf_inventory_classification_is_unchanged_except_inventory_content() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
-    assert len(inventory.production_paths) == 138
+    assert len(inventory.production_paths) == 139
     assert inventory.dynamic_findings == ()
     assert inventory.observer_external_consumers == EXPECTED_EXTERNAL_CONSUMERS
     assert inventory.report_artifact_readers == ()

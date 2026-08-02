@@ -2341,7 +2341,7 @@ def test_view_module_has_exact_grounded_prompt_consumer() -> None:
     assert importers == [
         "src/investment_orchestrator/mmi/grounded_prompt.py",
     ]
-    assert len(production_paths) == 138
+    assert len(production_paths) == 139
 
 
 def test_normal_build_and_validation_do_not_change_upstream_inputs(

@@ -50,6 +50,7 @@ EXPECTED_IDENTITY_DOMAINS = {
     b"mmi_raw_response_envelope_v2\0",
     b"mmi_validated_grounded_analysis_response_v1\0",
     b"mmi_validated_grounded_analysis_response_v2\0",
+    b"mmi_legacy_step1_compatibility_candidate_v1\0",
 }
 
 
@@ -179,18 +180,19 @@ def test_h02c_has_only_the_accepted_runtime_identity_domains() -> None:
     ).exists()
     domains = _identity_domains()
     assert set(domains) == EXPECTED_IDENTITY_DOMAINS
-    assert len(domains) == len(set(domains)) == 15
+    assert len(domains) == len(set(domains)) == 16
     assert b"mmi_validated_grounded_analysis_response_v2\0" in domains
     assert mmi.__all__ == ()
 
 
 def test_schema_inventory_includes_only_the_three_dormant_v2_additions() -> None:
     schema_paths = tuple(sorted((repo_root() / "schemas").glob("*.schema.json")))
-    assert len(schema_paths) == 39
+    assert len(schema_paths) == 40
     assert {path.name for path in schema_paths} >= {
         "mmi_grounded_prompt_v2.schema.json",
         "mmi_raw_response_envelope_v2.schema.json",
         "mmi_validated_grounded_analysis_response_v2.schema.json",
+        "mmi_legacy_step1_compatibility_candidate_v1.schema.json",
     }
     assert not (
         repo_root() / "schemas/mmi_grounded_analysis_response_v2.schema.json"
