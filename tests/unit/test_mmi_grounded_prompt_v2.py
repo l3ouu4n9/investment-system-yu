@@ -620,5 +620,22 @@ def test_g2_artifact_has_no_transport_or_authority_shaped_fields(
         "order",
         "execution",
     }
+    module_source = inspect.getsource(g2)
+    assert "_MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_IDENTITY_DOMAIN" not in (
+        module_source
+    )
+    assert "MAXIMUM_ANALYST_VISIBLE_EVIDENCE_VIEW_CANONICAL_BYTES" not in (
+        module_source
+    )
+    assert "MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_SCHEMA_VERSION" not in (
+        module_source
+    )
+    assert "MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_ARTIFACT_KIND" not in (
+        module_source
+    )
+    assert (
+        "MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_RESEARCH_COMPONENT_STATUSES"
+        not in module_source
+    )
     assert mmi.__all__ == ()
     assert not hasattr(mmi, "build_mmi_grounded_prompt_v2")

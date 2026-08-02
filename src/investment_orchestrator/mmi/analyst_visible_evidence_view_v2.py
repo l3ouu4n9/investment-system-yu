@@ -947,12 +947,6 @@ def _validate_derived_view(view: dict[str, object]) -> None:
         raise _ViewContractFailure(_DERIVED_SCHEMA_FAILURE) from None
     try:
         expected_identity = _v2_identity_sha256(view)
-        canonical_json_bytes(
-            view,
-            maximum_bytes=(
-                MAXIMUM_ANALYST_VISIBLE_EVIDENCE_VIEW_CANONICAL_BYTES
-            ),
-        )
     except MmiCanonicalizationError:
         raise _ViewContractFailure(_VIEW_IDENTITY_FAILURE) from None
     if (
@@ -987,6 +981,53 @@ def _source_bound_expected_view(
     )
     _validate_derived_view(view)
     return view
+
+
+def _validated_analyst_visible_evidence_view_v2_context(
+    *,
+    value: Mapping[str, object],
+    evidence_bundle: Mapping[str, object],
+    policy_projection: Mapping[str, object],
+    policy_source: MmiCapturedSource,
+    portfolio_projection: Mapping[str, object] | None,
+    portfolio_source: MmiCapturedSource | None,
+    run_context: MmiProjectionRunContext,
+) -> dict[str, object]:
+    """Return one stable candidate proven equal to its trusted sources."""
+    try:
+        candidate = _snapshot_mapping(value)
+    except _ViewBlocked:
+        raise _ViewBlocked(_CANDIDATE_SCHEMA_FAILURE) from None
+
+    evidence_snapshot = _snapshot_mapping(evidence_bundle)
+    policy_snapshot = _snapshot_mapping(policy_projection)
+    portfolio_snapshot = (
+        None
+        if portfolio_projection is None
+        else _snapshot_mapping(portfolio_projection)
+    )
+    expected = _source_bound_expected_view(
+        evidence_bundle=evidence_snapshot,
+        policy_projection=policy_snapshot,
+        policy_source=policy_source,
+        portfolio_projection=portfolio_snapshot,
+        portfolio_source=portfolio_source,
+        run_context=run_context,
+    )
+
+    try:
+        validate_artifact_schema(candidate, schema_name=_SCHEMA_NAME)
+    except Exception:
+        raise _ViewBlocked(_CANDIDATE_SCHEMA_FAILURE) from None
+    try:
+        expected_identity = _v2_identity_sha256(candidate)
+    except MmiCanonicalizationError:
+        raise _ViewContractFailure(_VIEW_IDENTITY_FAILURE) from None
+    if candidate.get(_IDENTITY_FIELD) != expected_identity:
+        raise _ViewContractFailure(_VIEW_IDENTITY_FAILURE)
+    if candidate != expected:
+        raise _ViewContractFailure(_SOURCE_FIDELITY_MISMATCH)
+    return candidate
 
 
 def build_mmi_analyst_visible_evidence_view_v2(
@@ -1060,25 +1101,12 @@ def validate_mmi_analyst_visible_evidence_view_v2(
 ) -> MmiPolicyProjectionValidationResult:
     """Validate a V2 candidate against exact same-run trusted inputs."""
     try:
-        candidate = _snapshot_mapping(value)
-    except _ViewBlocked:
-        return _validation_result(
-            MmiProjectionResultCategory.PROJECTION_BLOCKED,
-            _CANDIDATE_SCHEMA_FAILURE,
-        )
-    try:
-        evidence_snapshot = _snapshot_mapping(evidence_bundle)
-        policy_snapshot = _snapshot_mapping(policy_projection)
-        portfolio_snapshot = (
-            None
-            if portfolio_projection is None
-            else _snapshot_mapping(portfolio_projection)
-        )
-        expected = _source_bound_expected_view(
-            evidence_bundle=evidence_snapshot,
-            policy_projection=policy_snapshot,
+        _validated_analyst_visible_evidence_view_v2_context(
+            value=value,
+            evidence_bundle=evidence_bundle,
+            policy_projection=policy_projection,
             policy_source=policy_source,
-            portfolio_projection=portfolio_snapshot,
+            portfolio_projection=portfolio_projection,
             portfolio_source=portfolio_source,
             run_context=run_context,
         )
@@ -1096,42 +1124,6 @@ def validate_mmi_analyst_visible_evidence_view_v2(
         return _validation_result(
             MmiProjectionResultCategory.PROJECTION_CONTRACT_FAILURE,
             _INTERNAL_CONTRACT_FAILURE,
-        )
-
-    try:
-        validate_artifact_schema(candidate, schema_name=_SCHEMA_NAME)
-    except Exception:
-        return _validation_result(
-            MmiProjectionResultCategory.PROJECTION_BLOCKED,
-            _CANDIDATE_SCHEMA_FAILURE,
-        )
-    try:
-        expected_identity = _v2_identity_sha256(candidate)
-        canonical_json_bytes(
-            candidate,
-            maximum_bytes=(
-                MAXIMUM_ANALYST_VISIBLE_EVIDENCE_VIEW_CANONICAL_BYTES
-            ),
-        )
-    except MmiCanonicalizationError:
-        return _validation_result(
-            MmiProjectionResultCategory.PROJECTION_CONTRACT_FAILURE,
-            _VIEW_IDENTITY_FAILURE,
-        )
-    if (
-        candidate.get(
-            "analyst_visible_evidence_view_identity_sha256"
-        )
-        != expected_identity
-    ):
-        return _validation_result(
-            MmiProjectionResultCategory.PROJECTION_CONTRACT_FAILURE,
-            _VIEW_IDENTITY_FAILURE,
-        )
-    if candidate != expected:
-        return _validation_result(
-            MmiProjectionResultCategory.PROJECTION_CONTRACT_FAILURE,
-            _SOURCE_FIDELITY_MISMATCH,
         )
     return _validation_result(
         MmiProjectionResultCategory.PROJECTION_VALID_WITH_GAPS

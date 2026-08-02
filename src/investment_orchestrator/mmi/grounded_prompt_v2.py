@@ -10,18 +10,13 @@ from investment_orchestrator.common.schema_validation import (
     validate_artifact_schema,
 )
 from investment_orchestrator.mmi.analyst_visible_evidence_view_v2 import (
-    MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_ARTIFACT_KIND,
-    MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_RESEARCH_COMPONENT_STATUSES,
-    MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_SCHEMA_VERSION,
+    _validated_analyst_visible_evidence_view_v2_context,
     build_mmi_analyst_visible_evidence_view_v2,
-    validate_mmi_analyst_visible_evidence_view_v2,
 )
 from investment_orchestrator.mmi.canonical import (
-    MAXIMUM_ANALYST_VISIBLE_EVIDENCE_VIEW_CANONICAL_BYTES,
     MAXIMUM_CANONICAL_JSON_BYTES,
     MAXIMUM_GROUNDED_PROMPT_TEXT_BYTES,
     MmiCanonicalizationError,
-    _MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_IDENTITY_DOMAIN,
     _MMI_GROUNDED_PROMPT_V2_ARTIFACT_IDENTITY_DOMAIN,
     _MMI_GROUNDED_PROMPT_V2_CONTEXT_BINDING_DOMAIN,
     canonical_json_bytes,
@@ -47,9 +42,6 @@ __all__ = (
     "validate_mmi_grounded_prompt_v2",
 )
 
-_VIEW_SCHEMA_NAME: Final = (
-    "mmi_analyst_visible_evidence_view_v2.schema.json"
-)
 _PROMPT_SCHEMA_NAME: Final = "mmi_grounded_prompt_v2.schema.json"
 _VIEW_IDENTITY_FIELD: Final = (
     "analyst_visible_evidence_view_identity_sha256"
@@ -258,51 +250,8 @@ def _snapshot_mapping(value: object) -> dict[str, object]:
     return snapshot
 
 
-def _validated_view_snapshot(value: object) -> dict[str, object]:
-    view = _snapshot_mapping(value)
-    try:
-        validate_artifact_schema(view, schema_name=_VIEW_SCHEMA_NAME)
-    except Exception:
-        _fail("MMI_GROUNDED_PROMPT_V2_VIEW_SCHEMA_INVALID")
-    if (
-        view.get("schema_version")
-        != MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_SCHEMA_VERSION
-        or view.get("artifact_kind")
-        != MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_ARTIFACT_KIND
-        or view.get("report_only") is not True
-        or view.get("authority_effect") != AUTHORITY_EFFECT_NONE
-        or view.get("research_component_statuses")
-        != dict(
-            MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_RESEARCH_COMPONENT_STATUSES
-        )
-    ):
-        _fail("MMI_GROUNDED_PROMPT_V2_VIEW_CONTRACT_INVALID")
-    try:
-        canonical_json_bytes(
-            view,
-            maximum_bytes=(
-                MAXIMUM_ANALYST_VISIBLE_EVIDENCE_VIEW_CANONICAL_BYTES
-            ),
-        )
-        expected_identity = record_identity_sha256(
-            view,
-            identity_field=_VIEW_IDENTITY_FIELD,
-            domain=(
-                _MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_IDENTITY_DOMAIN
-            ),
-            maximum_bytes=(
-                MAXIMUM_ANALYST_VISIBLE_EVIDENCE_VIEW_CANONICAL_BYTES
-            ),
-        )
-    except MmiCanonicalizationError:
-        _fail("MMI_GROUNDED_PROMPT_V2_VIEW_CONTRACT_INVALID")
-    if view.get(_VIEW_IDENTITY_FIELD) != expected_identity:
-        _fail("MMI_GROUNDED_PROMPT_V2_VIEW_IDENTITY_INVALID")
-    return view
-
-
-def _require_source_bound_view(
-    view: dict[str, object],
+def _source_bound_view_snapshot(
+    value: Mapping[str, object],
     *,
     evidence_bundle: Mapping[str, object],
     policy_projection: Mapping[str, object],
@@ -312,8 +261,8 @@ def _require_source_bound_view(
     run_context: MmiProjectionRunContext,
 ) -> dict[str, object]:
     try:
-        result = validate_mmi_analyst_visible_evidence_view_v2(
-            value=view,
+        return _validated_analyst_visible_evidence_view_v2_context(
+            value=value,
             evidence_bundle=evidence_bundle,
             policy_projection=policy_projection,
             policy_source=policy_source,
@@ -321,16 +270,8 @@ def _require_source_bound_view(
             portfolio_source=portfolio_source,
             run_context=run_context,
         )
-        valid = (
-            result.status
-            is MmiProjectionResultCategory.PROJECTION_VALID_WITH_GAPS
-            and result.authority_effect == AUTHORITY_EFFECT_NONE
-        )
     except Exception:
         _fail("MMI_GROUNDED_PROMPT_V2_VIEW_SOURCE_FIDELITY_INVALID")
-    if not valid:
-        _fail("MMI_GROUNDED_PROMPT_V2_VIEW_SOURCE_FIDELITY_INVALID")
-    return view
 
 
 def _context_from_artifact(
@@ -377,9 +318,6 @@ def _render_prompt_text(
     try:
         evidence_bytes = canonical_json_bytes(
             view,
-            maximum_bytes=(
-                MAXIMUM_ANALYST_VISIBLE_EVIDENCE_VIEW_CANONICAL_BYTES
-            ),
         )
         evidence_text = evidence_bytes.decode("utf-8")
     except (MmiCanonicalizationError, UnicodeDecodeError):
@@ -459,19 +397,15 @@ def _embedded_view_from_prompt(
         )
     except (UnicodeDecodeError, ValueError):
         _fail("MMI_GROUNDED_PROMPT_V2_TEXT_INVALID")
-    view = _validated_view_snapshot(parsed)
     try:
-        canonical = canonical_json_bytes(
-            view,
-            maximum_bytes=(
-                MAXIMUM_ANALYST_VISIBLE_EVIDENCE_VIEW_CANONICAL_BYTES
-            ),
-        )
+        canonical = canonical_json_bytes(parsed)
     except MmiCanonicalizationError:
         _fail("MMI_GROUNDED_PROMPT_V2_TEXT_INVALID")
     if canonical != evidence_bytes:
         _fail("MMI_GROUNDED_PROMPT_V2_TEXT_INVALID")
-    return view
+    if not isinstance(parsed, Mapping):
+        _fail("MMI_GROUNDED_PROMPT_V2_TEXT_INVALID")
+    return dict(parsed)
 
 
 def _validated_grounded_prompt_snapshot(
@@ -515,12 +449,12 @@ def _validated_grounded_prompt_snapshot(
     prompt_text = artifact.get("prompt_text")
     if type(prompt_text) is not str:
         _fail("MMI_GROUNDED_PROMPT_V2_TEXT_INVALID")
-    embedded_view = _embedded_view_from_prompt(
+    embedded_candidate = _embedded_view_from_prompt(
         prompt_text=prompt_text,
         context_binding=expected_context_binding,
     )
-    _require_source_bound_view(
-        embedded_view,
+    embedded_view = _source_bound_view_snapshot(
+        embedded_candidate,
         evidence_bundle=evidence_bundle,
         policy_projection=policy_projection,
         policy_source=policy_source,
@@ -550,9 +484,8 @@ def build_mmi_grounded_prompt_v2(
     run_context: MmiProjectionRunContext,
 ) -> dict[str, object]:
     """Build one deterministic, in-memory, report-only G2 artifact."""
-    view = _validated_view_snapshot(analyst_visible_evidence_view)
-    _require_source_bound_view(
-        view,
+    view = _source_bound_view_snapshot(
+        analyst_visible_evidence_view,
         evidence_bundle=evidence_bundle,
         policy_projection=policy_projection,
         policy_source=policy_source,
@@ -636,7 +569,15 @@ def _build_source_bound_grounded_prompt_v2(
         )
         if not valid:
             _fail("MMI_GROUNDED_PROMPT_V2_VIEW_SOURCE_FIDELITY_INVALID")
-        view = _validated_view_snapshot(result.projection)
+        view = _source_bound_view_snapshot(
+            result.projection,
+            evidence_bundle=evidence_bundle,
+            policy_projection=policy_projection,
+            policy_source=policy_source,
+            portfolio_projection=portfolio_projection,
+            portfolio_source=portfolio_source,
+            run_context=run_context,
+        )
         prompt = build_mmi_grounded_prompt_v2(
             analyst_visible_evidence_view=view,
             evidence_bundle=evidence_bundle,
