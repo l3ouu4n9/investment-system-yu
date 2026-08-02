@@ -66,6 +66,10 @@ MMI_PRODUCTION_PATHS = (
         "validated_grounded_analysis_response_v2.py"
     ),
 )
+H2_COMPARISON_REPORT_RELATIVE_PATH = (
+    "src/investment_orchestrator/offline/"
+    "mmi_legacy_step1_comparison_report_v1.py"
+)
 EXPECTED_EXTERNAL_CONSUMERS = (
     "src/investment_orchestrator/cli/observe_ltetf_target_architecture_gaps.py",
     "src/investment_orchestrator/cli/weekly_shadow_01_report_publisher_cli.py",
@@ -242,13 +246,42 @@ def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -
         ),
     )
 
-    for path, imports in inventory.imports_by_path:
-        if path not in MMI_PRODUCTION_PATHS:
-            assert not any(
-                imported == "investment_orchestrator.mmi"
-                or imported.startswith("investment_orchestrator.mmi.")
-                for imported in imports
-            )
+    external_mmi_readers = tuple(
+        path
+        for path, imports in inventory.imports_by_path
+        if path not in MMI_PRODUCTION_PATHS
+        and any(
+            imported == "investment_orchestrator.mmi"
+            or imported.startswith("investment_orchestrator.mmi.")
+            for imported in imports
+        )
+    )
+    # The dormant offline H2 comparison report is the only production module
+    # outside the MMI package that may read MMI, and it reads exactly the
+    # committed H1 candidate owner plus the shared canonical / contract
+    # constants. It is report-only and is itself imported by nothing.
+    assert external_mmi_readers == (H2_COMPARISON_REPORT_RELATIVE_PATH,)
+    assert {
+        imported
+        for imported in imports_by_path[H2_COMPARISON_REPORT_RELATIVE_PATH]
+        if imported.startswith("investment_orchestrator.mmi")
+    } == {
+        "investment_orchestrator.mmi.canonical",
+        "investment_orchestrator.mmi.canonical."
+        "MAX_MMI_LEGACY_STEP1_COMPARISON_REPORT_V1_CANONICAL_BYTES",
+        "investment_orchestrator.mmi.canonical.MmiCanonicalizationError",
+        "investment_orchestrator.mmi.canonical."
+        "_MMI_LEGACY_STEP1_COMPARISON_REPORT_V1_IDENTITY_DOMAIN",
+        "investment_orchestrator.mmi.canonical.canonical_json_bytes",
+        "investment_orchestrator.mmi.canonical.record_identity_sha256",
+        "investment_orchestrator.mmi.contracts",
+        "investment_orchestrator.mmi.contracts.AUTHORITY_EFFECT_NONE",
+        "investment_orchestrator.mmi.legacy_step1_compatibility_candidate_v1",
+        "investment_orchestrator.mmi.legacy_step1_compatibility_candidate_v1."
+        "MmiLegacyStep1CompatibilityCandidateV1Error",
+        "investment_orchestrator.mmi.legacy_step1_compatibility_candidate_v1."
+        "validate_mmi_legacy_step1_compatibility_candidate_v1",
+    }
 
 
 def test_ctypes_authority_is_exactly_source_capture_openat2_only() -> None:
@@ -492,9 +525,14 @@ def test_v2_prompt_envelope_and_response_graph_is_exact_and_dormant() -> None:
         "src/investment_orchestrator/mmi/"
         "legacy_step1_compatibility_candidate_v1.py",
     )
+    # H2b: the H1 candidate gained exactly one inert, report-only consumer.
     assert consumers(
         "investment_orchestrator.mmi."
         "legacy_step1_compatibility_candidate_v1"
+    ) == (H2_COMPARISON_REPORT_RELATIVE_PATH,)
+    assert consumers(
+        "investment_orchestrator.offline."
+        "mmi_legacy_step1_comparison_report_v1"
     ) == ()
     assert consumers(
         "investment_orchestrator.mmi.analyst_visible_evidence_view"
@@ -585,7 +623,7 @@ def test_reachable_schema_validation_call_graph_does_not_write(
 
 def test_ltetf_inventory_classification_is_unchanged_except_inventory_content() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
-    assert len(inventory.production_paths) == 139
+    assert len(inventory.production_paths) == 140
     assert inventory.dynamic_findings == ()
     assert inventory.observer_external_consumers == EXPECTED_EXTERNAL_CONSUMERS
     assert inventory.report_artifact_readers == ()

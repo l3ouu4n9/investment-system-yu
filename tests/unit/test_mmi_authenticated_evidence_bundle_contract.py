@@ -1055,7 +1055,7 @@ def test_e1b_contract_and_e1c_runtime_have_exact_phase_ownership() -> None:
     root = repo_root()
     production_root = root / "src/investment_orchestrator"
     production_paths = tuple(sorted(production_root.rglob("*.py")))
-    assert len(production_paths) == 139
+    assert len(production_paths) == 140
 
     mmi_paths = tuple(
         sorted(

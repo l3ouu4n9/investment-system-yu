@@ -1,0 +1,939 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-system.local/schemas/mmi_legacy_step1_comparison_report_v1.schema.json",
+  "title": "MMI legacy Step 1 deterministic comparison report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "comparison_contract_version",
+    "report_only",
+    "authority_effect",
+    "provenance",
+    "legacy_contract_status",
+    "instrument_comparison",
+    "coverage_comparison",
+    "limitations",
+    "comparison_summary",
+    "comparison_report_identity_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mmi_legacy_step1_comparison_report_v1"
+    },
+    "artifact_kind": {
+      "const": "MMI_LEGACY_STEP1_COMPARISON_REPORT"
+    },
+    "comparison_contract_version": {
+      "const": "mmi_legacy_step1_comparison_compiler_v1"
+    },
+    "report_only": {
+      "const": true
+    },
+    "authority_effect": {
+      "const": "NONE"
+    },
+    "provenance": {
+      "$ref": "#/$defs/provenance"
+    },
+    "legacy_contract_status": {
+      "$ref": "#/$defs/legacy_contract_status"
+    },
+    "instrument_comparison": {
+      "$ref": "#/$defs/instrument_comparison"
+    },
+    "coverage_comparison": {
+      "$ref": "#/$defs/coverage_comparison"
+    },
+    "limitations": {
+      "$ref": "#/$defs/limitations"
+    },
+    "comparison_summary": {
+      "$ref": "#/$defs/comparison_summary"
+    },
+    "comparison_report_identity_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "nullable_sha256": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/sha256"
+        }
+      ]
+    },
+    "h1_ticker": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9.-]{0,15}$"
+    },
+    "legacy_ticker": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32
+    },
+    "legacy_role_layer": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "instrument_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 256
+    },
+    "nullable_count": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/count"
+        }
+      ]
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "legacy_step1_compatibility_candidate_identity_sha256",
+        "legacy_raw_bytes_sha256",
+        "legacy_parsed_payload_canonical_sha256",
+        "legacy_normalized_candidate_canonical_sha256",
+        "legacy_strategy_settings_canonical_sha256"
+      ],
+      "properties": {
+        "legacy_step1_compatibility_candidate_identity_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "legacy_raw_bytes_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "legacy_parsed_payload_canonical_sha256": {
+          "$ref": "#/$defs/nullable_sha256"
+        },
+        "legacy_normalized_candidate_canonical_sha256": {
+          "$ref": "#/$defs/nullable_sha256"
+        },
+        "legacy_strategy_settings_canonical_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "legacy_contract_status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "raw_parse_status",
+        "strict_handoff_status",
+        "strict_handoff_blocker_count",
+        "legacy_source_shape",
+        "legacy_self_reported_validation_passed"
+      ],
+      "properties": {
+        "raw_parse_status": {
+          "enum": [
+            "PARSED",
+            "LEGACY_PARSE_FAILURE",
+            "LEGACY_SCHEMA_FAILURE"
+          ]
+        },
+        "strict_handoff_status": {
+          "enum": [
+            "STRICT_HANDOFF_VALID",
+            "LEGACY_HANDOFF_CONTRACT_FAILURE",
+            "NOT_EVALUATED"
+          ]
+        },
+        "strict_handoff_blocker_count": {
+          "$ref": "#/$defs/nullable_count"
+        },
+        "legacy_source_shape": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "enum": [
+                "strict",
+                "wrapped_RESEARCH_JSON",
+                "legacy_structured",
+                "narrative_lanes",
+                "unknown"
+              ]
+            }
+          ]
+        },
+        "legacy_self_reported_validation_passed": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "strict_handoff_status": {
+                "const": "NOT_EVALUATED"
+              }
+            },
+            "required": [
+              "strict_handoff_status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "strict_handoff_blocker_count": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "strict_handoff_blocker_count": {
+                "$ref": "#/$defs/count"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "raw_parse_status": {
+                "const": "PARSED"
+              }
+            },
+            "required": [
+              "raw_parse_status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "legacy_source_shape": {
+                "type": "string"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "legacy_source_shape": {
+                "type": "null"
+              },
+              "strict_handoff_status": {
+                "const": "NOT_EVALUATED"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "instrument_comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "comparison_basis",
+        "h1_instrument_count",
+        "h1_policy_roles_present",
+        "legacy_instrument_count",
+        "shared_instrument_count",
+        "membership_equal",
+        "shared_sequence_equal",
+        "h1_only_tickers",
+        "legacy_only_tickers",
+        "legacy_duplicate_tickers",
+        "legacy_role_layers_present"
+      ],
+      "properties": {
+        "comparison_basis": {
+          "enum": [
+            "STRICT_VALID",
+            "STRICT_INVALID_BUT_STRUCTURALLY_READABLE",
+            "UNAVAILABLE_PARSE_FAILURE",
+            "UNAVAILABLE_SCHEMA_FAILURE",
+            "UNAVAILABLE_SCORECARD_SHAPE"
+          ]
+        },
+        "h1_instrument_count": {
+          "$ref": "#/$defs/instrument_count"
+        },
+        "h1_policy_roles_present": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "APPROVED_EXTENDED",
+              "CORE",
+              "SATELLITE"
+            ]
+          }
+        },
+        "legacy_instrument_count": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/instrument_count"
+            }
+          ]
+        },
+        "shared_instrument_count": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/instrument_count"
+            }
+          ]
+        },
+        "membership_equal": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
+        },
+        "shared_sequence_equal": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
+        },
+        "h1_only_tickers": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "minItems": 0,
+              "maxItems": 256,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/h1_ticker"
+              }
+            }
+          ]
+        },
+        "legacy_only_tickers": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "minItems": 0,
+              "maxItems": 256,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/legacy_ticker"
+              }
+            }
+          ]
+        },
+        "legacy_duplicate_tickers": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "minItems": 0,
+              "maxItems": 256,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/legacy_ticker"
+              }
+            }
+          ]
+        },
+        "legacy_role_layers_present": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "minItems": 0,
+              "maxItems": 16,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/legacy_role_layer"
+              }
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "comparison_basis": {
+                "enum": [
+                  "STRICT_VALID",
+                  "STRICT_INVALID_BUT_STRUCTURALLY_READABLE"
+                ]
+              }
+            },
+            "required": [
+              "comparison_basis"
+            ]
+          },
+          "then": {
+            "properties": {
+              "legacy_instrument_count": {
+                "$ref": "#/$defs/instrument_count"
+              },
+              "shared_instrument_count": {
+                "$ref": "#/$defs/instrument_count"
+              },
+              "membership_equal": {
+                "type": "boolean"
+              },
+              "shared_sequence_equal": {
+                "type": "boolean"
+              },
+              "h1_only_tickers": {
+                "type": "array"
+              },
+              "legacy_only_tickers": {
+                "type": "array"
+              },
+              "legacy_duplicate_tickers": {
+                "type": "array"
+              },
+              "legacy_role_layers_present": {
+                "type": "array"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "legacy_instrument_count": {
+                "type": "null"
+              },
+              "shared_instrument_count": {
+                "type": "null"
+              },
+              "membership_equal": {
+                "type": "null"
+              },
+              "shared_sequence_equal": {
+                "type": "null"
+              },
+              "h1_only_tickers": {
+                "type": "null"
+              },
+              "legacy_only_tickers": {
+                "type": "null"
+              },
+              "legacy_duplicate_tickers": {
+                "type": "null"
+              },
+              "legacy_role_layers_present": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "coverage_row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "category",
+        "h1_status",
+        "legacy_status",
+        "comparison_class",
+        "h1_count",
+        "legacy_count",
+        "legacy_consumer_class"
+      ],
+      "properties": {
+        "category": {
+          "enum": [
+            "INSTRUMENT_RATIONALE",
+            "INSTRUMENT_REFERENCES",
+            "EVIDENCE_OBSERVATIONS",
+            "RISKS",
+            "UNCERTAINTIES",
+            "CONTRADICTIONS",
+            "RESEARCH_QUESTIONS",
+            "SUMMARY",
+            "ANCHOR_ASSOCIATIONS",
+            "SCHEDULED_EVENTS",
+            "REGIME_INPUTS",
+            "TARGET_WEIGHTS",
+            "STRUCTURAL_THEMES",
+            "TOP_FIVE_NEXT_WEEK",
+            "EXTENDED_ETF_SLEEVE_FIELDS"
+          ]
+        },
+        "h1_status": {
+          "enum": [
+            "PRESENT",
+            "ABSENT",
+            "EXPLICITLY_UNAVAILABLE_TIER_A",
+            "POLICY_METHOD_ABSENT",
+            "NOT_REPRESENTED"
+          ]
+        },
+        "legacy_status": {
+          "enum": [
+            "PRESENT",
+            "ABSENT",
+            "NOT_REPRESENTED",
+            "UNAVAILABLE_DUE_TO_LEGACY_CONTRACT"
+          ]
+        },
+        "comparison_class": {
+          "enum": [
+            "AVAILABLE_IN_BOTH",
+            "AVAILABLE_ONLY_IN_H1",
+            "AVAILABLE_ONLY_IN_LEGACY",
+            "AVAILABLE_IN_NEITHER",
+            "NOT_COMPARABLE"
+          ]
+        },
+        "h1_count": {
+          "$ref": "#/$defs/nullable_count"
+        },
+        "legacy_count": {
+          "$ref": "#/$defs/nullable_count"
+        },
+        "legacy_consumer_class": {
+          "enum": [
+            "DETERMINISTIC_CONSUMER_PRESENT",
+            "PROMPT_ONLY",
+            "NO_CONSUMER"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "legacy_status": {
+                "const": "UNAVAILABLE_DUE_TO_LEGACY_CONTRACT"
+              }
+            },
+            "required": [
+              "legacy_status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "legacy_count": {
+                "type": "null"
+              },
+              "comparison_class": {
+                "const": "NOT_COMPARABLE"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "comparison_class": {
+                "enum": [
+                  "AVAILABLE_IN_BOTH",
+                  "AVAILABLE_ONLY_IN_H1",
+                  "AVAILABLE_ONLY_IN_LEGACY",
+                  "AVAILABLE_IN_NEITHER"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "legacy_status": {
+                "const": "NOT_REPRESENTED"
+              }
+            },
+            "required": [
+              "legacy_status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "legacy_count": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "h1_status": {
+                "enum": [
+                  "PRESENT",
+                  "ABSENT"
+                ]
+              }
+            },
+            "required": [
+              "h1_status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "h1_count": {
+                "$ref": "#/$defs/count"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "h1_count": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "coverage_comparison": {
+      "type": "array",
+      "minItems": 15,
+      "maxItems": 15,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/coverage_row"
+            },
+            {
+              "properties": {
+                "category": {
+                  "const": "INSTRUMENT_RATIONALE"
+                }
+              },
+              "required": [
+                "category"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/coverage_row"
+            },
+            {
+              "properties": {
+                "category": {
+                  "const": "INSTRUMENT_REFERENCES"
+                }
+              },
+              "required": [
+                "category"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/coverage_row"
+            },
+            {
+              "properties": {
+                "category": {
+                  "const": "EVIDENCE_OBSERVATIONS"
+                }
+              },
+              "required": [
+                "category"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/coverage_row"
+            },
+            {
+              "properties": {
+                "category": {
+                  "const": "RISKS"
+                }
+              },
+              "required": [
+                "category"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/coverage_row"
+            },
+            {
+              "properties": {
+                "category": {
+                  "const": "UNCERTAINTIES"
+                }
+              },
+              "required": [
+                "category"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/coverage_row"
+            },
+            {
+              "properties": {
+                "category": {
+                  "const": "CONTRADICTIONS"
+                }
+              },
+              "required": [
+                "category"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/coverage_row"
+            },
+            {
+              "properties": {
+                "category": {
+                  "const": "RESEARCH_QUESTIONS"
+                }
+              },
+              "required": [
+                "category"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/coverage_row"
+            },
+            {
+              "properties": {
+                "category": {
+                  "const": "SUMMARY"
+                }
+              },
+              "required": [
+                "category"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/coverage_row"
+            },
+            {
+              "properties": {
+                "category": {
+                  "const": "ANCHOR_ASSOCIATIONS"
+                }
+              },
+              "required": [
+                "category"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/coverage_row"
+            },
+            {
+              "properties": {
+                "category": {
+                  "const": "SCHEDULED_EVENTS"
+                }
+              },
+              "required": [
+                "category"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/coverage_row"
+            },
+            {
+              "properties": {
+                "category": {
+                  "const": "REGIME_INPUTS"
+                }
+              },
+              "required": [
+                "category"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/coverage_row"
+            },
+            {
+              "properties": {
+                "category": {
+                  "const": "TARGET_WEIGHTS"
+                }
+              },
+              "required": [
+                "category"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/coverage_row"
+            },
+            {
+              "properties": {
+                "category": {
+                  "const": "STRUCTURAL_THEMES"
+                }
+              },
+              "required": [
+                "category"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/coverage_row"
+            },
+            {
+              "properties": {
+                "category": {
+                  "const": "TOP_FIVE_NEXT_WEEK"
+                }
+              },
+              "required": [
+                "category"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/coverage_row"
+            },
+            {
+              "properties": {
+                "category": {
+                  "const": "EXTENDED_ETF_SLEEVE_FIELDS"
+                }
+              },
+              "required": [
+                "category"
+              ]
+            }
+          ]
+        }
+      ],
+      "items": false
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 7,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "H1_AND_LEGACY_REFERENCE_SYSTEMS_STRUCTURALLY_DISTINCT",
+          "H1_SOURCE_CAPABILITY_GAPS_REQUIRE_TIER_B",
+          "LEGACY_INSTRUMENT_IDENTIFIERS_COMPARED_WITHOUT_NORMALIZATION",
+          "LEGACY_STRATEGY_SETTINGS_NOT_PROVEN_IDENTICAL_TO_H1_POLICY_SOURCE",
+          "LEGACY_STRICT_VALIDATOR_HAS_NO_DECLARED_CONTRACT_VERSION",
+          "POLICY_ROLE_AND_LEGACY_ROLE_LAYER_MAPPING_UNDEFINED",
+          "TARGET_WEIGHTS_NOT_DERIVABLE_FROM_CURRENT_POLICY_METHOD"
+        ]
+      }
+    },
+    "comparison_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "coverage_available_in_both_count",
+        "coverage_only_in_one_count",
+        "coverage_not_comparable_count",
+        "limitation_count"
+      ],
+      "properties": {
+        "coverage_available_in_both_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 15
+        },
+        "coverage_only_in_one_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 15
+        },
+        "coverage_not_comparable_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 15
+        },
+        "limitation_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7
+        }
+      }
+    }
+  }
+}
