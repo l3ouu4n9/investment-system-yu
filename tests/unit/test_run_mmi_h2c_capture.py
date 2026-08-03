@@ -12,6 +12,7 @@ from investment_orchestrator.offline.mmi_h2c_manual_capture_session import (
     H2cManualCaptureErrorCode,
     H2cManualCaptureFailureClass,
     H2cManualCaptureResult,
+    H2cOperatorHandoff,
 )
 
 
@@ -75,6 +76,92 @@ def test_success_stdout_is_exact_and_all_paths_are_explicit(
         "comparison_report_output_path",
         "receipt_output_path",
     }
+
+
+def test_all_eight_parsed_values_reach_the_correct_session_keyword(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    settings_sha = "5" * 64
+    portfolio_sha = "6" * 64
+    h1_prompt_output_path = tmp_path / "role-h1-prompt-output"
+    legacy_prompt_output_path = tmp_path / "role-legacy-prompt-output"
+    h1_response_path = tmp_path / "role-h1-response-input"
+    legacy_response_path = tmp_path / "role-legacy-response-input"
+    comparison_report_output_path = (
+        tmp_path / "role-comparison-report-output"
+    )
+    receipt_output_path = tmp_path / "role-receipt-output"
+
+    captured: dict[str, object] = {}
+
+    def run(**kwargs: object) -> H2cManualCaptureResult:
+        captured.update(kwargs)
+        return H2cManualCaptureResult(
+            comparison_report_identity_sha256="7" * 64,
+            receipt_identity_sha256="8" * 64,
+        )
+
+    monkeypatch.setattr(cli, "run_h2c_manual_capture", run)
+    exit_code = cli.main(
+        [
+            "--strategy-settings-expected-sha256",
+            settings_sha,
+            "--portfolio-snapshot-expected-sha256",
+            portfolio_sha,
+            "--h1-prompt-output-path",
+            str(h1_prompt_output_path),
+            "--legacy-prompt-output-path",
+            str(legacy_prompt_output_path),
+            "--h1-response-path",
+            str(h1_response_path),
+            "--legacy-response-path",
+            str(legacy_response_path),
+            "--comparison-report-output-path",
+            str(comparison_report_output_path),
+            "--receipt-output-path",
+            str(receipt_output_path),
+        ]
+    )
+
+    assert exit_code == 0
+    assert set(captured) == {
+        "strategy_settings_expected_sha256",
+        "portfolio_snapshot_expected_sha256",
+        "h1_prompt_output_path",
+        "legacy_prompt_output_path",
+        "h1_response_path",
+        "legacy_response_path",
+        "comparison_report_output_path",
+        "receipt_output_path",
+        "operator_handoff",
+    }
+    assert captured["strategy_settings_expected_sha256"] == settings_sha
+    assert captured["portfolio_snapshot_expected_sha256"] == portfolio_sha
+    assert captured["h1_prompt_output_path"] == h1_prompt_output_path
+    assert (
+        captured["legacy_prompt_output_path"] == legacy_prompt_output_path
+    )
+    assert captured["h1_response_path"] == h1_response_path
+    assert captured["legacy_response_path"] == legacy_response_path
+    assert (
+        captured["comparison_report_output_path"]
+        == comparison_report_output_path
+    )
+    assert captured["receipt_output_path"] == receipt_output_path
+
+    handoff = captured["operator_handoff"]
+    assert isinstance(handoff, H2cOperatorHandoff)
+    assert not isinstance(handoff, (str, bytes, Path))
+    assert not any(isinstance(value, bytes) for value in captured.values())
+
+    captured_stdio = capsys.readouterr()
+    assert captured_stdio.out == (
+        f"comparison_report_identity_sha256={'7' * 64}\n"
+        f"receipt_identity_sha256={'8' * 64}\n"
+    )
+    assert captured_stdio.err == ""
 
 
 def test_controlled_failure_is_exit_three_and_hides_owner_reasons(
