@@ -466,6 +466,6 @@ def test_h02c_has_r2c_runtime_without_standalone_r2b_artifact() -> None:
         root / "schemas/mmi_grounded_analysis_response_v2.schema.json"
     ).exists()
     domains = _identity_domains()
-    assert len(domains) == len(set(domains)) == 17
+    assert len(domains) == len(set(domains)) == 18
     assert b"mmi_validated_grounded_analysis_response_v2\0" in domains
     assert mmi.__all__ == ()

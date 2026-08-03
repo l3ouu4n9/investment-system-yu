@@ -70,6 +70,17 @@ H2_COMPARISON_REPORT_RELATIVE_PATH = (
     "src/investment_orchestrator/offline/"
     "mmi_legacy_step1_comparison_report_v1.py"
 )
+H2C_CAPTURE_SESSION_RELATIVE_PATH = (
+    "src/investment_orchestrator/offline/"
+    "mmi_h2c_manual_capture_session.py"
+)
+H2C_RECEIPT_RELATIVE_PATH = (
+    "src/investment_orchestrator/offline/"
+    "mmi_h2c_dual_side_manual_handoff_context_receipt_v1.py"
+)
+H2C_CLI_RELATIVE_PATH = (
+    "src/investment_orchestrator/cli/run_mmi_h2c_capture.py"
+)
 EXPECTED_EXTERNAL_CONSUMERS = (
     "src/investment_orchestrator/cli/observe_ltetf_target_architecture_gaps.py",
     "src/investment_orchestrator/cli/weekly_shadow_01_report_publisher_cli.py",
@@ -256,11 +267,13 @@ def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -
             for imported in imports
         )
     )
-    # The dormant offline H2 comparison report is the only production module
-    # outside the MMI package that may read MMI, and it reads exactly the
-    # committed H1 candidate owner plus the shared canonical / contract
-    # constants. It is report-only and is itself imported by nothing.
-    assert external_mmi_readers == (H2_COMPARISON_REPORT_RELATIVE_PATH,)
+    # Only the dormant H2 owner and explicit report-only H2c owners may read
+    # MMI outside the package; none is an admission or action consumer.
+    assert external_mmi_readers == (
+        H2C_RECEIPT_RELATIVE_PATH,
+        H2C_CAPTURE_SESSION_RELATIVE_PATH,
+        H2_COMPARISON_REPORT_RELATIVE_PATH,
+    )
     assert {
         imported
         for imported in imports_by_path[H2_COMPARISON_REPORT_RELATIVE_PATH]
@@ -506,17 +519,20 @@ def test_v2_prompt_envelope_and_response_graph_is_exact_and_dormant() -> None:
         "src/investment_orchestrator/mmi/grounded_prompt_v2.py",
         "src/investment_orchestrator/mmi/"
         "legacy_step1_compatibility_candidate_v1.py",
+        H2C_CAPTURE_SESSION_RELATIVE_PATH,
     )
     assert consumers(
         "investment_orchestrator.mmi.grounded_prompt_v2"
     ) == (
         "src/investment_orchestrator/mmi/raw_response_envelope_v2.py",
+        H2C_CAPTURE_SESSION_RELATIVE_PATH,
     )
     assert consumers(
         "investment_orchestrator.mmi.raw_response_envelope_v2"
     ) == (
         "src/investment_orchestrator/mmi/"
         "validated_grounded_analysis_response_v2.py",
+        H2C_CAPTURE_SESSION_RELATIVE_PATH,
     )
     assert consumers(
         "investment_orchestrator.mmi."
@@ -524,16 +540,27 @@ def test_v2_prompt_envelope_and_response_graph_is_exact_and_dormant() -> None:
     ) == (
         "src/investment_orchestrator/mmi/"
         "legacy_step1_compatibility_candidate_v1.py",
+        H2C_CAPTURE_SESSION_RELATIVE_PATH,
     )
-    # H2b: the H1 candidate gained exactly one inert, report-only consumer.
+    # H2c: H1 and H2 gain only the explicit foreground capture consumer.
     assert consumers(
         "investment_orchestrator.mmi."
         "legacy_step1_compatibility_candidate_v1"
-    ) == (H2_COMPARISON_REPORT_RELATIVE_PATH,)
+    ) == (
+        H2C_CAPTURE_SESSION_RELATIVE_PATH,
+        H2_COMPARISON_REPORT_RELATIVE_PATH,
+    )
     assert consumers(
         "investment_orchestrator.offline."
         "mmi_legacy_step1_comparison_report_v1"
-    ) == ()
+    ) == (H2C_CAPTURE_SESSION_RELATIVE_PATH,)
+    assert consumers(
+        "investment_orchestrator.offline."
+        "mmi_h2c_dual_side_manual_handoff_context_receipt_v1"
+    ) == (H2C_CAPTURE_SESSION_RELATIVE_PATH,)
+    assert consumers(
+        "investment_orchestrator.offline.mmi_h2c_manual_capture_session"
+    ) == (H2C_CLI_RELATIVE_PATH,)
     assert consumers(
         "investment_orchestrator.mmi.analyst_visible_evidence_view"
     ) == (
@@ -623,7 +650,7 @@ def test_reachable_schema_validation_call_graph_does_not_write(
 
 def test_ltetf_inventory_classification_is_unchanged_except_inventory_content() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
-    assert len(inventory.production_paths) == 141
+    assert len(inventory.production_paths) == 144
     assert inventory.dynamic_findings == ()
     assert inventory.observer_external_consumers == EXPECTED_EXTERNAL_CONSUMERS
     assert inventory.report_artifact_readers == ()

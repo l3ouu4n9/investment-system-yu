@@ -538,7 +538,7 @@ def _production_imports() -> dict[str, set[str]]:
     return imports
 
 
-def test_h1_has_exactly_one_inert_consumer_and_h2_has_none() -> None:
+def test_h1_and_h2_gain_only_the_explicit_capture_consumer() -> None:
     imports = _production_imports()
     h1_consumers = sorted(
         path
@@ -557,8 +557,12 @@ def test_h1_has_exactly_one_inert_consumer_and_h2_has_none() -> None:
             for name in names
         )
     )
-    assert h1_consumers == [OWNER_RELATIVE_PATH]
-    assert h2_consumers == []
+    session_path = (
+        "src/investment_orchestrator/offline/"
+        "mmi_h2c_manual_capture_session.py"
+    )
+    assert h1_consumers == [session_path, OWNER_RELATIVE_PATH]
+    assert h2_consumers == [session_path]
 
 
 def test_inventory_domain_schema_and_package_posture_are_exact() -> None:
@@ -575,9 +579,9 @@ def test_inventory_domain_schema_and_package_posture_are_exact() -> None:
         and value.startswith(b"mmi_")
         and value.endswith(b"\0")
     )
-    assert len(production_paths) == 141
-    assert len(schema_paths) == 41
-    assert len(domains) == len(set(domains)) == 17
+    assert len(production_paths) == 144
+    assert len(schema_paths) == 42
+    assert len(domains) == len(set(domains)) == 18
     assert IDENTITY_DOMAIN in domains
     assert SCHEMA_PATH in schema_paths
     assert mmi.__all__ == ()

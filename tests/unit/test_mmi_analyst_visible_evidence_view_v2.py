@@ -698,19 +698,23 @@ def test_v2_has_exact_g2_consumer_and_no_side_effect_surface() -> None:
             "src/investment_orchestrator/mmi/"
             "legacy_step1_compatibility_candidate_v1.py"
         ),
+        (
+            "src/investment_orchestrator/offline/"
+            "mmi_h2c_manual_capture_session.py"
+        ),
     ]
 
 
 def test_inventory_and_persistent_identity_domain_counts_are_exact() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
-    assert len(inventory.production_paths) == 141
+    assert len(inventory.production_paths) == 144
     domains = {
         name: value
         for name, value in vars(canonical).items()
         if name.endswith("_DOMAIN")
         and type(value) is bytes
     }
-    assert len(domains) == len(set(domains.values())) == 17
+    assert len(domains) == len(set(domains.values())) == 18
     assert domains[
         "_MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_IDENTITY_DOMAIN"
     ] == IDENTITY_DOMAIN

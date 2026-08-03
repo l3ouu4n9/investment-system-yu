@@ -1055,7 +1055,7 @@ def test_e1b_contract_and_e1c_runtime_have_exact_phase_ownership() -> None:
     root = repo_root()
     production_root = root / "src/investment_orchestrator"
     production_paths = tuple(sorted(production_root.rglob("*.py")))
-    assert len(production_paths) == 141
+    assert len(production_paths) == 144
 
     mmi_paths = tuple(
         sorted(
@@ -1257,6 +1257,10 @@ def test_e1b_contract_and_e1c_runtime_have_exact_phase_ownership() -> None:
     assert evidence_importers == (
         analyst_view_relative_path,
         analyst_view_v2_relative_path,
+        (
+            "src/investment_orchestrator/offline/"
+            "mmi_h2c_manual_capture_session.py"
+        ),
     )
 
     init_tree = trees[init_path]

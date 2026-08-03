@@ -35,10 +35,10 @@ Two canonical forms are used and are kept strictly separate:
 * the report itself and its identity use the MMI canonical / domain-separated
   framing.
 
-This module is offline and report-only.  It is imported by no production
-module (a committed isolation test enforces that boundary), registers no CLI,
-writer, workflow, gate, pointer, or order surface, and performs no filesystem,
-network, clock, or scheduling work.
+This module is offline and report-only.  Its only production consumer is the
+explicit operator-invoked H2c foreground capture session.  It registers no
+CLI, writer, workflow, gate, pointer, or order surface, and performs no
+filesystem, network, clock, or scheduling work.
 """
 
 from __future__ import annotations

@@ -25,35 +25,66 @@ def _module_name(path: Path) -> str:
     return ".".join(rel.parts)
 
 
-def _imports_offline(path: Path) -> bool:
-    """True iff the file imports anything under investment_orchestrator.offline."""
+def _offline_target(parts: list[str]) -> str:
+    """Collapse a dotted import path down to its offline module, e.g. a.offline.b.c -> a.offline.b."""
+    idx = parts.index("offline")
+    end = idx + 2 if len(parts) > idx + 1 else idx + 1
+    return ".".join(parts[:end])
+
+
+def _offline_import_edges(path: Path) -> set[tuple[str, str]]:
+    """Return (source_module, offline_target_module) edges for offline imports in path."""
+    source = _module_name(path)
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    package_parts = _module_name(path).split(".")[:-1]
+    package_parts = source.split(".")[:-1]
+    edges: set[tuple[str, str]] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            if any("offline" in alias.name.split(".") for alias in node.names):
-                return True
+            for alias in node.names:
+                parts = alias.name.split(".")
+                if "offline" in parts:
+                    edges.add((source, _offline_target(parts)))
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
             if node.level == 0:
-                target = module.split(".")
+                target = module.split(".") if module else []
             else:
                 base = package_parts[: len(package_parts) - (node.level - 1)]
                 target = base + module.split(".") if module else base
             if "offline" in target:
-                return True
-            if any(alias.name == "offline" for alias in node.names):
-                return True
-    return False
+                edges.add((source, _offline_target(target)))
+            elif any(alias.name == "offline" for alias in node.names):
+                edges.add((source, ".".join(target + ["offline"])))
+    return edges
 
 
-def test_no_production_module_imports_the_offline_package() -> None:
-    offenders = [
-        _module_name(path)
+_ALLOWED_NON_OFFLINE_TO_OFFLINE_IMPORT_EDGES = frozenset({
+    (
+        "investment_orchestrator.cli.run_mmi_h2c_capture",
+        "investment_orchestrator.offline.mmi_h2c_manual_capture_session",
+    ),
+})
+
+
+def test_only_h2c_capture_cli_imports_the_offline_package() -> None:
+    actual_non_offline_to_offline_import_edges = {
+        edge
         for path in sorted(_PACKAGE_ROOT.rglob("*.py"))
-        if _OFFLINE_ROOT not in path.parents and _imports_offline(path)
-    ]
-    assert offenders == [], f"production modules import offline tooling: {offenders}"
+        if _OFFLINE_ROOT not in path.parents
+        for edge in _offline_import_edges(path)
+    }
+    unexpected = (
+        actual_non_offline_to_offline_import_edges
+        - _ALLOWED_NON_OFFLINE_TO_OFFLINE_IMPORT_EDGES
+    )
+    assert not unexpected, f"unapproved production->offline import edges: {sorted(unexpected)}"
+    assert (
+        actual_non_offline_to_offline_import_edges
+        == _ALLOWED_NON_OFFLINE_TO_OFFLINE_IMPORT_EDGES
+    ), (
+        "approved edge is missing: "
+        f"{sorted(_ALLOWED_NON_OFFLINE_TO_OFFLINE_IMPORT_EDGES - actual_non_offline_to_offline_import_edges)}"
+    )
 
 
 def test_step1_research_module_does_not_reference_offline_archive() -> None:
