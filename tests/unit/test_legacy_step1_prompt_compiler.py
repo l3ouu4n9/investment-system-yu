@@ -8,13 +8,16 @@ including its double read of ``inputs/current/strategy_settings.yaml``.
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 from pathlib import Path
 
 import pytest
 
+import investment_orchestrator as package
 from investment_orchestrator.common.io import read_text
+from investment_orchestrator.common.paths import repo_root
 from investment_orchestrator.llm.legacy_step1_prompt_compiler import (
     CURRENT_RUN_INPUT_NOTES_RE,
     compile_legacy_step1_prompt_text,
@@ -427,3 +430,158 @@ def test_wrapper_reads_settings_twice_independently_in_the_existing_order(
         indent=2,
     )
     assert expected_approved_json in rendered
+
+
+# ---------------------------------------------------------------------------
+# Purity guard (follow-up): the compiler module must not directly acquire
+# runtime capabilities or authority-bearing dependencies. This inspects only
+# the compiler module's own source and AST; it does not walk the import
+# closures of render_prompt or parse_strategy_settings_text, which are pure
+# dependencies the compiler is authorized to use. Purity here is a direct
+# module contract, not a transitive-import contract.
+# ---------------------------------------------------------------------------
+
+_COMPILER_RELATIVE_PATH = "src/investment_orchestrator/llm/legacy_step1_prompt_compiler.py"
+
+_PROHIBITED_DIRECT_IMPORT_PREFIXES = (
+    # Filesystem and process
+    "os",
+    "pathlib",
+    "shutil",
+    "tempfile",
+    "io",
+    "subprocess",
+    "multiprocessing",
+    # Concurrency and scheduling
+    "threading",
+    "asyncio",
+    "sched",
+    "concurrent",
+    # Network and provider access
+    "socket",
+    "urllib",
+    "requests",
+    "httpx",
+    "openai",
+    "anthropic",
+    "langchain",
+    "cohere",
+    "google.generativeai",
+    # Nondeterministic authority inputs
+    "time",
+    "datetime",
+    "random",
+    "secrets",
+    # Repository capability and authority owners
+    f"{package.__name__}.common.io",
+    f"{package.__name__}.mmi",
+    f"{package.__name__}.offline",
+    f"{package.__name__}.workflow",
+    f"{package.__name__}.cli",
+    f"{package.__name__}.state",
+    f"{package.__name__}.observability",
+    f"{package.__name__}.orders",
+    f"{package.__name__}.broker",
+    f"{package.__name__}.permissions",
+)
+
+_PROHIBITED_DIRECT_CALL_NAMES = frozenset({"open", "eval", "exec", "__import__"})
+
+
+def _direct_imported_module_names(tree: ast.AST) -> set[str]:
+    """Every module path this source directly imports (not transitively)."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names.add(node.module)
+            names.update(f"{node.module}.{alias.name}" for alias in node.names)
+    return names
+
+
+def _prohibited_import_hits(imported: set[str]) -> list[str]:
+    return sorted(
+        name
+        for name in imported
+        for prefix in _PROHIBITED_DIRECT_IMPORT_PREFIXES
+        if name == prefix or name.startswith(f"{prefix}.")
+    )
+
+
+def _direct_capability_call_hits(tree: ast.AST) -> list[str]:
+    """Direct calls to prohibited dynamic-capability functions, by exact node shape."""
+    hits: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name) and func.id in _PROHIBITED_DIRECT_CALL_NAMES:
+            hits.append(func.id)
+        elif (
+            isinstance(func, ast.Attribute)
+            and func.attr == "import_module"
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "importlib"
+        ):
+            hits.append("importlib.import_module")
+    return sorted(hits)
+
+
+def test_compiler_module_acquires_no_direct_runtime_capability() -> None:
+    path = repo_root() / _COMPILER_RELATIVE_PATH
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+
+    import_hits = _prohibited_import_hits(_direct_imported_module_names(tree))
+    assert not import_hits, (
+        "legacy_step1_prompt_compiler.py directly imports prohibited "
+        f"capability module(s): {import_hits}"
+    )
+
+    call_hits = _direct_capability_call_hits(tree)
+    assert not call_hits, (
+        "legacy_step1_prompt_compiler.py directly calls prohibited "
+        f"dynamic-capability function(s): {call_hits}"
+    )
+
+
+def test_direct_import_detector_catches_aliases_and_prefixes() -> None:
+    """Synthetic proof the detector above is not vacuously passing.
+
+    Covers ``import x``, ``import x as y``, dotted-prefix rejection (without
+    rejecting an unrelated name that merely shares a substring), and
+    ``from x import y`` where ``y`` names a prohibited submodule.
+    """
+    synthetic = ast.parse(
+        "import os as o\n"
+        "import urllib.request\n"
+        "import asynciomodule\n"  # must NOT be flagged: not the "asyncio" prefix
+        "from investment_orchestrator.mmi import canonical\n"
+        "from investment_orchestrator.common import io\n"
+        "from investment_orchestrator.validators.strategy_settings import (\n"
+        "    parse_strategy_settings_text,\n"
+        ")\n"
+    )
+    hits = _prohibited_import_hits(_direct_imported_module_names(synthetic))
+    assert hits == [
+        "investment_orchestrator.common.io",
+        "investment_orchestrator.mmi",
+        "investment_orchestrator.mmi.canonical",
+        "os",
+        "urllib.request",
+    ]
+
+
+def test_direct_call_detector_catches_dynamic_capability_acquisition() -> None:
+    """Synthetic proof the call-detector distinguishes direct builtins from lookalikes."""
+    synthetic = ast.parse(
+        "open('x')\n"
+        "eval('1')\n"
+        "exec('pass')\n"
+        "__import__('os')\n"
+        "importlib.import_module('os')\n"
+        "some_object.import_module('os')\n"  # unrelated method: must NOT be flagged
+        "text.rstrip()\n"  # unrelated method: must NOT be flagged
+    )
+    hits = _direct_capability_call_hits(synthetic)
+    assert hits == ["__import__", "eval", "exec", "importlib.import_module", "open"]
