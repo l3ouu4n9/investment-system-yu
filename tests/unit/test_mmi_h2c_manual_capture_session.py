@@ -11,6 +11,10 @@ import pytest
 
 from investment_orchestrator.common.paths import repo_root
 from investment_orchestrator.offline import mmi_h2c_manual_capture_session as session
+from investment_orchestrator.offline.mmi_h2c_dual_side_manual_handoff_context_receipt_v1 import (
+    MmiH2cDualSideManualHandoffContextReceiptV1Error,
+    validate_mmi_h2c_dual_side_manual_handoff_context_receipt_v1_portable_evidence,
+)
 
 
 class _ResponseHandoff:
@@ -165,6 +169,165 @@ def test_complete_foreground_session_writes_h2_then_receipt(
     assert h2["legacy_contract_status"]["raw_parse_status"] == (
         "LEGACY_PARSE_FAILURE"
     )
+
+
+def _spy(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    sink: list[object],
+) -> None:
+    """Wrap a real session owner call so its exact return value is kept,
+    without altering what it does or returns."""
+    original = getattr(session, name)
+
+    def wrapper(*args: object, **kwargs: object) -> object:
+        result = original(*args, **kwargs)
+        sink.append(result)
+        return result
+
+    monkeypatch.setattr(session, name, wrapper)
+
+
+def _run_and_capture_contemporaneous_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, object]:
+    """Run the real production session and retain the exact mappings and
+    bytes its real owners already produced during this one invocation."""
+    paths = _paths(tmp_path)
+    settings_hash, portfolio_hash = _source_hashes()
+    handoff = _ResponseHandoff(
+        h1_prompt_path=paths["h1_prompt_output_path"],
+        h1_response_path=paths["h1_response_path"],
+        legacy_response_path=paths["legacy_response_path"],
+    )
+
+    captured_sources: dict[object, object] = {}
+    original_capture_source = session.capture_current_mmi_source
+
+    def capture_source_spy(role: object, **kwargs: object) -> object:
+        result = original_capture_source(role, **kwargs)
+        captured_sources[role] = result
+        return result
+
+    monkeypatch.setattr(
+        session, "capture_current_mmi_source", capture_source_spy
+    )
+
+    g2_calls: list[object] = []
+    r1_calls: list[object] = []
+    r2_calls: list[object] = []
+    h1_calls: list[object] = []
+    template_calls: list[object] = []
+    _spy(monkeypatch, "validate_mmi_grounded_prompt_v2", g2_calls)
+    _spy(monkeypatch, "validate_mmi_raw_response_envelope_v2", r1_calls)
+    _spy(
+        monkeypatch,
+        "validate_mmi_validated_grounded_analysis_response_v2",
+        r2_calls,
+    )
+    _spy(
+        monkeypatch,
+        "validate_mmi_legacy_step1_compatibility_candidate_v1",
+        h1_calls,
+    )
+    _spy(monkeypatch, "_stable_read_legacy_template", template_calls)
+
+    result = session.run_h2c_manual_capture(
+        strategy_settings_expected_sha256=settings_hash,
+        portfolio_snapshot_expected_sha256=portfolio_hash,
+        operator_handoff=handoff,
+        **paths,
+    )
+
+    settings_capture = captured_sources[
+        session.MmiSourceRole.STRATEGY_SETTINGS
+    ]
+    portfolio_capture = captured_sources[
+        session.MmiSourceRole.PORTFOLIO_SNAPSHOT
+    ]
+
+    comparison_report = json.loads(
+        paths["comparison_report_output_path"].read_bytes()
+    )
+    receipt = json.loads(paths["receipt_output_path"].read_bytes())
+    assert (
+        receipt["receipt_identity_sha256"] == result.receipt_identity_sha256
+    )
+    assert (
+        comparison_report["comparison_report_identity_sha256"]
+        == result.comparison_report_identity_sha256
+    )
+
+    # G2 is validated twice (build-time, then live-chain revalidation); the
+    # first call is the exact artifact the session goes on to build R1 from.
+    return {
+        "receipt": receipt,
+        "comparison_report": comparison_report,
+        "legacy_step1_compatibility_candidate": h1_calls[0],
+        "validated_grounded_analysis_response": r2_calls[0],
+        "raw_response_envelope": r1_calls[0],
+        "grounded_prompt": g2_calls[0],
+        "archived_h1_prompt_bytes": (
+            paths["h1_prompt_output_path"].read_bytes()
+        ),
+        "archived_h1_response_bytes": (
+            paths["h1_response_path"].read_bytes()
+        ),
+        "archived_legacy_response_bytes": (
+            paths["legacy_response_path"].read_bytes()
+        ),
+        "archived_strategy_settings_bytes": (
+            settings_capture.source.raw_bytes
+        ),
+        "strategy_settings_source_record": dict(
+            settings_capture.source.source_record
+        ),
+        "archived_portfolio_snapshot_bytes": (
+            portfolio_capture.source.raw_bytes
+        ),
+        "portfolio_snapshot_source_record": dict(
+            portfolio_capture.source.source_record
+        ),
+        "archived_legacy_prompt_template_bytes": template_calls[0],
+        "archived_legacy_prompt_bytes": (
+            paths["legacy_prompt_output_path"].read_bytes()
+        ),
+    }
+
+
+def test_production_receipt_composes_with_portable_evidence_validator(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence = _run_and_capture_contemporaneous_artifacts(
+        tmp_path, monkeypatch
+    )
+    assert (
+        validate_mmi_h2c_dual_side_manual_handoff_context_receipt_v1_portable_evidence(
+            **evidence
+        )
+        is None
+    )
+
+
+def test_production_receipt_composition_fails_closed_on_tampered_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence = _run_and_capture_contemporaneous_artifacts(
+        tmp_path, monkeypatch
+    )
+    tampered = bytearray(evidence["archived_h1_prompt_bytes"])
+    tampered[-1] ^= 0xFF
+    evidence["archived_h1_prompt_bytes"] = bytes(tampered)
+    with pytest.raises(
+        MmiH2cDualSideManualHandoffContextReceiptV1Error,
+        match="^MMI_H2C_PORTABLE_EVIDENCE_INVALID$",
+    ):
+        validate_mmi_h2c_dual_side_manual_handoff_context_receipt_v1_portable_evidence(
+            **evidence
+        )
 
 
 def test_error_enum_mapping_is_exact_and_error_is_immutable() -> None:
