@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import date, datetime, timezone
-import json
-import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -19,9 +17,12 @@ from investment_orchestrator.common.io import (
     write_text,
 )
 from investment_orchestrator.common.paths import repo_root, require_prompt_path
+from investment_orchestrator.llm.legacy_step1_prompt_compiler import (
+    compile_legacy_step1_prompt_text,
+    derive_legacy_approved_extended_etf_json,
+)
 from investment_orchestrator.llm.manual_output import (
     ensure_manual_output_metadata_template,
-    render_prompt,
     write_rendered_prompt,
 )
 from investment_orchestrator.normalizers.research_handoff_candidate import (
@@ -214,11 +215,6 @@ STEP1A_ARTIFACT_SWITCH_STATUS_FILENAME = "step1a_artifact_switch_status.json"
 STEP1A_RETIREMENT_OBSERVATION_FILENAME = "step1a_retirement_observation.json"
 RESEARCH_ANCHORS_INPUT_FILENAME = "research_anchors.yaml"
 RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME = "research_anchor_approvals.yaml"
-CURRENT_RUN_INPUT_NOTES_RE = re.compile(
-    r"(?:\r?\n)*────────────────────────────────────────\r?\n"
-    r"【Current Run Inputs（injected by workflow; rendered prompt must contain actual values, not placeholder notes）】"
-    r"[\s\S]*?(?=CURRENT_RUN_INPUTS_START)",
-)
 
 
 def current_inputs_dir() -> Path:
@@ -567,47 +563,25 @@ def load_portfolio_snapshot_text() -> str:
 
 def load_current_run_user_approved_extended_etf_static_list_json() -> str:
     """Load the current-run approved ETF static list and serialize it as a JSON array string."""
-    strategy_settings = load_strategy_settings()
-    approved_static_list = strategy_settings.get("user_approved_extended_etf_static_list")
-    if approved_static_list is None:
-        raise ValueError(
-            "Missing required field 'user_approved_extended_etf_static_list' in "
-            "inputs/current/strategy_settings.yaml"
-        )
-    if not isinstance(approved_static_list, list):
-        raise ValueError(
-            "inputs/current/strategy_settings.yaml field "
-            "'user_approved_extended_etf_static_list' must be a list."
-        )
-    if not all(isinstance(item, str) for item in approved_static_list):
-        raise ValueError(
-            "inputs/current/strategy_settings.yaml field "
-            "'user_approved_extended_etf_static_list' must contain only strings."
-        )
-    return json.dumps(approved_static_list, ensure_ascii=False, indent=2)
-
-
-def sanitize_rendered_step1_prompt(text: str) -> str:
-    """Remove workflow-only current-run explanatory notes from the rendered prompt."""
-    return CURRENT_RUN_INPUT_NOTES_RE.sub("\n", text, count=1)
+    return derive_legacy_approved_extended_etf_json(
+        strategy_settings_text=load_strategy_settings_yaml_text(),
+    )
 
 
 def build_step1_prompt_text() -> str:
     """Render the Step 1 prompt without mutating the source prompt file."""
-    prompt_template = read_text(resolve_step1_prompt_template_path()).rstrip()
+    template_text = read_text(resolve_step1_prompt_template_path())
     strategy_settings_text = load_strategy_settings_yaml_text()
     portfolio_snapshot_text = load_portfolio_snapshot_text()
-    approved_static_list_json = load_current_run_user_approved_extended_etf_static_list_json()
-
-    rendered_prompt = render_prompt(
-        prompt_template,
-        {
-            "current_run_user_approved_extended_etf_static_list_json": approved_static_list_json,
-            "strategy_settings_yaml": strategy_settings_text,
-            "portfolio_snapshot": portfolio_snapshot_text,
-        },
+    approved_extended_etf_json = (
+        load_current_run_user_approved_extended_etf_static_list_json()
     )
-    return sanitize_rendered_step1_prompt(rendered_prompt).rstrip() + "\n"
+    return compile_legacy_step1_prompt_text(
+        template_text=template_text,
+        strategy_settings_text=strategy_settings_text,
+        portfolio_snapshot_text=portfolio_snapshot_text,
+        approved_extended_etf_json=approved_extended_etf_json,
+    )
 
 
 def render_step1_prompt() -> dict[str, str]:

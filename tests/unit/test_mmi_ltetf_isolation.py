@@ -623,7 +623,7 @@ def test_reachable_schema_validation_call_graph_does_not_write(
 
 def test_ltetf_inventory_classification_is_unchanged_except_inventory_content() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
-    assert len(inventory.production_paths) == 140
+    assert len(inventory.production_paths) == 141
     assert inventory.dynamic_findings == ()
     assert inventory.observer_external_consumers == EXPECTED_EXTERNAL_CONSUMERS
     assert inventory.report_artifact_readers == ()

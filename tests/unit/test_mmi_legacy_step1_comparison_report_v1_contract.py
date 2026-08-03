@@ -575,7 +575,7 @@ def test_inventory_domain_schema_and_package_posture_are_exact() -> None:
         and value.startswith(b"mmi_")
         and value.endswith(b"\0")
     )
-    assert len(production_paths) == 140
+    assert len(production_paths) == 141
     assert len(schema_paths) == 41
     assert len(domains) == len(set(domains)) == 17
     assert IDENTITY_DOMAIN in domains
