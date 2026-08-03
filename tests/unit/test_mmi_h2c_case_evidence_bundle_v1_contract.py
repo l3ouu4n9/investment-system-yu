@@ -680,7 +680,7 @@ def test_owner_has_no_forbidden_capability_imports() -> None:
     assert "PORTABLE_STRUCTURAL_VALIDATION" not in source
 
 
-def test_owner_has_zero_consumers_and_no_package_export() -> None:
+def test_owner_has_exact_session_consumer_and_no_package_export() -> None:
     production_root = repo_root() / "src/investment_orchestrator"
     owner_module = (
         "investment_orchestrator.offline.mmi_h2c_case_bundle_v1"
@@ -699,7 +699,9 @@ def test_owner_has_zero_consumers_and_no_package_export() -> None:
                 alias.name == owner_module for alias in node.names
             ):
                 consumers.append(path)
-    assert consumers == []
+    assert consumers == [
+        production_root / "offline/mmi_h2c_manual_capture_session.py"
+    ]
     # canonical.py names the domain and ceiling constants but imports nothing
     # from the owner, so it is not a consumer.
     assert (

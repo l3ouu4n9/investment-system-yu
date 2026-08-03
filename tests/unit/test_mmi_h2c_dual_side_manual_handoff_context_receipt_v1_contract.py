@@ -157,6 +157,8 @@ def test_public_api_is_exact_and_keyword_only() -> None:
         parameter.kind is inspect.Parameter.KEYWORD_ONLY
         for parameter in portable_signature.parameters.values()
     )
+    assert "case_evidence_bundle" not in PORTABLE_ARGUMENTS
+    assert "case_evidence_bundle_identity_sha256" not in EXPECTED_FIELDS
 
 
 def test_portable_owner_has_only_narrow_structural_helpers() -> None:
@@ -177,6 +179,20 @@ def test_portable_owner_has_only_narrow_structural_helpers() -> None:
         if isinstance(node, ast.ImportFrom)
         for alias in node.names
     }
+    imported_modules = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module
+    } | {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    assert (
+        "investment_orchestrator.offline.mmi_h2c_case_bundle_v1"
+        not in imported_modules
+    )
     assert not {
         "begin_mmi_projection_run",
         "capture_current_mmi_source",

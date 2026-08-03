@@ -72,6 +72,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--h1-response-path", required=True, type=Path)
     parser.add_argument("--legacy-response-path", required=True, type=Path)
     parser.add_argument(
+        "--case-evidence-bundle-output-path", required=True, type=Path
+    )
+    parser.add_argument(
         "--comparison-report-output-path", required=True, type=Path
     )
     parser.add_argument("--receipt-output-path", required=True, type=Path)
@@ -93,6 +96,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             legacy_prompt_output_path=args.legacy_prompt_output_path,
             h1_response_path=args.h1_response_path,
             legacy_response_path=args.legacy_response_path,
+            case_evidence_bundle_output_path=(
+                args.case_evidence_bundle_output_path
+            ),
             comparison_report_output_path=(
                 args.comparison_report_output_path
             ),

@@ -2,9 +2,9 @@
 
 This owner exposes exact report-only prompt bytes, waits for one explicit
 operator handoff, binds two exact response files to the retained live MMI
-objects, and persists H2 before its non-authoritative observation receipt.
-It has no provider, network, polling, publication, permission, or order
-capability.
+objects, and persists their portable case bundle before H2 and its
+non-authoritative observation receipt.  It has no provider, network, polling,
+publication, permission, or order capability.
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ from investment_orchestrator.mmi.analyst_visible_evidence_view_v2 import (
 from investment_orchestrator.mmi.canonical import (
     MAXIMUM_CANONICAL_JSON_BYTES,
     MAXIMUM_MMI_RAW_RESPONSE_BYTES,
+    MAX_MMI_H2C_CASE_EVIDENCE_BUNDLE_V1_CANONICAL_BYTES,
     MAX_MMI_H2C_DUAL_SIDE_MANUAL_HANDOFF_CONTEXT_RECEIPT_V1_CANONICAL_BYTES,
     MAX_MMI_LEGACY_STEP1_COMPARISON_REPORT_V1_CANONICAL_BYTES,
     MmiCanonicalizationError,
@@ -90,6 +91,7 @@ from investment_orchestrator.mmi.validated_grounded_analysis_response_v2 import 
     build_mmi_validated_grounded_analysis_response_v2,
     validate_mmi_validated_grounded_analysis_response_v2,
 )
+import investment_orchestrator.offline.mmi_h2c_case_bundle_v1 as _case_bundle
 from investment_orchestrator.offline.mmi_h2c_dual_side_manual_handoff_context_receipt_v1 import (
     MmiH2cDualSideManualHandoffContextReceiptV1Error,
     validate_mmi_h2c_dual_side_manual_handoff_context_receipt_v1,
@@ -145,8 +147,14 @@ class H2cManualCaptureErrorCode(str, Enum):
     H2C_OPERATOR_CONTROL_INVALID = "H2C_OPERATOR_CONTROL_INVALID"
     H2C_RESPONSE_INPUT_INVALID = "H2C_RESPONSE_INPUT_INVALID"
     H2C_RESPONSE_CONTENT_INVALID = "H2C_RESPONSE_CONTENT_INVALID"
+    H2C_CASE_EVIDENCE_BUNDLE_VALIDATION_INVALID = (
+        "H2C_CASE_EVIDENCE_BUNDLE_VALIDATION_INVALID"
+    )
     H2C_H2_VALIDATION_INVALID = "H2C_H2_VALIDATION_INVALID"
     H2C_RECEIPT_VALIDATION_INVALID = "H2C_RECEIPT_VALIDATION_INVALID"
+    H2C_CASE_EVIDENCE_BUNDLE_PERSISTENCE_FAILED = (
+        "H2C_CASE_EVIDENCE_BUNDLE_PERSISTENCE_FAILED"
+    )
     H2C_H2_PERSISTENCE_FAILED = "H2C_H2_PERSISTENCE_FAILED"
     H2C_RECEIPT_PERSISTENCE_FAILED = "H2C_RECEIPT_PERSISTENCE_FAILED"
 
@@ -191,11 +199,17 @@ _ERROR_CLASSES: Final = {
     H2cManualCaptureErrorCode.H2C_RESPONSE_CONTENT_INVALID: (
         H2cManualCaptureFailureClass.ARTIFACT_CONTENT
     ),
+    H2cManualCaptureErrorCode.H2C_CASE_EVIDENCE_BUNDLE_VALIDATION_INVALID: (
+        H2cManualCaptureFailureClass.VALIDATOR_SCHEMA
+    ),
     H2cManualCaptureErrorCode.H2C_H2_VALIDATION_INVALID: (
         H2cManualCaptureFailureClass.VALIDATOR_SCHEMA
     ),
     H2cManualCaptureErrorCode.H2C_RECEIPT_VALIDATION_INVALID: (
         H2cManualCaptureFailureClass.VALIDATOR_SCHEMA
+    ),
+    H2cManualCaptureErrorCode.H2C_CASE_EVIDENCE_BUNDLE_PERSISTENCE_FAILED: (
+        H2cManualCaptureFailureClass.PERSISTENCE
     ),
     H2cManualCaptureErrorCode.H2C_H2_PERSISTENCE_FAILED: (
         H2cManualCaptureFailureClass.PERSISTENCE
@@ -1293,6 +1307,7 @@ def run_h2c_manual_capture(
     legacy_prompt_output_path: Path,
     h1_response_path: Path,
     legacy_response_path: Path,
+    case_evidence_bundle_output_path: Path,
     comparison_report_output_path: Path,
     receipt_output_path: Path,
     operator_handoff: H2cOperatorHandoff,
@@ -1310,6 +1325,7 @@ def run_h2c_manual_capture(
             legacy_prompt_output_path,
             h1_response_path,
             legacy_response_path,
+            case_evidence_bundle_output_path,
             comparison_report_output_path,
             receipt_output_path,
         ),
@@ -1321,6 +1337,7 @@ def run_h2c_manual_capture(
         legacy_prompt_path,
         h1_response_path,
         legacy_response_path,
+        case_evidence_bundle_output_path,
         h2_output_path,
         receipt_output_path,
     ) = paths
@@ -1506,6 +1523,39 @@ def run_h2c_manual_capture(
             H2cManualCaptureErrorCode.H2C_LIVE_CHAIN_INVALID,
             owner_reason_codes=(exc.code,),
         )
+    try:
+        case_evidence_bundle = (
+            _case_bundle._build_mmi_h2c_case_evidence_bundle_v1(
+                grounded_prompt=prompt,
+                raw_response_envelope=r1,
+                validated_grounded_analysis_response=r2,
+                legacy_step1_compatibility_candidate=h1,
+                strategy_settings_source_record=dict(
+                    settings_source.source_record
+                ),
+                portfolio_snapshot_source_record=(
+                    dict(portfolio_source.source_record)
+                ),
+            )
+        )
+    except _case_bundle.MmiH2cCaseEvidenceBundleV1Error as exc:
+        if exc.code != "MMI_H2C_CASE_EVIDENCE_BUNDLE_V1_INVALID":
+            raise
+        _raise_controlled(
+            H2cManualCaptureErrorCode.H2C_CASE_EVIDENCE_BUNDLE_VALIDATION_INVALID,
+            owner_reason_codes=(exc.code,),
+        )
+    try:
+        case_evidence_bundle_bytes = canonical_json_bytes(
+            case_evidence_bundle,
+            maximum_bytes=(
+                MAX_MMI_H2C_CASE_EVIDENCE_BUNDLE_V1_CANONICAL_BYTES
+            ),
+        )
+    except MmiCanonicalizationError:
+        _raise_controlled(
+            H2cManualCaptureErrorCode.H2C_CASE_EVIDENCE_BUNDLE_VALIDATION_INVALID
+        )
     recomputed_legacy_prompt = _compile_legacy_prompt(
         template_text=template_text,
         settings_text=settings_text,
@@ -1563,6 +1613,17 @@ def run_h2c_manual_capture(
                 H2cManualCaptureErrorCode.H2C_H2_VALIDATION_INVALID
             ),
         )
+    try:
+        h2_bytes = canonical_json_bytes(
+            h2,
+            maximum_bytes=(
+                MAX_MMI_LEGACY_STEP1_COMPARISON_REPORT_V1_CANONICAL_BYTES
+            ),
+        )
+    except MmiCanonicalizationError:
+        _raise_controlled(
+            H2cManualCaptureErrorCode.H2C_H2_VALIDATION_INVALID
+        )
     receipt = _build_receipt(
         run_context=run_context,
         settings_source=settings_source,
@@ -1581,17 +1642,6 @@ def run_h2c_manual_capture(
         comparison_report=h2,
     )
     try:
-        h2_bytes = canonical_json_bytes(
-            h2,
-            maximum_bytes=(
-                MAX_MMI_LEGACY_STEP1_COMPARISON_REPORT_V1_CANONICAL_BYTES
-            ),
-        )
-    except MmiCanonicalizationError:
-        _raise_controlled(
-            H2cManualCaptureErrorCode.H2C_H2_VALIDATION_INVALID
-        )
-    try:
         receipt_bytes = canonical_json_bytes(
             receipt,
             maximum_bytes=(
@@ -1602,6 +1652,13 @@ def run_h2c_manual_capture(
         _raise_controlled(
             H2cManualCaptureErrorCode.H2C_RECEIPT_VALIDATION_INVALID
         )
+    _write_new_exact_file(
+        path=case_evidence_bundle_output_path,
+        exact_bytes=case_evidence_bundle_bytes,
+        failure_code=(
+            H2cManualCaptureErrorCode.H2C_CASE_EVIDENCE_BUNDLE_PERSISTENCE_FAILED
+        ),
+    )
     _write_new_exact_file(
         path=h2_output_path,
         exact_bytes=h2_bytes,

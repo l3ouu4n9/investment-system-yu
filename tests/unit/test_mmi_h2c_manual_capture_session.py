@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+from collections.abc import Mapping
+from dataclasses import FrozenInstanceError, fields
 import hashlib
 import json
 import os
@@ -9,7 +10,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from investment_orchestrator.common.paths import repo_root
+from investment_orchestrator.common.paths import prompt_path, repo_root
+from investment_orchestrator.offline.mmi_h2c_case_bundle_v1 import (
+    validate_mmi_h2c_case_evidence_bundle_v1,
+)
 from investment_orchestrator.offline import mmi_h2c_manual_capture_session as session
 from investment_orchestrator.offline.mmi_h2c_dual_side_manual_handoff_context_receipt_v1 import (
     MmiH2cDualSideManualHandoffContextReceiptV1Error,
@@ -114,6 +118,7 @@ def _paths(root: Path) -> dict[str, Path]:
         "legacy_prompt_output_path": root / "legacy-prompt",
         "h1_response_path": root / "h1-response",
         "legacy_response_path": root / "legacy-response",
+        "case_evidence_bundle_output_path": root / "case-bundle",
         "comparison_report_output_path": root / "h2",
         "receipt_output_path": root / "receipt",
     }
@@ -143,7 +148,7 @@ def _run(
     return result, handoff
 
 
-def test_complete_foreground_session_writes_h2_then_receipt(
+def test_complete_foreground_session_writes_bundle_h2_then_receipt(
     tmp_path: Path,
 ) -> None:
     result, handoff = _run(tmp_path)
@@ -151,12 +156,17 @@ def test_complete_foreground_session_writes_h2_then_receipt(
     assert handoff.call_count == 1
     assert paths["h1_prompt_output_path"].read_bytes()
     assert paths["legacy_prompt_output_path"].read_bytes().endswith(b"\n")
+    bundle_bytes = paths["case_evidence_bundle_output_path"].read_bytes()
     h2_bytes = paths["comparison_report_output_path"].read_bytes()
     receipt_bytes = paths["receipt_output_path"].read_bytes()
+    assert not bundle_bytes.endswith(b"\n")
     assert not h2_bytes.endswith(b"\n")
     assert len(receipt_bytes) == 1114
+    bundle = json.loads(bundle_bytes)
     h2 = json.loads(h2_bytes)
     receipt = json.loads(receipt_bytes)
+    assert validate_mmi_h2c_case_evidence_bundle_v1(bundle=bundle) is None
+    assert bundle["case_evidence_bundle_identity_sha256"]
     assert h2["comparison_report_identity_sha256"] == (
         result.comparison_report_identity_sha256
     )
@@ -171,138 +181,79 @@ def test_complete_foreground_session_writes_h2_then_receipt(
     )
 
 
-def _spy(
-    monkeypatch: pytest.MonkeyPatch,
-    name: str,
-    sink: list[object],
-) -> None:
-    """Wrap a real session owner call so its exact return value is kept,
-    without altering what it does or returns."""
-    original = getattr(session, name)
-
-    def wrapper(*args: object, **kwargs: object) -> object:
-        result = original(*args, **kwargs)
-        sink.append(result)
-        return result
-
-    monkeypatch.setattr(session, name, wrapper)
+def _run_completed_capture(
+    root: Path,
+) -> tuple[session.H2cManualCaptureResult, dict[str, Path]]:
+    """Cross the session boundary carrying only result values and paths."""
+    result, handoff = _run(root)
+    assert handoff.call_count == 1
+    return result, _paths(root)
 
 
-def _run_and_capture_contemporaneous_artifacts(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+def _portable_evidence_from_disk(
+    paths: Mapping[str, Path],
 ) -> dict[str, object]:
-    """Run the real production session and retain the exact mappings and
-    bytes its real owners already produced during this one invocation."""
-    paths = _paths(tmp_path)
-    settings_hash, portfolio_hash = _source_hashes()
-    handoff = _ResponseHandoff(
-        h1_prompt_path=paths["h1_prompt_output_path"],
-        h1_response_path=paths["h1_response_path"],
-        legacy_response_path=paths["legacy_response_path"],
+    bundle = json.loads(
+        paths["case_evidence_bundle_output_path"].read_bytes()
     )
-
-    captured_sources: dict[object, object] = {}
-    original_capture_source = session.capture_current_mmi_source
-
-    def capture_source_spy(role: object, **kwargs: object) -> object:
-        result = original_capture_source(role, **kwargs)
-        captured_sources[role] = result
-        return result
-
-    monkeypatch.setattr(
-        session, "capture_current_mmi_source", capture_source_spy
-    )
-
-    g2_calls: list[object] = []
-    r1_calls: list[object] = []
-    r2_calls: list[object] = []
-    h1_calls: list[object] = []
-    template_calls: list[object] = []
-    _spy(monkeypatch, "validate_mmi_grounded_prompt_v2", g2_calls)
-    _spy(monkeypatch, "validate_mmi_raw_response_envelope_v2", r1_calls)
-    _spy(
-        monkeypatch,
-        "validate_mmi_validated_grounded_analysis_response_v2",
-        r2_calls,
-    )
-    _spy(
-        monkeypatch,
-        "validate_mmi_legacy_step1_compatibility_candidate_v1",
-        h1_calls,
-    )
-    _spy(monkeypatch, "_stable_read_legacy_template", template_calls)
-
-    result = session.run_h2c_manual_capture(
-        strategy_settings_expected_sha256=settings_hash,
-        portfolio_snapshot_expected_sha256=portfolio_hash,
-        operator_handoff=handoff,
-        **paths,
-    )
-
-    settings_capture = captured_sources[
-        session.MmiSourceRole.STRATEGY_SETTINGS
-    ]
-    portfolio_capture = captured_sources[
-        session.MmiSourceRole.PORTFOLIO_SNAPSHOT
-    ]
-
-    comparison_report = json.loads(
-        paths["comparison_report_output_path"].read_bytes()
-    )
-    receipt = json.loads(paths["receipt_output_path"].read_bytes())
-    assert (
-        receipt["receipt_identity_sha256"] == result.receipt_identity_sha256
-    )
-    assert (
-        comparison_report["comparison_report_identity_sha256"]
-        == result.comparison_report_identity_sha256
-    )
-
-    # G2 is validated twice (build-time, then live-chain revalidation); the
-    # first call is the exact artifact the session goes on to build R1 from.
+    assert type(bundle) is dict
+    assert validate_mmi_h2c_case_evidence_bundle_v1(bundle=bundle) is None
     return {
-        "receipt": receipt,
-        "comparison_report": comparison_report,
-        "legacy_step1_compatibility_candidate": h1_calls[0],
-        "validated_grounded_analysis_response": r2_calls[0],
-        "raw_response_envelope": r1_calls[0],
-        "grounded_prompt": g2_calls[0],
-        "archived_h1_prompt_bytes": (
-            paths["h1_prompt_output_path"].read_bytes()
+        "receipt": json.loads(paths["receipt_output_path"].read_bytes()),
+        "comparison_report": json.loads(
+            paths["comparison_report_output_path"].read_bytes()
         ),
-        "archived_h1_response_bytes": (
-            paths["h1_response_path"].read_bytes()
-        ),
-        "archived_legacy_response_bytes": (
-            paths["legacy_response_path"].read_bytes()
-        ),
+        "legacy_step1_compatibility_candidate": bundle[
+            "legacy_step1_compatibility_candidate"
+        ],
+        "validated_grounded_analysis_response": bundle[
+            "validated_grounded_analysis_response"
+        ],
+        "raw_response_envelope": bundle["raw_response_envelope"],
+        "grounded_prompt": bundle["grounded_prompt"],
+        "archived_h1_prompt_bytes": paths[
+            "h1_prompt_output_path"
+        ].read_bytes(),
+        "archived_h1_response_bytes": paths["h1_response_path"].read_bytes(),
+        "archived_legacy_response_bytes": paths[
+            "legacy_response_path"
+        ].read_bytes(),
         "archived_strategy_settings_bytes": (
-            settings_capture.source.raw_bytes
-        ),
-        "strategy_settings_source_record": dict(
-            settings_capture.source.source_record
-        ),
+            repo_root() / "inputs/current/strategy_settings.yaml"
+        ).read_bytes(),
+        "strategy_settings_source_record": bundle[
+            "strategy_settings_source_record"
+        ],
         "archived_portfolio_snapshot_bytes": (
-            portfolio_capture.source.raw_bytes
-        ),
-        "portfolio_snapshot_source_record": dict(
-            portfolio_capture.source.source_record
-        ),
-        "archived_legacy_prompt_template_bytes": template_calls[0],
-        "archived_legacy_prompt_bytes": (
-            paths["legacy_prompt_output_path"].read_bytes()
-        ),
+            repo_root() / "inputs/current/portfolio_snapshot.txt"
+        ).read_bytes(),
+        "portfolio_snapshot_source_record": bundle[
+            "portfolio_snapshot_source_record"
+        ],
+        "archived_legacy_prompt_template_bytes": prompt_path(
+            "research_dual_lane.txt"
+        ).read_bytes(),
+        "archived_legacy_prompt_bytes": paths[
+            "legacy_prompt_output_path"
+        ].read_bytes(),
     }
+
+
+def _persisted_bundle(paths: Mapping[str, Path]) -> dict[str, object]:
+    value = json.loads(
+        paths["case_evidence_bundle_output_path"].read_bytes()
+    )
+    assert type(value) is dict
+    return value
 
 
 def test_production_receipt_composes_with_portable_evidence_validator(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    evidence = _run_and_capture_contemporaneous_artifacts(
-        tmp_path, monkeypatch
-    )
+    result, paths = _run_completed_capture(tmp_path)
+    assert result.comparison_report_identity_sha256
+    assert result.receipt_identity_sha256
+    evidence = _portable_evidence_from_disk(paths)
     assert (
         validate_mmi_h2c_dual_side_manual_handoff_context_receipt_v1_portable_evidence(
             **evidence
@@ -313,11 +264,9 @@ def test_production_receipt_composes_with_portable_evidence_validator(
 
 def test_production_receipt_composition_fails_closed_on_tampered_archive(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    evidence = _run_and_capture_contemporaneous_artifacts(
-        tmp_path, monkeypatch
-    )
+    _result, paths = _run_completed_capture(tmp_path)
+    evidence = _portable_evidence_from_disk(paths)
     tampered = bytearray(evidence["archived_h1_prompt_bytes"])
     tampered[-1] ^= 0xFF
     evidence["archived_h1_prompt_bytes"] = bytes(tampered)
@@ -330,8 +279,90 @@ def test_production_receipt_composition_fails_closed_on_tampered_archive(
         )
 
 
+def test_same_session_bundle_provenance_uses_exactly_two_source_captures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[tuple[object, object]] = []
+    original = session.capture_current_mmi_source
+
+    def capture(role: object, **kwargs: object) -> object:
+        result = original(role, **kwargs)
+        observed.append((role, result))
+        return result
+
+    monkeypatch.setattr(session, "capture_current_mmi_source", capture)
+    _result, paths = _run_completed_capture(tmp_path)
+
+    assert [role for role, _result in observed] == [
+        session.MmiSourceRole.STRATEGY_SETTINGS,
+        session.MmiSourceRole.PORTFOLIO_SNAPSHOT,
+    ]
+    assert len(observed) == 2
+    settings_result = observed[0][1]
+    portfolio_result = observed[1][1]
+    assert type(settings_result) is session.MmiSourceCaptureResult
+    assert type(portfolio_result) is session.MmiSourceCaptureResult
+    assert settings_result.source is not None
+    assert portfolio_result.source is not None
+
+    bundle = _persisted_bundle(paths)
+    h2 = json.loads(paths["comparison_report_output_path"].read_bytes())
+    receipt = json.loads(paths["receipt_output_path"].read_bytes())
+    assert bundle["strategy_settings_source_record"] == dict(
+        settings_result.source.source_record
+    )
+    assert bundle["portfolio_snapshot_source_record"] == dict(
+        portfolio_result.source.source_record
+    )
+
+    g2 = bundle["grounded_prompt"]
+    r1 = bundle["raw_response_envelope"]
+    r2 = bundle["validated_grounded_analysis_response"]
+    h1 = bundle["legacy_step1_compatibility_candidate"]
+    assert type(g2) is dict
+    assert type(r1) is dict
+    assert type(r2) is dict
+    assert type(h1) is dict
+    assert type(h2) is dict
+    assert type(receipt) is dict
+    assert r1["grounded_prompt_artifact_identity_sha256"] == (
+        g2["grounded_prompt_artifact_identity_sha256"]
+    )
+    assert r2["raw_response_envelope_identity_sha256"] == (
+        r1["raw_response_envelope_identity_sha256"]
+    )
+    h1_provenance = h1["provenance"]
+    h2_provenance = h2["provenance"]
+    assert type(h1_provenance) is dict
+    assert type(h2_provenance) is dict
+    assert h1_provenance[
+        "validated_grounded_analysis_response_identity_sha256"
+    ] == r2["validated_grounded_analysis_response_identity_sha256"]
+    assert h2_provenance[
+        "legacy_step1_compatibility_candidate_identity_sha256"
+    ] == h1["legacy_step1_compatibility_candidate_identity_sha256"]
+    assert receipt["strategy_settings_source_record_identity_sha256"] == (
+        bundle["strategy_settings_source_record"][
+            "source_record_identity_sha256"
+        ]
+    )
+    assert receipt["portfolio_snapshot_source_record_identity_sha256"] == (
+        bundle["portfolio_snapshot_source_record"][
+            "source_record_identity_sha256"
+        ]
+    )
+    evidence = _portable_evidence_from_disk(paths)
+    assert (
+        validate_mmi_h2c_dual_side_manual_handoff_context_receipt_v1_portable_evidence(
+            **evidence
+        )
+        is None
+    )
+
+
 def test_error_enum_mapping_is_exact_and_error_is_immutable() -> None:
-    assert len(session.H2cManualCaptureErrorCode) == 17
+    assert len(session.H2cManualCaptureErrorCode) == 19
     assert len(session.H2cManualCaptureFailureClass) == 8
     assert set(session._ERROR_CLASSES) == set(
         session.H2cManualCaptureErrorCode
@@ -347,16 +378,25 @@ def test_error_enum_mapping_is_exact_and_error_is_immutable() -> None:
         assert error.owner_reason_codes == ("OWNER_A", "OWNER_A")
         with pytest.raises(FrozenInstanceError):
             error.code = code  # type: ignore[misc]
+    assert session._ERROR_CLASSES[
+        session.H2cManualCaptureErrorCode.H2C_CASE_EVIDENCE_BUNDLE_VALIDATION_INVALID
+    ] is session.H2cManualCaptureFailureClass.VALIDATOR_SCHEMA
+    assert session._ERROR_CLASSES[
+        session.H2cManualCaptureErrorCode.H2C_CASE_EVIDENCE_BUNDLE_PERSISTENCE_FAILED
+    ] is session.H2cManualCaptureFailureClass.PERSISTENCE
 
 
-def test_six_paths_reject_lexical_alias_before_live_run(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _paths(tmp_path)
-    paths["legacy_prompt_output_path"] = Path(
-        os.fspath(tmp_path / "nested" / ".." / "h1-prompt")
+def test_result_shape_remains_exactly_two_identities() -> None:
+    assert tuple(field.name for field in fields(session.H2cManualCaptureResult)) == (
+        "comparison_report_identity_sha256",
+        "receipt_identity_sha256",
     )
+
+
+def _preflight_error(
+    paths: Mapping[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> session.H2cManualCaptureError:
     monkeypatch.setattr(
         session,
         "begin_mmi_projection_run",
@@ -368,9 +408,112 @@ def test_six_paths_reject_lexical_alias_before_live_run(
             strategy_settings_expected_sha256=settings_hash,
             portfolio_snapshot_expected_sha256=portfolio_hash,
             operator_handoff=_CancelHandoff(),
-            **paths,
+            **paths,  # type: ignore[arg-type]
         )
-    assert captured.value.code is (
+    return captured.value
+
+
+@pytest.mark.parametrize(
+    "aliased_role",
+    (
+        "h1_prompt_output_path",
+        "legacy_prompt_output_path",
+        "h1_response_path",
+        "legacy_response_path",
+        "comparison_report_output_path",
+        "receipt_output_path",
+    ),
+)
+def test_bundle_path_rejects_each_normalized_role_alias_before_live_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    aliased_role: str,
+) -> None:
+    paths = _paths(tmp_path)
+    other = paths[aliased_role]
+    paths["case_evidence_bundle_output_path"] = Path(
+        os.fspath(other.parent / "normalized-away" / ".." / other.name)
+    )
+    error = _preflight_error(paths, monkeypatch)
+    assert error.code is (
+        session.H2cManualCaptureErrorCode.H2C_PATH_CONTRACT_INVALID
+    )
+
+
+def test_existing_bundle_leaf_fails_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _paths(tmp_path)
+    paths["case_evidence_bundle_output_path"].write_bytes(b"existing")
+    error = _preflight_error(paths, monkeypatch)
+    assert error.code is (
+        session.H2cManualCaptureErrorCode.H2C_PATH_CONTRACT_INVALID
+    )
+
+
+def test_missing_bundle_parent_fails_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _paths(tmp_path)
+    paths["case_evidence_bundle_output_path"] = (
+        tmp_path / "missing-parent" / "bundle"
+    )
+    error = _preflight_error(paths, monkeypatch)
+    assert error.code is (
+        session.H2cManualCaptureErrorCode.H2C_PATH_CONTRACT_INVALID
+    )
+
+
+def test_nondirectory_bundle_parent_fails_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _paths(tmp_path)
+    parent = tmp_path / "not-a-directory"
+    parent.write_bytes(b"file")
+    paths["case_evidence_bundle_output_path"] = parent / "bundle"
+    error = _preflight_error(paths, monkeypatch)
+    assert error.code is (
+        session.H2cManualCaptureErrorCode.H2C_PATH_CONTRACT_INVALID
+    )
+
+
+def test_relative_bundle_path_fails_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _paths(tmp_path)
+    paths["case_evidence_bundle_output_path"] = Path("relative-bundle")
+    error = _preflight_error(paths, monkeypatch)
+    assert error.code is (
+        session.H2cManualCaptureErrorCode.H2C_PATH_CONTRACT_INVALID
+    )
+
+
+def test_wrong_bundle_path_type_fails_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths: dict[str, object] = dict(_paths(tmp_path))
+    paths["case_evidence_bundle_output_path"] = os.fspath(
+        tmp_path / "bundle"
+    )
+    error = _preflight_error(paths, monkeypatch)
+    assert error.code is session.H2cManualCaptureErrorCode.H2C_ARGUMENT_INVALID
+
+
+def test_dangling_bundle_symlink_fails_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _paths(tmp_path)
+    paths["case_evidence_bundle_output_path"].symlink_to(
+        tmp_path / "missing-target"
+    )
+    error = _preflight_error(paths, monkeypatch)
+    assert error.code is (
         session.H2cManualCaptureErrorCode.H2C_PATH_CONTRACT_INVALID
     )
 
@@ -394,6 +537,7 @@ def test_operator_cancellation_leaves_only_inert_prompts(
     assert handoff.call_count == 1
     assert paths["h1_prompt_output_path"].exists()
     assert paths["legacy_prompt_output_path"].exists()
+    assert not paths["case_evidence_bundle_output_path"].exists()
     assert not paths["comparison_report_output_path"].exists()
     assert not paths["receipt_output_path"].exists()
 
@@ -426,6 +570,7 @@ def test_invalid_h1_response_content_has_one_public_code(
     assert captured.value.code is (
         session.H2cManualCaptureErrorCode.H2C_RESPONSE_CONTENT_INVALID
     )
+    assert not (tmp_path / "case-bundle").exists()
     assert not (tmp_path / "h2").exists()
     assert not (tmp_path / "receipt").exists()
 
@@ -535,21 +680,161 @@ def test_legacy_conversion_matches_universal_newline_semantics() -> None:
     assert session._legacy_text(b"a\r\nb\rc\n") == "a\nb\nc\n"
 
 
-def test_receipt_persistence_failure_leaves_confirmed_h2(
+def test_bundle_owner_failure_translates_exact_reason_and_class(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    def fail(**_kwargs: object) -> object:
+        raise session._case_bundle.MmiH2cCaseEvidenceBundleV1Error(
+            "MMI_H2C_CASE_EVIDENCE_BUNDLE_V1_INVALID"
+        )
+
+    monkeypatch.setattr(
+        session._case_bundle,
+        "_build_mmi_h2c_case_evidence_bundle_v1",
+        fail,
+    )
+    with pytest.raises(session.H2cManualCaptureError) as captured:
+        _run(tmp_path)
+    assert captured.value.code is (
+        session.H2cManualCaptureErrorCode.H2C_CASE_EVIDENCE_BUNDLE_VALIDATION_INVALID
+    )
+    assert captured.value.failure_class is (
+        session.H2cManualCaptureFailureClass.VALIDATOR_SCHEMA
+    )
+    assert captured.value.owner_reason_codes == (
+        "MMI_H2C_CASE_EVIDENCE_BUNDLE_V1_INVALID",
+    )
+    assert not (tmp_path / "case-bundle").exists()
+    assert not (tmp_path / "h2").exists()
+    assert not (tmp_path / "receipt").exists()
+
+
+def test_unknown_bundle_owner_code_remains_a_true_bug(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error = session._case_bundle.MmiH2cCaseEvidenceBundleV1Error(
+        "MMI_H2C_CASE_EVIDENCE_BUNDLE_V1_INVALID"
+    )
+    error.code = "UNKNOWN"  # type: ignore[assignment]
+
+    def fail(**_kwargs: object) -> object:
+        raise error
+
+    monkeypatch.setattr(
+        session._case_bundle,
+        "_build_mmi_h2c_case_evidence_bundle_v1",
+        fail,
+    )
+    with pytest.raises(
+        session._case_bundle.MmiH2cCaseEvidenceBundleV1Error
+    ) as captured:
+        _run(tmp_path)
+    assert captured.value is error
+
+
+def test_bundle_canonicalization_failure_is_controlled_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = session.canonical_json_bytes
+
+    def fail_bundle(value: object, **kwargs: object) -> bytes:
+        if (
+            isinstance(value, Mapping)
+            and value.get("artifact_kind")
+            == "MMI_H2C_CASE_EVIDENCE_BUNDLE"
+        ):
+            raise session.MmiCanonicalizationError("CONTROLLED")
+        return original(value, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(session, "canonical_json_bytes", fail_bundle)
+    with pytest.raises(session.H2cManualCaptureError) as captured:
+        _run(tmp_path)
+    assert captured.value.code is (
+        session.H2cManualCaptureErrorCode.H2C_CASE_EVIDENCE_BUNDLE_VALIDATION_INVALID
+    )
+    assert captured.value.failure_class is (
+        session.H2cManualCaptureFailureClass.VALIDATOR_SCHEMA
+    )
+    assert captured.value.owner_reason_codes == ()
+
+
+def test_all_result_bytes_are_canonical_before_bundle_h2_receipt_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _paths(tmp_path)
+    artifact_kind_by_path = {
+        paths["case_evidence_bundle_output_path"]: (
+            "MMI_H2C_CASE_EVIDENCE_BUNDLE"
+        ),
+        paths["comparison_report_output_path"]: (
+            "MMI_LEGACY_STEP1_COMPARISON_REPORT"
+        ),
+        paths["receipt_output_path"]: (
+            "MMI_H2C_DUAL_SIDE_MANUAL_HANDOFF_CONTEXT_RECEIPT"
+        ),
+    }
+    prepared: dict[str, bytes] = {}
+    writes: list[Path] = []
+    original_canonical = session.canonical_json_bytes
+    original_write = session._write_new_exact_file
+
+    def canonical(value: object, **kwargs: object) -> bytes:
+        exact_bytes = original_canonical(
+            value, **kwargs  # type: ignore[arg-type]
+        )
+        if isinstance(value, Mapping):
+            artifact_kind = value.get("artifact_kind")
+            if artifact_kind in set(artifact_kind_by_path.values()):
+                assert type(artifact_kind) is str
+                prepared[artifact_kind] = exact_bytes
+        return exact_bytes
+
+    def write(**kwargs: object) -> object:
+        path = kwargs["path"]
+        assert isinstance(path, Path)
+        if path in artifact_kind_by_path:
+            assert set(prepared) == set(artifact_kind_by_path.values())
+            assert kwargs["exact_bytes"] == prepared[
+                artifact_kind_by_path[path]
+            ]
+            writes.append(path)
+        return original_write(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(session, "canonical_json_bytes", canonical)
+    monkeypatch.setattr(session, "_write_new_exact_file", write)
+    _run(tmp_path)
+    assert writes == [
+        paths["case_evidence_bundle_output_path"],
+        paths["comparison_report_output_path"],
+        paths["receipt_output_path"],
+    ]
+
+
+def test_bundle_persistence_failure_prevents_h2_and_receipt_attempts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _paths(tmp_path)
     original = session._write_new_exact_file
     observed: list[Path] = []
 
-    def fail_receipt(**kwargs: object) -> object:
+    def fail_bundle(**kwargs: object) -> object:
         path = kwargs["path"]
         assert isinstance(path, Path)
-        observed.append(path)
-        if path.name == "receipt":
+        if path in {
+            paths["case_evidence_bundle_output_path"],
+            paths["comparison_report_output_path"],
+            paths["receipt_output_path"],
+        }:
+            observed.append(path)
+        if path == paths["case_evidence_bundle_output_path"]:
             raise session.H2cManualCaptureError(
                 code=(
-                    session.H2cManualCaptureErrorCode.H2C_RECEIPT_PERSISTENCE_FAILED
+                    session.H2cManualCaptureErrorCode.H2C_CASE_EVIDENCE_BUNDLE_PERSISTENCE_FAILED
                 ),
                 failure_class=(
                     session.H2cManualCaptureFailureClass.PERSISTENCE
@@ -557,29 +842,39 @@ def test_receipt_persistence_failure_leaves_confirmed_h2(
             )
         return original(**kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(session, "_write_new_exact_file", fail_receipt)
+    monkeypatch.setattr(session, "_write_new_exact_file", fail_bundle)
     with pytest.raises(session.H2cManualCaptureError) as captured:
         _run(tmp_path)
     assert captured.value.code is (
-        session.H2cManualCaptureErrorCode.H2C_RECEIPT_PERSISTENCE_FAILED
+        session.H2cManualCaptureErrorCode.H2C_CASE_EVIDENCE_BUNDLE_PERSISTENCE_FAILED
     )
-    assert (tmp_path / "h2").exists()
-    assert not (tmp_path / "receipt").exists()
-    assert observed[-2:] == [tmp_path / "h2", tmp_path / "receipt"]
+    assert captured.value.failure_class is (
+        session.H2cManualCaptureFailureClass.PERSISTENCE
+    )
+    assert observed == [paths["case_evidence_bundle_output_path"]]
+    assert not paths["case_evidence_bundle_output_path"].exists()
+    assert not paths["comparison_report_output_path"].exists()
+    assert not paths["receipt_output_path"].exists()
 
 
-def test_h2_persistence_failure_prevents_receipt_attempt(
+def test_h2_persistence_failure_leaves_bundle_and_prevents_receipt_attempt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    paths = _paths(tmp_path)
     original = session._write_new_exact_file
     observed: list[Path] = []
 
     def fail_h2(**kwargs: object) -> object:
         path = kwargs["path"]
         assert isinstance(path, Path)
-        observed.append(path)
-        if path.name == "h2":
+        if path in {
+            paths["case_evidence_bundle_output_path"],
+            paths["comparison_report_output_path"],
+            paths["receipt_output_path"],
+        }:
+            observed.append(path)
+        if path == paths["comparison_report_output_path"]:
             raise session.H2cManualCaptureError(
                 code=(
                     session.H2cManualCaptureErrorCode.H2C_H2_PERSISTENCE_FAILED
@@ -596,13 +891,67 @@ def test_h2_persistence_failure_prevents_receipt_attempt(
     assert captured.value.code is (
         session.H2cManualCaptureErrorCode.H2C_H2_PERSISTENCE_FAILED
     )
-    assert observed[-1] == tmp_path / "h2"
-    assert not (tmp_path / "h2").exists()
-    assert not (tmp_path / "receipt").exists()
+    assert captured.value.failure_class is (
+        session.H2cManualCaptureFailureClass.PERSISTENCE
+    )
+    assert observed == [
+        paths["case_evidence_bundle_output_path"],
+        paths["comparison_report_output_path"],
+    ]
+    assert paths["case_evidence_bundle_output_path"].exists()
+    assert not paths["comparison_report_output_path"].exists()
+    assert not paths["receipt_output_path"].exists()
+
+
+def test_receipt_persistence_failure_leaves_confirmed_bundle_and_h2(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _paths(tmp_path)
+    original = session._write_new_exact_file
+    observed: list[Path] = []
+
+    def fail_receipt(**kwargs: object) -> object:
+        path = kwargs["path"]
+        assert isinstance(path, Path)
+        if path in {
+            paths["case_evidence_bundle_output_path"],
+            paths["comparison_report_output_path"],
+            paths["receipt_output_path"],
+        }:
+            observed.append(path)
+        if path == paths["receipt_output_path"]:
+            raise session.H2cManualCaptureError(
+                code=(
+                    session.H2cManualCaptureErrorCode.H2C_RECEIPT_PERSISTENCE_FAILED
+                ),
+                failure_class=(
+                    session.H2cManualCaptureFailureClass.PERSISTENCE
+                ),
+            )
+        return original(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(session, "_write_new_exact_file", fail_receipt)
+    with pytest.raises(session.H2cManualCaptureError) as captured:
+        _run(tmp_path)
+    assert captured.value.code is (
+        session.H2cManualCaptureErrorCode.H2C_RECEIPT_PERSISTENCE_FAILED
+    )
+    assert captured.value.failure_class is (
+        session.H2cManualCaptureFailureClass.PERSISTENCE
+    )
+    assert observed == [
+        paths["case_evidence_bundle_output_path"],
+        paths["comparison_report_output_path"],
+        paths["receipt_output_path"],
+    ]
+    assert paths["case_evidence_bundle_output_path"].exists()
+    assert paths["comparison_report_output_path"].exists()
+    assert not paths["receipt_output_path"].exists()
 
 
 @pytest.mark.parametrize("fsync_call", (1, 2))
-def test_file_and_parent_fsync_failures_use_persistence_code(
+def test_file_and_parent_fsync_failures_use_bundle_persistence_code(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     fsync_call: int,
@@ -623,11 +972,14 @@ def test_file_and_parent_fsync_failures_use_persistence_code(
             path=tmp_path / "out",
             exact_bytes=b"exact",
             failure_code=(
-                session.H2cManualCaptureErrorCode.H2C_H2_PERSISTENCE_FAILED
+                session.H2cManualCaptureErrorCode.H2C_CASE_EVIDENCE_BUNDLE_PERSISTENCE_FAILED
             ),
         )
     assert captured.value.code is (
-        session.H2cManualCaptureErrorCode.H2C_H2_PERSISTENCE_FAILED
+        session.H2cManualCaptureErrorCode.H2C_CASE_EVIDENCE_BUNDLE_PERSISTENCE_FAILED
+    )
+    assert captured.value.failure_class is (
+        session.H2cManualCaptureFailureClass.PERSISTENCE
     )
 
 
@@ -643,6 +995,25 @@ def test_unknown_filesystem_errno_remains_a_true_bug(
         session._stable_read_response_pair(
             h1_path=tmp_path / "h1",
             legacy_path=tmp_path / "legacy",
+        )
+    assert captured.value.errno == 9999
+
+
+def test_unknown_bundle_persistence_errno_remains_a_true_bug(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unknown(*_args: object, **_kwargs: object) -> int:
+        raise OSError(9999, "unknown")
+
+    monkeypatch.setattr(session.os, "open", unknown)
+    with pytest.raises(OSError) as captured:
+        session._write_new_exact_file(
+            path=tmp_path / "case-bundle",
+            exact_bytes=b"exact",
+            failure_code=(
+                session.H2cManualCaptureErrorCode.H2C_CASE_EVIDENCE_BUNDLE_PERSISTENCE_FAILED
+            ),
         )
     assert captured.value.errno == 9999
 

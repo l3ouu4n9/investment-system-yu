@@ -273,8 +273,8 @@ def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -
     )
     # Only the dormant H2 owner and explicit report-only H2c owners may read
     # MMI outside the package; none is an admission or action consumer.  The
-    # dormant H2c case-bundle owner structurally envelopes MMI artifact
-    # mappings and has zero production consumers.
+    # H2c case-bundle owner structurally envelopes MMI artifact mappings; its
+    # only consumer is the explicit foreground capture session asserted below.
     assert external_mmi_readers == (
         H2C_CASE_BUNDLE_RELATIVE_PATH,
         H2C_RECEIPT_RELATIVE_PATH,
@@ -564,6 +564,9 @@ def test_v2_prompt_envelope_and_response_graph_is_exact_and_dormant() -> None:
     assert consumers(
         "investment_orchestrator.offline."
         "mmi_h2c_dual_side_manual_handoff_context_receipt_v1"
+    ) == (H2C_CAPTURE_SESSION_RELATIVE_PATH,)
+    assert consumers(
+        "investment_orchestrator.offline.mmi_h2c_case_bundle_v1"
     ) == (H2C_CAPTURE_SESSION_RELATIVE_PATH,)
     assert consumers(
         "investment_orchestrator.offline.mmi_h2c_manual_capture_session"
