@@ -21,7 +21,6 @@ from investment_orchestrator.mmi.analyst_visible_evidence_view_v2 import (
 from investment_orchestrator.mmi.canonical import (
     MAX_MMI_H2C_DUAL_SIDE_MANUAL_HANDOFF_CONTEXT_RECEIPT_V1_CANONICAL_BYTES,
     _MMI_H2C_DUAL_SIDE_MANUAL_HANDOFF_CONTEXT_RECEIPT_V1_IDENTITY_DOMAIN,
-    canonical_json_bytes,
     record_identity_sha256,
 )
 from investment_orchestrator.mmi.contracts import (
@@ -359,6 +358,37 @@ def evidence() -> _PortableEvidence:
     )
 
 
+def _independent_canonical_json_bytes(value: object) -> bytes:
+    """Reimplements the canonical JSON encoding without calling
+    ``canonical_json_bytes`` -- an independent serialization oracle."""
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _independent_receipt_identity_sha256(receipt: dict[str, object]) -> str:
+    """Independent identity oracle: reimplements the domain-separated
+    framing and hashing from first principles. Deliberately does not call
+    ``record_identity_sha256``, ``domain_separated_sha256``, or any private
+    helper owned by the receipt module."""
+    preimage = deepcopy(receipt)
+    preimage.pop("receipt_identity_sha256")
+    preimage_bytes = _independent_canonical_json_bytes(preimage)
+    length_frame = len(preimage_bytes).to_bytes(
+        8, byteorder="big", signed=False
+    )
+    framed = (
+        _MMI_H2C_DUAL_SIDE_MANUAL_HANDOFF_CONTEXT_RECEIPT_V1_IDENTITY_DOMAIN
+        + length_frame
+        + preimage_bytes
+    )
+    return hashlib.sha256(framed).hexdigest()
+
+
 def test_receipt_exact_shape_identity_and_arithmetic(
     evidence: _PortableEvidence,
 ) -> None:
@@ -366,13 +396,54 @@ def test_receipt_exact_shape_identity_and_arithmetic(
         receipt=evidence.receipt
     ) is None
     assert len(evidence.receipt) == 16
-    complete = canonical_json_bytes(evidence.receipt)
-    preimage = dict(evidence.receipt)
+
+    preimage = deepcopy(evidence.receipt)
     preimage.pop("receipt_identity_sha256")
-    assert len(complete) == 1114
-    assert len(canonical_json_bytes(preimage)) == 1021
-    assert len(_MMI_H2C_DUAL_SIDE_MANUAL_HANDOFF_CONTEXT_RECEIPT_V1_IDENTITY_DOMAIN) == 52
-    assert 52 + 8 + 1021 == 1081
+    assert "receipt_identity_sha256" not in preimage
+    assert len(preimage) == 15
+    assert set(preimage) == set(evidence.receipt) - {
+        "receipt_identity_sha256"
+    }
+
+    domain = (
+        _MMI_H2C_DUAL_SIDE_MANUAL_HANDOFF_CONTEXT_RECEIPT_V1_IDENTITY_DOMAIN
+    )
+    preimage_bytes = _independent_canonical_json_bytes(preimage)
+    length_frame = len(preimage_bytes).to_bytes(
+        8, byteorder="big", signed=False
+    )
+    framed = domain + length_frame + preimage_bytes
+    complete_receipt_bytes = _independent_canonical_json_bytes(
+        evidence.receipt
+    )
+
+    assert len(domain) == 52
+    assert len(length_frame) == 8
+    assert len(preimage_bytes) == 1021
+    assert len(framed) == 1081
+    assert len(complete_receipt_bytes) == 1114
+
+    expected_identity = hashlib.sha256(framed).hexdigest()
+    assert expected_identity == evidence.receipt["receipt_identity_sha256"]
+    assert expected_identity == _independent_receipt_identity_sha256(
+        evidence.receipt
+    )
+
+
+def test_independent_oracle_detects_a_mutated_identity_covered_field(
+    evidence: _PortableEvidence,
+) -> None:
+    mutated = deepcopy(evidence.receipt)
+    stored_identity = mutated["receipt_identity_sha256"]
+    mutated["legacy_prompt_sha256"] = "0" * 64
+    assert (
+        mutated["legacy_prompt_sha256"]
+        != evidence.receipt["legacy_prompt_sha256"]
+    )
+
+    recomputed_identity = _independent_receipt_identity_sha256(mutated)
+
+    assert recomputed_identity != stored_identity
 
 
 def test_complete_portable_structural_chain_validates(
