@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-system.local/schemas/mmi_h2c_case_evidence_bundle_v1.schema.json",
+  "title": "MMI H2c case evidence bundle v1",
+  "description": "Report-only envelope preserving the six exact same-session mappings that are otherwise lost when the foreground H2c capture process exits. This schema performs slot-discriminator validation only; the receipt portable-evidence validator remains the sole owner of complete nested artifact validation, identities, links, and exact-byte equality.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "report_only",
+    "authority_effect",
+    "grounded_prompt",
+    "raw_response_envelope",
+    "validated_grounded_analysis_response",
+    "legacy_step1_compatibility_candidate",
+    "strategy_settings_source_record",
+    "portfolio_snapshot_source_record",
+    "case_evidence_bundle_identity_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mmi_h2c_case_evidence_bundle_v1"
+    },
+    "artifact_kind": {
+      "const": "MMI_H2C_CASE_EVIDENCE_BUNDLE"
+    },
+    "report_only": {
+      "const": true
+    },
+    "authority_effect": {
+      "const": "NONE"
+    },
+    "grounded_prompt": {
+      "$ref": "#/$defs/slot_grounded_prompt_v2"
+    },
+    "raw_response_envelope": {
+      "$ref": "#/$defs/slot_raw_response_envelope_v2"
+    },
+    "validated_grounded_analysis_response": {
+      "$ref": "#/$defs/slot_validated_grounded_analysis_response_v2"
+    },
+    "legacy_step1_compatibility_candidate": {
+      "$ref": "#/$defs/slot_legacy_step1_compatibility_candidate_v1"
+    },
+    "strategy_settings_source_record": {
+      "$ref": "#/$defs/slot_source_record_strategy_settings"
+    },
+    "portfolio_snapshot_source_record": {
+      "$ref": "#/$defs/slot_source_record_portfolio_snapshot"
+    },
+    "case_evidence_bundle_identity_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "slot_grounded_prompt_v2": {
+      "type": "object",
+      "required": [
+        "schema_version"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "mmi_grounded_prompt_v2"
+        }
+      }
+    },
+    "slot_raw_response_envelope_v2": {
+      "type": "object",
+      "required": [
+        "schema_version"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "mmi_raw_response_envelope_v2"
+        }
+      }
+    },
+    "slot_validated_grounded_analysis_response_v2": {
+      "type": "object",
+      "required": [
+        "schema_version"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "mmi_validated_grounded_analysis_response_v2"
+        }
+      }
+    },
+    "slot_legacy_step1_compatibility_candidate_v1": {
+      "type": "object",
+      "required": [
+        "schema_version"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "mmi_legacy_step1_compatibility_candidate_v1"
+        }
+      }
+    },
+    "slot_source_record_strategy_settings": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "source_role"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "mmi_source_record_v1"
+        },
+        "source_role": {
+          "const": "STRATEGY_SETTINGS"
+        }
+      }
+    },
+    "slot_source_record_portfolio_snapshot": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "source_role"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "mmi_source_record_v1"
+        },
+        "source_role": {
+          "const": "PORTFOLIO_SNAPSHOT"
+        }
+      }
+    }
+  }
+}

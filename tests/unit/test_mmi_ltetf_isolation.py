@@ -78,6 +78,10 @@ H2C_RECEIPT_RELATIVE_PATH = (
     "src/investment_orchestrator/offline/"
     "mmi_h2c_dual_side_manual_handoff_context_receipt_v1.py"
 )
+H2C_CASE_BUNDLE_RELATIVE_PATH = (
+    "src/investment_orchestrator/offline/"
+    "mmi_h2c_case_bundle_v1.py"
+)
 H2C_CLI_RELATIVE_PATH = (
     "src/investment_orchestrator/cli/run_mmi_h2c_capture.py"
 )
@@ -268,8 +272,11 @@ def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -
         )
     )
     # Only the dormant H2 owner and explicit report-only H2c owners may read
-    # MMI outside the package; none is an admission or action consumer.
+    # MMI outside the package; none is an admission or action consumer.  The
+    # dormant H2c case-bundle owner structurally envelopes MMI artifact
+    # mappings and has zero production consumers.
     assert external_mmi_readers == (
+        H2C_CASE_BUNDLE_RELATIVE_PATH,
         H2C_RECEIPT_RELATIVE_PATH,
         H2C_CAPTURE_SESSION_RELATIVE_PATH,
         H2_COMPARISON_REPORT_RELATIVE_PATH,
@@ -650,7 +657,7 @@ def test_reachable_schema_validation_call_graph_does_not_write(
 
 def test_ltetf_inventory_classification_is_unchanged_except_inventory_content() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
-    assert len(inventory.production_paths) == 144
+    assert len(inventory.production_paths) == 145
     assert inventory.dynamic_findings == ()
     assert inventory.observer_external_consumers == EXPECTED_EXTERNAL_CONSUMERS
     assert inventory.report_artifact_readers == ()

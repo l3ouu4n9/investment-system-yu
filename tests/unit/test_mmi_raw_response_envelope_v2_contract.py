@@ -177,7 +177,7 @@ def test_h02c_has_exact_r1c_v2_and_r2c_v2_phase_ownership() -> None:
         root / "src/investment_orchestrator/mmi/raw_response_envelope_v2.py"
     ).exists()
     domains = _identity_domains()
-    assert len(domains) == len(set(domains)) == 18
+    assert len(domains) == len(set(domains)) == 19
     assert b"mmi_raw_response_envelope_v2\0" in domains
     assert (
         root
