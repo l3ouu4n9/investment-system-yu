@@ -2,3 +2,9 @@ Currently unused by the repo CLIs.
 
 For Daily Execution Check overrides, use override_event_notes.txt in the daily
 artifact directory or inputs/current/override_event_notes.txt.
+
+2026-08-03 refresh:
+- operator approved hard_cap_open_orders_budget = 41935.20;
+- portfolio snapshot reconciled to current broker state;
+- VT and VTI quantities increased;
+- CIBR open buy order is no longer open.

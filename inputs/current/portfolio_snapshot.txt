@@ -1,5 +1,5 @@
 【輸入 2｜Portfolio Snapshot（PATCH: base ETF holdings required; extended ETF holdings optional）】
-# updated 2026-06-28
+# updated 2026-08-03
 
 (1) current_holdings_base（REQUIRED；六檔 base ETF 必填）
 格式：TICKER | shares | avg_cost
@@ -8,12 +8,13 @@
 - shares 必須為整數且 >=0
 - avg_cost 允許為 NA/null
 
+GRID | 5 | 174.38
 IGV | 5 | 97.05
-QQQ | 81 | 628.34
-SMH | 20 | 395.39
-VOO | 56 | 551.51
-VT | 3 | 144.49
-VTI | 36 | 290.45
+QQQ | 83 | 630.50
+SMH | 23 | 416.43
+VOO | 58 | 555.80
+VT | 5 | 148.1
+VTI | 38 | 294.46
 
 (1a_detail) current_holdings_base_by_broker（OPTIONAL；僅作明細保留，不作本回合 base holdings SSOT）
 格式：BROKER | TICKER | shares | avg_cost
@@ -23,13 +24,13 @@ VTI | 36 | 290.45
 - 若提供本區塊，current_holdings_base 的 shares 與 avg_cost 應為各券商明細的聚合結果
 - 模型不得直接以本區塊取代 current_holdings_base 做 base exposure / ranking / rotation 計算
 
-SCH | QQQ | 78 | 629.11
+SCH | QQQ | 80 | 631.33
 FID | QQQ | 3 | 608.4
 
-SCH | SMH | 16 | 357.82
+SCH | SMH | 19 | 389.22
 FID | SMH | 4 | 545.67
 
-SCH | VOO | 51 | 538.93
+SCH | VOO | 53 | 544.1
 FID | VOO | 5 | 679.87
 
 (1b) current_holdings_extended（OPTIONAL；若目前持有任何 extended ETF，無論本回合 optional_extended_etf_sleeve.enabled=true/false 都應提供）
@@ -154,11 +155,6 @@ TICKER | budget | compiled_open_order_notional(optional) | residual_cash_not_all
   - 若 open_order_state_timing=pre_submission 或 broker_submission_confirmed=false，Daily Execution Check 不得把 replacement 後 intended ladder 視為 live state。
 
 
-QQQ | 1277.14 | 692.24 | 584.90 | T4-E | 713.65 | 2026-06-23 | 2026-06-24 | 692.24 | 692.24 | 1 | L1@692.24 | L1:1
-VOO | 7757.08 | 6436.08 | 1321.00 | T4-B | 697.30 | 2026-06-10 |  | 658.95 | 613.62 | 3 | L2@658.95;L3@638.03;L4@613.62 | L2:5;L3:3;L4:2
-SMH | 2384.23 | 1682.46 | 701.77 | T4-B | 647.10 | 2026-06-15 |  | 592.10 | 530.62 | 3 | L2@592.10;L3@559.74;L4@530.62 | L2:1;L3:1;L4:1
-CIBR | 2500.00 | 2373.45 | 126.55 | T4-B | 84.21 | 2026-06-23 | 2026-06-24 | 80.42 | 68.21 | 4 | L1@80.42;L2@76.63;L3@72.00;L4@68.21 | L1:7;L2:8;L3:10;L4:7
-GRID | 2160.00 | 1826.84 | 333.16 | T4-B | 188.72 | 2026-06-23 | 2026-06-24 | 180.23 | 152.86 | 4 | L1@180.23;L2@171.74;L3@161.36;L4@152.86 | L1:2;L2:3;L3:4;L4:2
 
 (2b) sell_open_orders（optional, lot-aware open sell orders summary）
 

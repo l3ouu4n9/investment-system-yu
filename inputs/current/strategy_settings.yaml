@@ -1,9 +1,9 @@
-as_of: "2026-06-28"
-run_timestamp_et: "2026-06-29 01:49 ET"
+as_of: "2026-08-03"
+run_timestamp_et: "2026-08-03 12:00 ET"
 benchmark: "QQQ"
 tax_intent: "LTCG_only"
 min_holding_period: ">=12m"
-hard_cap_open_orders_budget: 38211.29
+hard_cap_open_orders_budget: 41935.2
 # Per-run deterministic ceiling (USD) on NET-NEW buy-order notional this weekly run.
 # Operator-controlled; enforced by the Step 4 post-order validator over net-new BUY
 # legs only (NEW_ORDER/BUY/SUBMIT_BUY/EXECUTE_BUY); replacement/cancel/keep legs are
