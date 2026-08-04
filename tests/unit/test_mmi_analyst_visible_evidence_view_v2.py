@@ -707,7 +707,7 @@ def test_v2_has_exact_g2_consumer_and_no_side_effect_surface() -> None:
 
 def test_inventory_and_persistent_identity_domain_counts_are_exact() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
-    assert len(inventory.production_paths) == 145
+    assert len(inventory.production_paths) == 147
     domains = {
         name: value
         for name, value in vars(canonical).items()

@@ -1,0 +1,231 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-system.local/schemas/mmi_h2c_prepared_case_v1.schema.json",
+  "title": "MMI H2c prepared case v1",
+  "description": "Closed report-only envelope for one dormant persisted H2c prepared case. Nested source-record and grounded-prompt mappings are opaque identity-bearing inputs whose semantic validation remains owned by later workflow phases.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "preparation_contract_version",
+    "report_only",
+    "authority_effect",
+    "workflow_status",
+    "evaluation_timestamp_utc",
+    "strategy_settings_source",
+    "portfolio_snapshot_source",
+    "legacy_prompt_template",
+    "grounded_prompt",
+    "h1_prompt",
+    "legacy_prompt",
+    "response_leaves",
+    "result_leaves",
+    "prepared_case_identity_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mmi_h2c_prepared_case_v1"
+    },
+    "artifact_kind": {
+      "const": "MMI_H2C_PREPARED_CASE"
+    },
+    "preparation_contract_version": {
+      "const": "mmi_h2c_persisted_case_prepare_v1"
+    },
+    "report_only": {
+      "const": true
+    },
+    "authority_effect": {
+      "const": "NONE"
+    },
+    "workflow_status": {
+      "const": "AWAITING_OPERATOR_RESPONSES"
+    },
+    "evaluation_timestamp_utc": {
+      "$ref": "#/$defs/canonical_timestamp"
+    },
+    "strategy_settings_source": {
+      "$ref": "#/$defs/strategy_settings_source"
+    },
+    "portfolio_snapshot_source": {
+      "$ref": "#/$defs/portfolio_snapshot_source"
+    },
+    "legacy_prompt_template": {
+      "$ref": "#/$defs/legacy_prompt_template"
+    },
+    "grounded_prompt": {
+      "$ref": "#/$defs/opaque_mapping"
+    },
+    "h1_prompt": {
+      "$ref": "#/$defs/h1_prompt"
+    },
+    "legacy_prompt": {
+      "$ref": "#/$defs/legacy_prompt"
+    },
+    "response_leaves": {
+      "$ref": "#/$defs/response_leaves"
+    },
+    "result_leaves": {
+      "$ref": "#/$defs/result_leaves"
+    },
+    "prepared_case_identity_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "canonical_timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-([0-2][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]\\.[0-9]{6}Z$"
+    },
+    "opaque_mapping": {
+      "type": "object"
+    },
+    "strategy_settings_source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_record",
+        "archive_relative_path"
+      ],
+      "properties": {
+        "source_record": {
+          "$ref": "#/$defs/opaque_mapping"
+        },
+        "archive_relative_path": {
+          "const": "archive/strategy_settings.yaml"
+        }
+      }
+    },
+    "portfolio_snapshot_source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_record",
+        "archive_relative_path"
+      ],
+      "properties": {
+        "source_record": {
+          "$ref": "#/$defs/opaque_mapping"
+        },
+        "archive_relative_path": {
+          "const": "archive/portfolio_snapshot.txt"
+        }
+      }
+    },
+    "legacy_prompt_template": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository_relative_locator",
+        "archive_relative_path",
+        "byte_length",
+        "sha256"
+      ],
+      "properties": {
+        "repository_relative_locator": {
+          "const": "prompts/research_dual_lane.txt"
+        },
+        "archive_relative_path": {
+          "const": "archive/research_dual_lane.txt"
+        },
+        "byte_length": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 262144
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "h1_prompt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "relative_path",
+        "byte_length",
+        "sha256"
+      ],
+      "properties": {
+        "relative_path": {
+          "const": "prompts/h1_prompt.txt"
+        },
+        "byte_length": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65536
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "legacy_prompt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "relative_path",
+        "byte_length",
+        "sha256",
+        "compiler_contract_version"
+      ],
+      "properties": {
+        "relative_path": {
+          "const": "prompts/legacy_prompt.txt"
+        },
+        "byte_length": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3170307
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "compiler_contract_version": {
+          "const": "mmi_legacy_step1_compatibility_compiler_v1"
+        }
+      }
+    },
+    "response_leaves": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "h1",
+        "legacy"
+      ],
+      "properties": {
+        "h1": {
+          "const": "responses/h1_response.raw"
+        },
+        "legacy": {
+          "const": "responses/legacy_response.raw"
+        }
+      }
+    },
+    "result_leaves": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_evidence_bundle",
+        "comparison_report",
+        "receipt"
+      ],
+      "properties": {
+        "case_evidence_bundle": {
+          "const": "artifacts/case_evidence_bundle.json"
+        },
+        "comparison_report": {
+          "const": "artifacts/comparison_report.json"
+        },
+        "receipt": {
+          "const": "artifacts/receipt.json"
+        }
+      }
+    }
+  }
+}

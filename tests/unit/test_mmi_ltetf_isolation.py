@@ -82,6 +82,14 @@ H2C_CASE_BUNDLE_RELATIVE_PATH = (
     "src/investment_orchestrator/offline/"
     "mmi_h2c_case_bundle_v1.py"
 )
+H2C_PERSISTED_RECEIPT_V2_RELATIVE_PATH = (
+    "src/investment_orchestrator/offline/"
+    "mmi_h2c_dual_side_persisted_case_receipt_v2.py"
+)
+H2C_PREPARED_CASE_RELATIVE_PATH = (
+    "src/investment_orchestrator/offline/"
+    "mmi_h2c_prepared_case_v1.py"
+)
 H2C_CLI_RELATIVE_PATH = (
     "src/investment_orchestrator/cli/run_mmi_h2c_capture.py"
 )
@@ -278,7 +286,9 @@ def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -
     assert external_mmi_readers == (
         H2C_CASE_BUNDLE_RELATIVE_PATH,
         H2C_RECEIPT_RELATIVE_PATH,
+        H2C_PERSISTED_RECEIPT_V2_RELATIVE_PATH,
         H2C_CAPTURE_SESSION_RELATIVE_PATH,
+        H2C_PREPARED_CASE_RELATIVE_PATH,
         H2_COMPARISON_REPORT_RELATIVE_PATH,
     )
     assert {
@@ -569,6 +579,13 @@ def test_v2_prompt_envelope_and_response_graph_is_exact_and_dormant() -> None:
         "investment_orchestrator.offline.mmi_h2c_case_bundle_v1"
     ) == (H2C_CAPTURE_SESSION_RELATIVE_PATH,)
     assert consumers(
+        "investment_orchestrator.offline."
+        "mmi_h2c_dual_side_persisted_case_receipt_v2"
+    ) == ()
+    assert consumers(
+        "investment_orchestrator.offline.mmi_h2c_prepared_case_v1"
+    ) == ()
+    assert consumers(
         "investment_orchestrator.offline.mmi_h2c_manual_capture_session"
     ) == (H2C_CLI_RELATIVE_PATH,)
     assert consumers(
@@ -660,7 +677,7 @@ def test_reachable_schema_validation_call_graph_does_not_write(
 
 def test_ltetf_inventory_classification_is_unchanged_except_inventory_content() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
-    assert len(inventory.production_paths) == 145
+    assert len(inventory.production_paths) == 147
     assert inventory.dynamic_findings == ()
     assert inventory.observer_external_consumers == EXPECTED_EXTERNAL_CONSUMERS
     assert inventory.report_artifact_readers == ()
