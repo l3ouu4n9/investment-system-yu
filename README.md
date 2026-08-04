@@ -153,6 +153,13 @@ See the
 for the manual handoff boundary, the exact command, exit-code actions, and the
 publication-ambiguity stop rule.
 
+## H2c Prospective Dual-Side Capture
+
+The [MMI H2c Prospective Dual-Side Capture Runbook](docs/mmi_h2c_prospective_capture_runbook.md)
+documents one operator-invoked, foreground, report-only manual handoff. It has
+no automatic provider integration and grants no publication, order, broker,
+weekly-routing, permission, or gate authority.
+
 ## Run Status / Blocked-Run Summary
 
 When Step 1 / Deep Research produces no output, invalid research, or a
