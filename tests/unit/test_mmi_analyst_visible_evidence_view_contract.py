@@ -2180,7 +2180,7 @@ def test_v1b_contract_and_v1c_runtime_have_exact_phase_ownership() -> None:
     root = repo_root()
     production_root = root / "src/investment_orchestrator"
     production_paths = tuple(sorted(production_root.rglob("*.py")))
-    assert len(production_paths) == 147
+    assert len(production_paths) == 148
     relative = {
         path: path.relative_to(root).as_posix()
         for path in production_paths
@@ -2390,6 +2390,10 @@ def test_v1b_contract_and_v1c_runtime_have_exact_phase_ownership() -> None:
         (
             "src/investment_orchestrator/offline/"
             "mmi_h2c_manual_capture_session.py"
+        ),
+        (
+            "src/investment_orchestrator/offline/"
+            "mmi_h2c_prepare_persisted_case_v1.py"
         ),
     )
 

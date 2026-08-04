@@ -220,7 +220,7 @@ def test_identity_domain_and_inventory_increase_once() -> None:
         canonical.MAX_MMI_H2C_DUAL_SIDE_MANUAL_HANDOFF_CONTEXT_RECEIPT_V1_CANONICAL_BYTES
         == 1114
     )
-    assert len(_production_paths()) == 147
+    assert len(_production_paths()) == 148
     assert len(tuple((repo_root() / "schemas").glob("*.schema.json"))) == 45
     assert mmi.__all__ == ()
     assert not hasattr(package, "__all__")

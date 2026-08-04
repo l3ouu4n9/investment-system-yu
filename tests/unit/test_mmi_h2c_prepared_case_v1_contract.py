@@ -634,7 +634,7 @@ def test_owner_has_no_forbidden_capability_or_workflow_imports() -> None:
     )
 
 
-def test_owner_is_dormant_and_package_exports_remain_empty() -> None:
+def test_owner_has_exactly_the_phase_a_consumer_and_no_package_export() -> None:
     owner_path = Path(owner.__file__).resolve()
     consumers: list[Path] = []
     for path in sorted(
@@ -645,7 +645,14 @@ def test_owner_is_dormant_and_package_exports_remain_empty() -> None:
         source = path.read_text(encoding="utf-8")
         if "mmi_h2c_prepared_case_v1" in source:
             consumers.append(path.relative_to(repo_root()))
-    assert consumers == []
+    # D4b: the dormant envelope is built and validated by exactly one
+    # production owner, the Phase A preparation engine.
+    assert consumers == [
+        Path(
+            "src/investment_orchestrator/offline/"
+            "mmi_h2c_prepare_persisted_case_v1.py"
+        )
+    ]
     assert mmi.__all__ == ()
     assert not hasattr(package, "__all__")
     assert IDENTITY_DOMAIN not in tuple(vars(canonical).values())

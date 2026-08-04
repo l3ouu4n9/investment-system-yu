@@ -90,6 +90,10 @@ H2C_PREPARED_CASE_RELATIVE_PATH = (
     "src/investment_orchestrator/offline/"
     "mmi_h2c_prepared_case_v1.py"
 )
+H2C_PREPARE_ENGINE_RELATIVE_PATH = (
+    "src/investment_orchestrator/offline/"
+    "mmi_h2c_prepare_persisted_case_v1.py"
+)
 H2C_CLI_RELATIVE_PATH = (
     "src/investment_orchestrator/cli/run_mmi_h2c_capture.py"
 )
@@ -283,11 +287,14 @@ def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -
     # MMI outside the package; none is an admission or action consumer.  The
     # H2c case-bundle owner structurally envelopes MMI artifact mappings; its
     # only consumer is the explicit foreground capture session asserted below.
+    # The Phase A preparation engine reads the same live chain report-only and
+    # has no production consumer of its own.
     assert external_mmi_readers == (
         H2C_CASE_BUNDLE_RELATIVE_PATH,
         H2C_RECEIPT_RELATIVE_PATH,
         H2C_PERSISTED_RECEIPT_V2_RELATIVE_PATH,
         H2C_CAPTURE_SESSION_RELATIVE_PATH,
+        H2C_PREPARE_ENGINE_RELATIVE_PATH,
         H2C_PREPARED_CASE_RELATIVE_PATH,
         H2_COMPARISON_REPORT_RELATIVE_PATH,
     )
@@ -537,12 +544,14 @@ def test_v2_prompt_envelope_and_response_graph_is_exact_and_dormant() -> None:
         "src/investment_orchestrator/mmi/"
         "legacy_step1_compatibility_candidate_v1.py",
         H2C_CAPTURE_SESSION_RELATIVE_PATH,
+        H2C_PREPARE_ENGINE_RELATIVE_PATH,
     )
     assert consumers(
         "investment_orchestrator.mmi.grounded_prompt_v2"
     ) == (
         "src/investment_orchestrator/mmi/raw_response_envelope_v2.py",
         H2C_CAPTURE_SESSION_RELATIVE_PATH,
+        H2C_PREPARE_ENGINE_RELATIVE_PATH,
     )
     assert consumers(
         "investment_orchestrator.mmi.raw_response_envelope_v2"
@@ -582,8 +591,13 @@ def test_v2_prompt_envelope_and_response_graph_is_exact_and_dormant() -> None:
         "investment_orchestrator.offline."
         "mmi_h2c_dual_side_persisted_case_receipt_v2"
     ) == ()
+    # D4b: the dormant prepared-case contract gains exactly one production
+    # consumer, the Phase A engine, which itself stays consumer-free.
     assert consumers(
         "investment_orchestrator.offline.mmi_h2c_prepared_case_v1"
+    ) == (H2C_PREPARE_ENGINE_RELATIVE_PATH,)
+    assert consumers(
+        "investment_orchestrator.offline.mmi_h2c_prepare_persisted_case_v1"
     ) == ()
     assert consumers(
         "investment_orchestrator.offline.mmi_h2c_manual_capture_session"
@@ -677,7 +691,7 @@ def test_reachable_schema_validation_call_graph_does_not_write(
 
 def test_ltetf_inventory_classification_is_unchanged_except_inventory_content() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
-    assert len(inventory.production_paths) == 147
+    assert len(inventory.production_paths) == 148
     assert inventory.dynamic_findings == ()
     assert inventory.observer_external_consumers == EXPECTED_EXTERNAL_CONSUMERS
     assert inventory.report_artifact_readers == ()

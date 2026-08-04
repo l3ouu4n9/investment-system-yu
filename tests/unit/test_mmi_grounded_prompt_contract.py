@@ -1865,7 +1865,7 @@ def test_grounded_prompt_runtime_has_exact_phase_ownership() -> None:
     production_paths = tuple(
         sorted((root / "src/investment_orchestrator").rglob("*.py"))
     )
-    assert len(production_paths) == 147
+    assert len(production_paths) == 148
     relative = {
         path: path.relative_to(root).as_posix()
         for path in production_paths

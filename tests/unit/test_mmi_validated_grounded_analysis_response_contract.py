@@ -1000,7 +1000,7 @@ def test_contract_and_runtime_have_exact_phase_and_inventory() -> None:
     production_paths = tuple(
         sorted((root / "src/investment_orchestrator").rglob("*.py"))
     )
-    assert len(production_paths) == 147
+    assert len(production_paths) == 148
     runtime_path = (
         root
         / "src/investment_orchestrator/mmi/"
