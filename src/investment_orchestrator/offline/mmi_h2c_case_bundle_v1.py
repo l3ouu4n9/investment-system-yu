@@ -44,6 +44,7 @@ from investment_orchestrator.mmi.canonical import (
 
 __all__ = (
     "MmiH2cCaseEvidenceBundleV1Error",
+    "build_mmi_h2c_case_evidence_bundle_v1",
     "validate_mmi_h2c_case_evidence_bundle_v1",
 )
 
@@ -127,7 +128,7 @@ def validate_mmi_h2c_case_evidence_bundle_v1(
         _fail()
 
 
-def _build_mmi_h2c_case_evidence_bundle_v1(
+def build_mmi_h2c_case_evidence_bundle_v1(
     *,
     grounded_prompt: Mapping[str, object],
     raw_response_envelope: Mapping[str, object],

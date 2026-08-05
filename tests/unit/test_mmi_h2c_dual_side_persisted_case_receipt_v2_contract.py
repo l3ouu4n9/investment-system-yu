@@ -107,7 +107,7 @@ def _inputs() -> dict[str, str]:
 
 @pytest.fixture()
 def receipt() -> dict[str, object]:
-    return owner._build_mmi_h2c_dual_side_persisted_case_receipt_v2(
+    return owner.build_mmi_h2c_dual_side_persisted_case_receipt_v2(
         **_inputs()
     )
 
@@ -173,7 +173,7 @@ def test_receipt_field_names_truthfully_bind_only_persisted_inputs() -> None:
 
 def test_builder_preserves_every_complete_expected_link() -> None:
     supplied = _inputs()
-    receipt = owner._build_mmi_h2c_dual_side_persisted_case_receipt_v2(
+    receipt = owner.build_mmi_h2c_dual_side_persisted_case_receipt_v2(
         **supplied
     )
     assert set(receipt) == EXPECTED_FIELDS
@@ -292,14 +292,11 @@ def test_exact_canonical_size_is_independently_derived_and_enforced(
         )
 
 
-def test_public_api_is_minimal_and_builder_is_private_keyword_only() -> None:
+def test_public_api_is_minimal_and_builder_is_public_keyword_only() -> None:
     assert owner.__all__ == (
         "MmiH2cDualSidePersistedCaseReceiptV2Error",
+        "build_mmi_h2c_dual_side_persisted_case_receipt_v2",
         "validate_mmi_h2c_dual_side_persisted_case_receipt_v2",
-    )
-    assert (
-        "_build_mmi_h2c_dual_side_persisted_case_receipt_v2"
-        not in owner.__all__
     )
     public = inspect.signature(
         owner.validate_mmi_h2c_dual_side_persisted_case_receipt_v2
@@ -310,7 +307,7 @@ def test_public_api_is_minimal_and_builder_is_private_keyword_only() -> None:
         for item in public.parameters.values()
     )
     private = inspect.signature(
-        owner._build_mmi_h2c_dual_side_persisted_case_receipt_v2
+        owner.build_mmi_h2c_dual_side_persisted_case_receipt_v2
     )
     assert tuple(private.parameters) == tuple(_inputs())
     assert all(

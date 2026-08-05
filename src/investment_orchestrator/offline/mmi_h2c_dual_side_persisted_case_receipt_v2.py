@@ -26,6 +26,7 @@ from investment_orchestrator.mmi.canonical import (
 
 __all__ = (
     "MmiH2cDualSidePersistedCaseReceiptV2Error",
+    "build_mmi_h2c_dual_side_persisted_case_receipt_v2",
     "validate_mmi_h2c_dual_side_persisted_case_receipt_v2",
 )
 
@@ -111,7 +112,7 @@ def _validate_receipt_snapshot(
     return parsed
 
 
-def _build_mmi_h2c_dual_side_persisted_case_receipt_v2(
+def build_mmi_h2c_dual_side_persisted_case_receipt_v2(
     *,
     evaluation_timestamp_utc: str,
     prepared_case_identity_sha256: str,

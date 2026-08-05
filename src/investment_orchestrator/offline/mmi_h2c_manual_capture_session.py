@@ -1525,7 +1525,7 @@ def run_h2c_manual_capture(
         )
     try:
         case_evidence_bundle = (
-            _case_bundle._build_mmi_h2c_case_evidence_bundle_v1(
+            _case_bundle.build_mmi_h2c_case_evidence_bundle_v1(
                 grounded_prompt=prompt,
                 raw_response_envelope=r1,
                 validated_grounded_analysis_response=r2,

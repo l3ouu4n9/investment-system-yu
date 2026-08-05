@@ -691,7 +691,7 @@ def test_bundle_owner_failure_translates_exact_reason_and_class(
 
     monkeypatch.setattr(
         session._case_bundle,
-        "_build_mmi_h2c_case_evidence_bundle_v1",
+        "build_mmi_h2c_case_evidence_bundle_v1",
         fail,
     )
     with pytest.raises(session.H2cManualCaptureError) as captured:
@@ -724,7 +724,7 @@ def test_unknown_bundle_owner_code_remains_a_true_bug(
 
     monkeypatch.setattr(
         session._case_bundle,
-        "_build_mmi_h2c_case_evidence_bundle_v1",
+        "build_mmi_h2c_case_evidence_bundle_v1",
         fail,
     )
     with pytest.raises(

@@ -127,7 +127,7 @@ def _inputs() -> dict[str, dict[str, object]]:
 
 @pytest.fixture()
 def bundle() -> dict[str, object]:
-    return owner._build_mmi_h2c_case_evidence_bundle_v1(**_inputs())
+    return owner.build_mmi_h2c_case_evidence_bundle_v1(**_inputs())
 
 
 def test_schema_is_closed_exact_and_constants_are_report_only() -> None:
@@ -311,14 +311,14 @@ def test_correct_discriminator_with_incomplete_body_passes_the_envelope(
     ) is None
 
 
-def test_builder_is_keyword_only_and_private() -> None:
+def test_builder_is_keyword_only_and_public() -> None:
     assert owner.__all__ == (
         "MmiH2cCaseEvidenceBundleV1Error",
+        "build_mmi_h2c_case_evidence_bundle_v1",
         "validate_mmi_h2c_case_evidence_bundle_v1",
     )
-    assert "_build_mmi_h2c_case_evidence_bundle_v1" not in owner.__all__
     signature = inspect.signature(
-        owner._build_mmi_h2c_case_evidence_bundle_v1
+        owner.build_mmi_h2c_case_evidence_bundle_v1
     )
     assert tuple(signature.parameters) == (
         "grounded_prompt",
@@ -345,7 +345,7 @@ def test_builder_is_keyword_only_and_private() -> None:
 def test_builder_detaches_every_member_and_never_mutates_callers() -> None:
     supplied = _inputs()
     before = deepcopy(supplied)
-    built = owner._build_mmi_h2c_case_evidence_bundle_v1(**supplied)
+    built = owner.build_mmi_h2c_case_evidence_bundle_v1(**supplied)
     assert type(built) is dict
     assert supplied == before
 
@@ -617,7 +617,7 @@ def test_unsupported_member_values_are_not_silently_coerced() -> None:
         "ratio": 1.5,
     }
     with pytest.raises(owner.MmiH2cCaseEvidenceBundleV1Error):
-        owner._build_mmi_h2c_case_evidence_bundle_v1(**supplied)
+        owner.build_mmi_h2c_case_evidence_bundle_v1(**supplied)
 
 
 def test_owner_has_no_forbidden_capability_imports() -> None:
