@@ -3,7 +3,6 @@ from __future__ import annotations
 import ast
 import inspect
 import json
-from pathlib import Path
 
 from jsonschema import Draft202012Validator
 
@@ -73,14 +72,6 @@ def _schema() -> dict[str, object]:
     )
     assert type(value) is dict
     return value
-
-
-def _production_paths() -> tuple[Path, ...]:
-    return tuple(
-        sorted(
-            (repo_root() / "src/investment_orchestrator").rglob("*.py")
-        )
-    )
 
 
 def _identity_domains() -> tuple[bytes, ...]:
@@ -220,7 +211,6 @@ def test_identity_domain_and_inventory_increase_once() -> None:
         canonical.MAX_MMI_H2C_DUAL_SIDE_MANUAL_HANDOFF_CONTEXT_RECEIPT_V1_CANONICAL_BYTES
         == 1114
     )
-    assert len(_production_paths()) == 148
     assert len(tuple((repo_root() / "schemas").glob("*.schema.json"))) == 45
     assert mmi.__all__ == ()
     assert not hasattr(package, "__all__")

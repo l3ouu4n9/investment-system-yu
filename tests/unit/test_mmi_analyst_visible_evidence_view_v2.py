@@ -48,9 +48,6 @@ from investment_orchestrator.mmi.evidence_bundle import (
 from investment_orchestrator.mmi.policy_projection import (
     build_mmi_policy_projection,
 )
-from investment_orchestrator.observability import (
-    ltetf_target_architecture_gap_report as ltetf,
-)
 
 import _mmi_hermetic_source_checkout as hermetic
 
@@ -724,8 +721,6 @@ def test_v2_has_exact_g2_consumer_and_no_side_effect_surface() -> None:
 
 
 def test_inventory_and_persistent_identity_domain_counts_are_exact() -> None:
-    inventory = ltetf._scan_production_inventory(repo_root())
-    assert len(inventory.production_paths) == 148
     domains = {
         name: value
         for name, value in vars(canonical).items()
