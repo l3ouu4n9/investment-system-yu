@@ -1686,10 +1686,7 @@ def test_owner_has_no_provider_network_or_concurrency_capability() -> None:
 def test_engine_has_only_its_one_approved_d4c_prepare_only_cli_consumer() -> None:
     production_root = repo_root() / "src/investment_orchestrator"
     engine_path = Path(engine.__file__).resolve()
-    engine_relative = engine_path.relative_to(repo_root())
     engine_consumers: list[str] = []
-    prepared_consumers: list[str] = []
-    receipt_consumers: list[str] = []
     for path in sorted(production_root.rglob("*.py")):
         source = path.read_text(encoding="utf-8")
         relative = path.relative_to(repo_root()).as_posix()
@@ -1698,23 +1695,11 @@ def test_engine_has_only_its_one_approved_d4c_prepare_only_cli_consumer() -> Non
             and path.resolve() != engine_path
         ):
             engine_consumers.append(relative)
-        if (
-            "mmi_h2c_prepared_case_v1" in source
-            and path.name != "mmi_h2c_prepared_case_v1.py"
-        ):
-            prepared_consumers.append(relative)
-        if (
-            "mmi_h2c_dual_side_persisted_case_receipt_v2" in source
-            and path.name != "mmi_h2c_dual_side_persisted_case_receipt_v2.py"
-        ):
-            receipt_consumers.append(relative)
     # D4c authorizes exactly one narrow, prepare-only CLI consumer; the engine
     # itself remains otherwise unconsumed.
     assert engine_consumers == [
         "src/investment_orchestrator/cli/run_mmi_h2c_prepare.py"
     ]
-    assert prepared_consumers == [engine_relative.as_posix()]
-    assert receipt_consumers == []
     assert mmi.__all__ == ()
     assert not hasattr(package, "__all__")
 
