@@ -55,9 +55,7 @@ from investment_orchestrator.mmi.raw_response_envelope import (
     build_mmi_raw_response_envelope,
     validate_mmi_raw_response_envelope,
 )
-from investment_orchestrator.mmi.source_capture import (
-    capture_current_mmi_source,
-)
+import _mmi_hermetic_source_checkout as hermetic
 
 
 SCHEMA_NAME = "mmi_raw_response_envelope_v1.schema.json"
@@ -69,6 +67,10 @@ RAW_DIGEST_FIELD = "raw_response_sha256"
 RAW_BASE64_FIELD = "raw_response_base64"
 RAW_BYTES = b'{"analysis":"manual response"}\r\n'
 EVALUATION_TIME = datetime(2026, 7, 27, 12, tzinfo=timezone.utc)
+# Test-owned source dates, fixed before ``EVALUATION_TIME`` so that an
+# operational ``inputs/current`` refresh cannot reach this module.
+SOURCE_AS_OF = "2026-07-26"
+SOURCE_RUN_TIMESTAMP_ET = "2026-07-26 10:00 ET"
 EXPECTED_FIELDS = frozenset(
     {
         "schema_version",
@@ -158,38 +160,38 @@ def _projection(
     return deepcopy(dict(result.projection))
 
 
-def _capture_current(role: MmiSourceRole) -> MmiCapturedSource:
-    relative = {
-        MmiSourceRole.STRATEGY_SETTINGS: (
-            "inputs/current/strategy_settings.yaml"
-        ),
-        MmiSourceRole.PORTFOLIO_SNAPSHOT: (
-            "inputs/current/portfolio_snapshot.txt"
-        ),
-    }[role]
-    raw = (repo_root() / relative).read_bytes()
-    result = capture_current_mmi_source(
-        role,
-        expected_source_sha256=hashlib.sha256(raw).hexdigest(),
-    )
-    assert result.valid, result.reason_codes
-    assert result.source is not None
-    return result.source
+@pytest.fixture(scope="module", autouse=True)
+def _no_live_operational_inputs():
+    with hermetic.live_operational_input_access_forbidden():
+        yield
 
 
 @pytest.fixture(scope="module")
-def trusted_inputs() -> _TrustedInputs:
+def checkout(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> hermetic.HermeticSourceCheckout:
+    return hermetic.build_checkout(
+        tmp_path_factory,
+        "r1-hermetic-checkout",
+        as_of=SOURCE_AS_OF,
+        run_timestamp_et=SOURCE_RUN_TIMESTAMP_ET,
+        updated=SOURCE_AS_OF,
+    )
+
+
+@pytest.fixture(scope="module")
+def trusted_inputs(
+    checkout: hermetic.HermeticSourceCheckout,
+) -> _TrustedInputs:
     run_context = _begin_mmi_projection_run_with_clock(_FixedClock())
-    policy_source = _capture_current(MmiSourceRole.STRATEGY_SETTINGS)
+    policy_source = checkout.policy_source
     policy_projection = _projection(
         build_mmi_policy_projection(
             policy_source,
             run_context=run_context,
         )
     )
-    portfolio_source = _capture_current(
-        MmiSourceRole.PORTFOLIO_SNAPSHOT
-    )
+    portfolio_source = checkout.portfolio_source
     portfolio_projection = _projection(
         build_mmi_portfolio_snapshot_projection(
             portfolio_source,
@@ -1301,3 +1303,27 @@ def test_module_has_no_parser_writer_transport_or_authority_capability() -> None
         "write_bytes",
         "write_text",
     } & calls
+
+
+def test_sources_are_test_owned_and_live_inputs_are_unreachable(
+    checkout: hermetic.HermeticSourceCheckout,
+    trusted_inputs: _TrustedInputs,
+) -> None:
+    hermetic.assert_checkout_resolves_both_locators(checkout.root)
+    hermetic.assert_test_owned_source(
+        trusted_inputs.policy_source,
+        role=MmiSourceRole.STRATEGY_SETTINGS,
+        raw=checkout.strategy_settings_raw,
+    )
+    hermetic.assert_test_owned_source(
+        trusted_inputs.portfolio_source,
+        role=MmiSourceRole.PORTFOLIO_SNAPSHOT,
+        raw=checkout.portfolio_snapshot_raw,
+    )
+    assert trusted_inputs.policy_source.source_record[
+        "repository_relative_locator"
+    ] == hermetic.STRATEGY_SETTINGS_LOCATOR
+    assert trusted_inputs.portfolio_source.source_record[
+        "repository_relative_locator"
+    ] == hermetic.PORTFOLIO_SNAPSHOT_LOCATOR
+    hermetic.assert_live_operational_inputs_are_unreachable()

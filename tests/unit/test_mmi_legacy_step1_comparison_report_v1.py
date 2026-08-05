@@ -39,7 +39,6 @@ from investment_orchestrator.mmi.raw_response_envelope_v2 import (
 )
 from investment_orchestrator.mmi.source_capture import (
     _capture_mmi_source_at_root,
-    capture_current_mmi_source,
 )
 from investment_orchestrator.mmi.validated_grounded_analysis_response_v2 import (
     build_mmi_validated_grounded_analysis_response_v2,
@@ -52,6 +51,7 @@ from investment_orchestrator.offline.mmi_legacy_step1_comparison_report_v1 impor
     build_mmi_legacy_step1_comparison_report_v1,
     validate_mmi_legacy_step1_comparison_report_v1,
 )
+import _mmi_hermetic_source_checkout as hermetic
 
 
 SCHEMA_NAME = "mmi_legacy_step1_comparison_report_v1.schema.json"
@@ -62,6 +62,10 @@ STRUCTURED_LEGACY = FIXTURES / "legacy_structured_missing_handoff.json"
 NARRATIVE_LEGACY = FIXTURES / "current_research_output_minimal.json"
 WRAPPED_LEGACY = FIXTURES / "wrapped_research_json_minimal.txt"
 EVALUATION_TIME = datetime(2026, 7, 31, 12, tzinfo=timezone.utc)
+# Test-owned source dates, fixed before ``EVALUATION_TIME`` so that an
+# operational ``inputs/current`` refresh cannot reach this module.
+SOURCE_AS_OF = "2026-07-30"
+SOURCE_RUN_TIMESTAMP_ET = "2026-07-30 10:00 ET"
 
 UNAVAILABLE_LEGACY_FIELDS = (
     "legacy_instrument_count",
@@ -252,18 +256,34 @@ def _inputs_from_source(
     )
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _no_live_operational_inputs():
+    with hermetic.live_operational_input_access_forbidden():
+        yield
+
+
 @pytest.fixture(scope="module")
-def inputs() -> _Inputs:
-    raw = (repo_root() / "inputs/current/strategy_settings.yaml").read_bytes()
-    capture = capture_current_mmi_source(
-        MmiSourceRole.STRATEGY_SETTINGS,
-        expected_source_sha256=hashlib.sha256(raw).hexdigest(),
+def checkout(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> hermetic.HermeticSourceCheckout:
+    return hermetic.build_checkout(
+        tmp_path_factory,
+        "h2-hermetic-checkout",
+        as_of=SOURCE_AS_OF,
+        run_timestamp_et=SOURCE_RUN_TIMESTAMP_ET,
+        updated=SOURCE_AS_OF,
     )
-    assert capture.valid, capture.reason_codes
-    assert capture.source is not None
+
+
+@pytest.fixture(scope="module")
+def inputs(checkout: hermetic.HermeticSourceCheckout) -> _Inputs:
+    raw = checkout.strategy_settings_raw
     settings = yaml.safe_load(raw.decode("utf-8"))
     assert type(settings) is dict
-    return _inputs_from_source(source=capture.source, settings=settings)
+    return _inputs_from_source(
+        source=checkout.policy_source,
+        settings=settings,
+    )
 
 
 def _kwargs(inputs: _Inputs) -> dict[str, object]:
@@ -435,15 +455,12 @@ def test_instrument_membership_order_and_duplicate_differences_are_exact(
     assert base["shared_sequence_equal"] is True
     assert base["legacy_only_tickers"] == []
     assert base["legacy_duplicate_tickers"] == []
-    assert base["h1_only_tickers"] == [
-        "AIQ",
-        "BOTZ",
-        "CIBR",
-        "GRID",
-        "PAVE",
-        "QUAL",
-        "VUG",
-    ]
+    # ``h1_only_tickers`` is the H1 analysis universe minus the legacy
+    # scorecard, sorted.  The legacy fixture covers exactly the synthetic
+    # core and satellite members, so the remainder is the synthetic
+    # extended-ETF sleeve in sorted order.  This expectation is owned by the
+    # test sources; it is deliberately not a snapshot of ``inputs/current``.
+    assert base["h1_only_tickers"] == ["CIBR", "QUAL"]
     assert base["legacy_role_layers_present"] == [
         "benchmark_carrier_core",
         "diversified_core_buffer",
@@ -1046,3 +1063,22 @@ def test_report_carries_no_prose_from_either_side(inputs: _Inputs) -> None:
     ):
         assert type(prose) is str
         assert prose not in serialized
+
+
+def test_sources_are_test_owned_and_live_inputs_are_unreachable(
+    checkout: hermetic.HermeticSourceCheckout,
+    inputs: _Inputs,
+) -> None:
+    hermetic.assert_checkout_resolves_both_locators(checkout.root)
+    hermetic.assert_test_owned_source(
+        inputs.policy_source,
+        role=MmiSourceRole.STRATEGY_SETTINGS,
+        raw=checkout.strategy_settings_raw,
+    )
+    assert inputs.policy_source.source_record[
+        "repository_relative_locator"
+    ] == hermetic.STRATEGY_SETTINGS_LOCATOR
+    assert inputs.settings == yaml.safe_load(
+        checkout.strategy_settings_raw.decode("utf-8")
+    )
+    hermetic.assert_live_operational_inputs_are_unreachable()

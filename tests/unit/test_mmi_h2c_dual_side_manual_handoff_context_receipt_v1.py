@@ -10,7 +10,7 @@ from collections.abc import Mapping
 
 import pytest
 
-from investment_orchestrator.common.paths import prompt_path, repo_root
+from investment_orchestrator.common.paths import prompt_path
 from investment_orchestrator.llm.legacy_step1_prompt_compiler import (
     compile_legacy_step1_prompt_text,
     derive_legacy_approved_extended_etf_json,
@@ -47,9 +47,6 @@ from investment_orchestrator.mmi.portfolio_projection import (
 from investment_orchestrator.mmi.raw_response_envelope_v2 import (
     build_mmi_raw_response_envelope_v2,
 )
-from investment_orchestrator.mmi.source_capture import (
-    capture_current_mmi_source,
-)
 from investment_orchestrator.mmi.validated_grounded_analysis_response_v2 import (
     build_mmi_validated_grounded_analysis_response_v2,
 )
@@ -64,6 +61,13 @@ from investment_orchestrator.offline.mmi_legacy_step1_comparison_report_v1 impor
 from investment_orchestrator.validators.strategy_settings import (
     parse_strategy_settings_text,
 )
+import _mmi_hermetic_source_checkout as hermetic
+
+
+# Test-owned source dates, fixed before the frozen evaluation timestamp below
+# so that an operational ``inputs/current`` refresh cannot reach this module.
+SOURCE_AS_OF = "2026-08-01"
+SOURCE_RUN_TIMESTAMP_ET = "2026-08-01 10:00 ET"
 
 
 class _FixedClock:
@@ -168,26 +172,33 @@ def _response_payload(
     }
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _no_live_operational_inputs():
+    with hermetic.live_operational_input_access_forbidden():
+        yield
+
+
 @pytest.fixture(scope="module")
-def evidence() -> _PortableEvidence:
-    settings_bytes = (
-        repo_root() / "inputs/current/strategy_settings.yaml"
-    ).read_bytes()
-    portfolio_bytes = (
-        repo_root() / "inputs/current/portfolio_snapshot.txt"
-    ).read_bytes()
-    settings_capture = capture_current_mmi_source(
-        MmiSourceRole.STRATEGY_SETTINGS,
-        expected_source_sha256=hashlib.sha256(settings_bytes).hexdigest(),
+def checkout(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> hermetic.HermeticSourceCheckout:
+    return hermetic.build_checkout(
+        tmp_path_factory,
+        "h2c-receipt-hermetic-checkout",
+        as_of=SOURCE_AS_OF,
+        run_timestamp_et=SOURCE_RUN_TIMESTAMP_ET,
+        updated=SOURCE_AS_OF,
     )
-    portfolio_capture = capture_current_mmi_source(
-        MmiSourceRole.PORTFOLIO_SNAPSHOT,
-        expected_source_sha256=hashlib.sha256(portfolio_bytes).hexdigest(),
-    )
-    assert settings_capture.valid and settings_capture.source is not None
-    assert portfolio_capture.valid and portfolio_capture.source is not None
-    settings_source: MmiCapturedSource = settings_capture.source
-    portfolio_source: MmiCapturedSource = portfolio_capture.source
+
+
+@pytest.fixture(scope="module")
+def evidence(
+    checkout: hermetic.HermeticSourceCheckout,
+) -> _PortableEvidence:
+    settings_bytes = checkout.strategy_settings_raw
+    portfolio_bytes = checkout.portfolio_snapshot_raw
+    settings_source: MmiCapturedSource = checkout.policy_source
+    portfolio_source: MmiCapturedSource = checkout.portfolio_source
     run_context: MmiProjectionRunContext = (
         _begin_mmi_projection_run_with_clock(_FixedClock())
     )
@@ -522,3 +533,26 @@ def test_unknown_receipt_field_and_non_bytes_are_rejected(
         validate_mmi_h2c_dual_side_manual_handoff_context_receipt_v1_portable_evidence(
             **kwargs
         )
+
+
+def test_sources_are_test_owned_and_live_inputs_are_unreachable(
+    checkout: hermetic.HermeticSourceCheckout,
+) -> None:
+    hermetic.assert_checkout_resolves_both_locators(checkout.root)
+    hermetic.assert_test_owned_source(
+        checkout.policy_source,
+        role=MmiSourceRole.STRATEGY_SETTINGS,
+        raw=checkout.strategy_settings_raw,
+    )
+    hermetic.assert_test_owned_source(
+        checkout.portfolio_source,
+        role=MmiSourceRole.PORTFOLIO_SNAPSHOT,
+        raw=checkout.portfolio_snapshot_raw,
+    )
+    assert checkout.policy_source.source_record[
+        "repository_relative_locator"
+    ] == hermetic.STRATEGY_SETTINGS_LOCATOR
+    assert checkout.portfolio_source.source_record[
+        "repository_relative_locator"
+    ] == hermetic.PORTFOLIO_SNAPSHOT_LOCATOR
+    hermetic.assert_live_operational_inputs_are_unreachable()

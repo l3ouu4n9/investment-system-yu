@@ -10,7 +10,6 @@ import struct
 import pytest
 import yaml
 
-from investment_orchestrator.common.paths import repo_root
 from investment_orchestrator.common.schema_validation import (
     validate_artifact_schema,
 )
@@ -46,11 +45,11 @@ from investment_orchestrator.mmi.raw_response_envelope_v2 import (
 )
 from investment_orchestrator.mmi.source_capture import (
     _capture_mmi_source_at_root,
-    capture_current_mmi_source,
 )
 from investment_orchestrator.mmi.validated_grounded_analysis_response_v2 import (
     build_mmi_validated_grounded_analysis_response_v2,
 )
+import _mmi_hermetic_source_checkout as hermetic
 
 
 CANDIDATE_DOMAIN = b"mmi_legacy_step1_compatibility_candidate_v1\0"
@@ -61,6 +60,10 @@ CANDIDATE_IDENTITY_FIELD = (
 R2_IDENTITY_FIELD = "validated_grounded_analysis_response_identity_sha256"
 SCHEMA_NAME = "mmi_legacy_step1_compatibility_candidate_v1.schema.json"
 EVALUATION_TIME = datetime(2026, 7, 31, 12, tzinfo=timezone.utc)
+# Test-owned source dates, fixed before ``EVALUATION_TIME`` so that an
+# operational ``inputs/current`` refresh cannot reach this module.
+SOURCE_AS_OF = "2026-07-30"
+SOURCE_RUN_TIMESTAMP_ET = "2026-07-30 10:00 ET"
 
 
 class _FixedClock:
@@ -214,19 +217,15 @@ def _payload(
     }
 
 
-def _build_inputs(*, portfolio_present: bool) -> _Inputs:
-    raw = (
-        repo_root() / "inputs/current/strategy_settings.yaml"
-    ).read_bytes()
-    policy_capture = capture_current_mmi_source(
-        MmiSourceRole.STRATEGY_SETTINGS,
-        expected_source_sha256=hashlib.sha256(raw).hexdigest(),
-    )
-    assert policy_capture.valid, policy_capture.reason_codes
-    assert policy_capture.source is not None
+def _build_inputs(
+    checkout: hermetic.HermeticSourceCheckout,
+    *,
+    portfolio_present: bool,
+) -> _Inputs:
+    policy_capture = checkout.policy_source
     run_context = _begin_mmi_projection_run_with_clock(_FixedClock())
     policy_result = build_mmi_policy_projection(
-        policy_capture.source,
+        policy_capture,
         run_context=run_context,
     )
     assert policy_result.valid, policy_result.reason_codes
@@ -236,31 +235,21 @@ def _build_inputs(*, portfolio_present: bool) -> _Inputs:
     portfolio: dict[str, object] | None = None
     portfolio_source: MmiCapturedSource | None = None
     if portfolio_present:
-        portfolio_raw = (
-            repo_root() / "inputs/current/portfolio_snapshot.txt"
-        ).read_bytes()
-        portfolio_capture = capture_current_mmi_source(
-            MmiSourceRole.PORTFOLIO_SNAPSHOT,
-            expected_source_sha256=hashlib.sha256(
-                portfolio_raw
-            ).hexdigest(),
-        )
-        assert portfolio_capture.valid, portfolio_capture.reason_codes
-        assert portfolio_capture.source is not None
+        portfolio_capture = checkout.portfolio_source
         portfolio_result = build_mmi_portfolio_snapshot_projection(
-            portfolio_capture.source,
+            portfolio_capture,
             policy_projection=deepcopy(policy),
-            policy_source=policy_capture.source,
+            policy_source=policy_capture,
             run_context=run_context,
         )
         assert portfolio_result.valid, portfolio_result.reason_codes
         assert portfolio_result.projection is not None
         portfolio = dict(portfolio_result.projection)
-        portfolio_source = portfolio_capture.source
+        portfolio_source = portfolio_capture
 
     evidence_result = build_mmi_authenticated_evidence_bundle(
         policy_projection=deepcopy(policy),
-        policy_source=policy_capture.source,
+        policy_source=policy_capture,
         portfolio_projection=deepcopy(portfolio),
         portfolio_source=portfolio_source,
         run_context=run_context,
@@ -271,7 +260,7 @@ def _build_inputs(*, portfolio_present: bool) -> _Inputs:
     view_result = build_mmi_analyst_visible_evidence_view_v2(
         evidence_bundle=deepcopy(evidence),
         policy_projection=deepcopy(policy),
-        policy_source=policy_capture.source,
+        policy_source=policy_capture,
         portfolio_projection=deepcopy(portfolio),
         portfolio_source=portfolio_source,
         run_context=run_context,
@@ -283,7 +272,7 @@ def _build_inputs(*, portfolio_present: bool) -> _Inputs:
         analyst_visible_evidence_view=deepcopy(view),
         evidence_bundle=deepcopy(evidence),
         policy_projection=deepcopy(policy),
-        policy_source=policy_capture.source,
+        policy_source=policy_capture,
         portfolio_projection=deepcopy(portfolio),
         portfolio_source=portfolio_source,
         run_context=run_context,
@@ -300,7 +289,7 @@ def _build_inputs(*, portfolio_present: bool) -> _Inputs:
         raw_response_bytes=raw_response,
         evidence_bundle=deepcopy(evidence),
         policy_projection=deepcopy(policy),
-        policy_source=policy_capture.source,
+        policy_source=policy_capture,
         portfolio_projection=deepcopy(portfolio),
         portfolio_source=portfolio_source,
         run_context=run_context,
@@ -309,14 +298,14 @@ def _build_inputs(*, portfolio_present: bool) -> _Inputs:
         raw_response_envelope=deepcopy(envelope),
         evidence_bundle=deepcopy(evidence),
         policy_projection=deepcopy(policy),
-        policy_source=policy_capture.source,
+        policy_source=policy_capture,
         portfolio_projection=deepcopy(portfolio),
         portfolio_source=portfolio_source,
         run_context=run_context,
     )
     return _Inputs(
         policy=policy,
-        policy_source=policy_capture.source,
+        policy_source=policy_capture,
         portfolio=portfolio,
         portfolio_source=portfolio_source,
         evidence=evidence,
@@ -328,14 +317,37 @@ def _build_inputs(*, portfolio_present: bool) -> _Inputs:
     )
 
 
-@pytest.fixture(scope="module")
-def absent_inputs() -> _Inputs:
-    return _build_inputs(portfolio_present=False)
+@pytest.fixture(scope="module", autouse=True)
+def _no_live_operational_inputs():
+    with hermetic.live_operational_input_access_forbidden():
+        yield
 
 
 @pytest.fixture(scope="module")
-def present_inputs() -> _Inputs:
-    return _build_inputs(portfolio_present=True)
+def checkout(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> hermetic.HermeticSourceCheckout:
+    return hermetic.build_checkout(
+        tmp_path_factory,
+        "h1c-hermetic-checkout",
+        as_of=SOURCE_AS_OF,
+        run_timestamp_et=SOURCE_RUN_TIMESTAMP_ET,
+        updated=SOURCE_AS_OF,
+    )
+
+
+@pytest.fixture(scope="module")
+def absent_inputs(
+    checkout: hermetic.HermeticSourceCheckout,
+) -> _Inputs:
+    return _build_inputs(checkout, portfolio_present=False)
+
+
+@pytest.fixture(scope="module")
+def present_inputs(
+    checkout: hermetic.HermeticSourceCheckout,
+) -> _Inputs:
+    return _build_inputs(checkout, portfolio_present=True)
 
 
 def test_portfolio_absent_build_validate_and_repeat_are_exact(
@@ -775,3 +787,29 @@ def test_large_public_256_instrument_fixture_builds_below_ceiling(
         value=value,
         **_context_kwargs(inputs),
     ) == value
+
+
+def test_sources_are_test_owned_and_live_inputs_are_unreachable(
+    checkout: hermetic.HermeticSourceCheckout,
+    present_inputs: _Inputs,
+) -> None:
+    hermetic.assert_checkout_resolves_both_locators(checkout.root)
+    hermetic.assert_test_owned_source(
+        present_inputs.policy_source,
+        role=MmiSourceRole.STRATEGY_SETTINGS,
+        raw=checkout.strategy_settings_raw,
+    )
+    bound = present_inputs.portfolio_source
+    assert bound is not None
+    hermetic.assert_test_owned_source(
+        bound,
+        role=MmiSourceRole.PORTFOLIO_SNAPSHOT,
+        raw=checkout.portfolio_snapshot_raw,
+    )
+    assert present_inputs.policy_source.source_record[
+        "repository_relative_locator"
+    ] == hermetic.STRATEGY_SETTINGS_LOCATOR
+    assert bound.source_record[
+        "repository_relative_locator"
+    ] == hermetic.PORTFOLIO_SNAPSHOT_LOCATOR
+    hermetic.assert_live_operational_inputs_are_unreachable()

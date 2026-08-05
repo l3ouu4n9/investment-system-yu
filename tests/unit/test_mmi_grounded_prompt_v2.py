@@ -14,7 +14,6 @@ import investment_orchestrator.mmi as mmi
 from investment_orchestrator.common.schema_validation import (
     validate_artifact_schema,
 )
-from investment_orchestrator.common.paths import repo_root
 from investment_orchestrator.mmi import grounded_prompt_v2 as g2
 from investment_orchestrator.mmi.analyst_visible_evidence_view_v2 import (
     build_mmi_analyst_visible_evidence_view_v2,
@@ -45,9 +44,7 @@ from investment_orchestrator.mmi.policy_projection import (
 from investment_orchestrator.mmi.portfolio_projection import (
     build_mmi_portfolio_snapshot_projection,
 )
-from investment_orchestrator.mmi.source_capture import (
-    capture_current_mmi_source,
-)
+import _mmi_hermetic_source_checkout as hermetic
 
 
 VIEW_DOMAIN = b"mmi_analyst_visible_evidence_view_v2\0"
@@ -75,6 +72,10 @@ EVALUATION_TIME = datetime(
     12,
     tzinfo=timezone.utc,
 )
+# Test-owned source dates, fixed before ``EVALUATION_TIME`` so that an
+# operational ``inputs/current`` refresh cannot reach this module.
+SOURCE_AS_OF = "2026-06-28"
+SOURCE_RUN_TIMESTAMP_ET = "2026-06-28 10:00 ET"
 
 
 class _FixedClock:
@@ -103,38 +104,41 @@ class _Inputs:
         self.view = view
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _no_live_operational_inputs():
+    with hermetic.live_operational_input_access_forbidden():
+        yield
+
+
 @pytest.fixture(scope="module")
-def inputs() -> _Inputs:
-    raw = (
-        repo_root() / "inputs/current/strategy_settings.yaml"
-    ).read_bytes()
-    capture = capture_current_mmi_source(
-        MmiSourceRole.STRATEGY_SETTINGS,
-        expected_source_sha256=hashlib.sha256(raw).hexdigest(),
+def checkout(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> hermetic.HermeticSourceCheckout:
+    return hermetic.build_checkout(
+        tmp_path_factory,
+        "g2c-hermetic-checkout",
+        as_of=SOURCE_AS_OF,
+        run_timestamp_et=SOURCE_RUN_TIMESTAMP_ET,
+        updated=SOURCE_AS_OF,
     )
-    assert capture.valid, capture.reason_codes
-    assert capture.source is not None
+
+
+@pytest.fixture(scope="module")
+def inputs(checkout: hermetic.HermeticSourceCheckout) -> _Inputs:
+    capture = checkout.policy_source
     run_context = _begin_mmi_projection_run_with_clock(_FixedClock())
     policy_result = build_mmi_policy_projection(
-        capture.source,
+        capture,
         run_context=run_context,
     )
     assert policy_result.valid, policy_result.reason_codes
     assert policy_result.projection is not None
     policy = dict(policy_result.projection)
-    portfolio_raw = (
-        repo_root() / "inputs/current/portfolio_snapshot.txt"
-    ).read_bytes()
-    portfolio_capture = capture_current_mmi_source(
-        MmiSourceRole.PORTFOLIO_SNAPSHOT,
-        expected_source_sha256=hashlib.sha256(portfolio_raw).hexdigest(),
-    )
-    assert portfolio_capture.valid, portfolio_capture.reason_codes
-    assert portfolio_capture.source is not None
+    portfolio_capture = checkout.portfolio_source
     portfolio_result = build_mmi_portfolio_snapshot_projection(
-        portfolio_capture.source,
+        portfolio_capture,
         policy_projection=deepcopy(policy),
-        policy_source=capture.source,
+        policy_source=capture,
         run_context=run_context,
     )
     assert portfolio_result.valid, portfolio_result.reason_codes
@@ -142,9 +146,9 @@ def inputs() -> _Inputs:
     portfolio = dict(portfolio_result.projection)
     evidence_result = build_mmi_authenticated_evidence_bundle(
         policy_projection=deepcopy(policy),
-        policy_source=capture.source,
+        policy_source=capture,
         portfolio_projection=deepcopy(portfolio),
-        portfolio_source=portfolio_capture.source,
+        portfolio_source=portfolio_capture,
         run_context=run_context,
     )
     assert evidence_result.valid, evidence_result.reason_codes
@@ -153,18 +157,18 @@ def inputs() -> _Inputs:
     view_result = build_mmi_analyst_visible_evidence_view_v2(
         evidence_bundle=deepcopy(evidence),
         policy_projection=deepcopy(policy),
-        policy_source=capture.source,
+        policy_source=capture,
         portfolio_projection=deepcopy(portfolio),
-        portfolio_source=portfolio_capture.source,
+        portfolio_source=portfolio_capture,
         run_context=run_context,
     )
     assert view_result.valid, view_result.reason_codes
     assert view_result.projection is not None
     return _Inputs(
         policy=policy,
-        policy_source=capture.source,
+        policy_source=capture,
         portfolio=portfolio,
-        portfolio_source=portfolio_capture.source,
+        portfolio_source=portfolio_capture,
         evidence=evidence,
         run_context=run_context,
         view=dict(view_result.projection),
@@ -639,3 +643,27 @@ def test_g2_artifact_has_no_transport_or_authority_shaped_fields(
     )
     assert mmi.__all__ == ()
     assert not hasattr(mmi, "build_mmi_grounded_prompt_v2")
+
+
+def test_sources_are_test_owned_and_live_inputs_are_unreachable(
+    checkout: hermetic.HermeticSourceCheckout,
+    inputs: _Inputs,
+) -> None:
+    hermetic.assert_checkout_resolves_both_locators(checkout.root)
+    hermetic.assert_test_owned_source(
+        inputs.policy_source,
+        role=MmiSourceRole.STRATEGY_SETTINGS,
+        raw=checkout.strategy_settings_raw,
+    )
+    hermetic.assert_test_owned_source(
+        inputs.portfolio_source,
+        role=MmiSourceRole.PORTFOLIO_SNAPSHOT,
+        raw=checkout.portfolio_snapshot_raw,
+    )
+    assert inputs.policy_source.source_record[
+        "repository_relative_locator"
+    ] == hermetic.STRATEGY_SETTINGS_LOCATOR
+    assert inputs.portfolio_source.source_record[
+        "repository_relative_locator"
+    ] == hermetic.PORTFOLIO_SNAPSHOT_LOCATOR
+    hermetic.assert_live_operational_inputs_are_unreachable()
