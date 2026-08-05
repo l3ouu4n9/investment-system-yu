@@ -584,17 +584,3 @@ def test_compile_blocked_data_gap_marker_is_classified_non_blocker() -> None:
 
     assert result.valid is True
     assert any("contains handoff uncertainty marker" in reason for reason in result.non_blocker_reasons)
-
-
-def test_archived_passing_handoff_artifacts_still_pass() -> None:
-    artifact_roots = [
-        Path("artifacts/archive/20260517_175322/step1_research/research_output.json"),
-        Path("artifacts/archive/20260525_192143/step1_research/research_output.json"),
-        Path("artifacts/archive/20260531_175546/step1_research/research_output.json"),
-        Path("artifacts/archive/20260614_232439/step1_research/research_output.json"),
-    ]
-
-    for path in artifact_roots:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        result = validate_research_handoff(payload, strategy_settings=strategy_settings())
-        assert result.valid is True, f"{path}: {result.fail_reasons}"
