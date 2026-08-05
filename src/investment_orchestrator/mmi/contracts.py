@@ -13,7 +13,7 @@ from pathlib import PurePosixPath
 import re
 import secrets
 from types import MappingProxyType
-from typing import Final, Mapping, NoReturn, Protocol
+from typing import Final, Literal, Mapping, NoReturn, Protocol
 
 from investment_orchestrator.common.schema_validation import (
     validate_artifact_schema,
@@ -556,6 +556,71 @@ def _begin_mmi_projection_run_with_clock(
 def begin_mmi_projection_run() -> MmiProjectionRunContext:
     """Read the code-owned UTC clock exactly once for an MMI projection run."""
     return _begin_mmi_projection_run_with_clock(_SystemUtcClock())
+
+
+_RUN_CONTEXT_TIMESTAMP_NOT_CANONICAL: Final = (
+    "MMI_RUN_CONTEXT_TIMESTAMP_NOT_CANONICAL"
+)
+_RunContextErrorCode = Literal["MMI_RUN_CONTEXT_TIMESTAMP_NOT_CANONICAL"]
+
+
+class MmiRunContextContractError(ValueError):
+    """Raised when a run-context input is not a canonical representation."""
+
+    code: _RunContextErrorCode
+
+    def __init__(self, code: _RunContextErrorCode) -> None:
+        if code != _RUN_CONTEXT_TIMESTAMP_NOT_CANONICAL:
+            raise TypeError("unsupported MMI run-context error code")
+        super().__init__(code)
+        self.code = code
+
+
+def mint_mmi_projection_run_context_from_canonical_timestamp(
+    *,
+    evaluation_timestamp_utc: str,
+) -> MmiProjectionRunContext:
+    """Mint one run context from an already-canonical UTC timestamp.
+
+    This validates canonical timestamp representation only.  It authenticates
+    no provenance whatsoever: it does not prove the value came from a clock,
+    does not prove the value came from a persisted case, does not establish
+    which case or sources the value belongs to, and authorizes no action.
+    ``begin_mmi_projection_run`` remains the only public path whose timestamp
+    comes from the live system clock.
+
+    A caller holding an unauthenticated timestamp must not use this function.
+    The only approved production consumer is the offline resumption wrapper
+    that first validates a complete persisted envelope, matches its explicit
+    expected identity, and only then reads the timestamp it passes here.
+    """
+    if (
+        type(evaluation_timestamp_utc) is not str
+        or len(evaluation_timestamp_utc) != 27
+    ):
+        raise MmiRunContextContractError(
+            _RUN_CONTEXT_TIMESTAMP_NOT_CANONICAL
+        )
+    try:
+        parsed = datetime.strptime(
+            evaluation_timestamp_utc,
+            CANONICAL_UTC_TIMESTAMP_FORMAT,
+        )
+    except ValueError:
+        raise MmiRunContextContractError(
+            _RUN_CONTEXT_TIMESTAMP_NOT_CANONICAL
+        ) from None
+    if (
+        parsed.strftime(CANONICAL_UTC_TIMESTAMP_FORMAT)
+        != evaluation_timestamp_utc
+    ):
+        raise MmiRunContextContractError(
+            _RUN_CONTEXT_TIMESTAMP_NOT_CANONICAL
+        )
+    return _new_mmi_projection_run_context(
+        evaluation_time_utc=parsed.replace(tzinfo=timezone.utc),
+        evaluation_timestamp_utc=evaluation_timestamp_utc,
+    )
 
 
 class MmiSourceRole(str, Enum):

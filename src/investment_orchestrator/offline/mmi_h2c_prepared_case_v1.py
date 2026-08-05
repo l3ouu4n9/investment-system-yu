@@ -7,6 +7,11 @@ grounded-prompt mappings are opaque here.  Live source fidelity belongs to the
 future preparation phase; archive fidelity and rebuilt-G2 equality belong to
 the future consumption phase before either response is read.
 
+One narrow addition reconstructs this envelope's own evaluation-time run
+context, but only after complete validation and only from the timestamp the
+validated envelope already carries, so a later process can rebuild the exact
+prepared chain without ever choosing that time itself.  It reads no clock.
+
 This owner has no filesystem, live-source, clock, capability, provider,
 network, workflow, scheduler, publication, permission, gate, order, broker, or
 execution behavior.
@@ -18,6 +23,7 @@ from collections.abc import Mapping
 from datetime import datetime
 import hashlib
 import json
+import re
 from typing import Final, Literal, NoReturn
 
 from investment_orchestrator.common.schema_validation import (
@@ -29,10 +35,15 @@ from investment_orchestrator.mmi.canonical import (
     canonical_json_bytes,
     record_identity_sha256,
 )
+from investment_orchestrator.mmi.contracts import (
+    MmiProjectionRunContext,
+    mint_mmi_projection_run_context_from_canonical_timestamp,
+)
 
 
 __all__ = (
     "MmiH2cPreparedCaseV1Error",
+    "resume_mmi_h2c_prepared_case_run_context",
     "validate_mmi_h2c_prepared_case_v1",
 )
 
@@ -53,6 +64,7 @@ _LEGACY_COMPILER_CONTRACT_VERSION: Final = (
     "mmi_legacy_step1_compatibility_compiler_v1"
 )
 _ZERO_SHA256: Final = "0" * 64
+_SHA256_RE: Final = re.compile(r"^[0-9a-f]{64}$")
 
 _PreparedCaseErrorCode = Literal["MMI_H2C_PREPARED_CASE_V1_INVALID"]
 
@@ -269,3 +281,48 @@ def validate_mmi_h2c_prepared_case_v1(
 ) -> None:
     """Validate only the closed persistent envelope and its self-identity."""
     _validate_prepared_case_snapshot(value=prepared_case)
+
+
+def resume_mmi_h2c_prepared_case_run_context(
+    *,
+    prepared_case: Mapping[str, object],
+    expected_prepared_case_identity_sha256: str,
+) -> MmiProjectionRunContext:
+    """Reconstruct one validated envelope's own evaluation-time context.
+
+    The envelope validator above stays the sole owner of canonical identity
+    recomputation and of ``recomputed == embedded``.  This owner adds only
+    ``embedded == expected`` and then reconstructs the context from the
+    timestamp inside that validated envelope, so no caller can choose the
+    reconstructed evaluation time.  The caller's mapping is materialized
+    exactly once, before validation, and every later read uses that detached
+    snapshot.
+
+    This reconstructs one evaluation time.  It resumes no workflow, retries
+    nothing, repairs nothing, reuses no attempt, reads no response, and
+    grants no availability, permission, gate, publication, order, broker or
+    execution authority.
+    """
+    if (
+        type(expected_prepared_case_identity_sha256) is not str
+        or _SHA256_RE.fullmatch(expected_prepared_case_identity_sha256)
+        is None
+    ):
+        _fail()
+    snapshot = _snapshot_mapping(
+        prepared_case,
+        maximum_bytes=_MAXIMUM_CANONICAL_BYTES,
+    )
+    validate_mmi_h2c_prepared_case_v1(prepared_case=snapshot)
+    if snapshot.get(_IDENTITY_FIELD) != (
+        expected_prepared_case_identity_sha256
+    ):
+        _fail()
+    evaluation_timestamp_utc = snapshot.get("evaluation_timestamp_utc")
+    # The validator above already accepted this exact canonical timestamp, so
+    # a disagreement here is contract drift rather than operator input.
+    if type(evaluation_timestamp_utc) is not str:
+        raise RuntimeError("validated prepared case omitted its timestamp")
+    return mint_mmi_projection_run_context_from_canonical_timestamp(
+        evaluation_timestamp_utc=evaluation_timestamp_utc,
+    )

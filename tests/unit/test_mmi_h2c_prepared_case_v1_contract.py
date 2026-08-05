@@ -15,6 +15,7 @@ import investment_orchestrator as package
 import investment_orchestrator.mmi as mmi
 from investment_orchestrator.common.paths import repo_root
 from investment_orchestrator.mmi import canonical
+from investment_orchestrator.mmi import contracts
 from investment_orchestrator.offline import mmi_h2c_case_bundle_v1
 from investment_orchestrator.offline import mmi_h2c_prepared_case_v1 as owner
 
@@ -229,8 +230,20 @@ def test_opaque_children_are_mapping_only_and_not_semantically_duplicated() -> N
     text = Path(owner.__file__).read_text(encoding="utf-8")
     assert "validate_mmi_grounded_prompt" not in text
     assert "validate_mmi_source" not in text
-    assert "MmiProjectionRunContext" not in text
-    assert "MmiCapturedSource" not in text
+    # The resumption wrapper returns the sealed run-context type, so that one
+    # type name is now legitimately present.  What must stay absent is any
+    # live-chain construction, source capture, or clock read that would give
+    # this owner semantic knowledge of an opaque child.
+    for forbidden in (
+        "build_mmi_policy_projection",
+        "build_mmi_portfolio_snapshot_projection",
+        "build_mmi_authenticated_evidence_bundle",
+        "build_mmi_analyst_visible_evidence_view",
+        "build_mmi_grounded_prompt",
+        "capture_current_mmi_source",
+        "MmiCapturedSource",
+    ):
+        assert forbidden not in text
 
 
 def test_builder_preserves_complete_opaque_mappings_and_fixed_roles() -> None:
@@ -547,6 +560,7 @@ def test_ceiling_is_a_maximum_and_rejects_an_oversized_child() -> None:
 def test_public_api_is_minimal_and_builder_is_private_keyword_only() -> None:
     assert owner.__all__ == (
         "MmiH2cPreparedCaseV1Error",
+        "resume_mmi_h2c_prepared_case_run_context",
         "validate_mmi_h2c_prepared_case_v1",
     )
     assert "_build_mmi_h2c_prepared_case_v1" not in owner.__all__
@@ -555,6 +569,21 @@ def test_public_api_is_minimal_and_builder_is_private_keyword_only() -> None:
     assert all(
         item.kind is inspect.Parameter.KEYWORD_ONLY
         for item in public.parameters.values()
+    )
+    # The resumption wrapper takes authenticated evidence and an explicit
+    # expected identity only.  It exposes no timestamp parameter, so no
+    # caller can choose the reconstructed evaluation time.
+    resume = inspect.signature(
+        owner.resume_mmi_h2c_prepared_case_run_context
+    )
+    assert tuple(resume.parameters) == (
+        "prepared_case",
+        "expected_prepared_case_identity_sha256",
+    )
+    assert all(
+        item.kind is inspect.Parameter.KEYWORD_ONLY
+        and item.default is inspect.Parameter.empty
+        for item in resume.parameters.values()
     )
     private = inspect.signature(owner._build_mmi_h2c_prepared_case_v1)
     assert tuple(private.parameters) == (
@@ -626,7 +655,20 @@ def test_owner_has_no_forbidden_capability_or_workflow_imports() -> None:
     } == {
         "investment_orchestrator.common.schema_validation",
         "investment_orchestrator.mmi.canonical",
+        # The resumption wrapper reconstructs the existing sealed context
+        # type through the existing owner.  It reads no clock: the live
+        # factory and both private clock seams stay unimported.
+        "investment_orchestrator.mmi.contracts",
     }
+    contracts_source = Path(contracts.__file__).read_text(encoding="utf-8")
+    assert "_SystemUtcClock" in contracts_source
+    for seam in (
+        "begin_mmi_projection_run",
+        "_begin_mmi_projection_run_with_clock",
+        "_SystemUtcClock",
+        "_new_mmi_projection_run_context",
+    ):
+        assert seam not in source
     assert "except Exception" not in source
     assert "rehydrat" not in source.lower()
     assert "capability" not in source.lower().replace(
