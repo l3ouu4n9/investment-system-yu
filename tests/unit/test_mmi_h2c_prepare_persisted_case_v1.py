@@ -1683,7 +1683,7 @@ def test_owner_has_no_provider_network_or_concurrency_capability() -> None:
     assert "listdir" not in source and "walk(" not in source
 
 
-def test_engine_is_dormant_and_owns_the_prepared_case_consumer() -> None:
+def test_engine_has_only_its_one_approved_d4c_prepare_only_cli_consumer() -> None:
     production_root = repo_root() / "src/investment_orchestrator"
     engine_path = Path(engine.__file__).resolve()
     engine_relative = engine_path.relative_to(repo_root())
@@ -1708,7 +1708,11 @@ def test_engine_is_dormant_and_owns_the_prepared_case_consumer() -> None:
             and path.name != "mmi_h2c_dual_side_persisted_case_receipt_v2.py"
         ):
             receipt_consumers.append(relative)
-    assert engine_consumers == []
+    # D4c authorizes exactly one narrow, prepare-only CLI consumer; the engine
+    # itself remains otherwise unconsumed.
+    assert engine_consumers == [
+        "src/investment_orchestrator/cli/run_mmi_h2c_prepare.py"
+    ]
     assert prepared_consumers == [engine_relative.as_posix()]
     assert receipt_consumers == []
     assert mmi.__all__ == ()
