@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 from copy import deepcopy
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_DOWN, ROUND_UP, localcontext
 import hashlib
 import inspect
@@ -15,6 +15,7 @@ from types import MappingProxyType
 import pytest
 import yaml
 
+from investment_orchestrator.common.paths import repo_root
 from investment_orchestrator.common.schema_validation import (
     validate_artifact_schema,
 )
@@ -29,6 +30,7 @@ from investment_orchestrator.mmi.contracts import (
     MmiProjectionRunContext,
     MmiProjectionResultCategory,
     MmiSourceRole,
+    begin_mmi_projection_run,
     _begin_mmi_projection_run_with_clock,
     _create_mmi_captured_source,
 )
@@ -45,6 +47,7 @@ from investment_orchestrator.mmi.policy_projection import (
 )
 from investment_orchestrator.mmi.source_capture import (
     _capture_mmi_source_at_root,
+    capture_current_mmi_source,
 )
 
 
@@ -301,19 +304,65 @@ def _forged_source(
     return forged
 
 
-def test_current_repository_settings_build_a_valid_report_only_projection(
-    tmp_path: Path,
-) -> None:
-    raw = Path("inputs/current/strategy_settings.yaml").read_bytes()
-    source, run_context = _source_and_run_context(tmp_path, raw=raw)
+def test_current_repository_settings_build_a_valid_report_only_projection() -> None:
+    # Live-current repository sentinel.  It validates the actual tracked
+    # strategy settings through the public production owners: the repository
+    # root locator, the code-owned clock, and the public source capture.  It
+    # deliberately freezes no operational scalar, so a routine operator input
+    # refresh cannot make it stale, while a genuinely future-dated or
+    # malformed current input still fails closed through production codes.
+    settings_path = repo_root() / "inputs/current/strategy_settings.yaml"
+    raw = settings_path.read_bytes()
+    expected_digest = hashlib.sha256(raw).hexdigest()
+
+    capture = capture_current_mmi_source(
+        MmiSourceRole.STRATEGY_SETTINGS,
+        expected_source_sha256=expected_digest,
+    )
+    assert capture.status is (
+        MmiProjectionResultCategory.PROJECTION_VALID_COMPLETE
+    ), capture.reason_codes
+    assert capture.authority_effect == "NONE"
+    assert capture.source is not None
+    source = capture.source
+    assert source.role is MmiSourceRole.STRATEGY_SETTINGS
+    assert source.raw_bytes == raw
+
+    record = dict(source.source_record)
+    assert record["repository_relative_locator"] == (
+        "inputs/current/strategy_settings.yaml"
+    )
+    assert record["expected_sha256"] == expected_digest
+    assert record["observed_sha256"] == expected_digest
+    assert record["observed_size_bytes"] == len(raw)
+    assert record["content_binding_status"] == "EXPECTED_SHA256_MATCHED"
+    assert record["stable_read_status"] == "STABLE_BEFORE_AND_AFTER"
+    assert record["regular_file_status"] == "REGULAR_FILE"
+    assert record["operator_origin_authentication"] == "NOT_ESTABLISHED"
+    assert record["authority_effect"] == "NONE"
+    assert record["source_record_identity_sha256"] == (
+        _independent_record_identity(
+            record,
+            identity_field="source_record_identity_sha256",
+            domain=MMI_SOURCE_RECORD_IDENTITY_DOMAIN,
+        )
+    )
+
+    run_context = begin_mmi_projection_run()
+    assert run_context.authority_effect == "NONE"
+    assert run_context.evaluation_time_utc.utcoffset().total_seconds() == 0
+    assert run_context.evaluation_timestamp_utc.endswith("Z")
+
     result = build_mmi_policy_projection(
         source,
         run_context=run_context,
     )
-    assert result.status is MmiProjectionResultCategory.PROJECTION_VALID_WITH_GAPS
+    assert result.status is (
+        MmiProjectionResultCategory.PROJECTION_VALID_WITH_GAPS
+    ), result.reason_codes
     assert result.authority_effect == "NONE"
     assert result.projection is not None
-    projection = result.projection
+    projection = dict(result.projection)
     assert projection["policy_method"] == POLICY_METHOD
     assert projection["report_only"] is True
     assert projection["authority_effect"] == "NONE"
@@ -323,18 +372,101 @@ def test_current_repository_settings_build_a_valid_report_only_projection(
         projection["target_weights_absence_reason"]
         == "POLICY_METHOD_HAS_NO_TARGET_WEIGHTS"
     )
-    assert projection["hard_open_orders_budget_cap"]["amount_decimal"] == (
-        "38211.29"
+    assert projection["source_record_identity_sha256"] == (
+        record["source_record_identity_sha256"]
     )
-    assert projection["per_run_new_buy_budget"] == {
-        "status": "VALUE_PRESENT_APPLICABILITY_UNVERIFIED",
-        "currency": "USD",
-        "amount_decimal": "12000",
-        "authority_effect": "NONE",
+
+    # Future-date protection, asserted against the real code-owned clock
+    # rather than a frozen literal.  A future-dated current input is rejected
+    # upstream by MMI_POLICY_AS_OF_FUTURE before this point is reached.
+    policy_as_of = date.fromisoformat(projection["policy_as_of_date"])
+    assert policy_as_of <= run_context.evaluation_time_utc.date()
+
+    # Neither budget scalar below is frozen here: both legitimately change on
+    # every operator input refresh.  The expected values are re-derived from
+    # the same captured current bytes through the strict settings parser,
+    # which is a separate production path from the projection builder under
+    # test.  Both comparisons are exact Decimal comparisons; no float is
+    # involved anywhere.
+    parsed_settings = _parse_strict_strategy_settings(raw)
+
+    cap = projection["hard_open_orders_budget_cap"]
+    assert set(cap) == {
+        "currency",
+        "amount_decimal",
+        "validation_status",
+        "authority_effect",
     }
+    assert cap["currency"] == "USD"
+    assert cap["validation_status"] == "SOURCE_VALIDATED"
+    assert cap["authority_effect"] == "NONE"
+    assert type(cap["amount_decimal"]) is str
+    cap_amount = Decimal(cap["amount_decimal"])
+    assert cap_amount.is_finite()
+    assert cap_amount >= 0
+    assert cap_amount == parsed_settings["hard_cap_open_orders_budget"]
+    assert "HARD_OPEN_ORDERS_BUDGET_CAP_VALIDATED" in (
+        projection["policy_completeness_statuses"]
+    )
+
+    per_run = projection["per_run_new_buy_budget"]
+    assert set(per_run) == {
+        "status",
+        "currency",
+        "amount_decimal",
+        "authority_effect",
+    }
+    assert per_run["status"] == "VALUE_PRESENT_APPLICABILITY_UNVERIFIED"
+    assert per_run["currency"] == "USD"
+    assert per_run["authority_effect"] == "NONE"
+    assert type(per_run["amount_decimal"]) is str
+    per_run_amount = Decimal(per_run["amount_decimal"])
+    assert per_run_amount.is_finite()
+    assert per_run_amount >= 0
+    assert per_run_amount == parsed_settings["target_new_buy_budget_this_run"]
+    # The unverified applicability of this budget is recorded consistently in
+    # all three places the contract owns, and the completeness statuses claim
+    # no validated per-run budget.
     assert "POLICY_PER_RUN_BUDGET_APPLICABILITY_UNVERIFIED" in (
         result.reason_codes
     )
+    assert "POLICY_PER_RUN_BUDGET_APPLICABILITY_UNVERIFIED" in tuple(
+        gap["code"] for gap in projection["known_policy_gaps"]
+    )
+    assert not any(
+        "PER_RUN" in status
+        for status in projection["policy_completeness_statuses"]
+    )
+
+    serialized = json.dumps(projection).casefold()
+    for forbidden in (
+        "order_compilation",
+        "execution_authority",
+        "publication_authority",
+        "permission",
+        "allowed_actions",
+        "blocked_actions",
+    ):
+        assert forbidden not in serialized
+
+    repeat = build_mmi_policy_projection(
+        source,
+        run_context=run_context,
+    )
+    assert repeat.projection is not None
+    assert dict(repeat.projection) == projection
+    assert projection["policy_projection_identity_sha256"] == (
+        _independent_record_identity(
+            projection,
+            identity_field="policy_projection_identity_sha256",
+            domain=MMI_POLICY_PROJECTION_IDENTITY_DOMAIN,
+        )
+    )
+    validate_artifact_schema(
+        projection,
+        schema_name="mmi_policy_projection_v1.schema.json",
+    )
+
     validation = validate_mmi_policy_projection(
         dict(projection),
         source=source,

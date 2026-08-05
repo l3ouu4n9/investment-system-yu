@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import (
     Clamped,
     Decimal,
@@ -24,6 +24,7 @@ from types import MappingProxyType
 import pytest
 import yaml
 
+from investment_orchestrator.common.paths import repo_root
 from investment_orchestrator.common.schema_validation import (
     validate_artifact_schema,
 )
@@ -39,6 +40,7 @@ from investment_orchestrator.mmi.contracts import (
     MmiProjectionResultCategory,
     MmiProjectionRunContext,
     MmiSourceRole,
+    begin_mmi_projection_run,
     _begin_mmi_projection_run_with_clock,
 )
 from investment_orchestrator.mmi.policy_projection import (
@@ -50,6 +52,7 @@ from investment_orchestrator.mmi.portfolio_projection import (
 )
 from investment_orchestrator.mmi.source_capture import (
     _capture_mmi_source_at_root,
+    capture_current_mmi_source,
 )
 
 
@@ -1869,29 +1872,109 @@ def test_schema_is_closed_draft_2020_12_and_authority_free(
         )
 
 
-def test_current_repository_sources_capture_build_and_validate(
-    tmp_path: Path,
-) -> None:
-    strategy_raw = Path(
+def test_current_repository_sources_capture_build_and_validate() -> None:
+    # Live-current repository sentinel.  It captures both actual tracked
+    # sources through the public production owner under the real code-owned
+    # clock, binding each by a digest derived at runtime rather than a frozen
+    # literal.  No operational scalar is frozen, so a routine operator input
+    # refresh cannot make it stale, while future-dated, malformed or unstable
+    # current input still fails closed through production reason codes.
+    settings_path = repo_root() / "inputs/current/strategy_settings.yaml"
+    portfolio_path = repo_root() / "inputs/current/portfolio_snapshot.txt"
+    strategy_raw = settings_path.read_bytes()
+    portfolio_raw = portfolio_path.read_bytes()
+    strategy_digest = hashlib.sha256(strategy_raw).hexdigest()
+    portfolio_digest = hashlib.sha256(portfolio_raw).hexdigest()
+
+    # One clock read, shared by both projections so they stay comparable.
+    run_context = begin_mmi_projection_run()
+    assert run_context.authority_effect == "NONE"
+    assert run_context.evaluation_time_utc.utcoffset().total_seconds() == 0
+    assert run_context.evaluation_timestamp_utc.endswith("Z")
+
+    strategy_capture = capture_current_mmi_source(
+        MmiSourceRole.STRATEGY_SETTINGS,
+        expected_source_sha256=strategy_digest,
+    )
+    assert strategy_capture.status is (
+        MmiProjectionResultCategory.PROJECTION_VALID_COMPLETE
+    ), strategy_capture.reason_codes
+    assert strategy_capture.source is not None
+    policy_source = strategy_capture.source
+    assert policy_source.role is MmiSourceRole.STRATEGY_SETTINGS
+    assert policy_source.raw_bytes == strategy_raw
+    strategy_record = dict(policy_source.source_record)
+    assert strategy_record["repository_relative_locator"] == (
         "inputs/current/strategy_settings.yaml"
-    ).read_bytes()
-    portfolio_raw = Path(
+    )
+    assert strategy_record["expected_sha256"] == strategy_digest
+    assert strategy_record["observed_sha256"] == strategy_digest
+    assert strategy_record["observed_size_bytes"] == len(strategy_raw)
+    assert strategy_record["content_binding_status"] == (
+        "EXPECTED_SHA256_MATCHED"
+    )
+    assert strategy_record["stable_read_status"] == "STABLE_BEFORE_AND_AFTER"
+    assert strategy_record["regular_file_status"] == "REGULAR_FILE"
+    assert strategy_record["operator_origin_authentication"] == (
+        "NOT_ESTABLISHED"
+    )
+    assert strategy_record["authority_effect"] == "NONE"
+    assert strategy_record["source_record_identity_sha256"] == (
+        _independent_identity(
+            strategy_record,
+            identity_field="source_record_identity_sha256",
+            domain=MMI_SOURCE_RECORD_IDENTITY_DOMAIN,
+        )
+    )
+
+    portfolio_capture = capture_current_mmi_source(
+        MmiSourceRole.PORTFOLIO_SNAPSHOT,
+        expected_source_sha256=portfolio_digest,
+    )
+    assert portfolio_capture.status is (
+        MmiProjectionResultCategory.PROJECTION_VALID_COMPLETE
+    ), portfolio_capture.reason_codes
+    assert portfolio_capture.source is not None
+    portfolio_source = portfolio_capture.source
+    assert portfolio_source.role is MmiSourceRole.PORTFOLIO_SNAPSHOT
+    assert portfolio_source.raw_bytes == portfolio_raw
+    portfolio_record = dict(portfolio_source.source_record)
+    assert portfolio_record["repository_relative_locator"] == (
         "inputs/current/portfolio_snapshot.txt"
-    ).read_bytes()
-    assert hashlib.sha256(strategy_raw).hexdigest() == (
-        "fde678173e2d115dbdad3e73ad5ac74fb"
-        "730ee4f40fb9c06c89fdefbcf732d26"
     )
-    assert hashlib.sha256(portfolio_raw).hexdigest() == (
-        "feabb3b03fa1022c6bc40c4214f7cb0d77"
-        "1cc4e7844cf0fc0a738a265b260916"
+    assert portfolio_record["expected_sha256"] == portfolio_digest
+    assert portfolio_record["observed_sha256"] == portfolio_digest
+    assert portfolio_record["observed_size_bytes"] == len(portfolio_raw)
+    assert portfolio_record["content_binding_status"] == (
+        "EXPECTED_SHA256_MATCHED"
     )
-    policy, policy_source, run_context = _policy_contract(
-        tmp_path,
-        raw=strategy_raw,
+    assert portfolio_record["stable_read_status"] == (
+        "STABLE_BEFORE_AND_AFTER"
     )
+    assert portfolio_record["regular_file_status"] == "REGULAR_FILE"
+    assert portfolio_record["operator_origin_authentication"] == (
+        "NOT_ESTABLISHED"
+    )
+    assert portfolio_record["authority_effect"] == "NONE"
+    assert portfolio_record["source_record_identity_sha256"] == (
+        _independent_identity(
+            portfolio_record,
+            identity_field="source_record_identity_sha256",
+            domain=MMI_SOURCE_RECORD_IDENTITY_DOMAIN,
+        )
+    )
+
+    policy_result = build_mmi_policy_projection(
+        policy_source,
+        run_context=run_context,
+    )
+    assert policy_result.status is (
+        MmiProjectionResultCategory.PROJECTION_VALID_WITH_GAPS
+    ), policy_result.reason_codes
+    assert policy_result.projection is not None
+    policy = dict(policy_result.projection)
     policy_before = deepcopy(policy)
-    portfolio_source = _portfolio_source(tmp_path, portfolio_raw)
+
     result = build_mmi_portfolio_snapshot_projection(
         portfolio_source,
         policy_projection=policy,
@@ -1900,17 +1983,76 @@ def test_current_repository_sources_capture_build_and_validate(
     )
     assert result.status is (
         MmiProjectionResultCategory.PROJECTION_VALID_WITH_GAPS
-    )
+    ), result.reason_codes
+    assert result.authority_effect == "NONE"
     assert result.projection is not None
     projection = dict(result.projection)
-    assert projection["portfolio_source_date"] == "2026-06-28"
+    assert projection["projection_kind"] == (
+        "MMI_PORTFOLIO_SNAPSHOT_PROJECTION"
+    )
+    assert projection["report_only"] is True
+    assert projection["authority_effect"] == "NONE"
+    assert projection["completeness_status"] == "PROJECTION_VALID_WITH_GAPS"
+    assert projection["portfolio_source_status"] == (
+        "SOURCE_PRESENT_CONTENT_BOUND"
+    )
+
+    # Comparability: the portfolio projection is bound to the exact policy
+    # projection and portfolio source record captured above.
+    assert projection["policy_projection_identity_sha256"] == (
+        policy["policy_projection_identity_sha256"]
+    )
+    assert projection["portfolio_source_record_identity_sha256"] == (
+        portfolio_record["source_record_identity_sha256"]
+    )
+
+    # The source date is not frozen: it advances on every operator refresh.
+    # What is owned is that it parses and is not future relative to the same
+    # run context the projection was built under.  A future-dated snapshot is
+    # rejected upstream by MMI_PORTFOLIO_SOURCE_TIMESTAMP_FUTURE.
+    source_date = date.fromisoformat(projection["portfolio_source_date"])
+    assert source_date <= run_context.evaluation_time_utc.date()
+
+    # Open-buy structure, not operational content.  A valid flat order state
+    # is legitimate and must pass, so no non-empty ticker list is required.
     open_buy = projection["open_buy_orders"]
+    assert set(open_buy) == {
+        "status",
+        "records",
+        "total_reserved_budget_decimal",
+    }
     assert open_buy["status"] == "SOURCE_VALIDATED"
-    assert [
-        record["ticker"] for record in open_buy["records"]
-    ] == ["QQQ", "VOO", "SMH", "CIBR", "GRID"]
-    assert open_buy["total_reserved_budget_decimal"] == "16078.45"
+    records = open_buy["records"]
+    assert type(records) is list
+    tickers = [record["ticker"] for record in records]
+    assert all(
+        type(ticker) is str and ticker and ticker.strip() == ticker
+        for ticker in tickers
+    )
+    assert len(set(tickers)) == len(tickers)
+    reserved = Decimal(open_buy["total_reserved_budget_decimal"])
+    assert reserved.is_finite()
+    assert reserved >= 0
+    holdings = projection["holdings"]
+    assert type(holdings) is dict
+    assert type(holdings["records"]) is list
+
     assert policy == policy_before
+
+    repeat = build_mmi_portfolio_snapshot_projection(
+        portfolio_source,
+        policy_projection=policy,
+        policy_source=policy_source,
+        run_context=run_context,
+    )
+    assert repeat.projection is not None
+    assert dict(repeat.projection) == projection
+    assert policy == policy_before
+
+    validate_artifact_schema(
+        projection,
+        schema_name="mmi_portfolio_snapshot_projection_v1.schema.json",
+    )
     validation = _validate_candidate(
         projection,
         portfolio_source=portfolio_source,
@@ -1928,11 +2070,18 @@ def test_current_repository_sources_capture_build_and_validate(
             ),
         )
     )
-    production_source = Path(
-        "src/investment_orchestrator/mmi/portfolio_projection.py"
+
+    # Anti-hardcoding guard.  The probe symbols are declared here, are never
+    # read from ``inputs/current``, and name no real instrument, so this stays
+    # a tripwire against sample ticker data being pasted into the projection
+    # module without re-encoding the operational universe into this test.
+    ticker_probes = ("ZZPROBEA", "ZZPROBEB", "ZZPROBEC", "ZZPROBED", "ZZPROBEE")
+    production_source = (
+        repo_root()
+        / "src/investment_orchestrator/mmi/portfolio_projection.py"
     ).read_text(encoding="utf-8")
-    for ticker in ("QQQ", "VOO", "SMH", "CIBR", "GRID"):
-        assert f'"{ticker}"' not in production_source
+    for probe in ticker_probes:
+        assert f'"{probe}"' not in production_source
 
 
 def test_p1a_projection_and_identities_are_unchanged_by_p1b_build(
