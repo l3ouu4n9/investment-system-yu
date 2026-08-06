@@ -604,6 +604,9 @@ def test_v2_prompt_envelope_and_response_graph_is_exact_and_dormant() -> None:
         "investment_orchestrator.offline."
         "mmi_h2c_dual_side_persisted_case_receipt_v2"
     ) == (H2C_CONSUME_ENGINE_RELATIVE_PATH,)
+    assert consumers(
+        "investment_orchestrator.offline._mmi_h2c_stable_read_v1"
+    ) == (H2C_CONSUME_ENGINE_RELATIVE_PATH,)
     # D4b: the dormant prepared-case contract gains exactly one production
     # consumer, the Phase A engine, which itself stays consumer-free.
     assert consumers(
@@ -704,7 +707,7 @@ def test_reachable_schema_validation_call_graph_does_not_write(
 
 def test_ltetf_inventory_classification_is_unchanged_except_inventory_content() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
-    assert len(inventory.production_paths) == 150
+    assert len(inventory.production_paths) == 151
     assert inventory.dynamic_findings == ()
     assert inventory.observer_external_consumers == EXPECTED_EXTERNAL_CONSUMERS
     assert inventory.report_artifact_readers == ()

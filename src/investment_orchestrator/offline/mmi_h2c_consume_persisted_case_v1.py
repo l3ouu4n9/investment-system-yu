@@ -106,6 +106,11 @@ from investment_orchestrator.validators.strategy_settings import (
     StrategySettingsValidationError,
     parse_strategy_settings_text,
 )
+from investment_orchestrator.offline._mmi_h2c_stable_read_v1 import (
+    MmiH2cStableReadError,
+    MmiH2cStableReadErrorCode,
+    _stable_read_exact_bytes as _neutral_stable_read_exact_bytes,
+)
 
 
 __all__ = (
@@ -520,42 +525,6 @@ def _open_case_root(path: Path) -> int:
         _translate_directory_oserror(exc)
 
 
-@dataclass(frozen=True, slots=True)
-class _ReadWitness:
-    device: int
-    inode: int
-    size: int
-    modification_time_ns: int
-    change_time_ns: int
-
-
-def _read_witness(value: os.stat_result) -> _ReadWitness:
-    return _ReadWitness(
-        device=value.st_dev,
-        inode=value.st_ino,
-        size=value.st_size,
-        modification_time_ns=value.st_mtime_ns,
-        change_time_ns=value.st_ctime_ns,
-    )
-
-
-def _read_to_eof_once(fd: int, *, maximum_bytes: int) -> bytes:
-    chunks: list[bytes] = []
-    observed = 0
-    while True:
-        chunk = os.read(
-            fd,
-            min(_READ_CHUNK_BYTES, maximum_bytes + 1 - observed),
-        )
-        if not chunk:
-            break
-        chunks.append(chunk)
-        observed += len(chunk)
-        if observed > maximum_bytes:
-            break
-    return b"".join(chunks)
-
-
 def _stable_read_exact_bytes(
     case_fd: int,
     relative_path: str,
@@ -563,31 +532,18 @@ def _stable_read_exact_bytes(
     maximum_bytes: int,
     input_invalid: H2cConsumeErrorCode = H2cConsumeErrorCode.H2C_CONSUME_PATH_CONTRACT_INVALID,
 ) -> bytes:
-    flags = (
-        os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
-    )
-    fd: int | None = None
     try:
-        fd = os.open(relative_path, flags, dir_fd=case_fd)
-        status = os.fstat(fd)
-        if not stat.S_ISREG(status.st_mode):
-            raise OSError(errno.EINVAL, "not a regular file")
-        before = _read_witness(status)
-        if before.size < 1 or before.size > maximum_bytes:
-            _raise_controlled(input_invalid)
-        exact_bytes = _read_to_eof_once(
-            fd,
+        return _neutral_stable_read_exact_bytes(
+            case_fd,
+            relative_path,
             maximum_bytes=maximum_bytes,
         )
-        after = _read_witness(os.fstat(fd))
-        if before != after or len(exact_bytes) != before.size:
+    except MmiH2cStableReadError as exc:
+        if exc.code == MmiH2cStableReadErrorCode.STABLE_READ_INPUT_INVALID:
             _raise_controlled(input_invalid)
-        return exact_bytes
-    except OSError as exc:
-        _translate_directory_oserror(exc, input_invalid=input_invalid)
-    finally:
-        if fd is not None:
-            os.close(fd)
+        elif exc.code == MmiH2cStableReadErrorCode.STABLE_READ_CAPABILITY_UNAVAILABLE:
+            _raise_controlled(H2cConsumeErrorCode.H2C_CONSUME_CAPABILITY_UNAVAILABLE)
+        raise exc
 
 
 def _read_manifest_dict(case_fd: int) -> dict[str, object]:
