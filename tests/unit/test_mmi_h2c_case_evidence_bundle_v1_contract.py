@@ -700,7 +700,8 @@ def test_owner_has_exact_session_consumer_and_no_package_export() -> None:
             ):
                 consumers.append(path)
     assert consumers == [
-        production_root / "offline/mmi_h2c_manual_capture_session.py"
+        production_root / "offline/mmi_h2c_consume_persisted_case_v1.py",
+        production_root / "offline/mmi_h2c_manual_capture_session.py",
     ]
     # canonical.py names the domain and ceiling constants but imports nothing
     # from the owner, so it is not a consumer.

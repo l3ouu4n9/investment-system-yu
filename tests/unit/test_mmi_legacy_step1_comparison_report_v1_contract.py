@@ -561,8 +561,12 @@ def test_h1_and_h2_gain_only_the_explicit_capture_consumer() -> None:
         "src/investment_orchestrator/offline/"
         "mmi_h2c_manual_capture_session.py"
     )
-    assert h1_consumers == [session_path, OWNER_RELATIVE_PATH]
-    assert h2_consumers == [session_path]
+    consume_path = (
+        "src/investment_orchestrator/offline/"
+        "mmi_h2c_consume_persisted_case_v1.py"
+    )
+    assert h1_consumers == [consume_path, session_path, OWNER_RELATIVE_PATH]
+    assert h2_consumers == [consume_path, session_path]
 
 
 def test_inventory_domain_schema_and_package_posture_are_exact() -> None:

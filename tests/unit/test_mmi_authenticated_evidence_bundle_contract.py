@@ -1258,6 +1258,10 @@ def test_e1b_contract_and_e1c_runtime_have_exact_phase_ownership() -> None:
         analyst_view_v2_relative_path,
         (
             "src/investment_orchestrator/offline/"
+            "mmi_h2c_consume_persisted_case_v1.py"
+        ),
+        (
+            "src/investment_orchestrator/offline/"
             "mmi_h2c_manual_capture_session.py"
         ),
         (

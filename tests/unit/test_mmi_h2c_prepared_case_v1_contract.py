@@ -692,6 +692,10 @@ def test_owner_has_exactly_the_phase_a_consumer_and_no_package_export() -> None:
     assert consumers == [
         Path(
             "src/investment_orchestrator/offline/"
+            "mmi_h2c_consume_persisted_case_v1.py"
+        ),
+        Path(
+            "src/investment_orchestrator/offline/"
             "mmi_h2c_prepare_persisted_case_v1.py"
         )
     ]

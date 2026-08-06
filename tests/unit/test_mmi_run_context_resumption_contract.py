@@ -67,9 +67,8 @@ OTHER_SHA256 = "1" * 64
 
 PRODUCTION_ROOT = "src/investment_orchestrator"
 CONTRACTS_RELATIVE = f"{PRODUCTION_ROOT}/mmi/contracts.py"
-PREPARED_CASE_RELATIVE = (
-    f"{PRODUCTION_ROOT}/offline/mmi_h2c_prepared_case_v1.py"
-)
+PREPARED_CASE_RELATIVE = f"{PRODUCTION_ROOT}/offline/mmi_h2c_prepared_case_v1.py"
+CONSUME_CASE_RELATIVE = f"{PRODUCTION_ROOT}/offline/mmi_h2c_consume_persisted_case_v1.py"
 
 
 class _FixedClock:
@@ -617,7 +616,7 @@ def test_resumption_wrapper_has_zero_production_consumers() -> None:
         if relative != PREPARED_CASE_RELATIVE
         and "resume_mmi_h2c_prepared_case_run_context" in source
     ]
-    assert consumers == []
+    assert consumers == [CONSUME_CASE_RELATIVE]
 
 
 @pytest.mark.parametrize(

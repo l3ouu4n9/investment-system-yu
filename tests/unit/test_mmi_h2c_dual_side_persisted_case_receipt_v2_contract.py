@@ -393,7 +393,12 @@ def test_owner_is_dormant_and_package_exports_remain_empty() -> None:
         source = path.read_text(encoding="utf-8")
         if "mmi_h2c_dual_side_persisted_case_receipt_v2" in source:
             consumers.append(path.relative_to(repo_root()))
-    assert consumers == []
+    assert consumers == [
+        Path(
+            "src/investment_orchestrator/offline/"
+            "mmi_h2c_consume_persisted_case_v1.py"
+        ),
+    ]
     assert mmi.__all__ == ()
     assert not hasattr(package, "__all__")
     assert IDENTITY_DOMAIN not in tuple(vars(canonical).values())

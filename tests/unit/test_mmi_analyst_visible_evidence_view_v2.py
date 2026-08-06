@@ -711,6 +711,10 @@ def test_v2_has_exact_g2_consumer_and_no_side_effect_surface() -> None:
         ),
         (
             "src/investment_orchestrator/offline/"
+            "mmi_h2c_consume_persisted_case_v1.py"
+        ),
+        (
+            "src/investment_orchestrator/offline/"
             "mmi_h2c_manual_capture_session.py"
         ),
         (
