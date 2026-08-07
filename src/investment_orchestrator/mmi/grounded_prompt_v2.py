@@ -10,8 +10,12 @@ from investment_orchestrator.common.schema_validation import (
     validate_artifact_schema,
 )
 from investment_orchestrator.mmi.analyst_visible_evidence_view_v2 import (
+    _validate_live_provenance_and_extract_identities,
+    _ViewContractFailure,
     _validated_analyst_visible_evidence_view_v2_context,
+    _validated_analyst_visible_evidence_view_v2_context_from_source_record_identities,
     build_mmi_analyst_visible_evidence_view_v2,
+    _build_mmi_analyst_visible_evidence_view_v2_from_source_record_identities,
 )
 from investment_orchestrator.mmi.canonical import (
     MAXIMUM_CANONICAL_JSON_BYTES,
@@ -261,13 +265,53 @@ def _source_bound_view_snapshot(
     run_context: MmiProjectionRunContext,
 ) -> dict[str, object]:
     try:
-        return _validated_analyst_visible_evidence_view_v2_context(
-            value=value,
+        evidence = _snapshot_mapping(evidence_bundle)
+        policy = _snapshot_mapping(policy_projection)
+        portfolio = (
+            None
+            if portfolio_projection is None
+            else _snapshot_mapping(portfolio_projection)
+        )
+        policy_id, portfolio_id = _validate_live_provenance_and_extract_identities(
+            evidence_bundle=evidence,
+            policy_projection=policy,
+            policy_source=policy_source,
+            portfolio_projection=portfolio,
+            portfolio_source=portfolio_source,
+            run_context=run_context,
+        )
+    except _ViewContractFailure:
+        _fail("MMI_GROUNDED_PROMPT_V2_VIEW_SOURCE_FIDELITY_INVALID")
+
+    return _source_bound_view_snapshot_from_source_record_identities(
+        value,
+        evidence_bundle=evidence_bundle,
+        policy_projection=policy_projection,
+        policy_source_record_identity_sha256=policy_id,
+        portfolio_projection=portfolio_projection,
+        portfolio_source_record_identity_sha256=portfolio_id,
+        run_context=run_context,
+    )
+
+
+def _source_bound_view_snapshot_from_source_record_identities(
+    value: Mapping[str, object],
+    *,
+    evidence_bundle: Mapping[str, object],
+    policy_projection: Mapping[str, object],
+    policy_source_record_identity_sha256: str,
+    portfolio_projection: Mapping[str, object] | None,
+    portfolio_source_record_identity_sha256: str | None,
+    run_context: MmiProjectionRunContext,
+) -> dict[str, object]:
+    try:
+        return _validated_analyst_visible_evidence_view_v2_context_from_source_record_identities(
+            value,
             evidence_bundle=evidence_bundle,
             policy_projection=policy_projection,
-            policy_source=policy_source,
+            policy_source_record_identity_sha256=policy_source_record_identity_sha256,
             portfolio_projection=portfolio_projection,
-            portfolio_source=portfolio_source,
+            portfolio_source_record_identity_sha256=portfolio_source_record_identity_sha256,
             run_context=run_context,
         )
     except Exception:
@@ -418,6 +462,61 @@ def _validated_grounded_prompt_snapshot(
     portfolio_source: MmiCapturedSource | None,
     run_context: MmiProjectionRunContext,
 ) -> dict[str, object]:
+    try:
+        evidence = _snapshot_mapping(evidence_bundle)
+        policy = _snapshot_mapping(policy_projection)
+        portfolio = (
+            None
+            if portfolio_projection is None
+            else _snapshot_mapping(portfolio_projection)
+        )
+        policy_id, portfolio_id = _validate_live_provenance_and_extract_identities(
+            evidence_bundle=evidence,
+            policy_projection=policy,
+            policy_source=policy_source,
+            portfolio_projection=portfolio,
+            portfolio_source=portfolio_source,
+            run_context=run_context,
+        )
+    except _ViewContractFailure:
+        _fail("MMI_GROUNDED_PROMPT_V2_VIEW_SOURCE_FIDELITY_INVALID")
+
+    return _validated_grounded_prompt_snapshot_from_source_record_identities(
+        value,
+        evidence_bundle=evidence_bundle,
+        policy_projection=policy_projection,
+        policy_source_record_identity_sha256=policy_id,
+        portfolio_projection=portfolio_projection,
+        portfolio_source_record_identity_sha256=portfolio_id,
+        run_context=run_context,
+    )
+
+
+def _validated_grounded_prompt_snapshot_from_source_record_identities(
+    value: object,
+    *,
+    evidence_bundle: Mapping[str, object],
+    policy_projection: Mapping[str, object],
+    policy_source_record_identity_sha256: str,
+    portfolio_projection: Mapping[str, object] | None,
+    portfolio_source_record_identity_sha256: str | None,
+    run_context: MmiProjectionRunContext,
+) -> dict[str, object]:
+    artifact, expected_context_binding, embedded_candidate = _validate_prompt_artifact_basics(value)
+
+    embedded_view = _source_bound_view_snapshot_from_source_record_identities(
+        embedded_candidate,
+        evidence_bundle=evidence_bundle,
+        policy_projection=policy_projection,
+        policy_source_record_identity_sha256=policy_source_record_identity_sha256,
+        portfolio_projection=portfolio_projection,
+        portfolio_source_record_identity_sha256=portfolio_source_record_identity_sha256,
+        run_context=run_context,
+    )
+    return _verify_prompt_identity(artifact, embedded_view)
+
+
+def _validate_prompt_artifact_basics(value: object) -> tuple[dict[str, object], str, dict[str, object]]:
     artifact = _snapshot_mapping(value)
     try:
         validate_artifact_schema(artifact, schema_name=_PROMPT_SCHEMA_NAME)
@@ -453,15 +552,10 @@ def _validated_grounded_prompt_snapshot(
         prompt_text=prompt_text,
         context_binding=expected_context_binding,
     )
-    embedded_view = _source_bound_view_snapshot(
-        embedded_candidate,
-        evidence_bundle=evidence_bundle,
-        policy_projection=policy_projection,
-        policy_source=policy_source,
-        portfolio_projection=portfolio_projection,
-        portfolio_source=portfolio_source,
-        run_context=run_context,
-    )
+    return artifact, expected_context_binding, embedded_candidate
+
+
+def _verify_prompt_identity(artifact: dict[str, object], embedded_view: dict[str, object]) -> dict[str, object]:
     if embedded_view.get(_VIEW_IDENTITY_FIELD) != artifact.get(
         _VIEW_IDENTITY_FIELD
     ):
@@ -484,13 +578,53 @@ def build_mmi_grounded_prompt_v2(
     run_context: MmiProjectionRunContext,
 ) -> dict[str, object]:
     """Build one deterministic, in-memory, report-only G2 artifact."""
-    view = _source_bound_view_snapshot(
+    try:
+        evidence = _snapshot_mapping(evidence_bundle)
+        policy = _snapshot_mapping(policy_projection)
+        portfolio = (
+            None
+            if portfolio_projection is None
+            else _snapshot_mapping(portfolio_projection)
+        )
+        policy_id, portfolio_id = _validate_live_provenance_and_extract_identities(
+            evidence_bundle=evidence,
+            policy_projection=policy,
+            policy_source=policy_source,
+            portfolio_projection=portfolio,
+            portfolio_source=portfolio_source,
+            run_context=run_context,
+        )
+    except _ViewContractFailure:
+        _fail("MMI_GROUNDED_PROMPT_V2_VIEW_SOURCE_FIDELITY_INVALID")
+
+    return _build_mmi_grounded_prompt_v2_from_source_record_identities(
+        analyst_visible_evidence_view=analyst_visible_evidence_view,
+        evidence_bundle=evidence_bundle,
+        policy_projection=policy_projection,
+        policy_source_record_identity_sha256=policy_id,
+        portfolio_projection=portfolio_projection,
+        portfolio_source_record_identity_sha256=portfolio_id,
+        run_context=run_context,
+    )
+
+
+def _build_mmi_grounded_prompt_v2_from_source_record_identities(
+    *,
+    analyst_visible_evidence_view: Mapping[str, object],
+    evidence_bundle: Mapping[str, object],
+    policy_projection: Mapping[str, object],
+    policy_source_record_identity_sha256: str,
+    portfolio_projection: Mapping[str, object] | None,
+    portfolio_source_record_identity_sha256: str | None,
+    run_context: MmiProjectionRunContext,
+) -> dict[str, object]:
+    view = _source_bound_view_snapshot_from_source_record_identities(
         analyst_visible_evidence_view,
         evidence_bundle=evidence_bundle,
         policy_projection=policy_projection,
-        policy_source=policy_source,
+        policy_source_record_identity_sha256=policy_source_record_identity_sha256,
         portfolio_projection=portfolio_projection,
-        portfolio_source=portfolio_source,
+        portfolio_source_record_identity_sha256=portfolio_source_record_identity_sha256,
         run_context=run_context,
     )
     context: dict[str, object] = {
@@ -531,13 +665,13 @@ def build_mmi_grounded_prompt_v2(
         _ARTIFACT_IDENTITY_FIELD: _ZERO_SHA256,
     }
     artifact[_ARTIFACT_IDENTITY_FIELD] = _artifact_identity(artifact)
-    return _validated_grounded_prompt_snapshot(
+    return _validated_grounded_prompt_snapshot_from_source_record_identities(
         artifact,
         evidence_bundle=evidence_bundle,
         policy_projection=policy_projection,
-        policy_source=policy_source,
+        policy_source_record_identity_sha256=policy_source_record_identity_sha256,
         portfolio_projection=portfolio_projection,
-        portfolio_source=portfolio_source,
+        portfolio_source_record_identity_sha256=portfolio_source_record_identity_sha256,
         run_context=run_context,
     )
 
@@ -569,6 +703,7 @@ def _build_source_bound_grounded_prompt_v2(
         )
         if not valid:
             _fail("MMI_GROUNDED_PROMPT_V2_VIEW_SOURCE_FIDELITY_INVALID")
+
         view = _source_bound_view_snapshot(
             result.projection,
             evidence_bundle=evidence_bundle,
@@ -589,8 +724,56 @@ def _build_source_bound_grounded_prompt_v2(
         )
     except MmiGroundedPromptV2Error:
         raise
-    except Exception:
-        _fail("MMI_GROUNDED_PROMPT_V2_VIEW_SOURCE_FIDELITY_INVALID")
+    return view, prompt
+
+
+def _build_source_bound_grounded_prompt_v2_from_source_record_identities(
+    *,
+    evidence_bundle: Mapping[str, object],
+    policy_projection: Mapping[str, object],
+    policy_source_record_identity_sha256: str,
+    portfolio_projection: Mapping[str, object] | None,
+    portfolio_source_record_identity_sha256: str | None,
+    run_context: MmiProjectionRunContext,
+) -> tuple[dict[str, object], dict[str, object]]:
+    try:
+        result = _build_mmi_analyst_visible_evidence_view_v2_from_source_record_identities(
+            evidence_bundle=evidence_bundle,
+            policy_projection=policy_projection,
+            policy_source_record_identity_sha256=policy_source_record_identity_sha256,
+            portfolio_projection=portfolio_projection,
+            portfolio_source_record_identity_sha256=portfolio_source_record_identity_sha256,
+            run_context=run_context,
+        )
+        valid = (
+            result.status
+            is MmiProjectionResultCategory.PROJECTION_VALID_WITH_GAPS
+            and result.authority_effect == AUTHORITY_EFFECT_NONE
+            and isinstance(result.projection, Mapping)
+        )
+        if not valid:
+            _fail("MMI_GROUNDED_PROMPT_V2_VIEW_SOURCE_FIDELITY_INVALID")
+
+        view = _source_bound_view_snapshot_from_source_record_identities(
+            result.projection,
+            evidence_bundle=evidence_bundle,
+            policy_projection=policy_projection,
+            policy_source_record_identity_sha256=policy_source_record_identity_sha256,
+            portfolio_projection=portfolio_projection,
+            portfolio_source_record_identity_sha256=portfolio_source_record_identity_sha256,
+            run_context=run_context,
+        )
+        prompt = _build_mmi_grounded_prompt_v2_from_source_record_identities(
+            analyst_visible_evidence_view=view,
+            evidence_bundle=evidence_bundle,
+            policy_projection=policy_projection,
+            policy_source_record_identity_sha256=policy_source_record_identity_sha256,
+            portfolio_projection=portfolio_projection,
+            portfolio_source_record_identity_sha256=portfolio_source_record_identity_sha256,
+            run_context=run_context,
+        )
+    except MmiGroundedPromptV2Error:
+        raise
     return view, prompt
 
 
@@ -612,5 +795,26 @@ def validate_mmi_grounded_prompt_v2(
         policy_source=policy_source,
         portfolio_projection=portfolio_projection,
         portfolio_source=portfolio_source,
+        run_context=run_context,
+    )
+
+
+def _validate_mmi_grounded_prompt_v2_from_source_record_identities(
+    *,
+    value: Mapping[str, object],
+    evidence_bundle: Mapping[str, object],
+    policy_projection: Mapping[str, object],
+    policy_source_record_identity_sha256: str,
+    portfolio_projection: Mapping[str, object] | None,
+    portfolio_source_record_identity_sha256: str | None,
+    run_context: MmiProjectionRunContext,
+) -> dict[str, object]:
+    return _validated_grounded_prompt_snapshot_from_source_record_identities(
+        value,
+        evidence_bundle=evidence_bundle,
+        policy_projection=policy_projection,
+        policy_source_record_identity_sha256=policy_source_record_identity_sha256,
+        portfolio_projection=portfolio_projection,
+        portfolio_source_record_identity_sha256=portfolio_source_record_identity_sha256,
         run_context=run_context,
     )

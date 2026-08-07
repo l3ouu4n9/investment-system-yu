@@ -380,7 +380,7 @@ def _require_initial_trust(
         )
 
 
-def _validate_source_bound_inputs(
+def _validate_live_provenance_and_extract_identities(
     *,
     evidence_bundle: dict[str, object],
     policy_projection: dict[str, object],
@@ -388,7 +388,7 @@ def _validate_source_bound_inputs(
     portfolio_projection: dict[str, object] | None,
     portfolio_source: MmiCapturedSource | None,
     run_context: MmiProjectionRunContext,
-) -> None:
+) -> tuple[str, str | None]:
     _require_initial_trust(
         policy_source=policy_source,
         run_context=run_context,
@@ -422,6 +422,58 @@ def _validate_source_bound_inputs(
         ) from None
     _raise_for_upstream_result(evidence_result)
 
+    if portfolio_source is not None:
+        if (
+            not _mmi_captured_source_provenance_is_valid(
+                portfolio_source
+            )
+            or portfolio_source.role
+            is not MmiSourceRole.PORTFOLIO_SNAPSHOT
+        ):
+            raise _ViewContractFailure(
+                _UPSTREAM_COMPONENT_CONTRACT_FAILURE
+            )
+        try:
+            portfolio_result = validate_mmi_portfolio_snapshot_projection(
+                portfolio_projection,
+                portfolio_source=portfolio_source,
+                policy_projection=policy_projection,
+                policy_source=policy_source,
+                run_context=run_context,
+            )
+        except Exception:
+            raise _ViewContractFailure(
+                _INTERNAL_CONTRACT_FAILURE
+            ) from None
+        _raise_for_upstream_result(portfolio_result)
+
+    policy_source_identity = _require_dict(
+        dict(policy_source.source_record)
+    ).get("source_record_identity_sha256")
+    if type(policy_source_identity) is not str:
+        raise _ViewContractFailure(_INTERNAL_CONTRACT_FAILURE)
+
+    portfolio_source_identity: str | None = None
+    if portfolio_source is not None:
+        portfolio_source_identity_val = _require_dict(
+            dict(portfolio_source.source_record)
+        ).get("source_record_identity_sha256")
+        if type(portfolio_source_identity_val) is not str:
+            raise _ViewContractFailure(_INTERNAL_CONTRACT_FAILURE)
+        portfolio_source_identity = portfolio_source_identity_val
+
+    return policy_source_identity, portfolio_source_identity
+
+
+def _validate_deterministic_source_bound_correlation(
+    *,
+    evidence_bundle: dict[str, object],
+    policy_projection: dict[str, object],
+    policy_source_record_identity_sha256: str,
+    portfolio_projection: dict[str, object] | None,
+    portfolio_source_record_identity_sha256: str | None,
+    run_context: MmiProjectionRunContext,
+) -> None:
     universe = _require_dict(
         policy_projection.get("universe_projection")
     )
@@ -439,7 +491,7 @@ def _validate_source_bound_inputs(
         or policy_component.get(
             "strategy_source_record_identity_sha256"
         )
-        != policy_projection.get("source_record_identity_sha256")
+        != policy_source_record_identity_sha256
         or policy_component.get(
             "universe_projection_identity_sha256"
         )
@@ -452,7 +504,7 @@ def _validate_source_bound_inputs(
     presence_status = portfolio_component.get("presence_status")
     if portfolio_projection is None:
         if (
-            portfolio_source is not None
+            portfolio_source_record_identity_sha256 is not None
             or presence_status
             != MMI_EVIDENCE_PORTFOLIO_NOT_SUPPLIED_STATUS
         ):
@@ -475,7 +527,7 @@ def _validate_source_bound_inputs(
     ):
         raise _ViewContractFailure(_COMPONENT_CORRELATION_INVALID)
 
-    if portfolio_source is None:
+    if portfolio_source_record_identity_sha256 is None:
         if (
             presence_status
             != MMI_EVIDENCE_PORTFOLIO_SOURCE_ABSENT_STATUS
@@ -488,22 +540,7 @@ def _validate_source_bound_inputs(
         ):
             raise _ViewContractFailure(_COMPONENT_CORRELATION_INVALID)
     else:
-        if (
-            not _mmi_captured_source_provenance_is_valid(
-                portfolio_source
-            )
-            or portfolio_source.role
-            is not MmiSourceRole.PORTFOLIO_SNAPSHOT
-        ):
-            raise _ViewContractFailure(
-                _UPSTREAM_COMPONENT_CONTRACT_FAILURE
-            )
-        source_record = _require_dict(
-            dict(portfolio_source.source_record)
-        )
-        source_identity = source_record.get(
-            "source_record_identity_sha256"
-        )
+        source_identity = portfolio_source_record_identity_sha256
         if (
             presence_status
             != MMI_EVIDENCE_PORTFOLIO_SOURCE_BOUND_STATUS
@@ -519,20 +556,6 @@ def _validate_source_bound_inputs(
             != source_identity
         ):
             raise _ViewContractFailure(_COMPONENT_CORRELATION_INVALID)
-
-    try:
-        portfolio_result = validate_mmi_portfolio_snapshot_projection(
-            portfolio_projection,
-            portfolio_source=portfolio_source,
-            policy_projection=policy_projection,
-            policy_source=policy_source,
-            run_context=run_context,
-        )
-    except Exception:
-        raise _ViewContractFailure(
-            _INTERNAL_CONTRACT_FAILURE
-        ) from None
-    _raise_for_upstream_result(portfolio_result)
 
 
 def _derive_policy_view(
@@ -956,36 +979,12 @@ def _validate_derived_view(view: dict[str, object]) -> None:
         raise _ViewContractFailure(_VIEW_IDENTITY_FAILURE)
 
 
-def _source_bound_expected_view(
-    *,
-    evidence_bundle: dict[str, object],
-    policy_projection: dict[str, object],
-    policy_source: MmiCapturedSource,
-    portfolio_projection: dict[str, object] | None,
-    portfolio_source: MmiCapturedSource | None,
-    run_context: MmiProjectionRunContext,
-) -> dict[str, object]:
-    _validate_source_bound_inputs(
-        evidence_bundle=evidence_bundle,
-        policy_projection=policy_projection,
-        policy_source=policy_source,
-        portfolio_projection=portfolio_projection,
-        portfolio_source=portfolio_source,
-        run_context=run_context,
-    )
-    view = _derive_expected_view(
-        evidence_bundle=evidence_bundle,
-        policy_projection=policy_projection,
-        portfolio_projection=portfolio_projection,
-        run_context=run_context,
-    )
-    _validate_derived_view(view)
-    return view
+
 
 
 def _validated_analyst_visible_evidence_view_v2_context(
+    value: object,
     *,
-    value: Mapping[str, object],
     evidence_bundle: Mapping[str, object],
     policy_projection: Mapping[str, object],
     policy_source: MmiCapturedSource,
@@ -993,41 +992,107 @@ def _validated_analyst_visible_evidence_view_v2_context(
     portfolio_source: MmiCapturedSource | None,
     run_context: MmiProjectionRunContext,
 ) -> dict[str, object]:
-    """Return one stable candidate proven equal to its trusted sources."""
-    try:
-        candidate = _snapshot_mapping(value)
-    except _ViewBlocked:
-        raise _ViewBlocked(_CANDIDATE_SCHEMA_FAILURE) from None
-
-    evidence_snapshot = _snapshot_mapping(evidence_bundle)
-    policy_snapshot = _snapshot_mapping(policy_projection)
-    portfolio_snapshot = (
+    evidence = _snapshot_mapping(evidence_bundle)
+    policy = _snapshot_mapping(policy_projection)
+    portfolio = (
         None
         if portfolio_projection is None
         else _snapshot_mapping(portfolio_projection)
     )
-    expected = _source_bound_expected_view(
-        evidence_bundle=evidence_snapshot,
-        policy_projection=policy_snapshot,
+    policy_id, portfolio_id = _validate_live_provenance_and_extract_identities(
+        evidence_bundle=evidence,
+        policy_projection=policy,
         policy_source=policy_source,
-        portfolio_projection=portfolio_snapshot,
+        portfolio_projection=portfolio,
         portfolio_source=portfolio_source,
         run_context=run_context,
     )
+    return _validated_analyst_visible_evidence_view_v2_context_from_source_record_identities(
+        value,
+        evidence_bundle=evidence,
+        policy_projection=policy,
+        policy_source_record_identity_sha256=policy_id,
+        portfolio_projection=portfolio,
+        portfolio_source_record_identity_sha256=portfolio_id,
+        run_context=run_context,
+    )
 
+
+def _validated_analyst_visible_evidence_view_v2_context_from_source_record_identities(
+    value: object,
+    *,
+    evidence_bundle: Mapping[str, object],
+    policy_projection: Mapping[str, object],
+    policy_source_record_identity_sha256: str,
+    portfolio_projection: Mapping[str, object] | None,
+    portfolio_source_record_identity_sha256: str | None,
+    run_context: MmiProjectionRunContext,
+) -> dict[str, object]:
+    artifact = _snapshot_mapping(value)
+    _validate_schema_and_contract(artifact)
+
+    evidence = _snapshot_mapping(evidence_bundle)
+    policy = _snapshot_mapping(policy_projection)
+    portfolio = (
+        None
+        if portfolio_projection is None
+        else _snapshot_mapping(portfolio_projection)
+    )
+
+    _validate_deterministic_source_bound_correlation(
+        evidence_bundle=evidence,
+        policy_projection=policy,
+        policy_source_record_identity_sha256=policy_source_record_identity_sha256,
+        portfolio_projection=portfolio,
+        portfolio_source_record_identity_sha256=portfolio_source_record_identity_sha256,
+        run_context=run_context,
+    )
+
+    return _verify_view_identity(
+        artifact=artifact,
+        evidence_bundle=evidence,
+        policy_projection=policy,
+        portfolio_projection=portfolio,
+        run_context=run_context,
+    )
+
+
+def _validate_schema_and_contract(artifact: dict[str, object]) -> None:
     try:
-        validate_artifact_schema(candidate, schema_name=_SCHEMA_NAME)
+        validate_artifact_schema(artifact, schema_name=_SCHEMA_NAME)
     except Exception:
         raise _ViewBlocked(_CANDIDATE_SCHEMA_FAILURE) from None
+
+
+
+def _verify_view_identity(
+    *,
+    artifact: dict[str, object],
+    evidence_bundle: dict[str, object],
+    policy_projection: dict[str, object],
+    portfolio_projection: dict[str, object] | None,
+    run_context: MmiProjectionRunContext,
+) -> dict[str, object]:
+
+    expected_view = _derive_expected_view(
+        evidence_bundle=evidence_bundle,
+        policy_projection=policy_projection,
+        portfolio_projection=portfolio_projection,
+        run_context=run_context,
+    )
+
+    if artifact != expected_view:
+        raise _ViewContractFailure(_SOURCE_FIDELITY_MISMATCH)
+
     try:
-        expected_identity = _v2_identity_sha256(candidate)
+        expected_identity = _v2_identity_sha256(artifact)
     except MmiCanonicalizationError:
         raise _ViewContractFailure(_VIEW_IDENTITY_FAILURE) from None
-    if candidate.get(_IDENTITY_FIELD) != expected_identity:
+
+    if artifact.get(_IDENTITY_FIELD) != expected_identity:
         raise _ViewContractFailure(_VIEW_IDENTITY_FAILURE)
-    if candidate != expected:
-        raise _ViewContractFailure(_SOURCE_FIDELITY_MISMATCH)
-    return candidate
+
+    return artifact
 
 
 def build_mmi_analyst_visible_evidence_view_v2(
@@ -1048,7 +1113,7 @@ def build_mmi_analyst_visible_evidence_view_v2(
             if portfolio_projection is None
             else _snapshot_mapping(portfolio_projection)
         )
-        view = _source_bound_expected_view(
+        policy_id, portfolio_id = _validate_live_provenance_and_extract_identities(
             evidence_bundle=evidence_snapshot,
             policy_projection=policy_snapshot,
             policy_source=policy_source,
@@ -1056,6 +1121,65 @@ def build_mmi_analyst_visible_evidence_view_v2(
             portfolio_source=portfolio_source,
             run_context=run_context,
         )
+    except _ViewBlocked as exc:
+        return _build_result(
+            MmiProjectionResultCategory.PROJECTION_BLOCKED,
+            exc.code,
+        )
+    except _ViewContractFailure as exc:
+        return _build_result(
+            MmiProjectionResultCategory.PROJECTION_CONTRACT_FAILURE,
+            exc.code,
+        )
+    except Exception:
+        return _build_result(
+            MmiProjectionResultCategory.PROJECTION_CONTRACT_FAILURE,
+            _INTERNAL_CONTRACT_FAILURE,
+        )
+
+    return _build_mmi_analyst_visible_evidence_view_v2_from_source_record_identities(
+        evidence_bundle=evidence_snapshot,
+        policy_projection=policy_snapshot,
+        policy_source_record_identity_sha256=policy_id,
+        portfolio_projection=portfolio_snapshot,
+        portfolio_source_record_identity_sha256=portfolio_id,
+        run_context=run_context,
+    )
+
+
+def _build_mmi_analyst_visible_evidence_view_v2_from_source_record_identities(
+    *,
+    evidence_bundle: Mapping[str, object],
+    policy_projection: Mapping[str, object],
+    policy_source_record_identity_sha256: str,
+    portfolio_projection: Mapping[str, object] | None,
+    portfolio_source_record_identity_sha256: str | None,
+    run_context: MmiProjectionRunContext,
+) -> MmiPolicyProjectionBuildResult:
+    try:
+        evidence_snapshot = _snapshot_mapping(evidence_bundle)
+        policy_snapshot = _snapshot_mapping(policy_projection)
+        portfolio_snapshot = (
+            None
+            if portfolio_projection is None
+            else _snapshot_mapping(portfolio_projection)
+        )
+
+        _validate_deterministic_source_bound_correlation(
+            evidence_bundle=evidence_snapshot,
+            policy_projection=policy_snapshot,
+            policy_source_record_identity_sha256=policy_source_record_identity_sha256,
+            portfolio_projection=portfolio_snapshot,
+            portfolio_source_record_identity_sha256=portfolio_source_record_identity_sha256,
+            run_context=run_context,
+        )
+        view = _derive_expected_view(
+            evidence_bundle=evidence_snapshot,
+            policy_projection=policy_snapshot,
+            portfolio_projection=portfolio_snapshot,
+            run_context=run_context,
+        )
+        _validate_derived_view(view)
     except _ViewBlocked as exc:
         return _build_result(
             MmiProjectionResultCategory.PROJECTION_BLOCKED,
@@ -1125,6 +1249,4 @@ def validate_mmi_analyst_visible_evidence_view_v2(
             MmiProjectionResultCategory.PROJECTION_CONTRACT_FAILURE,
             _INTERNAL_CONTRACT_FAILURE,
         )
-    return _validation_result(
-        MmiProjectionResultCategory.PROJECTION_VALID_WITH_GAPS
-    )
+    return _validation_result(MmiProjectionResultCategory.PROJECTION_VALID_WITH_GAPS)

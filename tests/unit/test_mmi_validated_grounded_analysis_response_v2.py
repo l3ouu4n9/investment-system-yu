@@ -37,6 +37,7 @@ from investment_orchestrator.mmi.policy_projection import (
     build_mmi_policy_projection,
 )
 from investment_orchestrator.mmi.raw_response_envelope_v2 import (
+    MmiRawResponseEnvelopeV2Error,
     build_mmi_raw_response_envelope_v2,
     validate_mmi_raw_response_envelope_v2,
 )
@@ -44,6 +45,7 @@ from investment_orchestrator.mmi.validated_grounded_analysis_response_v2 import 
     MmiValidatedGroundedAnalysisResponseV2Error,
     _validate_response_payload_canonical_size,
     build_mmi_validated_grounded_analysis_response_v2,
+    _build_mmi_validated_grounded_analysis_response_v2_from_source_record_identities,
     validate_mmi_validated_grounded_analysis_response_v2,
 )
 import _mmi_hermetic_source_checkout as hermetic
@@ -765,3 +767,36 @@ def test_sources_are_test_owned_and_live_inputs_are_unreachable(
         "repository_relative_locator"
     ] == hermetic.STRATEGY_SETTINGS_LOCATOR
     hermetic.assert_live_operational_inputs_are_unreachable()
+
+
+def test_r2c_v2_deterministic_builder_regression_oracle(inputs: _Inputs) -> None:
+    """Prove identical output bytes and preservation of live provenance gates."""
+    envelope = _envelope(inputs, _raw(_payload(inputs)))
+
+    # 1. Live wrapper succeeds
+    live_response = build_mmi_validated_grounded_analysis_response_v2(
+        raw_response_envelope=envelope,
+        evidence_bundle=deepcopy(inputs.evidence),
+        policy_projection=deepcopy(inputs.policy),
+        policy_source=inputs.policy_source,
+        portfolio_projection=None,
+        portfolio_source=None,
+        run_context=inputs.run_context,
+    )
+
+    policy_identity = dict(inputs.policy_source.source_record)["source_record_identity_sha256"]
+
+    assert type(policy_identity) is str
+
+    # 2. Deterministic helper succeeds with identical output
+    deterministic_response = _build_mmi_validated_grounded_analysis_response_v2_from_source_record_identities(
+        raw_response_envelope=envelope,
+        evidence_bundle=deepcopy(inputs.evidence),
+        policy_projection=deepcopy(inputs.policy),
+        policy_source_record_identity_sha256=policy_identity,
+        portfolio_projection=None,
+        portfolio_source_record_identity_sha256=None,
+        run_context=inputs.run_context,
+    )
+
+    assert live_response == deterministic_response

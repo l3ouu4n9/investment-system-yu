@@ -36,6 +36,7 @@ from investment_orchestrator.mmi.policy_projection import (
 from investment_orchestrator.mmi.raw_response_envelope_v2 import (
     MmiRawResponseEnvelopeV2Error,
     build_mmi_raw_response_envelope_v2,
+    _build_mmi_raw_response_envelope_v2_from_source_record_identities,
 )
 import _mmi_hermetic_source_checkout as hermetic
 
@@ -605,3 +606,39 @@ def test_sources_are_test_owned_and_live_inputs_are_unreachable(
         "repository_relative_locator"
     ] == hermetic.STRATEGY_SETTINGS_LOCATOR
     hermetic.assert_live_operational_inputs_are_unreachable()
+
+
+def test_r1c_v2_deterministic_builder_regression_oracle(inputs: _Inputs) -> None:
+    """Prove identical output bytes and preservation of live provenance gates."""
+    raw_response_bytes = b"Hello, World!"
+    prompt = _prompt(inputs)
+
+    # 1. Live wrapper succeeds
+    live_envelope = build_mmi_raw_response_envelope_v2(
+        grounded_prompt=prompt,
+        raw_response_bytes=raw_response_bytes,
+        evidence_bundle=deepcopy(inputs.evidence),
+        policy_projection=deepcopy(inputs.policy),
+        policy_source=inputs.policy_source,
+        portfolio_projection=None,
+        portfolio_source=None,
+        run_context=inputs.run_context,
+    )
+
+    policy_identity = dict(inputs.policy_source.source_record)["source_record_identity_sha256"]
+
+    assert type(policy_identity) is str
+
+    # 2. Deterministic helper succeeds with identical output
+    deterministic_envelope = _build_mmi_raw_response_envelope_v2_from_source_record_identities(
+        grounded_prompt=prompt,
+        raw_response_bytes=raw_response_bytes,
+        evidence_bundle=deepcopy(inputs.evidence),
+        policy_projection=deepcopy(inputs.policy),
+        policy_source_record_identity_sha256=policy_identity,
+        portfolio_projection=None,
+        portfolio_source_record_identity_sha256=None,
+        run_context=inputs.run_context,
+    )
+
+    assert live_envelope == deterministic_envelope

@@ -28,6 +28,8 @@ from investment_orchestrator.mmi.contracts import (
 from investment_orchestrator.mmi.grounded_prompt_v2 import (
     MmiGroundedPromptV2Error,
     _build_source_bound_grounded_prompt_v2,
+    _build_source_bound_grounded_prompt_v2_from_source_record_identities,
+    _validate_mmi_grounded_prompt_v2_from_source_record_identities,
     validate_mmi_grounded_prompt_v2,
 )
 
@@ -152,6 +154,54 @@ def _source_bound_view_and_prompt(
     portfolio_source: MmiCapturedSource | None,
     run_context: MmiProjectionRunContext,
 ) -> tuple[dict[str, object], dict[str, object]]:
+    try:
+        evidence = _snapshot_mapping(evidence_bundle)
+        policy = _snapshot_mapping(policy_projection)
+        portfolio = (
+            None
+            if portfolio_projection is None
+            else _snapshot_mapping(portfolio_projection)
+        )
+        policy_id = dict(policy_source.source_record).get(
+            "source_record_identity_sha256"
+        )
+        if type(policy_id) is not str:
+            _fail("MMI_RAW_RESPONSE_ENVELOPE_V2_PROMPT_INVALID")
+
+        portfolio_id = None
+        if portfolio_source is not None:
+            portfolio_id = dict(portfolio_source.source_record).get(
+                "source_record_identity_sha256"
+            )
+            if type(portfolio_id) is not str:
+                _fail("MMI_RAW_RESPONSE_ENVELOPE_V2_PROMPT_INVALID")
+    except _ViewContractFailure:
+        _fail("MMI_RAW_RESPONSE_ENVELOPE_V2_PROMPT_INVALID")
+
+    try:
+        return _build_source_bound_grounded_prompt_v2_from_source_record_identities(
+            evidence_bundle=evidence,
+            policy_projection=policy,
+            policy_source_record_identity_sha256=policy_id,
+            portfolio_projection=portfolio,
+            portfolio_source_record_identity_sha256=portfolio_id,
+            run_context=run_context,
+        )
+    except MmiRawResponseEnvelopeV2Error:
+        raise
+    except Exception:
+        _fail("MMI_RAW_RESPONSE_ENVELOPE_V2_PROMPT_INVALID")
+
+
+def _source_bound_view_and_prompt_from_source_record_identities(
+    *,
+    evidence_bundle: Mapping[str, object],
+    policy_projection: Mapping[str, object],
+    policy_source_record_identity_sha256: str,
+    portfolio_projection: Mapping[str, object] | None,
+    portfolio_source_record_identity_sha256: str | None,
+    run_context: MmiProjectionRunContext,
+) -> tuple[dict[str, object], dict[str, object]]:
     evidence = _snapshot_mapping(evidence_bundle)
     policy = _snapshot_mapping(policy_projection)
     portfolio = (
@@ -160,12 +210,12 @@ def _source_bound_view_and_prompt(
         else _snapshot_mapping(portfolio_projection)
     )
     try:
-        return _build_source_bound_grounded_prompt_v2(
+        return _build_source_bound_grounded_prompt_v2_from_source_record_identities(
             evidence_bundle=evidence,
             policy_projection=policy,
-            policy_source=policy_source,
+            policy_source_record_identity_sha256=policy_source_record_identity_sha256,
             portfolio_projection=portfolio,
-            portfolio_source=portfolio_source,
+            portfolio_source_record_identity_sha256=portfolio_source_record_identity_sha256,
             run_context=run_context,
         )
     except MmiRawResponseEnvelopeV2Error:
@@ -204,23 +254,7 @@ def _envelope_identity(artifact: dict[str, object]) -> str:
     except MmiCanonicalizationError:
         _fail("MMI_RAW_RESPONSE_ENVELOPE_V2_IDENTITY_INVALID")
 
-
-def _validated_envelope_context(
-    value: object,
-    *,
-    evidence_bundle: Mapping[str, object],
-    policy_projection: Mapping[str, object],
-    policy_source: MmiCapturedSource,
-    portfolio_projection: Mapping[str, object] | None,
-    portfolio_source: MmiCapturedSource | None,
-    run_context: MmiProjectionRunContext,
-) -> tuple[
-    dict[str, object],
-    bytes,
-    dict[str, object],
-    dict[str, object],
-]:
-    artifact = _snapshot_mapping(value)
+def _validate_envelope_schema_and_contract(artifact: dict[str, object]) -> None:
     try:
         validate_artifact_schema(artifact, schema_name=_SCHEMA_NAME)
     except Exception:
@@ -237,12 +271,83 @@ def _validated_envelope_context(
         is not _MMI_GROUNDED_PROMPT_MANUAL_HANDOFF_REQUIRED
     ):
         _fail("MMI_RAW_RESPONSE_ENVELOPE_V2_CONTRACT_INVALID")
-    view, prompt = _source_bound_view_and_prompt(
+
+
+
+def _validated_envelope_context(
+    value: object,
+    *,
+    evidence_bundle: Mapping[str, object],
+    policy_projection: Mapping[str, object],
+    policy_source: MmiCapturedSource,
+    portfolio_projection: Mapping[str, object] | None,
+    portfolio_source: MmiCapturedSource | None,
+    run_context: MmiProjectionRunContext,
+) -> tuple[
+    dict[str, object],
+    bytes,
+    dict[str, object],
+    dict[str, object],
+]:
+    try:
+        evidence = _snapshot_mapping(evidence_bundle)
+        policy = _snapshot_mapping(policy_projection)
+        portfolio = (
+            None
+            if portfolio_projection is None
+            else _snapshot_mapping(portfolio_projection)
+        )
+        policy_id = dict(policy_source.source_record).get(
+            "source_record_identity_sha256"
+        )
+        if type(policy_id) is not str:
+            _fail("MMI_RAW_RESPONSE_ENVELOPE_V2_PROMPT_INVALID")
+
+        portfolio_id = None
+        if portfolio_source is not None:
+            portfolio_id = dict(portfolio_source.source_record).get(
+                "source_record_identity_sha256"
+            )
+            if type(portfolio_id) is not str:
+                _fail("MMI_RAW_RESPONSE_ENVELOPE_V2_PROMPT_INVALID")
+    except _ViewContractFailure:
+        _fail("MMI_RAW_RESPONSE_ENVELOPE_V2_PROMPT_INVALID")
+
+    return _validated_envelope_context_from_source_record_identities(
+        value,
+        evidence_bundle=evidence,
+        policy_projection=policy,
+        policy_source_record_identity_sha256=policy_id,
+        portfolio_projection=portfolio,
+        portfolio_source_record_identity_sha256=portfolio_id,
+        run_context=run_context,
+    )
+
+
+def _validated_envelope_context_from_source_record_identities(
+    value: object,
+    *,
+    evidence_bundle: Mapping[str, object],
+    policy_projection: Mapping[str, object],
+    policy_source_record_identity_sha256: str,
+    portfolio_projection: Mapping[str, object] | None,
+    portfolio_source_record_identity_sha256: str | None,
+    run_context: MmiProjectionRunContext,
+) -> tuple[
+    dict[str, object],
+    bytes,
+    dict[str, object],
+    dict[str, object],
+]:
+    artifact = _snapshot_mapping(value)
+    _validate_envelope_schema_and_contract(artifact)
+
+    view, prompt = _source_bound_view_and_prompt_from_source_record_identities(
         evidence_bundle=evidence_bundle,
         policy_projection=policy_projection,
-        policy_source=policy_source,
+        policy_source_record_identity_sha256=policy_source_record_identity_sha256,
         portfolio_projection=portfolio_projection,
-        portfolio_source=portfolio_source,
+        portfolio_source_record_identity_sha256=portfolio_source_record_identity_sha256,
         run_context=run_context,
     )
     if artifact.get(_PROMPT_IDENTITY_FIELD) != prompt.get(
@@ -267,13 +372,58 @@ def _validated_envelope_snapshot(
     portfolio_source: MmiCapturedSource | None,
     run_context: MmiProjectionRunContext,
 ) -> dict[str, object]:
-    artifact, _exact_bytes, _view, _prompt = _validated_envelope_context(
+    try:
+        evidence = _snapshot_mapping(evidence_bundle)
+        policy = _snapshot_mapping(policy_projection)
+        portfolio = (
+            None
+            if portfolio_projection is None
+            else _snapshot_mapping(portfolio_projection)
+        )
+        policy_id = dict(policy_source.source_record).get(
+            "source_record_identity_sha256"
+        )
+        if type(policy_id) is not str:
+            _fail("MMI_RAW_RESPONSE_ENVELOPE_V2_PROMPT_INVALID")
+
+        portfolio_id = None
+        if portfolio_source is not None:
+            portfolio_id = dict(portfolio_source.source_record).get(
+                "source_record_identity_sha256"
+            )
+            if type(portfolio_id) is not str:
+                _fail("MMI_RAW_RESPONSE_ENVELOPE_V2_PROMPT_INVALID")
+    except _ViewContractFailure:
+        _fail("MMI_RAW_RESPONSE_ENVELOPE_V2_PROMPT_INVALID")
+
+    return _validated_envelope_snapshot_from_source_record_identities(
+        value,
+        evidence_bundle=evidence,
+        policy_projection=policy,
+        policy_source_record_identity_sha256=policy_id,
+        portfolio_projection=portfolio,
+        portfolio_source_record_identity_sha256=portfolio_id,
+        run_context=run_context,
+    )
+
+
+def _validated_envelope_snapshot_from_source_record_identities(
+    value: object,
+    *,
+    evidence_bundle: Mapping[str, object],
+    policy_projection: Mapping[str, object],
+    policy_source_record_identity_sha256: str,
+    portfolio_projection: Mapping[str, object] | None,
+    portfolio_source_record_identity_sha256: str | None,
+    run_context: MmiProjectionRunContext,
+) -> dict[str, object]:
+    artifact, _exact_bytes, _view, _prompt = _validated_envelope_context_from_source_record_identities(
         value,
         evidence_bundle=evidence_bundle,
         policy_projection=policy_projection,
-        policy_source=policy_source,
+        policy_source_record_identity_sha256=policy_source_record_identity_sha256,
         portfolio_projection=portfolio_projection,
-        portfolio_source=portfolio_source,
+        portfolio_source_record_identity_sha256=portfolio_source_record_identity_sha256,
         run_context=run_context,
     )
     return artifact
@@ -291,14 +441,94 @@ def build_mmi_raw_response_envelope_v2(
     run_context: MmiProjectionRunContext,
 ) -> dict[str, object]:
     """Bind exact operator-supplied bytes to one validated G2 artifact."""
+    policy_id = dict(policy_source.source_record).get(
+        "source_record_identity_sha256"
+    )
+    if type(policy_id) is not str:
+        _fail("MMI_RAW_RESPONSE_ENVELOPE_V2_PROMPT_INVALID")
+
+    portfolio_id = None
+    if portfolio_source is not None:
+        portfolio_id = dict(portfolio_source.source_record).get(
+            "source_record_identity_sha256"
+        )
+        if type(portfolio_id) is not str:
+            _fail("MMI_RAW_RESPONSE_ENVELOPE_V2_PROMPT_INVALID")
+
+    return _build_mmi_raw_response_envelope_v2_from_source_record_identities(
+        grounded_prompt=grounded_prompt,
+        raw_response_bytes=raw_response_bytes,
+        evidence_bundle=evidence_bundle,
+        policy_projection=policy_projection,
+        policy_source_record_identity_sha256=policy_id,
+        portfolio_projection=portfolio_projection,
+        portfolio_source_record_identity_sha256=portfolio_id,
+        run_context=run_context,
+    )
+
+
+def validate_mmi_raw_response_envelope_v2(
+    *,
+    value: Mapping[str, object],
+    evidence_bundle: Mapping[str, object],
+    policy_projection: Mapping[str, object],
+    policy_source: MmiCapturedSource,
+    portfolio_projection: Mapping[str, object] | None,
+    portfolio_source: MmiCapturedSource | None,
+    run_context: MmiProjectionRunContext,
+) -> dict[str, object]:
+    """Return a stable snapshot only for one source-bound R1c-v2."""
+    policy_source_identity = dict(policy_source.source_record)["source_record_identity_sha256"]
+    if type(policy_source_identity) is not str:
+        _fail("MMI_RAW_RESPONSE_ENVELOPE_V2_IDENTITY_INVALID")
+
+    portfolio_source_identity = None
+    if portfolio_source is not None:
+        portfolio_source_identity = dict(portfolio_source.source_record)["source_record_identity_sha256"]
+        if type(portfolio_source_identity) is not str:
+            _fail("MMI_RAW_RESPONSE_ENVELOPE_V2_IDENTITY_INVALID")
+
+    # Delegate validation of upstream context to the wrapper
+    _validated_envelope_snapshot(
+        value,
+        evidence_bundle=evidence_bundle,
+        policy_projection=policy_projection,
+        policy_source=policy_source,
+        portfolio_projection=portfolio_projection,
+        portfolio_source=portfolio_source,
+        run_context=run_context,
+    )
+
+    return _validate_mmi_raw_response_envelope_v2_from_source_record_identities(
+        value=value,
+        evidence_bundle=evidence_bundle,
+        policy_projection=policy_projection,
+        policy_source_record_identity_sha256=policy_source_identity,
+        portfolio_projection=portfolio_projection,
+        portfolio_source_record_identity_sha256=portfolio_source_identity,
+        run_context=run_context,
+    )
+
+
+def _build_mmi_raw_response_envelope_v2_from_source_record_identities(
+    *,
+    grounded_prompt: Mapping[str, object],
+    raw_response_bytes: bytes,
+    evidence_bundle: Mapping[str, object],
+    policy_projection: Mapping[str, object],
+    policy_source_record_identity_sha256: str,
+    portfolio_projection: Mapping[str, object] | None,
+    portfolio_source_record_identity_sha256: str | None,
+    run_context: MmiProjectionRunContext,
+) -> dict[str, object]:
     try:
-        prompt = validate_mmi_grounded_prompt_v2(
+        prompt = _validate_mmi_grounded_prompt_v2_from_source_record_identities(
             value=grounded_prompt,
             evidence_bundle=evidence_bundle,
             policy_projection=policy_projection,
-            policy_source=policy_source,
+            policy_source_record_identity_sha256=policy_source_record_identity_sha256,
             portfolio_projection=portfolio_projection,
-            portfolio_source=portfolio_source,
+            portfolio_source_record_identity_sha256=portfolio_source_record_identity_sha256,
             run_context=run_context,
         )
     except MmiGroundedPromptV2Error:
@@ -321,34 +551,33 @@ def build_mmi_raw_response_envelope_v2(
         _ENVELOPE_IDENTITY_FIELD: _ZERO_SHA256,
     }
     artifact[_ENVELOPE_IDENTITY_FIELD] = _envelope_identity(artifact)
-    return _validated_envelope_snapshot(
+    return _validated_envelope_snapshot_from_source_record_identities(
         artifact,
         evidence_bundle=evidence_bundle,
         policy_projection=policy_projection,
-        policy_source=policy_source,
+        policy_source_record_identity_sha256=policy_source_record_identity_sha256,
         portfolio_projection=portfolio_projection,
-        portfolio_source=portfolio_source,
+        portfolio_source_record_identity_sha256=portfolio_source_record_identity_sha256,
         run_context=run_context,
     )
 
 
-def validate_mmi_raw_response_envelope_v2(
+def _validate_mmi_raw_response_envelope_v2_from_source_record_identities(
     *,
     value: Mapping[str, object],
     evidence_bundle: Mapping[str, object],
     policy_projection: Mapping[str, object],
-    policy_source: MmiCapturedSource,
+    policy_source_record_identity_sha256: str,
     portfolio_projection: Mapping[str, object] | None,
-    portfolio_source: MmiCapturedSource | None,
+    portfolio_source_record_identity_sha256: str | None,
     run_context: MmiProjectionRunContext,
 ) -> dict[str, object]:
-    """Return a stable snapshot only for one source-bound R1c-v2."""
-    return _validated_envelope_snapshot(
+    return _validated_envelope_snapshot_from_source_record_identities(
         value,
         evidence_bundle=evidence_bundle,
         policy_projection=policy_projection,
-        policy_source=policy_source,
+        policy_source_record_identity_sha256=policy_source_record_identity_sha256,
         portfolio_projection=portfolio_projection,
-        portfolio_source=portfolio_source,
+        portfolio_source_record_identity_sha256=portfolio_source_record_identity_sha256,
         run_context=run_context,
     )

@@ -26,9 +26,11 @@ from investment_orchestrator.mmi.contracts import (
     _MMI_GROUNDED_PROMPT_MANUAL_HANDOFF_REQUIRED,
     _MMI_VALIDATED_GROUNDED_ANALYSIS_RESPONSE_V2_SCHEMA_VERSION,
 )
+
 from investment_orchestrator.mmi.raw_response_envelope_v2 import (
     MmiRawResponseEnvelopeV2Error,
     _validated_envelope_context,
+    _validated_envelope_context_from_source_record_identities,
 )
 
 
@@ -185,14 +187,17 @@ def _snapshot_mapping(value: object) -> dict[str, object]:
     return snapshot
 
 
-def _validated_upstream(
+
+
+
+def _validated_upstream_from_source_record_identities(
     *,
     raw_response_envelope: Mapping[str, object],
     evidence_bundle: Mapping[str, object],
     policy_projection: Mapping[str, object],
-    policy_source: MmiCapturedSource,
+    policy_source_record_identity_sha256: str,
     portfolio_projection: Mapping[str, object] | None,
-    portfolio_source: MmiCapturedSource | None,
+    portfolio_source_record_identity_sha256: str | None,
     run_context: MmiProjectionRunContext,
 ) -> tuple[
     dict[str, object],
@@ -214,13 +219,13 @@ def _validated_upstream(
             exact_bytes,
             view,
             prompt,
-        ) = _validated_envelope_context(
+        ) = _validated_envelope_context_from_source_record_identities(
             envelope,
             evidence_bundle=evidence,
             policy_projection=policy,
-            policy_source=policy_source,
+            policy_source_record_identity_sha256=policy_source_record_identity_sha256,
             portfolio_projection=portfolio,
-            portfolio_source=portfolio_source,
+            portfolio_source_record_identity_sha256=portfolio_source_record_identity_sha256,
             run_context=run_context,
         )
     except MmiRawResponseEnvelopeV2Error:
@@ -480,43 +485,12 @@ def _artifact_identity(artifact: dict[str, object]) -> str:
         _fail("MMI_VALIDATED_RESPONSE_V2_IDENTITY_INVALID")
 
 
-def _derive_expected_artifact(
+def _derive_provisional_artifact(
     *,
-    raw_response_envelope: Mapping[str, object],
-    evidence_bundle: Mapping[str, object],
-    policy_projection: Mapping[str, object],
-    policy_source: MmiCapturedSource,
-    portfolio_projection: Mapping[str, object] | None,
-    portfolio_source: MmiCapturedSource | None,
-    run_context: MmiProjectionRunContext,
+    envelope_identity: str,
+    payload: Mapping[str, object],
+    view: Mapping[str, object],
 ) -> dict[str, object]:
-    envelope, exact_bytes, view, prompt = _validated_upstream(
-        raw_response_envelope=raw_response_envelope,
-        evidence_bundle=evidence_bundle,
-        policy_projection=policy_projection,
-        policy_source=policy_source,
-        portfolio_projection=portfolio_projection,
-        portfolio_source=portfolio_source,
-        run_context=run_context,
-    )
-    envelope_identity = envelope.get(_R1_IDENTITY_FIELD)
-    if type(envelope_identity) is not str:
-        _fail("MMI_VALIDATED_RESPONSE_V2_UPSTREAM_INVALID")
-    payload = _decode_and_parse_response(exact_bytes)
-    _validate_payload_schema(
-        payload=payload,
-        envelope_identity=envelope_identity,
-    )
-    trusted_context = prompt.get(_CONTEXT_FIELD)
-    if (
-        type(trusted_context) is not str
-        or payload.get(_CONTEXT_FIELD) != trusted_context
-    ):
-        _fail("MMI_VALIDATED_RESPONSE_V2_CONTEXT_MISMATCH")
-    if payload.get("response_schema_version") != (
-        _MMI_GROUNDED_ANALYSIS_RESPONSE_V2_SCHEMA_VERSION
-    ):
-        _fail("MMI_VALIDATED_RESPONSE_V2_PAYLOAD_SCHEMA_INVALID")
     _require_instrument_equality(payload=payload, view=view)
     _require_reference_membership(payload=payload, view=view)
     artifact = _provisional_artifact(
@@ -533,6 +507,49 @@ def _derive_expected_artifact(
     return artifact
 
 
+
+
+
+def _derive_expected_artifact_from_source_record_identities(
+    *,
+    raw_response_envelope: Mapping[str, object],
+    evidence_bundle: Mapping[str, object],
+    policy_projection: Mapping[str, object],
+    policy_source_record_identity_sha256: str,
+    portfolio_projection: Mapping[str, object] | None,
+    portfolio_source_record_identity_sha256: str | None,
+    run_context: MmiProjectionRunContext,
+) -> dict[str, object]:
+    envelope, exact_bytes, view, prompt = _validated_upstream_from_source_record_identities(
+        raw_response_envelope=raw_response_envelope,
+        evidence_bundle=evidence_bundle,
+        policy_projection=policy_projection,
+        policy_source_record_identity_sha256=policy_source_record_identity_sha256,
+        portfolio_projection=portfolio_projection,
+        portfolio_source_record_identity_sha256=portfolio_source_record_identity_sha256,
+        run_context=run_context,
+    )
+    envelope_identity = envelope.get(_R1_IDENTITY_FIELD)
+    if type(envelope_identity) is not str:
+        _fail("MMI_VALIDATED_RESPONSE_V2_UPSTREAM_INVALID")
+    payload = _decode_and_parse_response(exact_bytes)
+    _validate_payload_schema(
+        payload=payload,
+        envelope_identity=envelope_identity,
+    )
+    trusted_context = prompt.get(_CONTEXT_FIELD)
+    if (
+        type(trusted_context) is not str
+        or payload.get(_CONTEXT_FIELD) != trusted_context
+    ):
+        _fail("MMI_VALIDATED_RESPONSE_V2_CONTEXT_MISMATCH")
+    return _derive_provisional_artifact(
+        envelope_identity=envelope_identity,
+        payload=payload,
+        view=view,
+    )
+
+
 def build_mmi_validated_grounded_analysis_response_v2(
     *,
     raw_response_envelope: Mapping[str, object],
@@ -544,13 +561,48 @@ def build_mmi_validated_grounded_analysis_response_v2(
     run_context: MmiProjectionRunContext,
 ) -> dict[str, object]:
     """Build one source-bound, report-only R2c-v2 artifact."""
-    return _derive_expected_artifact(
+    policy_id = dict(policy_source.source_record).get(
+        "source_record_identity_sha256"
+    )
+    if type(policy_id) is not str:
+        _fail("MMI_VALIDATED_RESPONSE_V2_UPSTREAM_INVALID")
+
+    portfolio_id = None
+    if portfolio_source is not None:
+        portfolio_id = dict(portfolio_source.source_record).get(
+            "source_record_identity_sha256"
+        )
+        if type(portfolio_id) is not str:
+            _fail("MMI_VALIDATED_RESPONSE_V2_UPSTREAM_INVALID")
+
+    return _build_mmi_validated_grounded_analysis_response_v2_from_source_record_identities(
         raw_response_envelope=raw_response_envelope,
         evidence_bundle=evidence_bundle,
         policy_projection=policy_projection,
-        policy_source=policy_source,
+        policy_source_record_identity_sha256=policy_id,
         portfolio_projection=portfolio_projection,
-        portfolio_source=portfolio_source,
+        portfolio_source_record_identity_sha256=portfolio_id,
+        run_context=run_context,
+    )
+
+
+def _build_mmi_validated_grounded_analysis_response_v2_from_source_record_identities(
+    *,
+    raw_response_envelope: Mapping[str, object],
+    evidence_bundle: Mapping[str, object],
+    policy_projection: Mapping[str, object],
+    policy_source_record_identity_sha256: str,
+    portfolio_projection: Mapping[str, object] | None,
+    portfolio_source_record_identity_sha256: str | None,
+    run_context: MmiProjectionRunContext,
+) -> dict[str, object]:
+    return _derive_expected_artifact_from_source_record_identities(
+        raw_response_envelope=raw_response_envelope,
+        evidence_bundle=evidence_bundle,
+        policy_projection=policy_projection,
+        policy_source_record_identity_sha256=policy_source_record_identity_sha256,
+        portfolio_projection=portfolio_projection,
+        portfolio_source_record_identity_sha256=portfolio_source_record_identity_sha256,
         run_context=run_context,
     )
 
@@ -567,14 +619,51 @@ def validate_mmi_validated_grounded_analysis_response_v2(
     run_context: MmiProjectionRunContext,
 ) -> dict[str, object]:
     """Return a stable snapshot only for the exact source-bound R2c-v2."""
-    candidate = _snapshot_mapping(value)
-    expected = _derive_expected_artifact(
+    policy_id = dict(policy_source.source_record).get(
+        "source_record_identity_sha256"
+    )
+    if type(policy_id) is not str:
+        _fail("MMI_VALIDATED_RESPONSE_V2_UPSTREAM_INVALID")
+
+    portfolio_id = None
+    if portfolio_source is not None:
+        portfolio_id = dict(portfolio_source.source_record).get(
+            "source_record_identity_sha256"
+        )
+        if type(portfolio_id) is not str:
+            _fail("MMI_VALIDATED_RESPONSE_V2_UPSTREAM_INVALID")
+
+    return _validate_mmi_validated_grounded_analysis_response_v2_from_source_record_identities(
+        value=value,
         raw_response_envelope=raw_response_envelope,
         evidence_bundle=evidence_bundle,
         policy_projection=policy_projection,
-        policy_source=policy_source,
+        policy_source_record_identity_sha256=policy_id,
         portfolio_projection=portfolio_projection,
-        portfolio_source=portfolio_source,
+        portfolio_source_record_identity_sha256=portfolio_id,
+        run_context=run_context,
+    )
+
+
+def _validate_mmi_validated_grounded_analysis_response_v2_from_source_record_identities(
+    *,
+    value: Mapping[str, object],
+    raw_response_envelope: Mapping[str, object],
+    evidence_bundle: Mapping[str, object],
+    policy_projection: Mapping[str, object],
+    policy_source_record_identity_sha256: str,
+    portfolio_projection: Mapping[str, object] | None,
+    portfolio_source_record_identity_sha256: str | None,
+    run_context: MmiProjectionRunContext,
+) -> dict[str, object]:
+    candidate = _snapshot_mapping(value)
+    expected = _derive_expected_artifact_from_source_record_identities(
+        raw_response_envelope=raw_response_envelope,
+        evidence_bundle=evidence_bundle,
+        policy_projection=policy_projection,
+        policy_source_record_identity_sha256=policy_source_record_identity_sha256,
+        portfolio_projection=portfolio_projection,
+        portfolio_source_record_identity_sha256=portfolio_source_record_identity_sha256,
         run_context=run_context,
     )
     try:
@@ -589,6 +678,39 @@ def validate_mmi_validated_grounded_analysis_response_v2(
         _fail("MMI_VALIDATED_RESPONSE_V2_SCHEMA_INVALID")
     if candidate.get(_ARTIFACT_IDENTITY_FIELD) != _artifact_identity(candidate):
         _fail("MMI_VALIDATED_RESPONSE_V2_IDENTITY_INVALID")
+    if candidate != expected:
+        _fail("MMI_VALIDATED_RESPONSE_V2_SOURCE_FIDELITY_INVALID")
+    return candidate
+
+
+def _validate_mmi_validated_grounded_analysis_response_v2_from_source_record_identities(
+    *,
+    value: Mapping[str, object],
+    raw_response_envelope: Mapping[str, object],
+    evidence_bundle: Mapping[str, object],
+    policy_projection: Mapping[str, object],
+    policy_source_record_identity_sha256: str,
+    portfolio_projection: Mapping[str, object] | None,
+    portfolio_source_record_identity_sha256: str | None,
+    run_context: MmiProjectionRunContext,
+) -> dict[str, object]:
+    candidate = _snapshot_mapping(value)
+    expected = _derive_expected_artifact_from_source_record_identities(
+        raw_response_envelope=raw_response_envelope,
+        evidence_bundle=evidence_bundle,
+        policy_projection=policy_projection,
+        policy_source_record_identity_sha256=policy_source_record_identity_sha256,
+        portfolio_projection=portfolio_projection,
+        portfolio_source_record_identity_sha256=portfolio_source_record_identity_sha256,
+        run_context=run_context,
+    )
+    try:
+        validate_artifact_schema(candidate, schema_name=_SCHEMA_NAME)
+    except Exception:
+        _fail("MMI_VALIDATED_RESPONSE_V2_SCHEMA_INVALID")
+    payload = candidate.get("response_payload")
+    if type(payload) is not dict:
+        _fail("MMI_VALIDATED_RESPONSE_V2_PAYLOAD_SCHEMA_INVALID")
     if candidate != expected:
         _fail("MMI_VALIDATED_RESPONSE_V2_SOURCE_FIDELITY_INVALID")
     return candidate
