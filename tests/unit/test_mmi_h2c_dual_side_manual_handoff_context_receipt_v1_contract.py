@@ -59,7 +59,6 @@ PRIVATE_HELPERS = {
     "_validate_portable_validated_grounded_analysis_response_v2",
     "_validate_portable_legacy_step1_compatibility_candidate_v1",
     "_validate_portable_legacy_step1_comparison_report_v1",
-    "_validate_portable_source_record_v1",
     "_validate_receipt_snapshot",
     "_validate_portable_artifact_links",
     "_validate_portable_legacy_prompt_reconstruction",
@@ -131,6 +130,7 @@ def test_public_api_is_exact_and_keyword_only() -> None:
         "MmiH2cDualSideManualHandoffContextReceiptV1Error",
         "validate_mmi_h2c_dual_side_manual_handoff_context_receipt_v1",
         "validate_mmi_h2c_dual_side_manual_handoff_context_receipt_v1_portable_evidence",
+        "validate_portable_source_record_v1",
     )
     receipt_signature = inspect.signature(
         owner.validate_mmi_h2c_dual_side_manual_handoff_context_receipt_v1

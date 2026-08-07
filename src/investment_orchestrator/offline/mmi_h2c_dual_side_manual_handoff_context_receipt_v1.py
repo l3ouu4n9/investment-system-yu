@@ -64,6 +64,7 @@ __all__ = (
     "MmiH2cDualSideManualHandoffContextReceiptV1Error",
     "validate_mmi_h2c_dual_side_manual_handoff_context_receipt_v1",
     "validate_mmi_h2c_dual_side_manual_handoff_context_receipt_v1_portable_evidence",
+    "validate_portable_source_record_v1",
 )
 
 _RECEIPT_ERROR: Final = "MMI_H2C_RECEIPT_V1_INVALID"
@@ -329,7 +330,7 @@ def _validate_portable_legacy_step1_comparison_report_v1(
     return artifact
 
 
-def _validate_portable_source_record_v1(
+def validate_portable_source_record_v1(
     *,
     value: Mapping[str, object],
     expected_role: MmiSourceRole,
@@ -651,12 +652,12 @@ def validate_mmi_h2c_dual_side_manual_handoff_context_receipt_v1_portable_eviden
         value=raw_response_envelope
     )
     g2 = _validate_portable_grounded_prompt_v2(value=grounded_prompt)
-    settings_record = _validate_portable_source_record_v1(
+    settings_record = validate_portable_source_record_v1(
         value=strategy_settings_source_record,
         expected_role=MmiSourceRole.STRATEGY_SETTINGS,
         archived_source_bytes=archived_strategy_settings_bytes,
     )
-    portfolio_record = _validate_portable_source_record_v1(
+    portfolio_record = validate_portable_source_record_v1(
         value=portfolio_snapshot_source_record,
         expected_role=MmiSourceRole.PORTFOLIO_SNAPSHOT,
         archived_source_bytes=archived_portfolio_snapshot_bytes,
