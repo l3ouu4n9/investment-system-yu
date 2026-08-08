@@ -673,44 +673,6 @@ def _validate_mmi_validated_grounded_analysis_response_v2_from_source_record_ide
     payload = candidate.get("response_payload")
     if type(payload) is not dict:
         _fail("MMI_VALIDATED_RESPONSE_V2_PAYLOAD_SCHEMA_INVALID")
-    _validate_response_payload_canonical_size(payload)
-    if set(candidate) != _WRAPPER_FIELDS:
-        _fail("MMI_VALIDATED_RESPONSE_V2_SCHEMA_INVALID")
-    if candidate.get(_ARTIFACT_IDENTITY_FIELD) != _artifact_identity(candidate):
-        _fail("MMI_VALIDATED_RESPONSE_V2_IDENTITY_INVALID")
-    if candidate != expected:
-        _fail("MMI_VALIDATED_RESPONSE_V2_SOURCE_FIDELITY_INVALID")
-    return candidate
-
-
-def _validate_mmi_validated_grounded_analysis_response_v2_from_source_record_identities(
-    *,
-    value: Mapping[str, object],
-    raw_response_envelope: Mapping[str, object],
-    evidence_bundle: Mapping[str, object],
-    policy_projection: Mapping[str, object],
-    policy_source_record_identity_sha256: str,
-    portfolio_projection: Mapping[str, object] | None,
-    portfolio_source_record_identity_sha256: str | None,
-    run_context: MmiProjectionRunContext,
-) -> dict[str, object]:
-    candidate = _snapshot_mapping(value)
-    expected = _derive_expected_artifact_from_source_record_identities(
-        raw_response_envelope=raw_response_envelope,
-        evidence_bundle=evidence_bundle,
-        policy_projection=policy_projection,
-        policy_source_record_identity_sha256=policy_source_record_identity_sha256,
-        portfolio_projection=portfolio_projection,
-        portfolio_source_record_identity_sha256=portfolio_source_record_identity_sha256,
-        run_context=run_context,
-    )
-    try:
-        validate_artifact_schema(candidate, schema_name=_SCHEMA_NAME)
-    except Exception:
-        _fail("MMI_VALIDATED_RESPONSE_V2_SCHEMA_INVALID")
-    payload = candidate.get("response_payload")
-    if type(payload) is not dict:
-        _fail("MMI_VALIDATED_RESPONSE_V2_PAYLOAD_SCHEMA_INVALID")
     if candidate != expected:
         _fail("MMI_VALIDATED_RESPONSE_V2_SOURCE_FIDELITY_INVALID")
     return candidate

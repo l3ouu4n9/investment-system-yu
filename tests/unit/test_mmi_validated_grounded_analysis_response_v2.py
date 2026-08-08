@@ -434,6 +434,23 @@ def test_candidate_validator_rejects_stale_and_resealed_changes(
             )
 
 
+def test_public_validate_pins_tampered_identity_error_code(
+    inputs: _Inputs,
+) -> None:
+    exact_bytes = _raw(_payload(inputs))
+    envelope = _envelope(inputs, exact_bytes)
+    artifact = _build(inputs, exact_bytes=exact_bytes, envelope=envelope)
+    tampered = deepcopy(artifact)
+    tampered[RESPONSE_IDENTITY_FIELD] = "f" * 64
+    with pytest.raises(MmiValidatedGroundedAnalysisResponseV2Error) as exc:
+        validate_mmi_validated_grounded_analysis_response_v2(
+            value=tampered,
+            raw_response_envelope=envelope,
+            **_context_kwargs(inputs),
+        )
+    assert exc.value.code == "MMI_VALIDATED_RESPONSE_V2_SOURCE_FIDELITY_INVALID"
+
+
 @pytest.mark.parametrize("surrounding", [b"\n", b"\r\n", b" "])
 def test_exact_json_whitespace_remains_identity_bound(
     inputs: _Inputs,
