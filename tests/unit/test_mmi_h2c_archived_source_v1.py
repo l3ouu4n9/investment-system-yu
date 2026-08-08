@@ -646,7 +646,7 @@ def test_source_record_schema_rejection(tmp_path, valid_case) -> None:
 
     fd = os.open(str(tmp_path), os.O_RDONLY | os.O_DIRECTORY)
 
-    with pytest.raises(MmiH2cArchivedSourceV1Error):
+    with pytest.raises(MmiH2cArchivedSourceV1Error, match="PREPARED_CASE_SCHEMA_INVALID"):
 
         _build_mmi_h2c_archived_prepared_case_snapshot(
 
@@ -684,7 +684,7 @@ def test_source_record_identity_mismatch(tmp_path, valid_case) -> None:
 
     fd = os.open(str(tmp_path), os.O_RDONLY | os.O_DIRECTORY)
 
-    with pytest.raises(MmiH2cArchivedSourceV1Error, match="ARCHIVE_SOURCE_INPUT_INVALID|PREPARED_CASE_INPUT_INVALID"):
+    with pytest.raises(MmiH2cArchivedSourceV1Error, match="PREPARED_CASE_SCHEMA_INVALID"):
 
         _build_mmi_h2c_archived_prepared_case_snapshot(
 
@@ -724,7 +724,7 @@ def test_role_path_swap(tmp_path, valid_case) -> None:
 
     fd = os.open(str(tmp_path), os.O_RDONLY | os.O_DIRECTORY)
 
-    with pytest.raises(MmiH2cArchivedSourceV1Error, match="ARCHIVE_SOURCE_INPUT_INVALID|PREPARED_CASE_INPUT_INVALID"):
+    with pytest.raises(MmiH2cArchivedSourceV1Error, match="PREPARED_CASE_SCHEMA_INVALID"):
 
         _build_mmi_h2c_archived_prepared_case_snapshot(
 
@@ -824,7 +824,7 @@ def test_strategy_limit_plus_one(tmp_path, valid_case) -> None:
 
     fd = os.open(str(tmp_path), os.O_RDONLY | os.O_DIRECTORY)
 
-    with pytest.raises(MmiH2cArchivedSourceV1Error, match="ARCHIVE_SOURCE_INPUT_INVALID|PREPARED_CASE_INPUT_INVALID"):
+    with pytest.raises(MmiH2cArchivedSourceV1Error, match="PREPARED_CASE_SCHEMA_INVALID"):
 
         _build_mmi_h2c_archived_prepared_case_snapshot(
 
@@ -872,7 +872,7 @@ def test_portfolio_limit_plus_one(tmp_path, valid_case) -> None:
 
     fd = os.open(str(tmp_path), os.O_RDONLY | os.O_DIRECTORY)
 
-    with pytest.raises(MmiH2cArchivedSourceV1Error, match="ARCHIVE_SOURCE_INPUT_INVALID|PREPARED_CASE_INPUT_INVALID"):
+    with pytest.raises(MmiH2cArchivedSourceV1Error, match="PREPARED_CASE_SCHEMA_INVALID"):
 
         _build_mmi_h2c_archived_prepared_case_snapshot(
 
@@ -922,7 +922,7 @@ def test_cross_case_substitution(tmp_path, valid_case) -> None:
 
     fd2 = os.open(str(case2), os.O_RDONLY | os.O_DIRECTORY)
 
-    with pytest.raises(MmiH2cArchivedSourceV1Error, match="ARCHIVE_SOURCE_INPUT_INVALID|PREPARED_CASE_INPUT_INVALID"):
+    with pytest.raises(MmiH2cArchivedSourceV1Error, match="ARCHIVE_SOURCE_INPUT_INVALID"):
 
         _build_mmi_h2c_archived_prepared_case_snapshot(
 
@@ -1095,22 +1095,29 @@ def test_mid_read_mutation(case_fd, monkeypatch) -> None:
     from investment_orchestrator.offline._mmi_h2c_stable_read_v1 import MmiH2cStableReadError, MmiH2cStableReadErrorCode
 
 
+    original = os.read
 
-    original = mod._stable_read_exact_bytes
-
-
-
-    def mock_stable_read(case_fd, path, *, maximum_bytes):
-
-        if path == "archive/strategy_settings.yaml":
-
-            raise MmiH2cStableReadError(MmiH2cStableReadErrorCode.STABLE_READ_INPUT_INVALID)
-
-        return original(case_fd, path, maximum_bytes=maximum_bytes)
+    read_count = 0
 
 
 
-    monkeypatch.setattr(mod, "_stable_read_exact_bytes", mock_stable_read)
+    def side_effect(inner_fd, length):
+
+        nonlocal read_count
+
+        read_count += 1
+
+        if read_count == 3:
+
+            import errno
+
+            raise OSError(errno.ESTALE, "stale file handle")
+
+        return original(inner_fd, length)
+
+
+
+    monkeypatch.setattr(os, "read", side_effect)
 
 
 
@@ -1121,3 +1128,81 @@ def test_mid_read_mutation(case_fd, monkeypatch) -> None:
             case_fd=fd, expected_prepared_case_identity_sha256=expected_id
 
         )
+
+
+
+def test_validate_portable_source_record_rejection_leakage(case_fd, monkeypatch) -> None:
+
+    from investment_orchestrator.offline.mmi_h2c_archived_source_v1 import MmiH2cDualSideManualHandoffContextReceiptV1Error
+
+    fd, expected_id = case_fd
+
+
+
+    def mock_validate(*args, **kwargs):
+
+        raise MmiH2cDualSideManualHandoffContextReceiptV1Error("MMI_H2C_PORTABLE_EVIDENCE_INVALID")
+
+
+
+    monkeypatch.setattr("investment_orchestrator.offline.mmi_h2c_archived_source_v1.validate_portable_source_record_v1", mock_validate)
+
+
+
+    with pytest.raises(MmiH2cArchivedSourceV1Error, match="ARCHIVE_SOURCE_SCHEMA_INVALID") as exc_info:
+
+        _build_mmi_h2c_archived_prepared_case_snapshot(case_fd=fd, expected_prepared_case_identity_sha256=expected_id)
+
+
+
+    assert isinstance(exc_info.value.__cause__, MmiH2cDualSideManualHandoffContextReceiptV1Error)
+
+
+
+def test_json_decode_ownership_proof(tmp_path, valid_case) -> None:
+
+    manifest, strategy, portfolio = valid_case
+
+    archive_dir = tmp_path / "archive"
+
+    archive_dir.mkdir()
+
+    (tmp_path / "manifest.json").write_bytes(b"invalid json")
+
+
+
+    fd = os.open(str(tmp_path), os.O_RDONLY | os.O_DIRECTORY)
+
+    try:
+
+        with pytest.raises(MmiH2cArchivedSourceV1Error, match="PREPARED_CASE_INPUT_INVALID") as exc_info:
+
+            _build_mmi_h2c_archived_prepared_case_snapshot(case_fd=fd, expected_prepared_case_identity_sha256=manifest["prepared_case_identity_sha256"])
+
+        assert isinstance(exc_info.value.__cause__, json.JSONDecodeError)
+
+    finally:
+
+        os.close(fd)
+
+
+
+def test_unexpected_error_proof(case_fd, monkeypatch) -> None:
+
+    fd, expected_id = case_fd
+
+
+
+    def mock_loads(*args, **kwargs):
+
+        raise RuntimeError("unexpected internal error")
+
+
+
+    monkeypatch.setattr("json.loads", mock_loads)
+
+
+
+    with pytest.raises(RuntimeError, match="unexpected internal error"):
+
+        _build_mmi_h2c_archived_prepared_case_snapshot(case_fd=fd, expected_prepared_case_identity_sha256=expected_id)

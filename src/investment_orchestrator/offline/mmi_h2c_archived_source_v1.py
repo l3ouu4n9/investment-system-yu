@@ -50,6 +50,8 @@ from investment_orchestrator.offline._mmi_h2c_stable_read_v1 import (
 
 from investment_orchestrator.offline.mmi_h2c_dual_side_manual_handoff_context_receipt_v1 import (
 
+    MmiH2cDualSideManualHandoffContextReceiptV1Error,
+
     validate_portable_source_record_v1,
 
 )
@@ -76,7 +78,11 @@ _ArchivedErrorCode = Literal[
 
     "PREPARED_CASE_INPUT_INVALID",
 
+    "PREPARED_CASE_SCHEMA_INVALID",
+
     "ARCHIVE_SOURCE_INPUT_INVALID",
+
+    "ARCHIVE_SOURCE_SCHEMA_INVALID",
 
     "CAPABILITY_UNAVAILABLE",
 
@@ -200,7 +206,7 @@ def _validate_path_syntax(path: str) -> None:
 
     if not path or path.startswith("/") or ".." in path.split("/"):
 
-        raise MmiH2cArchivedSourceV1Error("PREPARED_CASE_INPUT_INVALID")
+        raise MmiH2cArchivedSourceV1Error("PREPARED_CASE_SCHEMA_INVALID")
 
 
 
@@ -262,15 +268,21 @@ def _bind_role(
 
 
 
-    validated_record = validate_portable_source_record_v1(
+    try:
 
-        value=source_record,
+        validated_record = validate_portable_source_record_v1(
 
-        expected_role=role,
+            value=source_record,
 
-        archived_source_bytes=archived_bytes,
+            expected_role=role,
 
-    )
+            archived_source_bytes=archived_bytes,
+
+        )
+
+    except MmiH2cDualSideManualHandoffContextReceiptV1Error as exc:
+
+        raise MmiH2cArchivedSourceV1Error("ARCHIVE_SOURCE_SCHEMA_INVALID") from exc
 
 
 
@@ -280,7 +292,7 @@ def _bind_role(
 
         if not isinstance(v, (str, int)):
 
-            raise MmiH2cArchivedSourceV1Error("ARCHIVE_SOURCE_INPUT_INVALID")
+            raise TypeError("validator contract violation")
 
         frozen_record[k] = v
 
@@ -332,7 +344,7 @@ def _build_mmi_h2c_archived_prepared_case_snapshot(
 
     except MmiH2cPreparedCaseV1Error as exc:
 
-        raise MmiH2cArchivedSourceV1Error("PREPARED_CASE_INPUT_INVALID") from exc
+        raise MmiH2cArchivedSourceV1Error("PREPARED_CASE_SCHEMA_INVALID") from exc
 
 
 
