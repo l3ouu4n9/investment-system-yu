@@ -840,45 +840,15 @@ def _validate_report_schema(report: dict[str, object]) -> None:
         _fail("MMI_LEGACY_STEP1_COMPARISON_SCHEMA_INVALID")
 
 
-def _derive_expected_report(
+def _build_mmi_legacy_step1_comparison_report_v1_from_validated_h1_candidate(
     *,
-    legacy_step1_compatibility_candidate: Mapping[str, object],
-    validated_grounded_analysis_response: Mapping[str, object],
-    raw_response_envelope: Mapping[str, object],
-    evidence_bundle: Mapping[str, object],
-    policy_projection: Mapping[str, object],
-    policy_source: object,
-    portfolio_projection: Mapping[str, object] | None,
-    portfolio_source: object,
-    run_context: object,
-    legacy_research_raw_bytes: object,
-    legacy_strategy_settings: Mapping[str, object],
+    validated_h1_candidate: dict[str, object],
+    legacy_research_raw_bytes: bytes,
+    legacy_strategy_settings: dict[str, object],
 ) -> dict[str, object]:
-    candidate_snapshot = _snapshot_mapping(
-        legacy_step1_compatibility_candidate
-    )
-    response_snapshot = _snapshot_mapping(validated_grounded_analysis_response)
-    envelope_snapshot = _snapshot_mapping(raw_response_envelope)
-    evidence_snapshot = _snapshot_mapping(evidence_bundle)
-    policy_snapshot = _snapshot_mapping(policy_projection)
-    portfolio_snapshot = (
-        None
-        if portfolio_projection is None
-        else _snapshot_mapping(portfolio_projection)
-    )
-    settings_snapshot = _snapshot_mapping(legacy_strategy_settings)
+    settings_snapshot = legacy_strategy_settings
 
-    candidate = _validated_h1_candidate(
-        legacy_step1_compatibility_candidate=candidate_snapshot,
-        validated_grounded_analysis_response=response_snapshot,
-        raw_response_envelope=envelope_snapshot,
-        evidence_bundle=evidence_snapshot,
-        policy_projection=policy_snapshot,
-        policy_source=policy_source,
-        portfolio_projection=portfolio_snapshot,
-        portfolio_source=portfolio_source,
-        run_context=run_context,
-    )
+    candidate = validated_h1_candidate
 
     settings_canonical = _legacy_canonical_bytes(settings_snapshot)
     if len(settings_canonical) > MAX_LEGACY_STRATEGY_SETTINGS_CANONICAL_BYTES:
@@ -984,6 +954,35 @@ def _derive_expected_report(
     return report
 
 
+def _validate_mmi_legacy_step1_comparison_report_v1_from_validated_h1_candidate(
+    *,
+    value: Mapping[str, object],
+    validated_h1_candidate: dict[str, object],
+    legacy_research_raw_bytes: bytes,
+    legacy_strategy_settings: dict[str, object],
+) -> dict[str, object]:
+    report = _snapshot_mapping(value)
+    if (
+        report.get("schema_version") != _SCHEMA_VERSION
+        or report.get("artifact_kind") != _ARTIFACT_KIND
+        or report.get("comparison_contract_version")
+        != _COMPARISON_CONTRACT_VERSION
+    ):
+        _fail("MMI_LEGACY_STEP1_COMPARISON_CONTRACT_UNSUPPORTED")
+    _validate_report_schema(report)
+    _validate_report_canonical_size(report)
+    if report.get(_IDENTITY_FIELD) != _report_identity(report):
+        _fail("MMI_LEGACY_STEP1_COMPARISON_IDENTITY_MISMATCHED")
+    expected = _build_mmi_legacy_step1_comparison_report_v1_from_validated_h1_candidate(
+        validated_h1_candidate=validated_h1_candidate,
+        legacy_research_raw_bytes=legacy_research_raw_bytes,
+        legacy_strategy_settings=legacy_strategy_settings,
+    )
+    if report != expected:
+        _fail("MMI_LEGACY_STEP1_COMPARISON_NON_EXPECTED")
+    return report
+
+
 def build_mmi_legacy_step1_comparison_report_v1(
     *,
     legacy_step1_compatibility_candidate: Mapping[str, object],
@@ -999,22 +998,30 @@ def build_mmi_legacy_step1_comparison_report_v1(
     legacy_strategy_settings: Mapping[str, object],
 ) -> dict[str, object]:
     """Build one report-only comparison of H1 against one legacy artifact."""
-    return _derive_expected_report(
-        legacy_step1_compatibility_candidate=(
+    settings_snapshot = _snapshot_mapping(legacy_strategy_settings)
+    validated_h1 = _validated_h1_candidate(
+        legacy_step1_compatibility_candidate=_snapshot_mapping(
             legacy_step1_compatibility_candidate
         ),
-        validated_grounded_analysis_response=(
+        validated_grounded_analysis_response=_snapshot_mapping(
             validated_grounded_analysis_response
         ),
-        raw_response_envelope=raw_response_envelope,
-        evidence_bundle=evidence_bundle,
-        policy_projection=policy_projection,
+        raw_response_envelope=_snapshot_mapping(raw_response_envelope),
+        evidence_bundle=_snapshot_mapping(evidence_bundle),
+        policy_projection=_snapshot_mapping(policy_projection),
         policy_source=policy_source,
-        portfolio_projection=portfolio_projection,
+        portfolio_projection=(
+            None
+            if portfolio_projection is None
+            else _snapshot_mapping(portfolio_projection)
+        ),
         portfolio_source=portfolio_source,
         run_context=run_context,
+    )
+    return _build_mmi_legacy_step1_comparison_report_v1_from_validated_h1_candidate(
+        validated_h1_candidate=validated_h1,
         legacy_research_raw_bytes=legacy_research_raw_bytes,
-        legacy_strategy_settings=legacy_strategy_settings,
+        legacy_strategy_settings=settings_snapshot,
     )
 
 
@@ -1046,23 +1053,29 @@ def validate_mmi_legacy_step1_comparison_report_v1(
     _validate_report_canonical_size(report)
     if report.get(_IDENTITY_FIELD) != _report_identity(report):
         _fail("MMI_LEGACY_STEP1_COMPARISON_IDENTITY_MISMATCHED")
-    expected = _derive_expected_report(
-        legacy_step1_compatibility_candidate=(
+    settings_snapshot = _snapshot_mapping(legacy_strategy_settings)
+    validated_h1 = _validated_h1_candidate(
+        legacy_step1_compatibility_candidate=_snapshot_mapping(
             legacy_step1_compatibility_candidate
         ),
-        validated_grounded_analysis_response=(
+        validated_grounded_analysis_response=_snapshot_mapping(
             validated_grounded_analysis_response
         ),
-        raw_response_envelope=raw_response_envelope,
-        evidence_bundle=evidence_bundle,
-        policy_projection=policy_projection,
+        raw_response_envelope=_snapshot_mapping(raw_response_envelope),
+        evidence_bundle=_snapshot_mapping(evidence_bundle),
+        policy_projection=_snapshot_mapping(policy_projection),
         policy_source=policy_source,
-        portfolio_projection=portfolio_projection,
+        portfolio_projection=(
+            None
+            if portfolio_projection is None
+            else _snapshot_mapping(portfolio_projection)
+        ),
         portfolio_source=portfolio_source,
         run_context=run_context,
-        legacy_research_raw_bytes=legacy_research_raw_bytes,
-        legacy_strategy_settings=legacy_strategy_settings,
     )
-    if report != expected:
-        _fail("MMI_LEGACY_STEP1_COMPARISON_NON_EXPECTED")
-    return report
+    return _validate_mmi_legacy_step1_comparison_report_v1_from_validated_h1_candidate(
+        value=value,
+        validated_h1_candidate=validated_h1,
+        legacy_research_raw_bytes=legacy_research_raw_bytes,
+        legacy_strategy_settings=settings_snapshot,
+    )

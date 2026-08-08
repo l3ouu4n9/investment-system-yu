@@ -50,12 +50,15 @@ from investment_orchestrator.offline.mmi_legacy_step1_comparison_report_v1 impor
     MmiLegacyStep1ComparisonReportV1Error,
     build_mmi_legacy_step1_comparison_report_v1,
     validate_mmi_legacy_step1_comparison_report_v1,
+    _build_mmi_legacy_step1_comparison_report_v1_from_validated_h1_candidate,
+    _validate_mmi_legacy_step1_comparison_report_v1_from_validated_h1_candidate,
 )
 import _mmi_hermetic_source_checkout as hermetic
 
 
 SCHEMA_NAME = "mmi_legacy_step1_comparison_report_v1.schema.json"
 IDENTITY_FIELD = "comparison_report_identity_sha256"
+DOMAIN = b"mmi_legacy_step1_comparison_report_v1\0"
 FIXTURES = repo_root() / "tests/fixtures/step1_contract_failures"
 VALID_LEGACY = FIXTURES / "minimal_valid_research_handoff.json"
 STRUCTURED_LEGACY = FIXTURES / "legacy_structured_missing_handoff.json"
@@ -105,6 +108,25 @@ class _Inputs:
         self.policy_source = policy_source
         self.run_context = run_context
         self.settings = settings
+
+
+
+def _record_identity(
+    domain: bytes,
+    value: dict[str, object],
+    identity_field: str,
+) -> str:
+    import hashlib
+    import struct
+    from copy import deepcopy
+    preimage = deepcopy(value)
+    preimage.pop(identity_field, None)
+    canonical_bytes = _canonical(preimage)
+    return hashlib.sha256(
+        domain
+        + struct.pack(">Q", len(canonical_bytes))
+        + canonical_bytes
+    ).hexdigest()
 
 
 def _canonical(value: object) -> bytes:
@@ -1082,3 +1104,153 @@ def test_sources_are_test_owned_and_live_inputs_are_unreachable(
         checkout.strategy_settings_raw.decode("utf-8")
     )
     hermetic.assert_live_operational_inputs_are_unreachable()
+
+
+def test_public_and_private_comparison_builders_are_exact_equivalents(
+    inputs: _Inputs,
+) -> None:
+    public = _report(inputs, VALID_LEGACY.read_bytes())
+
+    from copy import deepcopy
+    validated_h1 = deepcopy(inputs.candidate)
+
+    private = _build_mmi_legacy_step1_comparison_report_v1_from_validated_h1_candidate(
+        validated_h1_candidate=validated_h1,
+        legacy_research_raw_bytes=VALID_LEGACY.read_bytes(),
+        legacy_strategy_settings=deepcopy(inputs.settings),
+    )
+
+    assert public == private
+    assert _canonical(public) == _canonical(private)
+    assert public[IDENTITY_FIELD] == private[IDENTITY_FIELD]
+
+
+def test_public_and_private_comparison_validators_are_exact_equivalents(
+    inputs: _Inputs,
+) -> None:
+    value = _report(inputs, VALID_LEGACY.read_bytes())
+
+    public = validate_mmi_legacy_step1_comparison_report_v1(
+        value=value,
+        legacy_research_raw_bytes=VALID_LEGACY.read_bytes(),
+        **_kwargs(inputs),
+    )
+
+    from copy import deepcopy
+    validated_h1 = deepcopy(inputs.candidate)
+
+    private = _validate_mmi_legacy_step1_comparison_report_v1_from_validated_h1_candidate(
+        value=value,
+        validated_h1_candidate=validated_h1,
+        legacy_research_raw_bytes=VALID_LEGACY.read_bytes(),
+        legacy_strategy_settings=deepcopy(inputs.settings),
+    )
+
+    assert public == private
+    assert _canonical(public) == _canonical(private)
+    assert public[IDENTITY_FIELD] == private[IDENTITY_FIELD]
+
+
+def test_comparison_private_validator_calls_private_builder_exactly_once_and_enforces_equality(
+    inputs: _Inputs,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import investment_orchestrator.offline.mmi_legacy_step1_comparison_report_v1 as mod
+
+    call_count = 0
+    original_builder = mod._build_mmi_legacy_step1_comparison_report_v1_from_validated_h1_candidate
+
+    def mock_builder(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return original_builder(*args, **kwargs)
+
+    value = _report(inputs, VALID_LEGACY.read_bytes())
+
+    monkeypatch.setattr(mod, "_build_mmi_legacy_step1_comparison_report_v1_from_validated_h1_candidate", mock_builder)
+
+    from copy import deepcopy
+    validated_h1 = deepcopy(inputs.candidate)
+
+    # Positive case: exact match
+    mod._validate_mmi_legacy_step1_comparison_report_v1_from_validated_h1_candidate(
+        value=value,
+        validated_h1_candidate=validated_h1,
+        legacy_research_raw_bytes=VALID_LEGACY.read_bytes(),
+        legacy_strategy_settings=deepcopy(inputs.settings),
+    )
+    assert call_count == 1
+
+    # Negative case: structurally sound but expected equality failure
+    altered_value = deepcopy(value)
+    summary = altered_value["comparison_summary"]
+    assert type(summary) is dict
+    original_limitation_count = summary["limitation_count"]
+    assert type(original_limitation_count) is int
+    summary["limitation_count"] = (
+        0 if original_limitation_count != 0 else 1
+    )
+    altered_value[IDENTITY_FIELD] = _record_identity(
+        DOMAIN, altered_value, IDENTITY_FIELD
+    )
+    with pytest.raises(MmiLegacyStep1ComparisonReportV1Error) as exc:
+        mod._validate_mmi_legacy_step1_comparison_report_v1_from_validated_h1_candidate(
+            value=altered_value,
+            validated_h1_candidate=validated_h1,
+            legacy_research_raw_bytes=VALID_LEGACY.read_bytes(),
+            legacy_strategy_settings=deepcopy(inputs.settings),
+        )
+    assert exc.value.code == "MMI_LEGACY_STEP1_COMPARISON_NON_EXPECTED"
+    assert call_count == 2
+
+
+def test_comparison_first_failure_schema_invalid_before_h1_candidate_failure(
+    inputs: _Inputs,
+) -> None:
+    # First-failure: Prove moving the boundary doesn't bypass an earlier schema validation
+    # by passing an invalid value AND an invalid H1 candidate upstream.
+    value = _report(inputs, VALID_LEGACY.read_bytes())
+    value["schema_version"] = "wrong"
+
+    bad_kwargs = _kwargs(inputs)
+    bad_kwargs["legacy_research_raw_bytes"] = VALID_LEGACY.read_bytes()
+    # Corrupt H1 candidate
+    candidate = bad_kwargs["legacy_step1_compatibility_candidate"]
+    assert type(candidate) is dict
+    candidate["schema_version"] = "wrong"
+
+    with pytest.raises(MmiLegacyStep1ComparisonReportV1Error) as exc:
+        validate_mmi_legacy_step1_comparison_report_v1(
+            value=value,
+            **bad_kwargs,
+        )
+    # Fails on comparison report schema first, NOT on H1 candidate schema or anything else
+    assert exc.value.code == "MMI_LEGACY_STEP1_COMPARISON_CONTRACT_UNSUPPORTED"
+
+
+@pytest.mark.parametrize("use_validate", [False, True])
+def test_comparison_first_failure_settings_invalid_before_h1_candidate_failure(
+    inputs: _Inputs,
+    use_validate: bool,
+) -> None:
+    # First-failure: an invalid legacy_strategy_settings input and an
+    # invalid H1 candidate are simultaneously present. HEAD snapshots and
+    # validates legacy_strategy_settings before validating the H1 candidate,
+    # so the settings-owned input error must still win.
+    bad_kwargs = _kwargs(inputs)
+    bad_kwargs["legacy_research_raw_bytes"] = VALID_LEGACY.read_bytes()
+    bad_kwargs["legacy_strategy_settings"] = {1: "non_string_key"}
+    candidate = bad_kwargs["legacy_step1_compatibility_candidate"]
+    assert type(candidate) is dict
+    candidate["schema_version"] = "wrong"
+
+    with pytest.raises(MmiLegacyStep1ComparisonReportV1Error) as exc:
+        if use_validate:
+            value = _report(inputs, VALID_LEGACY.read_bytes())
+            validate_mmi_legacy_step1_comparison_report_v1(
+                value=value,
+                **bad_kwargs,
+            )
+        else:
+            build_mmi_legacy_step1_comparison_report_v1(**bad_kwargs)
+    assert exc.value.code == "MMI_LEGACY_STEP1_COMPARISON_INPUT_INVALID"

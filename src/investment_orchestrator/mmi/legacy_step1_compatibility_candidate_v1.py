@@ -9,7 +9,10 @@ from investment_orchestrator.common.schema_validation import (
     validate_artifact_schema,
 )
 from investment_orchestrator.mmi.analyst_visible_evidence_view_v2 import (
-    build_mmi_analyst_visible_evidence_view_v2,
+    _build_mmi_analyst_visible_evidence_view_v2_from_source_record_identities,
+    _validate_live_provenance_and_extract_identities,
+    _ViewBlocked,
+    _ViewContractFailure,
 )
 from investment_orchestrator.mmi.canonical import (
     MAX_MMI_LEGACY_STEP1_COMPATIBILITY_CANDIDATE_V1_CANONICAL_BYTES,
@@ -25,7 +28,7 @@ from investment_orchestrator.mmi.contracts import (
 )
 from investment_orchestrator.mmi.validated_grounded_analysis_response_v2 import (
     MmiValidatedGroundedAnalysisResponseV2Error,
-    validate_mmi_validated_grounded_analysis_response_v2,
+    _validate_mmi_validated_grounded_analysis_response_v2_from_source_record_identities,
 )
 
 
@@ -88,6 +91,28 @@ class MmiLegacyStep1CompatibilityCandidateV1Error(ValueError):
 
 def _fail(code: str) -> NoReturn:
     raise MmiLegacyStep1CompatibilityCandidateV1Error(code)
+
+
+def _validated_live_provenance_and_extracted_identities(
+    *,
+    evidence_bundle: Mapping[str, object],
+    policy_projection: Mapping[str, object],
+    policy_source: MmiCapturedSource,
+    portfolio_projection: Mapping[str, object] | None,
+    portfolio_source: MmiCapturedSource | None,
+    run_context: MmiProjectionRunContext,
+) -> tuple[str, str | None]:
+    try:
+        return _validate_live_provenance_and_extract_identities(
+            evidence_bundle=evidence_bundle,
+            policy_projection=policy_projection,
+            policy_source=policy_source,
+            portfolio_projection=portfolio_projection,
+            portfolio_source=portfolio_source,
+            run_context=run_context,
+        )
+    except (_ViewBlocked, _ViewContractFailure):
+        _fail("MMI_LEGACY_STEP1_CANDIDATE_UPSTREAM_RESPONSE_INVALID")
 
 
 def _snapshot_value(
@@ -271,15 +296,15 @@ def _source_capability_statuses(
     }
 
 
-def _derive_expected_candidate(
+def _build_mmi_legacy_step1_compatibility_candidate_v1_from_source_record_identities(
     *,
     validated_grounded_analysis_response: Mapping[str, object],
     raw_response_envelope: Mapping[str, object],
     evidence_bundle: Mapping[str, object],
     policy_projection: Mapping[str, object],
-    policy_source: MmiCapturedSource,
+    policy_source_record_identity_sha256: str,
     portfolio_projection: Mapping[str, object] | None,
-    portfolio_source: MmiCapturedSource | None,
+    portfolio_source_record_identity_sha256: str | None,
     run_context: MmiProjectionRunContext,
 ) -> dict[str, object]:
     response_snapshot = _snapshot_mapping(
@@ -295,25 +320,33 @@ def _derive_expected_candidate(
     )
 
     try:
-        response = validate_mmi_validated_grounded_analysis_response_v2(
+        response = _validate_mmi_validated_grounded_analysis_response_v2_from_source_record_identities(
             value=response_snapshot,
             raw_response_envelope=envelope_snapshot,
             evidence_bundle=evidence_snapshot,
             policy_projection=policy_snapshot,
-            policy_source=policy_source,
+            policy_source_record_identity_sha256=(
+                policy_source_record_identity_sha256
+            ),
             portfolio_projection=portfolio_snapshot,
-            portfolio_source=portfolio_source,
+            portfolio_source_record_identity_sha256=(
+                portfolio_source_record_identity_sha256
+            ),
             run_context=run_context,
         )
     except MmiValidatedGroundedAnalysisResponseV2Error:
         _fail("MMI_LEGACY_STEP1_CANDIDATE_UPSTREAM_RESPONSE_INVALID")
 
-    view_result = build_mmi_analyst_visible_evidence_view_v2(
+    view_result = _build_mmi_analyst_visible_evidence_view_v2_from_source_record_identities(
         evidence_bundle=evidence_snapshot,
         policy_projection=policy_snapshot,
-        policy_source=policy_source,
+        policy_source_record_identity_sha256=(
+            policy_source_record_identity_sha256
+        ),
         portfolio_projection=portfolio_snapshot,
-        portfolio_source=portfolio_source,
+        portfolio_source_record_identity_sha256=(
+            portfolio_source_record_identity_sha256
+        ),
         run_context=run_context,
     )
     if (
@@ -369,6 +402,44 @@ def _derive_expected_candidate(
     return candidate
 
 
+def _validate_mmi_legacy_step1_compatibility_candidate_v1_from_source_record_identities(
+    *,
+    value: Mapping[str, object],
+    validated_grounded_analysis_response: Mapping[str, object],
+    raw_response_envelope: Mapping[str, object],
+    evidence_bundle: Mapping[str, object],
+    policy_projection: Mapping[str, object],
+    policy_source_record_identity_sha256: str,
+    portfolio_projection: Mapping[str, object] | None,
+    portfolio_source_record_identity_sha256: str | None,
+    run_context: MmiProjectionRunContext,
+) -> dict[str, object]:
+    candidate = _snapshot_mapping(value)
+    _validate_candidate_schema(candidate)
+    _validate_candidate_canonical_size(candidate)
+    if candidate.get(_IDENTITY_FIELD) != _candidate_identity(candidate):
+        _fail("MMI_LEGACY_STEP1_CANDIDATE_IDENTITY_MISMATCHED")
+    expected = _build_mmi_legacy_step1_compatibility_candidate_v1_from_source_record_identities(
+        validated_grounded_analysis_response=(
+            validated_grounded_analysis_response
+        ),
+        raw_response_envelope=raw_response_envelope,
+        evidence_bundle=evidence_bundle,
+        policy_projection=policy_projection,
+        policy_source_record_identity_sha256=(
+            policy_source_record_identity_sha256
+        ),
+        portfolio_projection=portfolio_projection,
+        portfolio_source_record_identity_sha256=(
+            portfolio_source_record_identity_sha256
+        ),
+        run_context=run_context,
+    )
+    if candidate != expected:
+        _fail("MMI_LEGACY_STEP1_CANDIDATE_NON_EXPECTED")
+    return candidate
+
+
 def build_mmi_legacy_step1_compatibility_candidate_v1(
     *,
     validated_grounded_analysis_response: Mapping[str, object],
@@ -381,16 +452,32 @@ def build_mmi_legacy_step1_compatibility_candidate_v1(
     run_context: MmiProjectionRunContext,
 ) -> dict[str, object]:
     """Build one source-bound report-only compatibility candidate."""
-    return _derive_expected_candidate(
+    policy_source_record_identity_sha256, portfolio_source_record_identity_sha256 = _validated_live_provenance_and_extracted_identities(
+        evidence_bundle=_snapshot_mapping(evidence_bundle),
+        policy_projection=_snapshot_mapping(policy_projection),
+        policy_source=policy_source,
+        portfolio_projection=(
+            None
+            if portfolio_projection is None
+            else _snapshot_mapping(portfolio_projection)
+        ),
+        portfolio_source=portfolio_source,
+        run_context=run_context,
+    )
+    return _build_mmi_legacy_step1_compatibility_candidate_v1_from_source_record_identities(
         validated_grounded_analysis_response=(
             validated_grounded_analysis_response
         ),
         raw_response_envelope=raw_response_envelope,
         evidence_bundle=evidence_bundle,
         policy_projection=policy_projection,
-        policy_source=policy_source,
+        policy_source_record_identity_sha256=(
+            policy_source_record_identity_sha256
+        ),
         portfolio_projection=portfolio_projection,
-        portfolio_source=portfolio_source,
+        portfolio_source_record_identity_sha256=(
+            portfolio_source_record_identity_sha256
+        ),
         run_context=run_context,
     )
 
@@ -413,18 +500,33 @@ def validate_mmi_legacy_step1_compatibility_candidate_v1(
     _validate_candidate_canonical_size(candidate)
     if candidate.get(_IDENTITY_FIELD) != _candidate_identity(candidate):
         _fail("MMI_LEGACY_STEP1_CANDIDATE_IDENTITY_MISMATCHED")
-    expected = _derive_expected_candidate(
+
+    policy_source_record_identity_sha256, portfolio_source_record_identity_sha256 = _validated_live_provenance_and_extracted_identities(
+        evidence_bundle=_snapshot_mapping(evidence_bundle),
+        policy_projection=_snapshot_mapping(policy_projection),
+        policy_source=policy_source,
+        portfolio_projection=(
+            None
+            if portfolio_projection is None
+            else _snapshot_mapping(portfolio_projection)
+        ),
+        portfolio_source=portfolio_source,
+        run_context=run_context,
+    )
+    return _validate_mmi_legacy_step1_compatibility_candidate_v1_from_source_record_identities(
+        value=value,
         validated_grounded_analysis_response=(
             validated_grounded_analysis_response
         ),
         raw_response_envelope=raw_response_envelope,
         evidence_bundle=evidence_bundle,
         policy_projection=policy_projection,
-        policy_source=policy_source,
+        policy_source_record_identity_sha256=(
+            policy_source_record_identity_sha256
+        ),
         portfolio_projection=portfolio_projection,
-        portfolio_source=portfolio_source,
+        portfolio_source_record_identity_sha256=(
+            portfolio_source_record_identity_sha256
+        ),
         run_context=run_context,
     )
-    if candidate != expected:
-        _fail("MMI_LEGACY_STEP1_CANDIDATE_NON_EXPECTED")
-    return candidate

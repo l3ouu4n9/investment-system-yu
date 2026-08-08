@@ -33,6 +33,8 @@ from investment_orchestrator.mmi.legacy_step1_compatibility_candidate_v1 import 
     _source_capability_statuses,
     build_mmi_legacy_step1_compatibility_candidate_v1,
     validate_mmi_legacy_step1_compatibility_candidate_v1,
+    _build_mmi_legacy_step1_compatibility_candidate_v1_from_source_record_identities,
+    _validate_mmi_legacy_step1_compatibility_candidate_v1_from_source_record_identities,
 )
 from investment_orchestrator.mmi.policy_projection import (
     build_mmi_policy_projection,
@@ -813,3 +815,210 @@ def test_sources_are_test_owned_and_live_inputs_are_unreachable(
         "repository_relative_locator"
     ] == hermetic.PORTFOLIO_SNAPSHOT_LOCATOR
     hermetic.assert_live_operational_inputs_are_unreachable()
+
+
+def test_public_and_private_builders_are_exact_equivalents(
+    present_inputs: _Inputs,
+) -> None:
+    public = _candidate(present_inputs)
+    policy_source_record_identity_sha256 = present_inputs.policy_source.source_record["source_record_identity_sha256"]
+    portfolio_source_record_identity_sha256 = present_inputs.portfolio_source.source_record["source_record_identity_sha256"]
+    assert type(policy_source_record_identity_sha256) is str
+    assert type(portfolio_source_record_identity_sha256) is str
+
+    private = _build_mmi_legacy_step1_compatibility_candidate_v1_from_source_record_identities(
+        validated_grounded_analysis_response=deepcopy(present_inputs.response),
+        raw_response_envelope=deepcopy(present_inputs.envelope),
+        evidence_bundle=deepcopy(present_inputs.evidence),
+        policy_projection=deepcopy(present_inputs.policy),
+        policy_source_record_identity_sha256=policy_source_record_identity_sha256,
+        portfolio_projection=deepcopy(present_inputs.portfolio),
+        portfolio_source_record_identity_sha256=portfolio_source_record_identity_sha256,
+        run_context=present_inputs.run_context,
+    )
+    assert public == private
+    assert _canonical(public) == _canonical(private)
+    assert public[CANDIDATE_IDENTITY_FIELD] == private[CANDIDATE_IDENTITY_FIELD]
+
+
+def test_public_and_private_validators_are_exact_equivalents(
+    present_inputs: _Inputs,
+) -> None:
+    value = _candidate(present_inputs)
+    public = validate_mmi_legacy_step1_compatibility_candidate_v1(
+        value=value,
+        **_context_kwargs(present_inputs),
+    )
+    policy_source_record_identity_sha256 = present_inputs.policy_source.source_record["source_record_identity_sha256"]
+    portfolio_source_record_identity_sha256 = present_inputs.portfolio_source.source_record["source_record_identity_sha256"]
+    assert type(policy_source_record_identity_sha256) is str
+    assert type(portfolio_source_record_identity_sha256) is str
+
+    private = _validate_mmi_legacy_step1_compatibility_candidate_v1_from_source_record_identities(
+        value=value,
+        validated_grounded_analysis_response=deepcopy(present_inputs.response),
+        raw_response_envelope=deepcopy(present_inputs.envelope),
+        evidence_bundle=deepcopy(present_inputs.evidence),
+        policy_projection=deepcopy(present_inputs.policy),
+        policy_source_record_identity_sha256=policy_source_record_identity_sha256,
+        portfolio_projection=deepcopy(present_inputs.portfolio),
+        portfolio_source_record_identity_sha256=portfolio_source_record_identity_sha256,
+        run_context=present_inputs.run_context,
+    )
+    assert public == private
+    assert _canonical(public) == _canonical(private)
+    assert public[CANDIDATE_IDENTITY_FIELD] == private[CANDIDATE_IDENTITY_FIELD]
+
+
+def test_private_validator_calls_private_builder_exactly_once_and_enforces_equality(
+    present_inputs: _Inputs,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import investment_orchestrator.mmi.legacy_step1_compatibility_candidate_v1 as mod
+
+    call_count = 0
+    original_builder = mod._build_mmi_legacy_step1_compatibility_candidate_v1_from_source_record_identities
+
+    value = _candidate(present_inputs)
+
+    def mock_builder(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return original_builder(*args, **kwargs)
+
+    monkeypatch.setattr(mod, "_build_mmi_legacy_step1_compatibility_candidate_v1_from_source_record_identities", mock_builder)
+    policy_source_record_identity_sha256 = present_inputs.policy_source.source_record["source_record_identity_sha256"]
+    portfolio_source_record_identity_sha256 = present_inputs.portfolio_source.source_record["source_record_identity_sha256"]
+    assert type(policy_source_record_identity_sha256) is str
+    assert type(portfolio_source_record_identity_sha256) is str
+
+    # Positive case: exact match
+    mod._validate_mmi_legacy_step1_compatibility_candidate_v1_from_source_record_identities(
+        value=value,
+        validated_grounded_analysis_response=deepcopy(present_inputs.response),
+        raw_response_envelope=deepcopy(present_inputs.envelope),
+        evidence_bundle=deepcopy(present_inputs.evidence),
+        policy_projection=deepcopy(present_inputs.policy),
+        policy_source_record_identity_sha256=policy_source_record_identity_sha256,
+        portfolio_projection=deepcopy(present_inputs.portfolio),
+        portfolio_source_record_identity_sha256=portfolio_source_record_identity_sha256,
+        run_context=present_inputs.run_context,
+    )
+    assert call_count == 1
+
+    # Negative case: structurally sound but expected equality failure
+    altered_value = deepcopy(value)
+    summary = altered_value["summary"]
+    assert type(summary) is dict
+    summary["text"] = "Structurally sound but completely wrong."
+    altered_value[CANDIDATE_IDENTITY_FIELD] = _record_identity(
+        CANDIDATE_DOMAIN, altered_value, CANDIDATE_IDENTITY_FIELD
+    )
+    with pytest.raises(MmiLegacyStep1CompatibilityCandidateV1Error) as exc:
+        mod._validate_mmi_legacy_step1_compatibility_candidate_v1_from_source_record_identities(
+            value=altered_value,
+            validated_grounded_analysis_response=deepcopy(present_inputs.response),
+            raw_response_envelope=deepcopy(present_inputs.envelope),
+            evidence_bundle=deepcopy(present_inputs.evidence),
+            policy_projection=deepcopy(present_inputs.policy),
+            policy_source_record_identity_sha256=policy_source_record_identity_sha256,
+            portfolio_projection=deepcopy(present_inputs.portfolio),
+            portfolio_source_record_identity_sha256=portfolio_source_record_identity_sha256,
+            run_context=present_inputs.run_context,
+        )
+    assert exc.value.code == "MMI_LEGACY_STEP1_CANDIDATE_NON_EXPECTED"
+    assert call_count == 2
+
+
+def test_public_provenance_gate_rejects_unadmitted_wrong_role_source(
+    checkout: hermetic.HermeticSourceCheckout,
+    absent_inputs: _Inputs,
+) -> None:
+    kwargs = _context_kwargs(absent_inputs)
+
+    bad_build_kwargs = dict(kwargs)
+    bad_build_kwargs["policy_source"] = checkout.portfolio_source
+    with pytest.raises(MmiLegacyStep1CompatibilityCandidateV1Error) as build_exc:
+        build_mmi_legacy_step1_compatibility_candidate_v1(**bad_build_kwargs)
+    assert build_exc.value.code == (
+        "MMI_LEGACY_STEP1_CANDIDATE_UPSTREAM_RESPONSE_INVALID"
+    )
+
+    value = _candidate(absent_inputs)
+    bad_validate_kwargs = dict(kwargs)
+    bad_validate_kwargs["policy_source"] = checkout.portfolio_source
+    with pytest.raises(MmiLegacyStep1CompatibilityCandidateV1Error) as validate_exc:
+        validate_mmi_legacy_step1_compatibility_candidate_v1(
+            value=value,
+            **bad_validate_kwargs,
+        )
+    assert validate_exc.value.code == (
+        "MMI_LEGACY_STEP1_CANDIDATE_UPSTREAM_RESPONSE_INVALID"
+    )
+
+
+def test_independent_source_identity_mismatch_is_rejected_at_deterministic_boundary(
+    absent_inputs: _Inputs,
+) -> None:
+    real_policy_source_record_identity_sha256 = (
+        absent_inputs.policy_source.source_record[
+            "source_record_identity_sha256"
+        ]
+    )
+    assert type(real_policy_source_record_identity_sha256) is str
+
+    _build_mmi_legacy_step1_compatibility_candidate_v1_from_source_record_identities(
+        validated_grounded_analysis_response=deepcopy(
+            absent_inputs.response
+        ),
+        raw_response_envelope=deepcopy(absent_inputs.envelope),
+        evidence_bundle=deepcopy(absent_inputs.evidence),
+        policy_projection=deepcopy(absent_inputs.policy),
+        policy_source_record_identity_sha256=(
+            real_policy_source_record_identity_sha256
+        ),
+        portfolio_projection=deepcopy(absent_inputs.portfolio),
+        portfolio_source_record_identity_sha256=None,
+        run_context=absent_inputs.run_context,
+    )
+
+    inconsistent_identity = "f" * 64
+    assert inconsistent_identity != real_policy_source_record_identity_sha256
+    with pytest.raises(MmiLegacyStep1CompatibilityCandidateV1Error) as exc:
+        _build_mmi_legacy_step1_compatibility_candidate_v1_from_source_record_identities(
+            validated_grounded_analysis_response=deepcopy(
+                absent_inputs.response
+            ),
+            raw_response_envelope=deepcopy(absent_inputs.envelope),
+            evidence_bundle=deepcopy(absent_inputs.evidence),
+            policy_projection=deepcopy(absent_inputs.policy),
+            policy_source_record_identity_sha256=inconsistent_identity,
+            portfolio_projection=deepcopy(absent_inputs.portfolio),
+            portfolio_source_record_identity_sha256=None,
+            run_context=absent_inputs.run_context,
+        )
+    assert exc.value.code == (
+        "MMI_LEGACY_STEP1_CANDIDATE_UPSTREAM_RESPONSE_INVALID"
+    )
+
+
+def test_validate_first_failure_identity_mismatch_before_provenance_failure(
+    checkout: hermetic.HermeticSourceCheckout,
+    absent_inputs: _Inputs,
+) -> None:
+    # First-failure: prove the value/schema/size/identity precheck still
+    # wins over an independently present live-provenance failure, matching
+    # HEAD's ordering (candidate self-identity is checked before any source
+    # is consulted).
+    value = _candidate(absent_inputs)
+    value[CANDIDATE_IDENTITY_FIELD] = "e" * 64
+
+    kwargs = _context_kwargs(absent_inputs)
+    kwargs["policy_source"] = checkout.portfolio_source
+
+    with pytest.raises(MmiLegacyStep1CompatibilityCandidateV1Error) as exc:
+        validate_mmi_legacy_step1_compatibility_candidate_v1(
+            value=value,
+            **kwargs,
+        )
+    assert exc.value.code == "MMI_LEGACY_STEP1_CANDIDATE_IDENTITY_MISMATCHED"
