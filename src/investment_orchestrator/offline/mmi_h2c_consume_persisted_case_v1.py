@@ -141,6 +141,7 @@ class H2cConsumeErrorCode(str, Enum):
     H2C_CONSUME_ARGUMENT_INVALID = "H2C_CONSUME_ARGUMENT_INVALID"
     H2C_CONSUME_PATH_CONTRACT_INVALID = "H2C_CONSUME_PATH_CONTRACT_INVALID"
     H2C_CONSUME_CAPABILITY_UNAVAILABLE = "H2C_CONSUME_CAPABILITY_UNAVAILABLE"
+    H2C_CONSUME_ARTIFACT_CONTENT_INVALID = "H2C_CONSUME_ARTIFACT_CONTENT_INVALID"
     H2C_CONSUME_MANIFEST_INVALID = "H2C_CONSUME_MANIFEST_INVALID"
     H2C_CONSUME_WORKFLOW_STATE_INVALID = "H2C_CONSUME_WORKFLOW_STATE_INVALID"
     H2C_CONSUME_SOURCE_CAPTURE_INVALID = "H2C_CONSUME_SOURCE_CAPTURE_INVALID"
@@ -163,6 +164,9 @@ _ERROR_CLASSES: Final = {
     ),
     H2cConsumeErrorCode.H2C_CONSUME_CAPABILITY_UNAVAILABLE: (
         H2cConsumeFailureClass.AVAILABILITY_PERMISSION
+    ),
+    H2cConsumeErrorCode.H2C_CONSUME_ARTIFACT_CONTENT_INVALID: (
+        H2cConsumeFailureClass.ARTIFACT_CONTENT
     ),
     H2cConsumeErrorCode.H2C_CONSUME_MANIFEST_INVALID: (
         H2cConsumeFailureClass.VALIDATOR_SCHEMA
@@ -556,7 +560,7 @@ def _read_manifest_dict(case_fd: int) -> dict[str, object]:
     try:
         parsed = json.loads(exact_bytes.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
-        _raise_controlled(H2cConsumeErrorCode.H2C_CONSUME_MANIFEST_INVALID)
+        _raise_controlled(H2cConsumeErrorCode.H2C_CONSUME_ARTIFACT_CONTENT_INVALID)
     if type(parsed) is not dict:
         _raise_controlled(H2cConsumeErrorCode.H2C_CONSUME_MANIFEST_INVALID)
     return parsed

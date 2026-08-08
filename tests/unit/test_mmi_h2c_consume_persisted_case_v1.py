@@ -125,7 +125,7 @@ def test_h2c_consume_failure_classes() -> None:
     assert len(H2cConsumeFailureClass) == 8
 
 def test_h2c_consume_error_codes() -> None:
-    assert len(H2cConsumeErrorCode) == 14
+    assert len(H2cConsumeErrorCode) == 15
 
 # --- 10. Persisted validator, bytes and identity oracle ---
 def test_h2c_consume_positive_path_and_validators(run_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -442,3 +442,33 @@ def test_h2c_consume_persistence_failure_before_receipt_blocks_reuse(run_env: Pa
             portfolio_snapshot_expected_sha256=port_sha,
         )
     assert exc.value.code == H2cConsumeErrorCode.H2C_CONSUME_COLLISION
+
+def test_h2c_consume_manifest_content_invalid(run_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    case_root, case_sha, set_sha, port_sha = _create_prepared_case(run_env)
+    manifest_path = case_root / "prepared/prepared_case.json"
+    manifest_path.write_bytes(b"not json {")
+    from investment_orchestrator.offline.mmi_h2c_consume_persisted_case_v1 import H2cConsumeError
+    with pytest.raises(H2cConsumeError) as exc:
+        consume_h2c_persisted_case(
+            case_root=case_root,
+            expected_prepared_case_identity_sha256=case_sha,
+            strategy_settings_expected_sha256=set_sha,
+            portfolio_snapshot_expected_sha256=port_sha,
+        )
+    assert exc.value.code == H2cConsumeErrorCode.H2C_CONSUME_ARTIFACT_CONTENT_INVALID
+    assert exc.value.failure_class == H2cConsumeFailureClass.ARTIFACT_CONTENT
+
+def test_h2c_consume_manifest_schema_invalid(run_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    case_root, case_sha, set_sha, port_sha = _create_prepared_case(run_env)
+    manifest_path = case_root / "prepared/prepared_case.json"
+    manifest_path.write_bytes(b'{"bad": "schema"}')
+    from investment_orchestrator.offline.mmi_h2c_consume_persisted_case_v1 import H2cConsumeError
+    with pytest.raises(H2cConsumeError) as exc:
+        consume_h2c_persisted_case(
+            case_root=case_root,
+            expected_prepared_case_identity_sha256=case_sha,
+            strategy_settings_expected_sha256=set_sha,
+            portfolio_snapshot_expected_sha256=port_sha,
+        )
+    assert exc.value.code == H2cConsumeErrorCode.H2C_CONSUME_MANIFEST_INVALID
+    assert exc.value.failure_class == H2cConsumeFailureClass.VALIDATOR_SCHEMA
