@@ -1189,10 +1189,14 @@ def test_reachable_limitation_maximum_is_proven_from_upstream_contracts() -> Non
     # evidence_bundle._derive_expected_manifest emits the assembly omission
     # only for NOT_SUPPLIED; both supplied P1b branches must have no E1 gap.
     for branch, component in portfolio_components.items():
-        manifest = evidence_bundle._derive_expected_manifest(
-            evaluation_timestamp_utc=TIMESTAMP,
-            policy=validated_policy,
-            portfolio=component,
+        # Using SimpleNamespace to duck-type MmiProjectionRunContext which is an immutable dataclass
+        # built only by a clock factory, but our helper only reads evaluation_timestamp_utc.
+        manifest = evidence_bundle._build_mmi_authenticated_evidence_bundle_from_components(
+            run_context=SimpleNamespace(
+                evaluation_timestamp_utc=TIMESTAMP,
+            ),
+            policy_component=validated_policy,
+            portfolio_component=component,
         )
         gaps = manifest["known_evidence_gaps"]
         assert type(gaps) is list

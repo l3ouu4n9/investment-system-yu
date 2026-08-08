@@ -998,25 +998,21 @@ def _base_projection(
     return projection
 
 
-def _derive_expected_portfolio_projection(
-    portfolio_source: MmiCapturedSource | None,
+def _build_mmi_portfolio_snapshot_projection_from_source_bytes(
+    raw_bytes: bytes | None,
     *,
-    policy_projection: Mapping[str, object],
-    policy_source: MmiCapturedSource,
+    source_record_identity_sha256: str | None,
+    policy_projection_identity_sha256: str,
+    policy_roles: dict[str, str],
     run_context: MmiProjectionRunContext,
 ) -> tuple[dict[str, object], dict[str, str]]:
-    policy_identity, policy_roles = _validate_policy_inputs(
-        policy_projection,
-        policy_source=policy_source,
-        run_context=run_context,
-    )
-    if portfolio_source is None:
+    if raw_bytes is None:
         return (
             _base_projection(
                 evaluation_timestamp_utc=(
                     run_context.evaluation_timestamp_utc
                 ),
-                policy_projection_identity_sha256=policy_identity,
+                policy_projection_identity_sha256=policy_projection_identity_sha256,
                 portfolio_source_status="SOURCE_ABSENT",
                 portfolio_source_record_identity_sha256=None,
                 portfolio_source_date=None,
@@ -1026,8 +1022,7 @@ def _derive_expected_portfolio_projection(
             ),
             policy_roles,
         )
-    source_record = _validate_portfolio_source(portfolio_source)
-    text = _decode_portfolio_source(portfolio_source.raw_bytes)
+    text = _decode_portfolio_source(raw_bytes)
     source_date = _parse_source_header_date(
         text,
         evaluation_date_utc=run_context.evaluation_time_utc.date(),
@@ -1042,10 +1037,7 @@ def _derive_expected_portfolio_projection(
         records = []
         total = None
         open_status = "PARSE_FAILED"
-    source_identity = source_record.get(
-        "source_record_identity_sha256"
-    )
-    if type(source_identity) is not str:
+    if type(source_record_identity_sha256) is not str:
         raise _PortfolioContractFailure(
             "MMI_PORTFOLIO_SOURCE_RECORD_CONTRACT_INVALID"
         )
@@ -1054,9 +1046,9 @@ def _derive_expected_portfolio_projection(
             evaluation_timestamp_utc=(
                 run_context.evaluation_timestamp_utc
             ),
-            policy_projection_identity_sha256=policy_identity,
+            policy_projection_identity_sha256=policy_projection_identity_sha256,
             portfolio_source_status="SOURCE_PRESENT_CONTENT_BOUND",
-            portfolio_source_record_identity_sha256=source_identity,
+            portfolio_source_record_identity_sha256=source_record_identity_sha256,
             portfolio_source_date=source_date,
             open_buy_status=open_status,
             open_buy_records=records,
@@ -1263,13 +1255,30 @@ def build_mmi_portfolio_snapshot_projection(
 ) -> MmiPortfolioProjectionBuildResult:
     """Build one deterministic report-only projection from trusted inputs."""
     try:
-        projection, policy_roles = (
-            _derive_expected_portfolio_projection(
-                portfolio_source,
-                policy_projection=policy_projection,
-                policy_source=policy_source,
-                run_context=run_context,
+        policy_identity, policy_roles = _validate_policy_inputs(
+            policy_projection,
+            policy_source=policy_source,
+            run_context=run_context,
+        )
+        if portfolio_source is None:
+            raw_bytes = None
+            source_identity = None
+        else:
+            source_record = _validate_portfolio_source(portfolio_source)
+            raw_bytes = portfolio_source.raw_bytes
+            source_identity = source_record.get(
+                "source_record_identity_sha256"
             )
+            if type(source_identity) is not str:
+                raise _PortfolioContractFailure(
+                    "MMI_PORTFOLIO_SOURCE_RECORD_CONTRACT_INVALID"
+                )
+        projection, policy_roles = _build_mmi_portfolio_snapshot_projection_from_source_bytes(
+            raw_bytes,
+            source_record_identity_sha256=source_identity,
+            policy_projection_identity_sha256=policy_identity,
+            policy_roles=policy_roles,
+            run_context=run_context,
         )
         policy_identity = projection.get(
             "policy_projection_identity_sha256"
@@ -1318,20 +1327,21 @@ def build_mmi_portfolio_snapshot_projection(
     )
 
 
-def validate_mmi_portfolio_snapshot_projection(
+def _validate_mmi_portfolio_snapshot_projection_from_source_bytes(
     value: object,
     *,
-    portfolio_source: MmiCapturedSource | None,
-    policy_projection: Mapping[str, object],
-    policy_source: MmiCapturedSource,
+    raw_bytes: bytes | None,
+    source_record_identity_sha256: str | None,
+    policy_projection_identity_sha256: str,
+    policy_roles: dict[str, str],
     run_context: MmiProjectionRunContext,
 ) -> MmiPortfolioProjectionValidationResult:
-    """Validate a candidate against the exact same-run trusted inputs."""
     try:
-        expected, policy_roles = _derive_expected_portfolio_projection(
-            portfolio_source,
-            policy_projection=policy_projection,
-            policy_source=policy_source,
+        expected, policy_roles_ignored = _build_mmi_portfolio_snapshot_projection_from_source_bytes(
+            raw_bytes,
+            source_record_identity_sha256=source_record_identity_sha256,
+            policy_projection_identity_sha256=policy_projection_identity_sha256,
+            policy_roles=policy_roles,
             run_context=run_context,
         )
     except _PortfolioBlocked as exc:
@@ -1391,4 +1401,57 @@ def validate_mmi_portfolio_snapshot_projection(
         )
     return _validation_result(
         MmiProjectionResultCategory.PROJECTION_VALID_WITH_GAPS
+    )
+
+
+def validate_mmi_portfolio_snapshot_projection(
+    value: object,
+    *,
+    portfolio_source: MmiCapturedSource | None,
+    policy_projection: Mapping[str, object],
+    policy_source: MmiCapturedSource,
+    run_context: MmiProjectionRunContext,
+) -> MmiPortfolioProjectionValidationResult:
+    """Validate a candidate against the exact same-run trusted inputs."""
+    try:
+        policy_identity, policy_roles = _validate_policy_inputs(
+            policy_projection,
+            policy_source=policy_source,
+            run_context=run_context,
+        )
+        if portfolio_source is None:
+            raw_bytes = None
+            source_identity = None
+        else:
+            source_record = _validate_portfolio_source(portfolio_source)
+            raw_bytes = portfolio_source.raw_bytes
+            source_identity = source_record.get(
+                "source_record_identity_sha256"
+            )
+            if type(source_identity) is not str:
+                raise _PortfolioContractFailure(
+                    "MMI_PORTFOLIO_SOURCE_RECORD_CONTRACT_INVALID"
+                )
+    except _PortfolioBlocked as exc:
+        return _validation_result(
+            MmiProjectionResultCategory.PROJECTION_BLOCKED,
+            exc.code,
+        )
+    except _PortfolioContractFailure as exc:
+        return _validation_result(
+            MmiProjectionResultCategory.PROJECTION_CONTRACT_FAILURE,
+            exc.code,
+        )
+    except Exception:
+        return _validation_result(
+            MmiProjectionResultCategory.PROJECTION_CONTRACT_FAILURE,
+            "MMI_PORTFOLIO_PROJECTION_INTERNAL_INVARIANT_FAILED",
+        )
+    return _validate_mmi_portfolio_snapshot_projection_from_source_bytes(
+        value,
+        raw_bytes=raw_bytes,
+        source_record_identity_sha256=source_identity,
+        policy_projection_identity_sha256=policy_identity,
+        policy_roles=policy_roles,
+        run_context=run_context,
     )

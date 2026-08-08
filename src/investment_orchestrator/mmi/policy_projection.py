@@ -1084,7 +1084,7 @@ def _derive_expected_policy_gaps(
 def _build_policy_projection_value(
     settings: Mapping[str, object],
     *,
-    source_record: Mapping[str, object],
+    source_record_identity_sha256: str,
     run_context: MmiProjectionRunContext,
 ) -> dict[str, object]:
     prohibited_target_keys = {
@@ -1095,7 +1095,7 @@ def _build_policy_projection_value(
     }
     if prohibited_target_keys & set(settings):
         raise _ProjectionBlocked("MMI_POLICY_TARGET_WEIGHTS_PROHIBITED")
-    source_identity = source_record["source_record_identity_sha256"]
+    source_identity = source_record_identity_sha256
     if type(source_identity) is not str:
         raise _ProjectionContractFailure(
             "MMI_POLICY_SOURCE_RECORD_CONTRACT_FAILURE"
@@ -1173,19 +1173,84 @@ def _build_policy_projection_value(
     return projection
 
 
-def _derive_expected_policy_projection(
-    source: MmiCapturedSource,
+def _build_mmi_policy_projection_from_source_bytes(
+    raw_bytes: bytes,
     *,
+    source_record_identity_sha256: str,
     run_context: MmiProjectionRunContext,
 ) -> dict[str, object]:
     """Derive every source-owned projection field from trusted run inputs."""
     _validate_run_context(run_context)
-    source_record = _validate_captured_source(source)
-    settings = _parse_strict_strategy_settings(source.raw_bytes)
+    settings = _parse_strict_strategy_settings(raw_bytes)
     return _build_policy_projection_value(
         settings,
-        source_record=source_record,
+        source_record_identity_sha256=source_record_identity_sha256,
         run_context=run_context,
+    )
+
+
+def _validate_mmi_policy_projection_from_source_bytes(
+    value: object,
+    *,
+    raw_bytes: bytes,
+    source_record_identity_sha256: str,
+    run_context: MmiProjectionRunContext,
+) -> MmiPolicyProjectionValidationResult:
+    try:
+        expected = _build_mmi_policy_projection_from_source_bytes(
+            raw_bytes,
+            source_record_identity_sha256=source_record_identity_sha256,
+            run_context=run_context,
+        )
+    except _ProjectionBlocked as exc:
+        return _validation_result(
+            MmiProjectionResultCategory.PROJECTION_BLOCKED,
+            exc.code,
+        )
+    except _ProjectionContractFailure as exc:
+        return _validation_result(
+            MmiProjectionResultCategory.PROJECTION_CONTRACT_FAILURE,
+            exc.code,
+        )
+    except Exception:
+        return _validation_result(
+            MmiProjectionResultCategory.PROJECTION_CONTRACT_FAILURE,
+            "MMI_POLICY_PROJECTION_INTERNAL_INVARIANT_FAILED",
+        )
+    if type(value) is not dict:
+        return _validation_result(
+            MmiProjectionResultCategory.PROJECTION_BLOCKED,
+            "MMI_POLICY_PROJECTION_SCHEMA_INVALID",
+        )
+    try:
+        validate_artifact_schema(
+            value,
+            schema_name="mmi_policy_projection_v1.schema.json",
+        )
+    except Exception:
+        return _validation_result(
+            MmiProjectionResultCategory.PROJECTION_BLOCKED,
+            "MMI_POLICY_PROJECTION_SCHEMA_INVALID",
+        )
+    try:
+        _validate_policy_semantics(value)
+    except _ProjectionContractFailure as exc:
+        return _validation_result(
+            MmiProjectionResultCategory.PROJECTION_CONTRACT_FAILURE,
+            exc.code,
+        )
+    if value != expected:
+        return _validation_result(
+            MmiProjectionResultCategory.PROJECTION_CONTRACT_FAILURE,
+            "MMI_POLICY_SOURCE_FIDELITY_MISMATCH",
+        )
+    gaps = value["known_policy_gaps"]
+    return _validation_result(
+        (
+            MmiProjectionResultCategory.PROJECTION_VALID_WITH_GAPS
+            if gaps
+            else MmiProjectionResultCategory.PROJECTION_VALID_COMPLETE
+        )
     )
 
 
@@ -1553,10 +1618,12 @@ def validate_mmi_policy_projection(
 ) -> MmiPolicyProjectionValidationResult:
     """Validate one projection against its same-run captured source."""
     try:
-        expected = _derive_expected_policy_projection(
-            source,
-            run_context=run_context,
-        )
+        source_record = _validate_captured_source(source)
+        source_identity = source_record["source_record_identity_sha256"]
+        if type(source_identity) is not str:
+            raise _ProjectionContractFailure(
+                "MMI_POLICY_SOURCE_RECORD_CONTRACT_FAILURE"
+            )
     except _ProjectionBlocked as exc:
         return _validation_result(
             MmiProjectionResultCategory.PROJECTION_BLOCKED,
@@ -1572,40 +1639,11 @@ def validate_mmi_policy_projection(
             MmiProjectionResultCategory.PROJECTION_CONTRACT_FAILURE,
             "MMI_POLICY_PROJECTION_INTERNAL_INVARIANT_FAILED",
         )
-    if type(value) is not dict:
-        return _validation_result(
-            MmiProjectionResultCategory.PROJECTION_BLOCKED,
-            "MMI_POLICY_PROJECTION_SCHEMA_INVALID",
-        )
-    try:
-        validate_artifact_schema(
-            value,
-            schema_name="mmi_policy_projection_v1.schema.json",
-        )
-    except Exception:
-        return _validation_result(
-            MmiProjectionResultCategory.PROJECTION_BLOCKED,
-            "MMI_POLICY_PROJECTION_SCHEMA_INVALID",
-        )
-    try:
-        _validate_policy_semantics(value)
-    except _ProjectionContractFailure as exc:
-        return _validation_result(
-            MmiProjectionResultCategory.PROJECTION_CONTRACT_FAILURE,
-            exc.code,
-        )
-    if value != expected:
-        return _validation_result(
-            MmiProjectionResultCategory.PROJECTION_CONTRACT_FAILURE,
-            "MMI_POLICY_SOURCE_FIDELITY_MISMATCH",
-        )
-    gaps = value["known_policy_gaps"]
-    return _validation_result(
-        (
-            MmiProjectionResultCategory.PROJECTION_VALID_WITH_GAPS
-            if gaps
-            else MmiProjectionResultCategory.PROJECTION_VALID_COMPLETE
-        )
+    return _validate_mmi_policy_projection_from_source_bytes(
+        value,
+        raw_bytes=source.raw_bytes,
+        source_record_identity_sha256=source_identity,
+        run_context=run_context,
     )
 
 
@@ -1616,8 +1654,15 @@ def build_mmi_policy_projection(
 ) -> MmiPolicyProjectionBuildResult:
     """Build one pure report-only policy/universe projection from exact bytes."""
     try:
-        projection = _derive_expected_policy_projection(
-            source,
+        source_record = _validate_captured_source(source)
+        source_identity = source_record["source_record_identity_sha256"]
+        if type(source_identity) is not str:
+            raise _ProjectionContractFailure(
+                "MMI_POLICY_SOURCE_RECORD_CONTRACT_FAILURE"
+            )
+        projection = _build_mmi_policy_projection_from_source_bytes(
+            source.raw_bytes,
+            source_record_identity_sha256=source_identity,
             run_context=run_context,
         )
         try:

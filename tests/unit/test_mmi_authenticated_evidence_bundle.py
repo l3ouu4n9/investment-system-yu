@@ -653,11 +653,11 @@ def test_validation_order_is_provenance_then_components_then_derivation(
     original_source = (
         evidence_bundle._mmi_captured_source_provenance_is_valid
     )
-    original_policy = evidence_bundle.validate_mmi_policy_projection
+    original_policy = evidence_bundle._validate_mmi_policy_projection_from_source_bytes
     original_portfolio = (
-        evidence_bundle.validate_mmi_portfolio_snapshot_projection
+        evidence_bundle._validate_mmi_portfolio_snapshot_projection_from_source_bytes
     )
-    original_derive = evidence_bundle._derive_expected_manifest
+    original_derive = evidence_bundle._build_mmi_authenticated_evidence_bundle_from_components
 
     def run_wrapper(value: object) -> bool:
         events.append("run-provenance")
@@ -692,17 +692,17 @@ def test_validation_order_is_provenance_then_components_then_derivation(
     )
     monkeypatch.setattr(
         evidence_bundle,
-        "validate_mmi_policy_projection",
+        "_validate_mmi_policy_projection_from_source_bytes",
         policy_wrapper,
     )
     monkeypatch.setattr(
         evidence_bundle,
-        "validate_mmi_portfolio_snapshot_projection",
+        "_validate_mmi_portfolio_snapshot_projection_from_source_bytes",
         portfolio_wrapper,
     )
     monkeypatch.setattr(
         evidence_bundle,
-        "_derive_expected_manifest",
+        "_build_mmi_authenticated_evidence_bundle_from_components",
         derive_wrapper,
     )
     result = _build_bundle(
@@ -715,8 +715,8 @@ def test_validation_order_is_provenance_then_components_then_derivation(
         "run-provenance",
         "source-provenance:STRATEGY_SETTINGS",
         "policy-validation",
-        "portfolio-validation",
         "source-provenance:PORTFOLIO_SNAPSHOT",
+        "portfolio-validation",
         "manifest-derivation",
     ]
 
@@ -1280,7 +1280,7 @@ def test_builder_and_validator_use_one_shared_manifest_derivation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = 0
-    original = evidence_bundle._derive_expected_manifest
+    original = evidence_bundle._build_mmi_authenticated_evidence_bundle_from_components
 
     def wrapper(*args: object, **kwargs: object):
         nonlocal calls
@@ -1289,7 +1289,7 @@ def test_builder_and_validator_use_one_shared_manifest_derivation(
 
     monkeypatch.setattr(
         evidence_bundle,
-        "_derive_expected_manifest",
+        "_build_mmi_authenticated_evidence_bundle_from_components",
         wrapper,
     )
     result = _build_bundle(

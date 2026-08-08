@@ -37,10 +37,10 @@ from investment_orchestrator.mmi.contracts import (
     mmi_authenticated_evidence_bundle_identity_sha256,
 )
 from investment_orchestrator.mmi.policy_projection import (
-    validate_mmi_policy_projection,
+    _validate_mmi_policy_projection_from_source_bytes,
 )
 from investment_orchestrator.mmi.portfolio_projection import (
-    validate_mmi_portfolio_snapshot_projection,
+    _validate_mmi_portfolio_snapshot_projection_from_source_bytes,
 )
 
 
@@ -189,37 +189,28 @@ def _raise_for_component_result(
         raise _BundleContractFailure(_COMPONENT_CONTRACT_FAILURE)
 
 
-def _validated_policy_component(
+def _validate_policy_component_from_source_bytes(
     policy_projection: Mapping[str, object],
     *,
-    policy_source: MmiCapturedSource,
+    raw_bytes: bytes,
+    source_record_identity_sha256: str,
     run_context: MmiProjectionRunContext,
 ) -> tuple[dict[str, object], _ValidatedPolicyComponent]:
-    _require_policy_initial_trust(
-        policy_source=policy_source,
-        run_context=run_context,
-    )
     policy_value = _snapshot_mapping(policy_projection)
     try:
-        validation = validate_mmi_policy_projection(
+        validation = _validate_mmi_policy_projection_from_source_bytes(
             policy_value,
-            source=policy_source,
+            raw_bytes=raw_bytes,
+            source_record_identity_sha256=source_record_identity_sha256,
             run_context=run_context,
         )
     except Exception:
         raise _BundleContractFailure(_INTERNAL_CONTRACT_FAILURE) from None
     _raise_for_component_result(validation)
 
-    try:
-        source_record = dict(policy_source.source_record)
-    except (TypeError, ValueError):
-        raise _BundleContractFailure(_COMPONENT_CONTRACT_FAILURE) from None
     universe = policy_value.get("universe_projection")
     if (
-        source_record.get("schema_version") != "mmi_source_record_v1"
-        or source_record.get("source_role")
-        != MmiSourceRole.STRATEGY_SETTINGS.value
-        or policy_value.get("schema_version")
+        policy_value.get("schema_version")
         != "mmi_policy_projection_v1"
         or policy_value.get("projection_kind")
         != "MMI_POLICY_PROJECTION"
@@ -233,9 +224,7 @@ def _validated_policy_component(
     ):
         raise _BundleContractFailure(_COMPONENT_CONTRACT_FAILURE)
 
-    source_identity = _require_sha256(
-        source_record.get("source_record_identity_sha256")
-    )
+    source_identity = source_record_identity_sha256
     universe_identity = _require_sha256(
         universe.get("universe_projection_identity_sha256")
     )
@@ -262,17 +251,17 @@ def _validated_policy_component(
     )
 
 
-def _validated_portfolio_component(
+def _validate_portfolio_component_from_source_bytes(
     portfolio_projection: Mapping[str, object] | None,
     *,
-    portfolio_source: MmiCapturedSource | None,
-    policy_projection: dict[str, object],
-    policy_source: MmiCapturedSource,
-    run_context: MmiProjectionRunContext,
+    raw_bytes: bytes | None,
+    source_record_identity_sha256: str | None,
+    policy_projection: Mapping[str, object],
     policy_component: _ValidatedPolicyComponent,
+    run_context: MmiProjectionRunContext,
 ) -> _ValidatedPortfolioComponent:
     if portfolio_projection is None:
-        if portfolio_source is not None:
+        if raw_bytes is not None or source_record_identity_sha256 is not None:
             raise _BundleBlocked(_PORTFOLIO_PROJECTION_REQUIRED)
         return _ValidatedPortfolioComponent(
             presence_status=(
@@ -284,12 +273,26 @@ def _validated_portfolio_component(
         )
 
     portfolio_value = _snapshot_mapping(portfolio_projection)
+
+    universe = policy_projection.get("universe_projection")
+    if type(universe) is not dict:
+        raise _BundleContractFailure(_COMPONENT_CONTRACT_FAILURE)
+    raw_roles = universe.get("role_by_ticker")
+    if type(raw_roles) is not dict:
+        raise _BundleContractFailure(_COMPONENT_CONTRACT_FAILURE)
+    policy_roles: dict[str, str] = {}
+    for ticker, role in raw_roles.items():
+        if type(ticker) is not str or type(role) is not str:
+            raise _BundleContractFailure(_COMPONENT_CONTRACT_FAILURE)
+        policy_roles[ticker] = role
+
     try:
-        validation = validate_mmi_portfolio_snapshot_projection(
+        validation = _validate_mmi_portfolio_snapshot_projection_from_source_bytes(
             portfolio_value,
-            portfolio_source=portfolio_source,
-            policy_projection=policy_projection,
-            policy_source=policy_source,
+            raw_bytes=raw_bytes,
+            source_record_identity_sha256=source_record_identity_sha256,
+            policy_projection_identity_sha256=policy_component.policy_projection_identity_sha256,
+            policy_roles=policy_roles,
             run_context=run_context,
         )
     except Exception:
@@ -311,7 +314,7 @@ def _validated_portfolio_component(
     portfolio_identity = _require_sha256(
         portfolio_value.get("portfolio_projection_identity_sha256")
     )
-    if portfolio_source is None:
+    if raw_bytes is None:
         if (
             portfolio_value.get("portfolio_source_status")
             != "SOURCE_ABSENT"
@@ -324,29 +327,9 @@ def _validated_portfolio_component(
         presence_status = MMI_EVIDENCE_PORTFOLIO_SOURCE_ABSENT_STATUS
         source_identity = None
     else:
+        source_identity = source_record_identity_sha256
         if (
-            not _mmi_captured_source_provenance_is_valid(
-                portfolio_source
-            )
-            or portfolio_source.role
-            is not MmiSourceRole.PORTFOLIO_SNAPSHOT
-        ):
-            raise _BundleContractFailure(_COMPONENT_CONTRACT_FAILURE)
-        try:
-            source_record = dict(portfolio_source.source_record)
-        except (TypeError, ValueError):
-            raise _BundleContractFailure(
-                _COMPONENT_CONTRACT_FAILURE
-            ) from None
-        source_identity = _require_sha256(
-            source_record.get("source_record_identity_sha256")
-        )
-        if (
-            source_record.get("schema_version")
-            != "mmi_source_record_v1"
-            or source_record.get("source_role")
-            != MmiSourceRole.PORTFOLIO_SNAPSHOT.value
-            or portfolio_value.get("portfolio_source_status")
+            portfolio_value.get("portfolio_source_status")
             != "SOURCE_PRESENT_CONTENT_BOUND"
             or portfolio_value.get(
                 "portfolio_source_record_identity_sha256"
@@ -364,12 +347,15 @@ def _validated_portfolio_component(
     )
 
 
-def _derive_expected_manifest(
+def _build_mmi_authenticated_evidence_bundle_from_components(
     *,
-    evaluation_timestamp_utc: str,
-    policy: _ValidatedPolicyComponent,
-    portfolio: _ValidatedPortfolioComponent,
+    policy_component: _ValidatedPolicyComponent,
+    portfolio_component: _ValidatedPortfolioComponent,
+    run_context: MmiProjectionRunContext,
 ) -> dict[str, object]:
+    policy = policy_component
+    portfolio = portfolio_component
+    evaluation_timestamp_utc = run_context.evaluation_timestamp_utc
     policy_component: dict[str, object] = {
         "presence_status": (
             MMI_EVIDENCE_POLICY_COMPONENT_PRESENCE_STATUS
@@ -534,26 +520,75 @@ def _source_bound_expected_manifest(
     portfolio_source: MmiCapturedSource | None,
     run_context: MmiProjectionRunContext,
 ) -> dict[str, object]:
-    policy_value, policy_component = _validated_policy_component(
-        policy_projection,
+    _require_policy_initial_trust(
         policy_source=policy_source,
         run_context=run_context,
-    )
-    portfolio_component = _validated_portfolio_component(
-        portfolio_projection,
-        portfolio_source=portfolio_source,
-        policy_projection=policy_value,
-        policy_source=policy_source,
-        run_context=run_context,
-        policy_component=policy_component,
     )
     try:
-        manifest = _derive_expected_manifest(
-            evaluation_timestamp_utc=(
-                run_context.evaluation_timestamp_utc
-            ),
-            policy=policy_component,
-            portfolio=portfolio_component,
+        policy_source_record = dict(policy_source.source_record)
+    except (TypeError, ValueError):
+        raise _BundleContractFailure(_COMPONENT_CONTRACT_FAILURE) from None
+    if (
+        policy_source_record.get("schema_version") != "mmi_source_record_v1"
+        or policy_source_record.get("source_role")
+        != MmiSourceRole.STRATEGY_SETTINGS.value
+    ):
+        raise _BundleContractFailure(_COMPONENT_CONTRACT_FAILURE)
+    policy_source_identity = _require_sha256(
+        policy_source_record.get("source_record_identity_sha256")
+    )
+    policy_raw_bytes = policy_source.raw_bytes
+
+    policy_value, validated_policy = _validate_policy_component_from_source_bytes(
+        policy_projection,
+        raw_bytes=policy_raw_bytes,
+        source_record_identity_sha256=policy_source_identity,
+        run_context=run_context,
+    )
+
+    if portfolio_source is None:
+        portfolio_raw_bytes = None
+        portfolio_source_identity = None
+    else:
+        if (
+            not _mmi_captured_source_provenance_is_valid(
+                portfolio_source
+            )
+            or portfolio_source.role
+            is not MmiSourceRole.PORTFOLIO_SNAPSHOT
+        ):
+            raise _BundleContractFailure(_COMPONENT_CONTRACT_FAILURE)
+        try:
+            portfolio_source_record = dict(portfolio_source.source_record)
+        except (TypeError, ValueError):
+            raise _BundleContractFailure(
+                _COMPONENT_CONTRACT_FAILURE
+            ) from None
+        if (
+            portfolio_source_record.get("schema_version")
+            != "mmi_source_record_v1"
+            or portfolio_source_record.get("source_role")
+            != MmiSourceRole.PORTFOLIO_SNAPSHOT.value
+        ):
+            raise _BundleContractFailure(_COMPONENT_CONTRACT_FAILURE)
+        portfolio_source_identity = _require_sha256(
+            portfolio_source_record.get("source_record_identity_sha256")
+        )
+        portfolio_raw_bytes = portfolio_source.raw_bytes
+
+    validated_portfolio = _validate_portfolio_component_from_source_bytes(
+        portfolio_projection,
+        raw_bytes=portfolio_raw_bytes,
+        source_record_identity_sha256=portfolio_source_identity,
+        policy_projection=policy_value,
+        policy_component=validated_policy,
+        run_context=run_context,
+    )
+    try:
+        manifest = _build_mmi_authenticated_evidence_bundle_from_components(
+            policy_component=validated_policy,
+            portfolio_component=validated_portfolio,
+            run_context=run_context,
         )
     except MmiCanonicalizationError:
         raise _BundleContractFailure(_BUNDLE_IDENTITY_FAILURE) from None
