@@ -1267,6 +1267,125 @@ either response, poll, or retry. Submission surface and UTC time may be noted
 only in the private operator-notes staging file as operator-authored,
 non-authoritative metadata.
 
+### 10.1 Primary prospective cohort protocol v1
+
+`prospective_h2c_manual_llm_cohort_v1` governs the planned primary
+prospective H2C paired-comparison cohort. It is an operator procedure and an
+experimental comparability contract with `authority_effect = NONE`.
+
+It is not provider authentication, model-backend authentication, reasoning
+authentication, a permission source, a gate, trading authority, or execution
+authority. The repository does not authenticate any displayed product setting,
+hidden backend, Deep Research backend, or tool trajectory.
+
+The cohort configuration is locked **before the first response-generating
+submission of the cohort**. The lock applies to every attempted case, including
+failed, incomplete, and `OUT_OF_PROTOCOL` cases. Do not tune configuration
+after observing model output.
+
+#### Frozen H1 configuration
+
+For every v1 case, use exactly:
+
+```text
+Surface: ChatGPT ordinary chat
+Conversation: fresh, clean, non-project conversation
+Displayed model: GPT-5.6 Sol
+Displayed reasoning: Extra High
+Deep Research: OFF
+Web/Search/browsing: OFF / not used
+Uploaded files: none
+Apps/connectors/plugins: none
+Memory/personalization/project instructions/prior context: absent or not used
+Input: exact persisted H1 prompt only
+Response: first complete returned response only
+```
+
+The H1 response must use only the evidence framed in the persisted H1 prompt.
+Do not allow external research or browsing to contribute. The displayed model
+and reasoning values are operator-visible settings only; they do not
+authenticate a hidden model backend or reasoning execution.
+
+#### Frozen Legacy configuration
+
+For every v1 case, use exactly:
+
+```text
+Surface: ChatGPT Deep Research
+Task/conversation: fresh
+Displayed model: GPT-5.6 Sol
+Displayed reasoning: Extra High
+Deep Research: full/default Deep Research workflow
+Public web: enabled
+Uploaded files: none
+Private connectors/apps/plugins: none
+Memory/personalization/prior conversation context: absent or not used
+Input: exact persisted Legacy prompt only
+Response: first complete Deep Research result only
+```
+
+Legacy remains the current Step 1 / ChatGPT Deep Research workflow. Do not
+substitute ordinary chat for Legacy or disable public-web research merely to
+make H1 and Legacy symmetrical.
+
+The cohort freezes the same operator-visible `GPT-5.6 Sol` / `Extra High`
+selection on both sides because both surfaces currently expose it. Matching
+displayed labels do **not** prove the same hidden model/backend, reasoning
+execution, research backend, or tool trajectory. Workflow fidelity remains more
+important than unverifiable backend equality.
+
+#### Required cross-side isolation
+
+This is a MUST requirement:
+
+- use separate fresh conversations/tasks;
+- H1 never receives the Legacy response;
+- Legacy never receives the H1 response;
+- neither side receives comparison commentary;
+- neither side receives another case's response;
+- neither prompt is changed after seeing the other side; and
+- no response is reused across cases.
+
+#### One response only
+
+Each prepared case permits exactly one response-generating submission per side.
+Do not retry, regenerate, use “try again,” branch, edit and resubmit, request a
+follow-up for a better answer, repair a response, select among candidate
+responses, or automate a retry. Poor, malformed, refused, or inconvenient
+output remains prospective evidence. Preserve the first complete response
+exactly.
+
+If there is no complete LLM response, response-byte capture is ambiguous,
+response placement fails, or deterministic consume fails, retain and abandon
+the case. Do not retry, resume, or repair that case. Any future attempt uses a
+fresh prepared case/root and fresh manual submissions under the existing
+fresh-case rules.
+
+If a configuration mistake is discovered before any response-generating
+submission, correct the visible configuration; that pre-submission correction
+does not itself consume the prepared case. If a response-generating submission
+already occurred with the wrong material configuration, set
+`case_protocol_status = OUT_OF_PROTOCOL`, retain the case, do not reuse or
+resume it, exclude it from the primary cohort, and use a fresh prepared case
+for any later attempt.
+
+If a frozen material visible configuration becomes unavailable or materially
+changes, stop before submitting another prompt. Do not substitute automatically.
+Preserve completed and failed cases and perform design review. Any approved
+material substitution starts a new cohort version, for example
+`prospective_h2c_manual_llm_cohort_v2`; do not combine v1 and v2 into one
+primary cohort estimate. They may be reported separately with the boundary
+disclosed.
+
+Record the v1 cohort and each attempted case using
+`docs/mmi_h2c_prospective_cohort_log_template.md` as an operator-owned template.
+The actual log remains outside frozen case roots. Its metadata is
+operator-authored, unauthenticated, observational, non-authoritative, not
+consumed by deterministic code, not a gate, not a permission source, and not
+execution authority. Do not record credentials, cookies, session tokens,
+provider conversation identifiers, response contents, or other private
+authentication material.
+
 ## 11. Save the operator-supplied response bytes
 
 Prefer a direct export or download when the surface provides one. Save each
