@@ -162,13 +162,13 @@ done
 umask 077
 dd if="$H2C_H1_STAGING" \
   of="$H2C_CASE_ROOT/responses/h1_response.raw" \
-  iflag=fullblock,nofollow oflag=excl,nofollow conv=fsync status=none
+  iflag=fullblock,nofollow oflag=nofollow conv=excl,fsync status=none
 cmp -- "$H2C_H1_STAGING" \
   "$H2C_CASE_ROOT/responses/h1_response.raw"
 
 dd if="$H2C_LEGACY_STAGING" \
   of="$H2C_CASE_ROOT/responses/legacy_response.raw" \
-  iflag=fullblock,nofollow oflag=excl,nofollow conv=fsync status=none
+  iflag=fullblock,nofollow oflag=nofollow conv=excl,fsync status=none
 cmp -- "$H2C_LEGACY_STAGING" \
   "$H2C_CASE_ROOT/responses/legacy_response.raw"
 ```
