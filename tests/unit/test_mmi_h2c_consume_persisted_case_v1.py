@@ -28,6 +28,7 @@ from investment_orchestrator.mmi.canonical import (
     MAX_MMI_LEGACY_STEP1_COMPARISON_REPORT_V1_CANONICAL_BYTES,
     canonical_json_bytes,
 )
+from investment_orchestrator.mmi.contracts import MMI_SOURCE_CATALOG, MmiSourceRole
 from investment_orchestrator.offline.mmi_legacy_step1_comparison_report_v1 import MAX_LEGACY_RESEARCH_RAW_BYTES
 from investment_orchestrator.offline.mmi_h2c_case_bundle_v1 import validate_mmi_h2c_case_evidence_bundle_v1
 from investment_orchestrator.offline.mmi_legacy_step1_comparison_report_v1 import validate_mmi_legacy_step1_comparison_report_v1
@@ -91,10 +92,12 @@ def run_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(engine_consume, "capture_current_mmi_source", _capture_at(tmp_path))
     return tmp_path
 
-def _create_prepared_case(tmp_path: Path, settings_suffix=b"") -> tuple[Path, str, str, str]:
+def _create_prepared_case(
+    tmp_path: Path, settings_suffix=b"", portfolio_suffix=b""
+) -> tuple[Path, str, str, str]:
     case_root = tmp_path / "case_root"
     settings = _settings_bytes() + settings_suffix
-    portfolio = _portfolio_bytes()
+    portfolio = _portfolio_bytes() + portfolio_suffix
 
     current = tmp_path / "inputs/current"
     current.mkdir(parents=True, exist_ok=True)
@@ -384,6 +387,133 @@ def test_h2c_consume_legacy_limit_plus_one(run_env: Path) -> None:
             portfolio_snapshot_expected_sha256=port_sha,
         )
     assert exc.value.code == H2cConsumeErrorCode.H2C_CONSUME_RESPONSE_INPUT_INVALID
+
+# --- 8a. Archive raw-source read bound: catalog ownership, not the record bound ---
+def _padding_suffix(base_length: int, *, target_total: int) -> bytes:
+    """A suffix that pads a legitimate source to an exact total size.
+
+    Mirrors the existing ``settings_suffix=b"\\n# Case A\\n"`` precedent
+    elsewhere in this file: the padding is an inert trailing comment, not a
+    structural change, so the prepare owner still accepts and authenticates
+    it exactly like any other real source.
+    """
+    marker, tail = b"\n# ", b"\n"
+    pad_length = target_total - base_length - len(marker) - len(tail)
+    assert pad_length >= 0
+    return marker + (b"x" * pad_length) + tail
+
+
+_STRATEGY_CATALOG_MAX = MMI_SOURCE_CATALOG[MmiSourceRole.STRATEGY_SETTINGS].maximum_bytes
+_PORTFOLIO_CATALOG_MAX = MMI_SOURCE_CATALOG[MmiSourceRole.PORTFOLIO_SNAPSHOT].maximum_bytes
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        pytest.param(
+            {"settings_suffix": _padding_suffix(len(_settings_bytes()), target_total=20_000)},
+            id="strategy",
+        ),
+        pytest.param(
+            {"portfolio_suffix": _padding_suffix(len(_portfolio_bytes()), target_total=20_000)},
+            id="portfolio",
+        ),
+    ],
+)
+def test_h2c_consume_source_divergence_window_succeeds(run_env: Path, kwargs) -> None:
+    """A genuine source strictly above the old 8,192 record-canonical bound
+    and strictly below the catalog raw-source maximum must still consume
+    successfully -- this is the domain the old bound wrongly rejected."""
+    case_root, case_sha, set_sha, port_sha = _create_prepared_case(run_env, **kwargs)
+    _write_responses(case_root)
+    result = consume_h2c_persisted_case(
+        case_root=case_root,
+        expected_prepared_case_identity_sha256=case_sha,
+        strategy_settings_expected_sha256=set_sha,
+        portfolio_snapshot_expected_sha256=port_sha,
+    )
+    assert result.workflow_status == "COMPLETED"
+    for leaf in ("case_evidence_bundle.json", "comparison_report.json", "receipt.json"):
+        assert (case_root / "artifacts" / leaf).exists()
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        pytest.param(
+            {
+                "settings_suffix": _padding_suffix(
+                    len(_settings_bytes()), target_total=_STRATEGY_CATALOG_MAX
+                )
+            },
+            id="strategy",
+        ),
+        pytest.param(
+            {
+                "portfolio_suffix": _padding_suffix(
+                    len(_portfolio_bytes()), target_total=_PORTFOLIO_CATALOG_MAX
+                )
+            },
+            id="portfolio",
+        ),
+    ],
+)
+def test_h2c_consume_source_at_exact_catalog_maximum_succeeds(run_env: Path, kwargs) -> None:
+    """Proves the corrected ceiling is the role-specific catalog maximum
+    itself, not merely "larger than 8,192": a source at exactly that size
+    must still consume successfully end-to-end."""
+    case_root, case_sha, set_sha, port_sha = _create_prepared_case(run_env, **kwargs)
+    _write_responses(case_root)
+    result = consume_h2c_persisted_case(
+        case_root=case_root,
+        expected_prepared_case_identity_sha256=case_sha,
+        strategy_settings_expected_sha256=set_sha,
+        portfolio_snapshot_expected_sha256=port_sha,
+    )
+    assert result.workflow_status == "COMPLETED"
+
+
+@pytest.mark.parametrize(
+    "leaf,catalog_max",
+    [
+        pytest.param("archive/strategy_settings.yaml", _STRATEGY_CATALOG_MAX, id="strategy"),
+        pytest.param("archive/portfolio_snapshot.txt", _PORTFOLIO_CATALOG_MAX, id="portfolio"),
+    ],
+)
+def test_h2c_consume_corrupted_archive_leaf_above_catalog_maximum_opens_no_response(
+    run_env: Path, monkeypatch: pytest.MonkeyPatch, leaf: str, catalog_max: int
+) -> None:
+    """A prepared case cannot legitimately carry a source above the catalog
+    maximum (prepare itself rejects it), so the only way to exercise the
+    ceiling is a corrupted persisted-case input: the archived raw leaf is
+    replaced with catalog_max + 1 bytes while the authenticated manifest and
+    source records are left exactly as prepared. The raw read must reject
+    this before the archive/live byte-equality check, before any response
+    leaf is opened, and before any artifact is persisted."""
+    case_root, case_sha, set_sha, port_sha = _create_prepared_case(run_env)
+    _write_responses(case_root)
+
+    (case_root / leaf).write_bytes(b"x" * (catalog_max + 1))
+
+    orig_open = os.open
+    def mocked_open(path, flags, mode=0o777, *, dir_fd=None):
+        if "responses/" in str(path):
+            raise RuntimeError("Response opened despite oversize archive leaf")
+        return orig_open(path, flags, mode, dir_fd=dir_fd)
+    monkeypatch.setattr(os, "open", mocked_open)
+    monkeypatch.setattr(os, "supports_dir_fd", frozenset(os.supports_dir_fd) | {mocked_open})
+
+    with pytest.raises(Exception) as exc:
+        consume_h2c_persisted_case(
+            case_root=case_root,
+            expected_prepared_case_identity_sha256=case_sha,
+            strategy_settings_expected_sha256=set_sha,
+            portfolio_snapshot_expected_sha256=port_sha,
+        )
+    assert exc.value.code == H2cConsumeErrorCode.H2C_CONSUME_PATH_CONTRACT_INVALID
+    assert not (case_root / "artifacts/receipt.json").exists()
+    assert not (case_root / "artifacts/case_evidence_bundle.json").exists()
+    assert not (case_root / "artifacts/comparison_report.json").exists()
 
 # --- 9. Legacy parse/normalization rejection ---
 def test_h2c_consume_legacy_parse_rejection(run_env: Path) -> None:

@@ -45,6 +45,7 @@ from investment_orchestrator.mmi.canonical import (
 )
 from investment_orchestrator.mmi.contracts import (
     AUTHORITY_EFFECT_NONE,
+    MMI_SOURCE_CATALOG,
     MmiCapturedSource,
     MmiClockContractError,
     MmiPolicyProjectionBuildResult,
@@ -258,7 +259,6 @@ _LEGACY_TEMPLATE_MAXIMUM_BYTES: Final = 262_144
 _LEGACY_PROMPT_MAXIMUM_BYTES: Final = 3_170_307
 _H1_PROMPT_MAXIMUM_BYTES: Final = 65_536
 _GROUNDED_PROMPT_MAXIMUM_CANONICAL_BYTES: Final = 393_852
-_SOURCE_RECORD_MAXIMUM_CANONICAL_BYTES: Final = 8_192
 
 _MANIFEST_RELATIVE_PATH: Final = "prepared/prepared_case.json"
 _ARCHIVE_SETTINGS_PATH: Final = "archive/strategy_settings.yaml"
@@ -1048,7 +1048,9 @@ def consume_h2c_persisted_case(
         archive_settings_bytes = _stable_read_exact_bytes(
             case_fd,
             _ARCHIVE_SETTINGS_PATH,
-            maximum_bytes=_SOURCE_RECORD_MAXIMUM_CANONICAL_BYTES,
+            maximum_bytes=MMI_SOURCE_CATALOG[
+                MmiSourceRole.STRATEGY_SETTINGS
+            ].maximum_bytes,
         )
         if archive_settings_bytes != settings_source.raw_bytes:
             _raise_controlled(H2cConsumeErrorCode.H2C_CONSUME_LIVE_CHAIN_INVALID)
@@ -1056,7 +1058,9 @@ def consume_h2c_persisted_case(
         archive_portfolio_bytes = _stable_read_exact_bytes(
             case_fd,
             _ARCHIVE_PORTFOLIO_PATH,
-            maximum_bytes=_SOURCE_RECORD_MAXIMUM_CANONICAL_BYTES,
+            maximum_bytes=MMI_SOURCE_CATALOG[
+                MmiSourceRole.PORTFOLIO_SNAPSHOT
+            ].maximum_bytes,
         )
         if archive_portfolio_bytes != portfolio_source.raw_bytes:
             _raise_controlled(H2cConsumeErrorCode.H2C_CONSUME_LIVE_CHAIN_INVALID)
