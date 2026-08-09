@@ -37,6 +37,18 @@ def _identity(value: dict[str, object], domain: bytes) -> str:
     return hashlib.sha256(framed).hexdigest()
 
 
+def _write_manifest_leaf(root: Path, payload: bytes) -> None:
+    """Write the one canonical prepared-case leaf the prepare owner defines.
+
+    ``prepared/prepared_case.json`` is the prepare owner's committed choice
+    (``mmi_h2c_prepare_persisted_case_v1.py``); no root ``manifest.json``
+    contract exists in production.
+    """
+    prepared_dir = root / "prepared"
+    prepared_dir.mkdir(exist_ok=True)
+    (prepared_dir / "prepared_case.json").write_bytes(payload)
+
+
 
 
 
@@ -232,9 +244,7 @@ def case_fd(tmp_path: Path, valid_case: tuple[dict[str, object], bytes, bytes]) 
 
 
 
-    manifest_path = tmp_path / "manifest.json"
-
-    manifest_path.write_bytes(json.dumps(manifest).encode("utf-8"))
+    _write_manifest_leaf(tmp_path, json.dumps(manifest).encode("utf-8"))
 
 
 
@@ -380,7 +390,7 @@ def test_manifest_exactly_one_read(case_fd, monkeypatch) -> None:
 
 
 
-    assert calls.count("manifest.json") == 1
+    assert calls.count("prepared/prepared_case.json") == 1
 
     assert calls.count("archive/strategy_settings.yaml") == 1
 
@@ -400,7 +410,7 @@ def test_no_case_root_reopen(tmp_path, valid_case, monkeypatch) -> None:
 
     archive_dir.mkdir()
 
-    (tmp_path / "manifest.json").write_bytes(json.dumps(manifest).encode("utf-8"))
+    _write_manifest_leaf(tmp_path, json.dumps(manifest).encode("utf-8"))
 
     (tmp_path / "archive/strategy_settings.yaml").write_bytes(strategy)
 
@@ -450,7 +460,7 @@ def test_symlink_rejection(tmp_path, valid_case) -> None:
 
     archive_dir.mkdir()
 
-    (tmp_path / "manifest.json").write_bytes(json.dumps(manifest).encode("utf-8"))
+    _write_manifest_leaf(tmp_path, json.dumps(manifest).encode("utf-8"))
 
 
 
@@ -490,7 +500,7 @@ def test_directory_rejection(tmp_path, valid_case) -> None:
 
     archive_dir.mkdir()
 
-    (tmp_path / "manifest.json").write_bytes(json.dumps(manifest).encode("utf-8"))
+    _write_manifest_leaf(tmp_path, json.dumps(manifest).encode("utf-8"))
 
 
 
@@ -524,7 +534,7 @@ def test_fifo_rejection_without_blocking(tmp_path, valid_case) -> None:
 
     archive_dir.mkdir()
 
-    (tmp_path / "manifest.json").write_bytes(json.dumps(manifest).encode("utf-8"))
+    _write_manifest_leaf(tmp_path, json.dumps(manifest).encode("utf-8"))
 
 
 
@@ -558,7 +568,7 @@ def test_length_mismatch(tmp_path, valid_case) -> None:
 
     archive_dir.mkdir()
 
-    (tmp_path / "manifest.json").write_bytes(json.dumps(manifest).encode("utf-8"))
+    _write_manifest_leaf(tmp_path, json.dumps(manifest).encode("utf-8"))
 
 
 
@@ -592,7 +602,7 @@ def test_digest_mismatch(tmp_path, valid_case) -> None:
 
     archive_dir.mkdir()
 
-    (tmp_path / "manifest.json").write_bytes(json.dumps(manifest).encode("utf-8"))
+    _write_manifest_leaf(tmp_path, json.dumps(manifest).encode("utf-8"))
 
 
 
@@ -636,7 +646,7 @@ def test_source_record_schema_rejection(tmp_path, valid_case) -> None:
 
     archive_dir.mkdir()
 
-    (tmp_path / "manifest.json").write_bytes(json.dumps(manifest).encode("utf-8"))
+    _write_manifest_leaf(tmp_path, json.dumps(manifest).encode("utf-8"))
 
     (tmp_path / "archive/strategy_settings.yaml").write_bytes(strategy)
 
@@ -674,7 +684,7 @@ def test_source_record_identity_mismatch(tmp_path, valid_case) -> None:
 
     archive_dir.mkdir()
 
-    (tmp_path / "manifest.json").write_bytes(json.dumps(manifest).encode("utf-8"))
+    _write_manifest_leaf(tmp_path, json.dumps(manifest).encode("utf-8"))
 
     (tmp_path / "archive/strategy_settings.yaml").write_bytes(strategy)
 
@@ -714,7 +724,7 @@ def test_role_path_swap(tmp_path, valid_case) -> None:
 
     archive_dir.mkdir()
 
-    (tmp_path / "manifest.json").write_bytes(json.dumps(manifest).encode("utf-8"))
+    _write_manifest_leaf(tmp_path, json.dumps(manifest).encode("utf-8"))
 
     (tmp_path / "archive/strategy_settings.yaml").write_bytes(strategy)
 
@@ -814,7 +824,7 @@ def test_strategy_limit_plus_one(tmp_path, valid_case) -> None:
 
 
 
-    (tmp_path / "manifest.json").write_bytes(json.dumps(manifest).encode("utf-8"))
+    _write_manifest_leaf(tmp_path, json.dumps(manifest).encode("utf-8"))
 
     (tmp_path / "archive/strategy_settings.yaml").write_bytes(too_large)
 
@@ -862,7 +872,7 @@ def test_portfolio_limit_plus_one(tmp_path, valid_case) -> None:
 
 
 
-    (tmp_path / "manifest.json").write_bytes(json.dumps(manifest).encode("utf-8"))
+    _write_manifest_leaf(tmp_path, json.dumps(manifest).encode("utf-8"))
 
     (tmp_path / "archive/strategy_settings.yaml").write_bytes(strategy)
 
@@ -906,7 +916,7 @@ def test_cross_case_substitution(tmp_path, valid_case) -> None:
 
 
 
-    (case1 / "manifest.json").write_bytes(json.dumps(manifest).encode("utf-8"))
+    _write_manifest_leaf(case1, json.dumps(manifest).encode("utf-8"))
 
     (case1 / "archive/strategy_settings.yaml").write_bytes(strategy)
 
@@ -916,7 +926,7 @@ def test_cross_case_substitution(tmp_path, valid_case) -> None:
 
     # Intentionally missing from case2, but present in case1.
 
-    (case2 / "manifest.json").write_bytes(json.dumps(manifest).encode("utf-8"))
+    _write_manifest_leaf(case2, json.dumps(manifest).encode("utf-8"))
 
 
 
@@ -1167,7 +1177,7 @@ def test_json_decode_ownership_proof(tmp_path, valid_case) -> None:
 
     archive_dir.mkdir()
 
-    (tmp_path / "manifest.json").write_bytes(b"invalid json")
+    _write_manifest_leaf(tmp_path, b"invalid json")
 
 
 
@@ -1206,3 +1216,89 @@ def test_unexpected_error_proof(case_fd, monkeypatch) -> None:
     with pytest.raises(RuntimeError, match="unexpected internal error"):
 
         _build_mmi_h2c_archived_prepared_case_snapshot(case_fd=fd, expected_prepared_case_identity_sha256=expected_id)
+
+
+def test_root_manifest_json_is_never_a_fallback_leaf(tmp_path, valid_case) -> None:
+    """The prepared-case leaf has one canonical location: ``prepared/prepared_case.json``.
+
+    A root ``manifest.json`` (the obsolete test-only layout this file used to
+    fabricate) must never be consulted, even when it is present and would
+    otherwise parse and validate successfully.
+    """
+    manifest, strategy, portfolio = valid_case
+
+    archive_dir = tmp_path / "archive"
+    archive_dir.mkdir()
+
+    # The canonical leaf is intentionally absent: no ``prepared/`` directory
+    # is created and ``_write_manifest_leaf`` is never called.
+    (tmp_path / "manifest.json").write_bytes(json.dumps(manifest).encode("utf-8"))
+    (tmp_path / "archive/strategy_settings.yaml").write_bytes(strategy)
+    (tmp_path / "archive/portfolio_snapshot.txt").write_bytes(portfolio)
+
+    fd = os.open(str(tmp_path), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(MmiH2cArchivedSourceV1Error, match="PREPARED_CASE_INPUT_INVALID"):
+            _build_mmi_h2c_archived_prepared_case_snapshot(
+                case_fd=fd,
+                expected_prepared_case_identity_sha256=manifest["prepared_case_identity_sha256"],
+            )
+    finally:
+        os.close(fd)
+
+
+def test_genuine_prepare_owner_case_is_consumed_without_root_manifest(
+    tmp_path, monkeypatch
+) -> None:
+    """One committed prepare-owner case must be consumable by E1 as-is.
+
+    This is the integration oracle for the leaf-alignment fix: it builds a
+    real case root with the committed ``prepare_h2c_persisted_case`` owner
+    (not a hand-fabricated manifest) and proves ``_build_mmi_h2c_archived_prepared_case_snapshot``
+    reads it successfully from ``prepared/prepared_case.json`` alone, with no
+    root ``manifest.json`` ever created or required.
+    """
+    from tests.unit.test_mmi_h2c_consume_persisted_case_v1 import (
+        _capture_at,
+        _create_prepared_case,
+    )
+    import investment_orchestrator.offline.mmi_h2c_prepare_persisted_case_v1 as engine_prepare
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        engine_prepare, "capture_current_mmi_source", _capture_at(tmp_path)
+    )
+
+    case_root, prepared_identity, _settings_sha256, _portfolio_sha256 = (
+        _create_prepared_case(tmp_path)
+    )
+
+    assert not (case_root / "manifest.json").exists()
+    assert (case_root / "prepared/prepared_case.json").exists()
+
+    expected_strategy_bytes = (case_root / "archive/strategy_settings.yaml").read_bytes()
+    expected_portfolio_bytes = (case_root / "archive/portfolio_snapshot.txt").read_bytes()
+
+    case_fd = os.open(os.fspath(case_root), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        snapshot = _build_mmi_h2c_archived_prepared_case_snapshot(
+            case_fd=case_fd,
+            expected_prepared_case_identity_sha256=prepared_identity,
+        )
+    finally:
+        os.close(case_fd)
+
+    assert snapshot.prepared_case_identity_sha256 == prepared_identity
+    assert snapshot.strategy_archived_bytes == expected_strategy_bytes
+    assert snapshot.portfolio_archived_bytes == expected_portfolio_bytes
+    assert snapshot.strategy_source_record["source_role"] == "STRATEGY_SETTINGS"
+    assert snapshot.strategy_source_record["observed_sha256"] == hashlib.sha256(
+        expected_strategy_bytes
+    ).hexdigest()
+    assert snapshot.portfolio_source_record["source_role"] == "PORTFOLIO_SNAPSHOT"
+    assert snapshot.portfolio_source_record["observed_sha256"] == hashlib.sha256(
+        expected_portfolio_bytes
+    ).hexdigest()
+    assert snapshot.projection.workflow_status == "AWAITING_OPERATOR_RESPONSES"
+    assert snapshot.run_context.evaluation_timestamp_utc

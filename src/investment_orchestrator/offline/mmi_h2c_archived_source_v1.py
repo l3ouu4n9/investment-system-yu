@@ -158,7 +158,7 @@ def _read_manifest(case_fd: int) -> bytes:
 
             case_fd,
 
-            "manifest.json",
+            "prepared/prepared_case.json",
 
             maximum_bytes=_MAXIMUM_CANONICAL_BYTES,
 
