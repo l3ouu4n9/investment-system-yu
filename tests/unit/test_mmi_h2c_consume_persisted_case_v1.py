@@ -1121,14 +1121,18 @@ def test_h2c_consume_archived_never_recaptures_live_source(
     assert result.workflow_status == "COMPLETED"
 
 
-# O. The archived public entry has zero production/CLI/weekly callers.
-def test_h2c_consume_archived_zero_production_consumers() -> None:
+# O. The archived public entry has exactly one production caller: its CLI.
+def test_h2c_consume_archived_has_only_operator_cli_consumer() -> None:
     target = "consume_h2c_persisted_case_from_archives"
     owner_module = repo_root() / (
         "src/investment_orchestrator/offline/mmi_h2c_consume_persisted_case_v1.py"
     )
+    observed = []
     for path in (repo_root() / "src").rglob("*.py"):
         if path == owner_module:
             continue
         if target in path.read_text(encoding="utf-8"):
-            pytest.fail(f"unexpected production consumer: {path}")
+            observed.append(path.relative_to(repo_root()).as_posix())
+    assert tuple(sorted(observed)) == (
+        "src/investment_orchestrator/cli/run_mmi_h2c_consume_archived.py",
+    )

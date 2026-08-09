@@ -160,6 +160,10 @@ documents one operator-invoked, foreground, report-only manual handoff. It has
 no automatic provider integration and grants no publication, order, broker,
 weekly-routing, permission, or gate authority.
 
+For a prepared portable case, the
+[MMI H2c Archived Consume Operator Runbook](docs/mmi_h2c_archived_consume_operator_runbook.md)
+documents the separate manual response placement and archived-consume command.
+
 ## Run Status / Blocked-Run Summary
 
 When Step 1 / Deep Research produces no output, invalid research, or a

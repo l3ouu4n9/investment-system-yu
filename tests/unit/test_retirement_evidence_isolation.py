@@ -67,6 +67,10 @@ _ALLOWED_NON_OFFLINE_TO_OFFLINE_IMPORT_EDGES = frozenset({
         "investment_orchestrator.cli.run_mmi_h2c_prepare",
         "investment_orchestrator.offline.mmi_h2c_prepare_persisted_case_v1",
     ),
+    (
+        "investment_orchestrator.cli.run_mmi_h2c_consume_archived",
+        "investment_orchestrator.offline.mmi_h2c_consume_persisted_case_v1",
+    ),
 })
 
 

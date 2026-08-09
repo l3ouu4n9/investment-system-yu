@@ -104,6 +104,9 @@ H2C_CLI_RELATIVE_PATH = (
 H2C_PREPARE_CLI_RELATIVE_PATH = (
     "src/investment_orchestrator/cli/run_mmi_h2c_prepare.py"
 )
+H2C_ARCHIVED_CONSUME_CLI_RELATIVE_PATH = (
+    "src/investment_orchestrator/cli/run_mmi_h2c_consume_archived.py"
+)
 H2C_ARCHIVED_SOURCE_RELATIVE_PATH = (
     "src/investment_orchestrator/offline/"
     "mmi_h2c_archived_source_v1.py"
@@ -621,6 +624,9 @@ def test_v2_prompt_envelope_and_response_graph_is_exact_and_dormant() -> None:
         "investment_orchestrator.offline.mmi_h2c_prepare_persisted_case_v1"
     ) == (H2C_PREPARE_CLI_RELATIVE_PATH,)
     assert consumers(
+        "investment_orchestrator.offline.mmi_h2c_consume_persisted_case_v1"
+    ) == (H2C_ARCHIVED_CONSUME_CLI_RELATIVE_PATH,)
+    assert consumers(
         "investment_orchestrator.offline.mmi_h2c_manual_capture_session"
     ) == (H2C_CLI_RELATIVE_PATH,)
     assert consumers(
@@ -712,7 +718,7 @@ def test_reachable_schema_validation_call_graph_does_not_write(
 
 def test_ltetf_inventory_classification_is_unchanged_except_inventory_content() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
-    assert len(inventory.production_paths) == 152
+    assert len(inventory.production_paths) == 153
     assert inventory.dynamic_findings == ()
     assert inventory.observer_external_consumers == EXPECTED_EXTERNAL_CONSUMERS
     assert inventory.report_artifact_readers == ()
