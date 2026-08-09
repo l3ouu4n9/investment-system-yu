@@ -32,6 +32,7 @@ from investment_orchestrator.llm.legacy_step1_prompt_compiler import (
 )
 from investment_orchestrator.llm.manual_output import PromptRenderError
 from investment_orchestrator.mmi.analyst_visible_evidence_view_v2 import (
+    _build_mmi_analyst_visible_evidence_view_v2_from_source_record_identities,
     build_mmi_analyst_visible_evidence_view_v2,
     validate_mmi_analyst_visible_evidence_view_v2,
 )
@@ -61,23 +62,34 @@ from investment_orchestrator.mmi.contracts import (
 from investment_orchestrator.mmi import evidence_bundle as _evidence_bundle
 from investment_orchestrator.mmi.grounded_prompt_v2 import (
     MmiGroundedPromptV2Error,
+    _build_mmi_grounded_prompt_v2_from_source_record_identities,
+    _validate_mmi_grounded_prompt_v2_from_source_record_identities,
     build_mmi_grounded_prompt_v2,
     validate_mmi_grounded_prompt_v2,
 )
 from investment_orchestrator.mmi.legacy_step1_compatibility_candidate_v1 import (
     MmiLegacyStep1CompatibilityCandidateV1Error,
+    _build_mmi_legacy_step1_compatibility_candidate_v1_from_source_record_identities,
     build_mmi_legacy_step1_compatibility_candidate_v1,
 )
 from investment_orchestrator.mmi.policy_projection import (
+    _ProjectionBlocked,
+    _ProjectionContractFailure,
+    _build_mmi_policy_projection_from_source_bytes,
     build_mmi_policy_projection,
     validate_mmi_policy_projection,
 )
 from investment_orchestrator.mmi.portfolio_projection import (
+    _PortfolioBlocked,
+    _PortfolioContractFailure,
+    _build_mmi_portfolio_snapshot_projection_from_source_bytes,
     build_mmi_portfolio_snapshot_projection,
     validate_mmi_portfolio_snapshot_projection,
 )
 from investment_orchestrator.mmi.raw_response_envelope_v2 import (
     MmiRawResponseEnvelopeV2Error,
+    _build_mmi_raw_response_envelope_v2_from_source_record_identities,
+    _validate_mmi_raw_response_envelope_v2_from_source_record_identities,
     build_mmi_raw_response_envelope_v2,
     validate_mmi_raw_response_envelope_v2,
 )
@@ -86,8 +98,14 @@ from investment_orchestrator.mmi.source_capture import (
 )
 from investment_orchestrator.mmi.validated_grounded_analysis_response_v2 import (
     MmiValidatedGroundedAnalysisResponseV2Error,
+    _build_mmi_validated_grounded_analysis_response_v2_from_source_record_identities,
+    _validate_mmi_validated_grounded_analysis_response_v2_from_source_record_identities,
     build_mmi_validated_grounded_analysis_response_v2,
     validate_mmi_validated_grounded_analysis_response_v2,
+)
+from investment_orchestrator.offline.mmi_h2c_archived_source_v1 import (
+    MmiH2cArchivedSourceV1Error,
+    _build_mmi_h2c_archived_prepared_case_snapshot,
 )
 from investment_orchestrator.offline.mmi_h2c_case_bundle_v1 import (
     build_mmi_h2c_case_evidence_bundle_v1,
@@ -101,6 +119,7 @@ from investment_orchestrator.offline.mmi_h2c_prepared_case_v1 import (
 from investment_orchestrator.offline.mmi_legacy_step1_comparison_report_v1 import (
     MAX_LEGACY_RESEARCH_RAW_BYTES,
     MmiLegacyStep1ComparisonReportV1Error,
+    _build_mmi_legacy_step1_comparison_report_v1_from_validated_h1_candidate,
     build_mmi_legacy_step1_comparison_report_v1,
 )
 from investment_orchestrator.validators.strategy_settings import (
@@ -120,6 +139,7 @@ __all__ = (
     "H2cConsumeFailureClass",
     "H2cConsumeResult",
     "consume_h2c_persisted_case",
+    "consume_h2c_persisted_case_from_archives",
 )
 
 
@@ -438,6 +458,21 @@ _EVIDENCE_REASON_PREFIXES: Final = (
 )
 _VIEW_REASON_PREFIXES: Final = ("MMI_ANALYST_VIEW_V2_", "VIEW_")
 
+_E1_ERROR_TRANSLATION: Final = {
+    "ARCHIVED_ARGUMENT_INVALID": H2cConsumeErrorCode.H2C_CONSUME_ARGUMENT_INVALID,
+    "PREPARED_CASE_INPUT_INVALID": (
+        H2cConsumeErrorCode.H2C_CONSUME_ARTIFACT_CONTENT_INVALID
+    ),
+    "PREPARED_CASE_SCHEMA_INVALID": H2cConsumeErrorCode.H2C_CONSUME_MANIFEST_INVALID,
+    "ARCHIVE_SOURCE_INPUT_INVALID": (
+        H2cConsumeErrorCode.H2C_CONSUME_ARTIFACT_CONTENT_INVALID
+    ),
+    "ARCHIVE_SOURCE_SCHEMA_INVALID": (
+        H2cConsumeErrorCode.H2C_CONSUME_LIVE_CHAIN_INVALID
+    ),
+    "CAPABILITY_UNAVAILABLE": H2cConsumeErrorCode.H2C_CONSUME_CAPABILITY_UNAVAILABLE,
+}
+
 
 def _raise_controlled(
     code: H2cConsumeErrorCode,
@@ -469,6 +504,80 @@ def _raise_named_owner(
     )
 
 
+def _validate_case_root_argument(
+    *,
+    expected_prepared_case_identity_sha256: object,
+    case_root: object,
+) -> Path:
+    if (
+        type(expected_prepared_case_identity_sha256) is not str
+        or _SHA256_RE.fullmatch(expected_prepared_case_identity_sha256) is None
+        or not isinstance(case_root, Path)
+    ):
+        _raise_controlled(H2cConsumeErrorCode.H2C_CONSUME_ARGUMENT_INVALID)
+    normalized_string = os.path.normpath(os.fspath(case_root))
+    if not os.path.isabs(normalized_string):
+        _raise_controlled(
+            H2cConsumeErrorCode.H2C_CONSUME_PATH_CONTRACT_INVALID
+        )
+    return Path(normalized_string)
+
+
+def _raise_for_archived_source_error(
+    exc: MmiH2cArchivedSourceV1Error,
+) -> NoReturn:
+    public_code = _E1_ERROR_TRANSLATION[exc.code]
+    _raise_controlled(public_code, owner_reason_codes=(exc.code,))
+
+
+def _raise_for_p2_internal_error(
+    exc: RuntimeError,
+    *,
+    allowed_prefixes: tuple[str, ...],
+) -> NoReturn:
+    code = getattr(exc, "code", None)
+    if type(code) is not str or not any(
+        code.startswith(prefix) for prefix in allowed_prefixes
+    ):
+        raise RuntimeError("malformed MMI internal error code") from exc
+    _raise_controlled(
+        H2cConsumeErrorCode.H2C_CONSUME_LIVE_CHAIN_INVALID,
+        owner_reason_codes=(code,),
+    )
+
+
+def _policy_roles_from_projection(
+    policy_projection: Mapping[str, object],
+) -> dict[str, str]:
+    universe = policy_projection.get("universe_projection")
+    if type(universe) is not dict:
+        raise RuntimeError("malformed MMI policy projection universe")
+    raw_roles = universe.get("role_by_ticker")
+    if type(raw_roles) is not dict:
+        raise RuntimeError("malformed MMI policy projection role_by_ticker")
+    roles: dict[str, str] = {}
+    for ticker, role in raw_roles.items():
+        if type(ticker) is not str or type(role) is not str:
+            raise RuntimeError("malformed MMI policy projection role entry")
+        roles[ticker] = role
+    return roles
+
+
+def _preflight_output_collision(case_fd: int) -> None:
+    for relative_path in (
+        _ARTIFACTS_BUNDLE_PATH,
+        _ARTIFACTS_REPORT_PATH,
+        _ARTIFACTS_RECEIPT_PATH,
+    ):
+        try:
+            os.stat(relative_path, dir_fd=case_fd, follow_symlinks=False)
+        except OSError as exc:
+            if exc.errno == errno.ENOENT:
+                continue
+            _translate_directory_oserror(exc)
+        _raise_controlled(H2cConsumeErrorCode.H2C_CONSUME_COLLISION)
+
+
 def _validate_arguments(
     *,
     strategy_settings_expected_sha256: object,
@@ -481,17 +590,14 @@ def _validate_arguments(
         or _SHA256_RE.fullmatch(strategy_settings_expected_sha256) is None
         or type(portfolio_snapshot_expected_sha256) is not str
         or _SHA256_RE.fullmatch(portfolio_snapshot_expected_sha256) is None
-        or type(expected_prepared_case_identity_sha256) is not str
-        or _SHA256_RE.fullmatch(expected_prepared_case_identity_sha256) is None
-        or not isinstance(case_root, Path)
     ):
         _raise_controlled(H2cConsumeErrorCode.H2C_CONSUME_ARGUMENT_INVALID)
-    normalized_string = os.path.normpath(os.fspath(case_root))
-    if not os.path.isabs(normalized_string):
-        _raise_controlled(
-            H2cConsumeErrorCode.H2C_CONSUME_PATH_CONTRACT_INVALID
-        )
-    return Path(normalized_string)
+    return _validate_case_root_argument(
+        expected_prepared_case_identity_sha256=(
+            expected_prepared_case_identity_sha256
+        ),
+        case_root=case_root,
+    )
 
 
 def _require_filesystem_capabilities() -> None:
@@ -846,18 +952,7 @@ def consume_h2c_persisted_case(
 
     case_fd = _open_case_root(case_root_path)
     try:
-        for relative_path in (
-            _ARTIFACTS_BUNDLE_PATH,
-            _ARTIFACTS_REPORT_PATH,
-            _ARTIFACTS_RECEIPT_PATH,
-        ):
-            try:
-                os.stat(relative_path, dir_fd=case_fd, follow_symlinks=False)
-            except OSError as exc:
-                if exc.errno == errno.ENOENT:
-                    continue
-                _translate_directory_oserror(exc)
-            _raise_controlled(H2cConsumeErrorCode.H2C_CONSUME_COLLISION)
+        _preflight_output_collision(case_fd)
 
         prepared_dict = _read_manifest_dict(case_fd)
 
@@ -1291,6 +1386,430 @@ def consume_h2c_persisted_case(
             case_fd,
             _ARTIFACTS_RECEIPT_PATH,
             exact_bytes=canonical_json_bytes(receipt, maximum_bytes=MAXIMUM_CANONICAL_JSON_BYTES),
+        )
+
+        return H2cConsumeResult(
+            workflow_status=_WORKFLOW_STATUS,
+            case_evidence_bundle_identity_sha256=bundle_sha256,
+            comparison_report_identity_sha256=report_sha256,
+            receipt_identity_sha256=receipt_sha256,
+        )
+    finally:
+        os.close(case_fd)
+
+
+def consume_h2c_persisted_case_from_archives(
+    *,
+    case_root: Path,
+    expected_prepared_case_identity_sha256: str,
+) -> H2cConsumeResult:
+    """Consume one prepared H2c case from its authenticated archives.
+
+    Unlike ``consume_h2c_persisted_case``, this entry recovers both source
+    bindings from the validated prepared case itself rather than from a live
+    recapture, so it takes no source-hash arguments.
+    """
+    case_root_path = _validate_case_root_argument(
+        expected_prepared_case_identity_sha256=(
+            expected_prepared_case_identity_sha256
+        ),
+        case_root=case_root,
+    )
+    _require_filesystem_capabilities()
+
+    case_fd = _open_case_root(case_root_path)
+    try:
+        _preflight_output_collision(case_fd)
+
+        try:
+            snapshot = _build_mmi_h2c_archived_prepared_case_snapshot(
+                case_fd=case_fd,
+                expected_prepared_case_identity_sha256=(
+                    expected_prepared_case_identity_sha256
+                ),
+            )
+        except MmiH2cArchivedSourceV1Error as exc:
+            if exc.code not in _E1_ERROR_TRANSLATION:
+                raise
+            _raise_for_archived_source_error(exc)
+
+        strategy_record = snapshot.strategy_source_record
+        portfolio_record = snapshot.portfolio_source_record
+        strategy_sid = strategy_record["source_record_identity_sha256"]
+        portfolio_sid = portfolio_record["source_record_identity_sha256"]
+        run_context = snapshot.run_context
+
+        try:
+            policy = _build_mmi_policy_projection_from_source_bytes(
+                snapshot.strategy_archived_bytes,
+                source_record_identity_sha256=strategy_sid,
+                run_context=run_context,
+            )
+        except (_ProjectionBlocked, _ProjectionContractFailure) as exc:
+            _raise_for_p2_internal_error(
+                exc, allowed_prefixes=_POLICY_REASON_PREFIXES
+            )
+        try:
+            policy, policy_component = _evidence_bundle._validate_policy_component_from_source_bytes(
+                policy,
+                raw_bytes=snapshot.strategy_archived_bytes,
+                source_record_identity_sha256=strategy_sid,
+                run_context=run_context,
+            )
+        except (
+            _evidence_bundle._BundleBlocked,
+            _evidence_bundle._BundleContractFailure,
+        ) as exc:
+            _raise_for_p2_internal_error(
+                exc, allowed_prefixes=_EVIDENCE_REASON_PREFIXES
+            )
+
+        policy_roles = _policy_roles_from_projection(policy)
+        try:
+            portfolio, _policy_roles_echo = _build_mmi_portfolio_snapshot_projection_from_source_bytes(
+                snapshot.portfolio_archived_bytes,
+                source_record_identity_sha256=portfolio_sid,
+                policy_projection_identity_sha256=(
+                    policy_component.policy_projection_identity_sha256
+                ),
+                policy_roles=policy_roles,
+                run_context=run_context,
+            )
+        except (_PortfolioBlocked, _PortfolioContractFailure) as exc:
+            _raise_for_p2_internal_error(
+                exc, allowed_prefixes=_PORTFOLIO_REASON_PREFIXES
+            )
+        try:
+            portfolio_component = _evidence_bundle._validate_portfolio_component_from_source_bytes(
+                portfolio,
+                raw_bytes=snapshot.portfolio_archived_bytes,
+                source_record_identity_sha256=portfolio_sid,
+                policy_projection=policy,
+                policy_component=policy_component,
+                run_context=run_context,
+            )
+        except (
+            _evidence_bundle._BundleBlocked,
+            _evidence_bundle._BundleContractFailure,
+        ) as exc:
+            _raise_for_p2_internal_error(
+                exc, allowed_prefixes=_EVIDENCE_REASON_PREFIXES
+            )
+
+        evidence = _evidence_bundle._build_mmi_authenticated_evidence_bundle_from_components(
+            policy_component=policy_component,
+            portfolio_component=portfolio_component,
+            run_context=run_context,
+        )
+
+        view = _require_projection_build(
+            _build_mmi_analyst_visible_evidence_view_v2_from_source_record_identities(
+                evidence_bundle=evidence,
+                policy_projection=policy,
+                policy_source_record_identity_sha256=strategy_sid,
+                portfolio_projection=portfolio,
+                portfolio_source_record_identity_sha256=portfolio_sid,
+                run_context=run_context,
+            ),
+            expected_type=MmiPolicyProjectionBuildResult,
+            allowed_reason_prefixes=_VIEW_REASON_PREFIXES,
+        )
+
+        try:
+            g2 = _build_mmi_grounded_prompt_v2_from_source_record_identities(
+                analyst_visible_evidence_view=view,
+                evidence_bundle=evidence,
+                policy_projection=policy,
+                policy_source_record_identity_sha256=strategy_sid,
+                portfolio_projection=portfolio,
+                portfolio_source_record_identity_sha256=portfolio_sid,
+                run_context=run_context,
+            )
+            g2 = _validate_mmi_grounded_prompt_v2_from_source_record_identities(
+                value=g2,
+                evidence_bundle=evidence,
+                policy_projection=policy,
+                policy_source_record_identity_sha256=strategy_sid,
+                portfolio_projection=portfolio,
+                portfolio_source_record_identity_sha256=portfolio_sid,
+                run_context=run_context,
+            )
+        except MmiGroundedPromptV2Error as exc:
+            _raise_named_owner(
+                observed_code=exc.args[0],
+                allowed_codes=_G2_CODES,
+                response_codes=_G2_PROMPT_CODES,
+                response_public_code=(
+                    H2cConsumeErrorCode.H2C_CONSUME_PROMPT_CONTRACT_INVALID
+                ),
+                remaining_public_code=(
+                    H2cConsumeErrorCode.H2C_CONSUME_LIVE_CHAIN_INVALID
+                ),
+            )
+
+        g2_canonical_bytes = canonical_json_bytes(
+            _snapshot_mapping(
+                g2, maximum_bytes=_GROUNDED_PROMPT_MAXIMUM_CANONICAL_BYTES
+            ),
+            maximum_bytes=_GROUNDED_PROMPT_MAXIMUM_CANONICAL_BYTES,
+        )
+        if (
+            g2_canonical_bytes
+            != snapshot.projection.grounded_prompt_canonical_bytes
+        ):
+            _raise_controlled(
+                H2cConsumeErrorCode.H2C_CONSUME_PROMPT_CONTRACT_INVALID
+            )
+
+        archive_template_bytes = _stable_read_exact_bytes(
+            case_fd,
+            _ARCHIVE_TEMPLATE_PATH,
+            maximum_bytes=_LEGACY_TEMPLATE_MAXIMUM_BYTES,
+        )
+        if (
+            hashlib.sha256(archive_template_bytes).hexdigest()
+            != snapshot.projection.legacy_prompt_template_sha256
+        ):
+            _raise_controlled(
+                H2cConsumeErrorCode.H2C_CONSUME_PROMPT_CONTRACT_INVALID
+            )
+
+        legacy_prompt_bytes = _compile_legacy_prompt(
+            template_text=_legacy_text(archive_template_bytes),
+            settings_text=_legacy_text(snapshot.strategy_archived_bytes),
+            portfolio_text=_legacy_text(snapshot.portfolio_archived_bytes),
+            approved_list_json=_derive_approved_list(
+                _legacy_text(snapshot.strategy_archived_bytes)
+            ),
+        )
+        if (
+            hashlib.sha256(legacy_prompt_bytes).hexdigest()
+            != snapshot.projection.legacy_prompt_sha256
+        ):
+            _raise_controlled(
+                H2cConsumeErrorCode.H2C_CONSUME_PROMPT_CONTRACT_INVALID
+            )
+
+        h1_prompt_bytes = _stable_read_exact_bytes(
+            case_fd,
+            _PROMPTS_H1_PATH,
+            maximum_bytes=_H1_PROMPT_MAXIMUM_BYTES,
+        )
+        if (
+            hashlib.sha256(h1_prompt_bytes).hexdigest()
+            != snapshot.projection.h1_prompt_sha256
+        ):
+            _raise_controlled(
+                H2cConsumeErrorCode.H2C_CONSUME_PROMPT_CONTRACT_INVALID
+            )
+
+        h1_response_bytes = _stable_read_exact_bytes(
+            case_fd,
+            _RESPONSES_H1_PATH,
+            maximum_bytes=MAXIMUM_MMI_RAW_RESPONSE_BYTES,
+            input_invalid=H2cConsumeErrorCode.H2C_CONSUME_RESPONSE_INPUT_INVALID,
+        )
+        legacy_response_bytes = _stable_read_exact_bytes(
+            case_fd,
+            _RESPONSES_LEGACY_PATH,
+            maximum_bytes=MAX_LEGACY_RESEARCH_RAW_BYTES,
+            input_invalid=H2cConsumeErrorCode.H2C_CONSUME_RESPONSE_INPUT_INVALID,
+        )
+
+        try:
+            r1 = _build_mmi_raw_response_envelope_v2_from_source_record_identities(
+                grounded_prompt=g2,
+                raw_response_bytes=h1_response_bytes,
+                evidence_bundle=evidence,
+                policy_projection=policy,
+                policy_source_record_identity_sha256=strategy_sid,
+                portfolio_projection=portfolio,
+                portfolio_source_record_identity_sha256=portfolio_sid,
+                run_context=run_context,
+            )
+            r1 = _validate_mmi_raw_response_envelope_v2_from_source_record_identities(
+                value=r1,
+                evidence_bundle=evidence,
+                policy_projection=policy,
+                policy_source_record_identity_sha256=strategy_sid,
+                portfolio_projection=portfolio,
+                portfolio_source_record_identity_sha256=portfolio_sid,
+                run_context=run_context,
+            )
+        except MmiRawResponseEnvelopeV2Error as exc:
+            _raise_named_owner(
+                observed_code=exc.args[0],
+                allowed_codes=_R1_CODES,
+                response_codes=_R1_RESPONSE_CODES,
+                response_public_code=(
+                    H2cConsumeErrorCode.H2C_CONSUME_RESPONSE_CONTENT_INVALID
+                ),
+                remaining_public_code=(
+                    H2cConsumeErrorCode.H2C_CONSUME_LIVE_CHAIN_INVALID
+                ),
+            )
+
+        try:
+            r2 = _build_mmi_validated_grounded_analysis_response_v2_from_source_record_identities(
+                raw_response_envelope=r1,
+                evidence_bundle=evidence,
+                policy_projection=policy,
+                policy_source_record_identity_sha256=strategy_sid,
+                portfolio_projection=portfolio,
+                portfolio_source_record_identity_sha256=portfolio_sid,
+                run_context=run_context,
+            )
+            r2 = _validate_mmi_validated_grounded_analysis_response_v2_from_source_record_identities(
+                value=r2,
+                raw_response_envelope=r1,
+                evidence_bundle=evidence,
+                policy_projection=policy,
+                policy_source_record_identity_sha256=strategy_sid,
+                portfolio_projection=portfolio,
+                portfolio_source_record_identity_sha256=portfolio_sid,
+                run_context=run_context,
+            )
+        except MmiValidatedGroundedAnalysisResponseV2Error as exc:
+            _raise_named_owner(
+                observed_code=exc.args[0],
+                allowed_codes=_R2_CODES,
+                response_codes=_R2_RESPONSE_CODES,
+                response_public_code=(
+                    H2cConsumeErrorCode.H2C_CONSUME_RESPONSE_CONTENT_INVALID
+                ),
+                remaining_public_code=(
+                    H2cConsumeErrorCode.H2C_CONSUME_LIVE_CHAIN_INVALID
+                ),
+            )
+
+        try:
+            h1 = _build_mmi_legacy_step1_compatibility_candidate_v1_from_source_record_identities(
+                validated_grounded_analysis_response=r2,
+                raw_response_envelope=r1,
+                evidence_bundle=evidence,
+                policy_projection=policy,
+                policy_source_record_identity_sha256=strategy_sid,
+                portfolio_projection=portfolio,
+                portfolio_source_record_identity_sha256=portfolio_sid,
+                run_context=run_context,
+            )
+        except MmiLegacyStep1CompatibilityCandidateV1Error as exc:
+            _raise_named_owner(
+                observed_code=exc.args[0],
+                allowed_codes=_H1_CODES,
+                response_codes=frozenset(),
+                response_public_code=(
+                    H2cConsumeErrorCode.H2C_CONSUME_LIVE_CHAIN_INVALID
+                ),
+                remaining_public_code=(
+                    H2cConsumeErrorCode.H2C_CONSUME_LIVE_CHAIN_INVALID
+                ),
+            )
+
+        try:
+            h2 = _build_mmi_legacy_step1_comparison_report_v1_from_validated_h1_candidate(
+                validated_h1_candidate=h1,
+                legacy_research_raw_bytes=legacy_response_bytes,
+                legacy_strategy_settings=parse_strategy_settings_text(
+                    _legacy_text(snapshot.strategy_archived_bytes)
+                ),
+            )
+        except MmiLegacyStep1ComparisonReportV1Error as exc:
+            _raise_named_owner(
+                observed_code=exc.args[0],
+                allowed_codes=_H2_CODES,
+                response_codes=_H2_RESPONSE_CODES,
+                response_public_code=(
+                    H2cConsumeErrorCode.H2C_CONSUME_RESPONSE_CONTENT_INVALID
+                ),
+                remaining_public_code=(
+                    H2cConsumeErrorCode.H2C_CONSUME_VALIDATION_INVALID
+                ),
+            )
+
+        try:
+            bundle = build_mmi_h2c_case_evidence_bundle_v1(
+                grounded_prompt=g2,
+                raw_response_envelope=r1,
+                validated_grounded_analysis_response=r2,
+                legacy_step1_compatibility_candidate=h1,
+                strategy_settings_source_record=dict(strategy_record),
+                portfolio_snapshot_source_record=dict(portfolio_record),
+            )
+        except ValueError as exc:
+            if str(exc) == "MMI_H2C_CASE_EVIDENCE_BUNDLE_V1_INVALID":
+                _raise_controlled(
+                    H2cConsumeErrorCode.H2C_CONSUME_VALIDATION_INVALID
+                )
+            raise
+
+        bundle_sha256 = bundle.get("case_evidence_bundle_identity_sha256")
+        report_sha256 = h2.get("comparison_report_identity_sha256")
+        if type(bundle_sha256) is not str or type(report_sha256) is not str:
+            raise RuntimeError("malformed artifact identities")
+
+        try:
+            receipt = build_mmi_h2c_dual_side_persisted_case_receipt_v2(
+                evaluation_timestamp_utc=run_context.evaluation_timestamp_utc,
+                prepared_case_identity_sha256=(
+                    expected_prepared_case_identity_sha256
+                ),
+                case_evidence_bundle_identity_sha256=bundle_sha256,
+                comparison_report_identity_sha256=report_sha256,
+                strategy_settings_source_record_identity_sha256=(
+                    strategy_record["observed_sha256"]
+                ),
+                portfolio_snapshot_source_record_identity_sha256=(
+                    portfolio_record["observed_sha256"]
+                ),
+                h1_prompt_sha256=hashlib.sha256(h1_prompt_bytes).hexdigest(),
+                legacy_prompt_sha256=hashlib.sha256(
+                    legacy_prompt_bytes
+                ).hexdigest(),
+                h1_operator_supplied_response_sha256=hashlib.sha256(
+                    h1_response_bytes
+                ).hexdigest(),
+                legacy_operator_supplied_response_sha256=hashlib.sha256(
+                    legacy_response_bytes
+                ).hexdigest(),
+            )
+        except ValueError as exc:
+            if str(exc) == "MMI_H2C_PERSISTED_CASE_RECEIPT_V2_INVALID":
+                _raise_controlled(
+                    H2cConsumeErrorCode.H2C_CONSUME_VALIDATION_INVALID
+                )
+            raise
+
+        receipt_sha256 = receipt.get("receipt_identity_sha256")
+        if type(receipt_sha256) is not str:
+            raise RuntimeError("malformed receipt identity")
+
+        _write_new_exact_file(
+            case_fd,
+            _ARTIFACTS_BUNDLE_PATH,
+            exact_bytes=canonical_json_bytes(
+                bundle,
+                maximum_bytes=(
+                    MAX_MMI_H2C_CASE_EVIDENCE_BUNDLE_V1_CANONICAL_BYTES
+                ),
+            ),
+        )
+        _write_new_exact_file(
+            case_fd,
+            _ARTIFACTS_REPORT_PATH,
+            exact_bytes=canonical_json_bytes(
+                h2,
+                maximum_bytes=(
+                    MAX_MMI_LEGACY_STEP1_COMPARISON_REPORT_V1_CANONICAL_BYTES
+                ),
+            ),
+        )
+        _write_new_exact_file(
+            case_fd,
+            _ARTIFACTS_RECEIPT_PATH,
+            exact_bytes=canonical_json_bytes(
+                receipt, maximum_bytes=MAXIMUM_CANONICAL_JSON_BYTES
+            ),
         )
 
         return H2cConsumeResult(
