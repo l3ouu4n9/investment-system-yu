@@ -1,0 +1,496 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-system.local/schemas/mmi_h1_legacy_step1_mapping_report_v1.schema.json",
+  "title": "MMI H1 to Legacy Step 1 report-only role mapping v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "role_map_version",
+    "target_legacy_validator_contract_version",
+    "report_only",
+    "authority_effect",
+    "not_authorization",
+    "full_legacy_compatibility",
+    "upstream_identity_chain",
+    "deterministic_mappings",
+    "ordered_role_results",
+    "mapping_report_identity_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mmi_h1_legacy_step1_mapping_report_v1"
+    },
+    "artifact_kind": {
+      "const": "MMI_H1_LEGACY_STEP1_MAPPING_REPORT"
+    },
+    "role_map_version": {
+      "const": "h1_legacy_step1_role_map_v1"
+    },
+    "target_legacy_validator_contract_version": {
+      "const": "legacy_research_handoff_strict_validator_v1"
+    },
+    "report_only": {
+      "const": true
+    },
+    "authority_effect": {
+      "const": "NONE"
+    },
+    "not_authorization": {
+      "const": true
+    },
+    "full_legacy_compatibility": {
+      "const": false
+    },
+    "upstream_identity_chain": {
+      "$ref": "#/$defs/upstream_identity_chain"
+    },
+    "deterministic_mappings": {
+      "$ref": "#/$defs/deterministic_mappings"
+    },
+    "ordered_role_results": {
+      "type": "array",
+      "minItems": 52,
+      "maxItems": 52,
+      "prefixItems": [
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "TRADE_UNIVERSE_ALLOWED_BUY_TICKERS"}, "mapping_status": {"const": "EXACT_CODE_SUPPLIED_EQUIVALENT"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "BUY_UNIVERSE_SCORECARD_TICKER"}, "mapping_status": {"const": "EXACT_CODE_SUPPLIED_EQUIVALENT"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "BUY_UNIVERSE_SCORECARD_ROLE_LAYER"}, "mapping_status": {"const": "EXACT_CODE_SUPPLIED_EQUIVALENT"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "BUY_UNIVERSE_SCORECARD_EXECUTION_PRIORITY_THIS_RUN"}, "mapping_status": {"const": "NOT_MAPPABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "BUY_UNIVERSE_SCORECARD_ACTIONABILITY_STATUS"}, "mapping_status": {"const": "NOT_MAPPABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "BUY_UNIVERSE_SCORECARD_ENTRY_DRIVER"}, "mapping_status": {"const": "QUALITATIVE_NON_AUTHORITY_ONLY"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "BUY_UNIVERSE_SCORECARD_PRIMARY_ANCHOR_TYPE"}, "mapping_status": {"const": "EXPLICITLY_UNAVAILABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "BUY_UNIVERSE_SCORECARD_PRIMARY_ANCHOR_EVENT_ID"}, "mapping_status": {"const": "EXPLICITLY_UNAVAILABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "BUY_UNIVERSE_SCORECARD_PRIMARY_ANCHOR_DATE_ET"}, "mapping_status": {"const": "EXPLICITLY_UNAVAILABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "BUY_UNIVERSE_SCORECARD_PREFERRED_SCHEDULED_THEME_EVENT_ID"}, "mapping_status": {"const": "EXPLICITLY_UNAVAILABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "BUY_UNIVERSE_SCORECARD_THESIS_12M_PLUS_SUPPORTED"}, "mapping_status": {"const": "QUALITATIVE_NON_AUTHORITY_ONLY"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "BUY_UNIVERSE_SCORECARD_THESIS_12M_PLUS_SUMMARY"}, "mapping_status": {"const": "QUALITATIVE_NON_AUTHORITY_ONLY"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "BUY_UNIVERSE_SCORECARD_THESIS_LINKAGE_QUALITY"}, "mapping_status": {"const": "NOT_MAPPABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "BUY_UNIVERSE_SCORECARD_COMPILE_BLOCKER_IF_ANY"}, "mapping_status": {"const": "NOT_MAPPABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "BUY_UNIVERSE_SCORECARD_EVENT_ID_REFS"}, "mapping_status": {"const": "EXPLICITLY_UNAVAILABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "BUY_UNIVERSE_SCORECARD_STRUCTURAL_THEME_REFS"}, "mapping_status": {"const": "NOT_MAPPABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "SCHEDULED_EVENTS"}, "mapping_status": {"const": "EXPLICITLY_UNAVAILABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "STRUCTURAL_THEMES_6_18M"}, "mapping_status": {"const": "QUALITATIVE_NON_AUTHORITY_ONLY"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "REGIME_INPUTS"}, "mapping_status": {"const": "EXPLICITLY_UNAVAILABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "POLICY_ITEMS"}, "mapping_status": {"const": "LEGACY_ROLE_PROPOSED_FOR_REMOVAL_REQUIRES_SEPARATE_CONTRACT_CHANGE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "TOP5_NEXT_WEEK"}, "mapping_status": {"const": "NOT_MAPPABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "USER_APPROVED_EXTENDED_ETF_STATIC_LIST"}, "mapping_status": {"const": "EXACT_CODE_SUPPLIED_EQUIVALENT"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "PROPOSED_EXTENDED_ETF_CANDIDATES"}, "mapping_status": {"const": "EXPLICITLY_UNAVAILABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "EXTENDED_ETF_CANDIDATE_UNIVERSE"}, "mapping_status": {"const": "EXPLICITLY_UNAVAILABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "EXTENDED_ETF_PREDECISION_SCORECARD"}, "mapping_status": {"const": "EXPLICITLY_UNAVAILABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "APPROVED_STATIC_LIST_SCREENING_LOG"}, "mapping_status": {"const": "EXPLICITLY_UNAVAILABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "OPTIONAL_EXTENDED_ETF_SLEEVE"}, "mapping_status": {"const": "EXPLICITLY_UNAVAILABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "EXTENDED_ETF_SCORECARD"}, "mapping_status": {"const": "EXPLICITLY_UNAVAILABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "STRATEGY_A_HANDOFF_VERSION"}, "mapping_status": {"const": "LEGACY_ROLE_PROPOSED_FOR_REMOVAL_REQUIRES_SEPARATE_CONTRACT_CHANGE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "STRATEGY_A_HANDOFF_SCOPE"}, "mapping_status": {"const": "LEGACY_ROLE_PROPOSED_FOR_REMOVAL_REQUIRES_SEPARATE_CONTRACT_CHANGE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "STRATEGY_A_NOT_ORDER_INSTRUCTION"}, "mapping_status": {"const": "EXACT_CODE_SUPPLIED_EQUIVALENT"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "STRATEGY_A_MUST_STILL_APPLY"}, "mapping_status": {"const": "LEGACY_ROLE_PROPOSED_FOR_REMOVAL_REQUIRES_SEPARATE_CONTRACT_CHANGE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "BASE_SHORTLIST_ELIGIBLE_BY_ROLE"}, "mapping_status": {"const": "NOT_MAPPABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "BASE_WATCH_ONLY_BY_ROLE"}, "mapping_status": {"const": "NOT_MAPPABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "POSITIVE_DELTA_RESEARCH_SUPPORTED"}, "mapping_status": {"const": "NOT_MAPPABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "POSITIVE_DELTA_NOT_IMPLIED_FOR"}, "mapping_status": {"const": "NOT_MAPPABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "REPLACEMENT_RANKING_BY_ROLE"}, "mapping_status": {"const": "NOT_MAPPABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "ROTATION_HANDOFF"}, "mapping_status": {"const": "LEGACY_ROLE_PROPOSED_FOR_REMOVAL_REQUIRES_SEPARATE_CONTRACT_CHANGE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "BUY_SIDE_NO_ACTION_HINTS"}, "mapping_status": {"const": "QUALITATIVE_NON_AUTHORITY_ONLY"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "EXTENDED_LANE_DOWNSTREAM_GATE"}, "mapping_status": {"const": "EXPLICITLY_UNAVAILABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "SELL_SIDE_RESEARCH_BOUNDARY"}, "mapping_status": {"const": "NOT_MAPPABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "TARGET_WEIGHTS"}, "mapping_status": {"const": "EXPLICITLY_UNAVAILABLE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "PROVENANCE_IDENTITY_CHAIN"}, "mapping_status": {"const": "EXACT_DETERMINISTIC_EQUIVALENT"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "BUDGETS_CAPS_EXTERNAL_DETERMINISTIC_OWNER"}, "mapping_status": {"const": "EXACT_CODE_SUPPLIED_EQUIVALENT"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "H1_EVIDENCE_OBSERVATIONS"}, "mapping_status": {"const": "QUALITATIVE_NON_AUTHORITY_ONLY"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "H1_RISKS"}, "mapping_status": {"const": "QUALITATIVE_NON_AUTHORITY_ONLY"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "H1_UNCERTAINTIES"}, "mapping_status": {"const": "QUALITATIVE_NON_AUTHORITY_ONLY"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "H1_CONTRADICTIONS"}, "mapping_status": {"const": "QUALITATIVE_NON_AUTHORITY_ONLY"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "H1_RESEARCH_QUESTIONS"}, "mapping_status": {"const": "QUALITATIVE_NON_AUTHORITY_ONLY"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "H1_SUMMARY"}, "mapping_status": {"const": "QUALITATIVE_NON_AUTHORITY_ONLY"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "FRESHNESS_INPUTS"}, "mapping_status": {"const": "EXACT_CODE_SUPPLIED_EQUIVALENT"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/role_result"},
+            {"properties": {"legacy_role": {"const": "QUANTITIES_PERMISSIONS_GATES_ORDERS"}, "mapping_status": {"const": "EXPLICITLY_UNAVAILABLE"}}}
+          ]
+        }
+      ],
+      "items": false
+    },
+    "mapping_report_identity_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "ticker": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9.-]{0,15}$"
+    },
+    "upstream_identity_chain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "strategy_settings_source_record_identity_sha256",
+        "policy_projection_identity_sha256",
+        "universe_projection_identity_sha256",
+        "portfolio_source_record_identity_sha256",
+        "portfolio_projection_identity_sha256",
+        "evidence_bundle_identity_sha256",
+        "analyst_visible_evidence_view_identity_sha256",
+        "grounded_prompt_artifact_identity_sha256",
+        "prompt_context_binding_sha256",
+        "raw_response_envelope_identity_sha256",
+        "validated_grounded_analysis_response_identity_sha256",
+        "legacy_step1_compatibility_candidate_identity_sha256"
+      ],
+      "properties": {
+        "strategy_settings_source_record_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "policy_projection_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "universe_projection_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "portfolio_source_record_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "portfolio_projection_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "evidence_bundle_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "analyst_visible_evidence_view_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "grounded_prompt_artifact_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "prompt_context_binding_sha256": {"$ref": "#/$defs/sha256"},
+        "raw_response_envelope_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "validated_grounded_analysis_response_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "legacy_step1_compatibility_candidate_identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "deterministic_mappings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "base_trade_universe_ordered",
+        "legacy_role_membership",
+        "approved_extended_static_membership_ordered"
+      ],
+      "properties": {
+        "base_trade_universe_ordered": {
+          "$ref": "#/$defs/base_ticker_list"
+        },
+        "legacy_role_membership": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "$ref": "#/$defs/legacy_role_membership"
+          }
+        },
+        "approved_extended_static_membership_ordered": {
+          "$ref": "#/$defs/ticker_list"
+        }
+      }
+    },
+    "base_ticker_list": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/ticker"
+      }
+    },
+    "ticker_list": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/ticker"
+      }
+    },
+    "legacy_role_membership": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "legacy_role",
+        "tickers"
+      ],
+      "properties": {
+        "legacy_role": {
+          "enum": [
+            "benchmark_carrier_core",
+            "diversified_core_buffer",
+            "sector_alpha_tilt"
+          ]
+        },
+        "tickers": {
+          "$ref": "#/$defs/ticker_list"
+        }
+      }
+    },
+    "role_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "legacy_role",
+        "mapping_status"
+      ],
+      "properties": {
+        "legacy_role": {
+          "type": "string"
+        },
+        "mapping_status": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

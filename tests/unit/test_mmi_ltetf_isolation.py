@@ -70,6 +70,10 @@ H2_COMPARISON_REPORT_RELATIVE_PATH = (
     "src/investment_orchestrator/offline/"
     "mmi_legacy_step1_comparison_report_v1.py"
 )
+H1_LEGACY_MAPPING_REPORT_RELATIVE_PATH = (
+    "src/investment_orchestrator/offline/"
+    "mmi_h1_legacy_step1_mapping_report_v1.py"
+)
 H2C_CAPTURE_SESSION_RELATIVE_PATH = (
     "src/investment_orchestrator/offline/"
     "mmi_h2c_manual_capture_session.py"
@@ -297,13 +301,14 @@ def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -
             for imported in imports
         )
     )
-    # Only the dormant H2 owner and explicit report-only H2c owners may read
-    # MMI outside the package; none is an admission or action consumer.  The
-    # H2c case-bundle owner structurally envelopes MMI artifact mappings; its
-    # only consumer is the explicit foreground capture session asserted below.
-    # The Phase A preparation engine reads the same live chain report-only and
-    # has no production consumer of its own.
+    # Only closed report-only H1/H2 owners and explicit report-only H2c owners
+    # may read MMI outside the package; none is an admission or action
+    # consumer.  The H2c case-bundle owner structurally envelopes MMI artifact
+    # mappings; its only consumer is the explicit foreground capture session
+    # asserted below.  The Phase A preparation engine reads the same live
+    # chain report-only and has no production consumer of its own.
     assert set(external_mmi_readers) == {
+        H1_LEGACY_MAPPING_REPORT_RELATIVE_PATH,
         H2C_CASE_BUNDLE_RELATIVE_PATH,
         H2C_CONSUME_ENGINE_RELATIVE_PATH,
         H2C_RECEIPT_RELATIVE_PATH,
@@ -588,11 +593,12 @@ def test_v2_prompt_envelope_and_response_graph_is_exact_and_dormant() -> None:
         H2C_CONSUME_ENGINE_RELATIVE_PATH,
         H2C_CAPTURE_SESSION_RELATIVE_PATH,
     )
-    # H2c: H1 and H2 gain only the explicit foreground capture consumer.
+    # The H1 mapping adapter is report-only; H2c remains foreground-only.
     assert consumers(
         "investment_orchestrator.mmi."
         "legacy_step1_compatibility_candidate_v1"
     ) == (
+        H1_LEGACY_MAPPING_REPORT_RELATIVE_PATH,
         H2C_CONSUME_ENGINE_RELATIVE_PATH,
         H2C_CAPTURE_SESSION_RELATIVE_PATH,
         H2_COMPARISON_REPORT_RELATIVE_PATH,
@@ -718,7 +724,7 @@ def test_reachable_schema_validation_call_graph_does_not_write(
 
 def test_ltetf_inventory_classification_is_unchanged_except_inventory_content() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
-    assert len(inventory.production_paths) == 153
+    assert len(inventory.production_paths) == 154
     assert inventory.dynamic_findings == ()
     assert inventory.observer_external_consumers == EXPECTED_EXTERNAL_CONSUMERS
     assert inventory.report_artifact_readers == ()

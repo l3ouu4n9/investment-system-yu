@@ -46,6 +46,10 @@ OWNER_RELATIVE_PATH = (
     "src/investment_orchestrator/offline/"
     "mmi_legacy_step1_comparison_report_v1.py"
 )
+H1_LEGACY_MAPPING_REPORT_RELATIVE_PATH = (
+    "src/investment_orchestrator/offline/"
+    "mmi_h1_legacy_step1_mapping_report_v1.py"
+)
 H1_MODULE = (
     "investment_orchestrator.mmi.legacy_step1_compatibility_candidate_v1"
 )
@@ -565,7 +569,12 @@ def test_h1_and_h2_gain_only_the_explicit_capture_consumer() -> None:
         "src/investment_orchestrator/offline/"
         "mmi_h2c_consume_persisted_case_v1.py"
     )
-    assert h1_consumers == [consume_path, session_path, OWNER_RELATIVE_PATH]
+    assert h1_consumers == [
+        H1_LEGACY_MAPPING_REPORT_RELATIVE_PATH,
+        consume_path,
+        session_path,
+        OWNER_RELATIVE_PATH,
+    ]
     assert h2_consumers == [consume_path, session_path]
 
 
@@ -580,8 +589,8 @@ def test_inventory_domain_schema_and_package_posture_are_exact() -> None:
         and value.startswith(b"mmi_")
         and value.endswith(b"\0")
     )
-    assert len(schema_paths) == 45
-    assert len(domains) == len(set(domains)) == 19
+    assert len(schema_paths) == 46
+    assert len(domains) == len(set(domains)) == 20
     assert IDENTITY_DOMAIN in domains
     assert SCHEMA_PATH in schema_paths
     assert mmi.__all__ == ()

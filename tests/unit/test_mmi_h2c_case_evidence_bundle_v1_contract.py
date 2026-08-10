@@ -431,7 +431,7 @@ def test_identity_domain_inventory_increases_exactly_once() -> None:
             and value.endswith(b"\0")
         )
     )
-    assert len(domains) == len(set(domains)) == 19
+    assert len(domains) == len(set(domains)) == 20
     assert domains.count(b"mmi_h2c_case_evidence_bundle_v1\0") == 1
     assert (
         canonical._MMI_H2C_CASE_EVIDENCE_BUNDLE_V1_IDENTITY_DOMAIN
