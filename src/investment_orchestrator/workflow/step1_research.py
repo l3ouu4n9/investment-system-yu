@@ -1211,6 +1211,7 @@ def _evaluate_research_availability_report_only(
     candidate_validation: Any,
     strategy_settings: Mapping[str, Any] | None,
     payload: Mapping[str, Any],
+    h1_mapped_facts: Any | None = None,
 ):
     """Evaluate availability, write the promoted Step 2 artifacts, and persist.
 
@@ -1225,6 +1226,13 @@ def _evaluate_research_availability_report_only(
     verification + dry-run, which may upgrade an eligible pending-gates run to
     the Step 2 decision-only state. Fail closed: if the promoted layer errors,
     the preliminary (pending-gates) result is written unchanged.
+
+    ``h1_mapped_facts`` is an optional, already-validated
+    ``H1MappedRecognitionFacts`` passed straight through to the availability
+    owner in-process. It is never persisted and never reconstructed from a
+    stored bridge object: on restart the upstream evidence is re-read and the
+    bridge rebuilds the facts under its own contract. ``None`` (the default)
+    leaves every Legacy outcome and artifact byte-for-byte unchanged.
     """
     try:
         last_good = read_last_good_research_handoff(step1_state_dir())
@@ -1260,6 +1268,7 @@ def _evaluate_research_availability_report_only(
             "promoted_effective_handoff": compiled_inputs["promoted_effective_handoff"],
             "promoted_effective_validation": compiled_inputs["promoted_effective_validation"],
             "promoted_source_artifacts": compiled_inputs["promoted_source_artifacts"],
+            "h1_mapped_facts": h1_mapped_facts,
         }
         # Pass 1: pre-upgrade posture; this is what the verification / dry-run
         # layer diagnoses (the dry-run's pending-gates criteria stay meaningful).

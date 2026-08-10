@@ -87,6 +87,12 @@ _STATE_SEVERITY = {
     # NEW_BUY / ORDER_COMPILATION), same benign severity tier as the other
     # promoted non-order / pending-final-gates states.
     "STRICT_FRESH_COMPILED_ACTIONABLE_STEP3_AUDIT_ONLY": 1,
+    # Validated mapped-H1 research recognized as fresh but strictly
+    # non-actionable (HOLD / NO_TRADE only, no SELL) — same benign tier as the
+    # other fresh non-order states. Listed explicitly so exhaustive severity
+    # ranking never falls back to the unknown-state default. Observability does
+    # not own permission; the permission table alone does.
+    "H1_MAPPED_FRESH_NON_ACTIONABLE": 1,
     "STRICT_STALE": 2,
     "DEGRADED_WITH_LAST_GOOD": 3,
     "DEGRADED_NO_RESEARCH": 4,

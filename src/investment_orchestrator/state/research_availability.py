@@ -23,6 +23,9 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
+from investment_orchestrator.research.h1_mapped_recognition import (
+    H1MappedRecognitionFacts,
+)
 from investment_orchestrator.state.last_good_research_handoff import (
     decision_relevant_settings,
     strategy_settings_hash,
@@ -75,6 +78,16 @@ DEGRADED_NO_RESEARCH = "DEGRADED_NO_RESEARCH"
 INVALID_CONTRACT = "INVALID_CONTRACT"
 NO_OUTPUT = "NO_OUTPUT"
 MANUAL_REVIEW_REQUIRED = "MANUAL_REVIEW_REQUIRED"
+# Validated, role-mapped H1 research recognized as *fresh* but STRICTLY
+# NON-ACTIONABLE — HOLD / NO_TRADE only. It is deliberately a distinct state:
+# mapped H1 research is never relabeled STRICT_FRESH (which is order-eligible)
+# and stale mapped H1 is never relabeled STRICT_STALE (which carries SELL). The
+# word FRESH in the name describes source freshness only; it grants nothing.
+H1_MAPPED_FRESH_NON_ACTIONABLE = "H1_MAPPED_FRESH_NON_ACTIONABLE"
+
+# Source label recorded when mapped H1 research is the selected availability
+# source. Matches the H1 bridge's own ``source_kind`` literal.
+H1_ROLE_MAPPED_SOURCE = "H1_ROLE_MAPPED"
 
 # Compiled-handoff modes (R2D metadata) recognized as a real compiler output.
 # Kept as literals to avoid a state->research layer import; the integration passes
@@ -88,6 +101,28 @@ _COMPILED_MODES = ("evidence_only", "evidence_plus_memo", "invalid_memo_ignored"
 # fresh raw handoff", it never removes a manual-review escalation or SELL right.
 _EVIDENCE_ONLY_REPLACEABLE = frozenset(
     {INVALID_CONTRACT, DEGRADED_NO_RESEARCH, NO_OUTPUT, DEGRADED_WITH_LAST_GOOD}
+)
+
+# Fallback states that fresh, validated mapped-H1 research may replace. Declared
+# independently of ``_EVIDENCE_ONLY_REPLACEABLE`` (currently equal) because the
+# two precedence policies are logically separate and must not drift together.
+# Legacy STRICT_FRESH / STRICT_STALE, every compiled/promoted state, and
+# MANUAL_REVIEW_REQUIRED are absent: mapped H1 never removes a SELL right, never
+# demotes a promoted permission, and never clears a manual-review escalation.
+_H1_MAPPED_REPLACEABLE = frozenset(
+    {INVALID_CONTRACT, DEGRADED_NO_RESEARCH, NO_OUTPUT, DEGRADED_WITH_LAST_GOOD}
+)
+
+# Current-source projection identities retained for audit when mapped H1 is the
+# selected source. Deliberately a subset of the bridge's fields: the bridge owns
+# the full provenance chain, and the availability artifact keeps only the
+# current-source bindings an auditor needs to tie the state to this run.
+_H1_CURRENT_SOURCE_IDENTITY_FIELDS = (
+    "strategy_settings_source_record_identity_sha256",
+    "policy_projection_identity_sha256",
+    "universe_projection_identity_sha256",
+    "portfolio_source_record_identity_sha256",
+    "portfolio_projection_identity_sha256",
 )
 
 # --- actions -----------------------------------------------------------------
@@ -138,6 +173,11 @@ _ALLOWED_ACTIONS_BY_STATE: dict[str, tuple[str, ...]] = {
     INVALID_CONTRACT: ("HOLD", "NO_TRADE"),
     NO_OUTPUT: ("HOLD", "NO_TRADE"),
     MANUAL_REVIEW_REQUIRED: ("HOLD", "NO_TRADE"),
+    # Explicit closed row: exactly HOLD / NO_TRADE. No SELL, no NEW_BUY, no
+    # ROTATION / REBALANCE / EXTENDED_ETF_ADMISSION, no ORDER_COMPILATION, and
+    # none of the promoted decision/audit actions. No wildcard, no inheritance,
+    # no fallthrough — unknown states remain fail closed via KeyError.
+    H1_MAPPED_FRESH_NON_ACTIONABLE: ("HOLD", "NO_TRADE"),
 }
 
 # R2E.5b-6b artifact contract literals, kept as literals to avoid a
@@ -165,6 +205,8 @@ DEFAULT_STALE_POLICY: dict[str, int] = {"fresh_days": 8, "stale_days": 16}
 CURRENT_HANDOFF_FUTURE_DATED = "current_handoff_future_dated"
 LAST_GOOD_HANDOFF_FUTURE_DATED = "last_good_handoff_future_dated"
 COMPILED_HANDOFF_FUTURE_DATED = "compiled_handoff_future_dated"
+H1_MAPPED_RESEARCH_FUTURE_DATED = "h1_mapped_research_future_dated"
+H1_MAPPED_RESEARCH_TOO_OLD = "h1_mapped_research_too_old"
 
 
 @dataclass(frozen=True)
@@ -221,6 +263,10 @@ class ResearchAvailabilityResult:
     promoted_step2_decision_only: bool = False
     # R2E.5b-6f Step 3 audit-only upgrade. Still no order authority.
     promoted_step3_audit_only: bool = False
+    # Mapped-H1 recognition (strictly non-actionable). ``None`` whenever no
+    # validated H1 candidate was supplied, so Legacy runs are unaffected.
+    h1_mapped_recognition: dict[str, Any] | None = None
+    h1_mapped_selected: bool = False
 
 
 def evaluate_research_availability(
@@ -247,6 +293,7 @@ def evaluate_research_availability(
     promoted_step2_gate_dry_run: Mapping[str, Any] | None = None,
     promoted_step3_audit_verification: Mapping[str, Any] | None = None,
     promoted_step3_audit_gate_dry_run: Mapping[str, Any] | None = None,
+    h1_mapped_facts: Any | None = None,
 ) -> ResearchAvailabilityResult:
     """Classify research availability and derive a deterministic permission.
 
@@ -469,6 +516,52 @@ def evaluate_research_availability(
         blocker_reasons.append("promoted_step3_audit_only_enabled")
         blocker_reasons.append("step4_order_compilation_requires_future_gate_pr")
 
+    # --- mapped-H1 recognition (strictly non-actionable) ----------------------
+    # Evaluated LAST, so every Legacy/compiled/promoted outcome above has already
+    # settled. Fresh mapped H1 may replace ONLY the four fallback states in
+    # _H1_MAPPED_REPLACEABLE; STRICT_FRESH, STRICT_STALE (and its SELL right),
+    # every compiled/promoted state, and MANUAL_REVIEW_REQUIRED are protected by
+    # construction because they are absent from that set. An absent or invalid
+    # H1 candidate yields None and changes nothing at all.
+    h1 = _evaluate_h1_mapped_recognition(
+        h1_mapped_facts=h1_mapped_facts,
+        now_date=now_date,
+        fresh_days=fresh_days,
+        stale_days=stale_days,
+    )
+    h1_mapped_selected = False
+    if h1 is not None:
+        h1_controls = state in _H1_MAPPED_REPLACEABLE
+        if h1["freshness"] in ("future_dated", "too_old"):
+            # Mirrors the existing compiled/current/last-good convention: escalate
+            # only when the defective source would otherwise control the state;
+            # when a protected Legacy result controls, record it diagnostically
+            # and leave that result and its actions untouched.
+            reason = (
+                H1_MAPPED_RESEARCH_FUTURE_DATED
+                if h1["freshness"] == "future_dated"
+                else H1_MAPPED_RESEARCH_TOO_OLD
+            )
+            if h1_controls:
+                blocker_reasons.append(reason)
+                state = MANUAL_REVIEW_REQUIRED
+            else:
+                non_blocker_reasons.append(reason)
+        elif h1["freshness"] == "fresh" and h1_controls:
+            state = H1_MAPPED_FRESH_NON_ACTIONABLE
+            source = H1_ROLE_MAPPED_SOURCE
+            h1_mapped_selected = True
+            blocker_reasons.append(
+                "h1_mapped_research_non_actionable: validated role-mapped H1 research is fresh, "
+                "but this state is non-actionable by policy."
+            )
+            blocker_reasons.append(
+                "h1_mapped_no_new_buy: SELL / NEW_BUY / ORDER_COMPILATION remain blocked and "
+                "require a future explicit gate PR; this state permits HOLD / NO_TRADE only."
+            )
+        # "stale" and "unknown" deliberately fall through: mapped H1 is simply
+        # not selected and the existing Legacy/degraded outcome is preserved.
+
     last_good_usable = state == DEGRADED_WITH_LAST_GOOD
     age_for_label = handoff_age_days if handoff_valid else (last_good_age_days if last_good_available else None)
     stale_label = _stale_label(age_for_label, fresh_days, stale_days)
@@ -531,6 +624,8 @@ def evaluate_research_availability(
         not_authorization=pending["not_authorization"],
         promoted_step2_decision_only=promoted_step2_decision_only,
         promoted_step3_audit_only=promoted_step3_audit_only,
+        h1_mapped_recognition=h1,
+        h1_mapped_selected=h1_mapped_selected,
     )
 
 
@@ -727,6 +822,131 @@ def _source_artifacts_use_promoted_effective(source_artifacts: Any) -> bool:
         if _is_promoted_effective_source_token(key) or _is_promoted_effective_source_token(value):
             uses_promoted_effective = True
     return uses_promoted_effective
+
+
+def _h1_temporal_date(value: Any) -> str | None:
+    """Return the calendar-date part of a canonical H1 temporal fact.
+
+    The bridge guarantees dates are ``YYYY-MM-DD`` and timestamps are exactly
+    ``YYYY-MM-DDTHH:MM:SS.ffffffZ``, so the leading ten characters are the UTC
+    calendar date in both cases. No clock is read and nothing is substituted.
+    """
+    if not isinstance(value, str) or len(value) < 10:
+        return None
+    return value[:10]
+
+
+def _evaluate_h1_mapped_recognition(
+    *,
+    h1_mapped_facts: Any,
+    now_date: Any,
+    fresh_days: int,
+    stale_days: int,
+) -> dict[str, Any] | None:
+    """Classify mapped-H1 freshness from validated typed facts. Report-only.
+
+    Accepts ONLY a factory-created ``H1MappedRecognitionFacts``. The bridge owns
+    structural / provenance / current-source validity and its instances cannot be
+    constructed by any other caller, so a raw mapping report, a plain dict, or any
+    other object is ignored entirely (returns ``None``). Bridge construction
+    failure therefore never becomes a permission state, and an invalid or absent
+    H1 candidate can never suppress a valid Legacy result.
+
+    Freshness is decided HERE — availability stays the single freshness owner and
+    reuses the same ``fresh_days`` / ``stale_days`` policy and ``_age_days``
+    helper as every other source. The OLDEST required fact controls: ages are
+    never averaged and a newer source never compensates for an older required
+    one. ``context_evaluation_timestamp_utc`` is never part of the age; it serves
+    only the conservative future-date integrity check. Bridge construction time,
+    mapping generation time, file mtimes, and the current clock are never
+    substituted for a missing fact.
+    """
+    if not isinstance(h1_mapped_facts, H1MappedRecognitionFacts):
+        return None
+
+    required_ages: dict[str, int | None] = {
+        "policy_as_of_date": _age_days(now_date, h1_mapped_facts.policy_as_of_date),
+        "portfolio_source_date": _age_days(now_date, h1_mapped_facts.portfolio_source_date),
+    }
+    # Optional fact: included only when present. It can make the run look older,
+    # never fresher. When absent it is simply omitted — never substituted.
+    if h1_mapped_facts.policy_source_run_timestamp_utc is not None:
+        required_ages["policy_source_run_timestamp_utc"] = _age_days(
+            now_date,
+            _h1_temporal_date(h1_mapped_facts.policy_source_run_timestamp_utc),
+        )
+    context_age = _age_days(
+        now_date,
+        _h1_temporal_date(h1_mapped_facts.context_evaluation_timestamp_utc),
+    )
+
+    ages = list(required_ages.values())
+    if context_age is None or any(age is None for age in ages):
+        # Unknown age is never fresh; mapped H1 is simply not selected.
+        freshness = "unknown"
+        age_days: int | None = None
+    else:
+        age_days = max(ages)  # oldest required fact controls
+        if min(ages) < 0 or context_age < 0:
+            # Any required fact (or the evaluation context itself) dated after
+            # the trusted boundary is a hard integrity defect, never freshness.
+            freshness = "future_dated"
+        elif age_days <= fresh_days:
+            freshness = "fresh"
+        elif age_days <= stale_days:
+            freshness = "stale"
+        else:
+            freshness = "too_old"
+
+    return {
+        "source_kind": h1_mapped_facts.source_kind,
+        "freshness": freshness,
+        "age_days": age_days,
+        "required_fact_ages_days": dict(required_ages),
+        "identity": {
+            "mapping_schema_version": h1_mapped_facts.mapping_schema_version,
+            "mapping_report_identity_sha256": h1_mapped_facts.mapping_report_identity_sha256,
+            "role_map_version": h1_mapped_facts.role_map_version,
+            "target_legacy_validator_contract_version": (
+                h1_mapped_facts.target_legacy_validator_contract_version
+            ),
+        },
+        "current_source_identities": {
+            name: getattr(h1_mapped_facts, name)
+            for name in _H1_CURRENT_SOURCE_IDENTITY_FIELDS
+        },
+        "temporal_evidence": {
+            "policy_as_of_date": h1_mapped_facts.policy_as_of_date,
+            "portfolio_source_date": h1_mapped_facts.portfolio_source_date,
+            "policy_source_run_timestamp_utc": (
+                h1_mapped_facts.policy_source_run_timestamp_utc
+            ),
+            "context_evaluation_timestamp_utc": (
+                h1_mapped_facts.context_evaluation_timestamp_utc
+            ),
+        },
+    }
+
+
+def _h1_mapped_artifact_fields(result: ResearchAvailabilityResult) -> dict[str, Any]:
+    """Minimum mapped-H1 audit/provenance fields for the availability artifacts.
+
+    Emitted ONLY when mapped H1 is the selected source. When Legacy controls (or
+    no H1 candidate exists) this contributes no keys at all, so existing Legacy
+    artifacts serialize exactly as before and no migration is required.
+    """
+    if not result.h1_mapped_selected or result.h1_mapped_recognition is None:
+        return {}
+    recognition = result.h1_mapped_recognition
+    return {
+        "h1_mapped_selected": True,
+        "h1_mapped_source_kind": recognition["source_kind"],
+        "h1_mapped_freshness": recognition["freshness"],
+        "h1_mapped_age_days": recognition["age_days"],
+        "h1_mapped_identity": dict(recognition["identity"]),
+        "h1_mapped_current_source_identities": dict(recognition["current_source_identities"]),
+        "h1_mapped_temporal_evidence": dict(recognition["temporal_evidence"]),
+    }
 
 
 def _classify_current_valid(
@@ -1066,6 +1286,7 @@ def research_availability_result_to_dict(result: ResearchAvailabilityResult) -> 
         "final_execution_allowed": False if result.promoted_step3_audit_only else None,
         "broker_automation_allowed": False if result.promoted_step3_audit_only else None,
         "source_artifacts": dict(result.source_artifacts),
+        **_h1_mapped_artifact_fields(result),
         "report_only": True,
     }
 
@@ -1141,5 +1362,6 @@ def research_degraded_mode_decision_to_dict(result: ResearchAvailabilityResult) 
         "final_execution_allowed": False if result.promoted_step3_audit_only else None,
         "broker_automation_allowed": False if result.promoted_step3_audit_only else None,
         "source_artifacts": dict(result.source_artifacts),
+        **_h1_mapped_artifact_fields(result),
         "report_only": True,
     }
