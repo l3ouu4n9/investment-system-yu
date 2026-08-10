@@ -573,8 +573,8 @@ def build_step1_prompt_text() -> str:
     template_text = read_text(resolve_step1_prompt_template_path())
     strategy_settings_text = load_strategy_settings_yaml_text()
     portfolio_snapshot_text = load_portfolio_snapshot_text()
-    approved_extended_etf_json = (
-        load_current_run_user_approved_extended_etf_static_list_json()
+    approved_extended_etf_json = derive_legacy_approved_extended_etf_json(
+        strategy_settings_text=strategy_settings_text,
     )
     return compile_legacy_step1_prompt_text(
         template_text=template_text,

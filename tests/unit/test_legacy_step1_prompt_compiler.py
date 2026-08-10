@@ -3,7 +3,7 @@
 These tests prove that extracting placeholder rendering, sanitization, and
 approved-list derivation into ``llm.legacy_step1_prompt_compiler`` preserved
 the exact pre-extraction behavior of ``step1_research.build_step1_prompt_text``,
-including its double read of ``inputs/current/strategy_settings.yaml``.
+including its single strategy-settings snapshot behavior.
 """
 
 from __future__ import annotations
@@ -26,7 +26,6 @@ from investment_orchestrator.llm.legacy_step1_prompt_compiler import (
 )
 from investment_orchestrator.llm.manual_output import PromptRenderError, render_prompt
 from investment_orchestrator.validators.strategy_settings import (
-    StrategySettingsValidationError,
     parse_strategy_settings_text,
 )
 from investment_orchestrator.workflow import step1_research
@@ -359,25 +358,26 @@ def test_independent_reference_composition_matches_committed_inputs() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Double-read compatibility (§8 / §10): build_step1_prompt_text() must still
-# read inputs/current/strategy_settings.yaml twice, independently, in the
-# order template -> settings -> portfolio -> settings.
+# Single-snapshot consistency (§8 / §10): build_step1_prompt_text() must read
+# inputs/current/strategy_settings.yaml once in the order template -> settings
+# -> portfolio, and derive both injected representations from that one read.
 # ---------------------------------------------------------------------------
 
-FIRST_SETTINGS_TEXT = "FIRST_SETTINGS_UNIQUE_MARKER_9f3a1c\n"
-SECOND_SETTINGS_TEXT = (
+S1_SETTINGS_TEXT = (
+    "strategy_snapshot_marker: STRATEGY_S1_UNIQUE_MARKER_9f3a1c\n"
     "user_approved_extended_etf_static_list:\n"
-    "  - TICKER_SECOND_A\n"
-    "  - TICKER_SECOND_B\n"
+    "  - TICKER_S1_A\n"
+    "  - TICKER_S1_B\n"
+)
+S2_SETTINGS_TEXT = (
+    "strategy_snapshot_marker: STRATEGY_S2_UNIQUE_MARKER_4b8de0\n"
+    "user_approved_extended_etf_static_list:\n"
+    "  - TICKER_S2_A\n"
+    "  - TICKER_S2_B\n"
 )
 
 
-def test_first_settings_text_is_invalid_as_strategy_settings() -> None:
-    with pytest.raises(StrategySettingsValidationError):
-        parse_strategy_settings_text(FIRST_SETTINGS_TEXT)
-
-
-def test_wrapper_reads_settings_twice_independently_in_the_existing_order(
+def test_render_uses_one_strategy_snapshot_for_settings_and_approved_list(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     real_read_text = step1_research.read_text
@@ -395,9 +395,9 @@ def test_wrapper_reads_settings_twice_independently_in_the_existing_order(
         if normalized == expected_settings_path:
             settings_read_count += 1
             returned = (
-                FIRST_SETTINGS_TEXT
+                S1_SETTINGS_TEXT
                 if settings_read_count == 1
-                else SECOND_SETTINGS_TEXT
+                else S2_SETTINGS_TEXT
             )
         else:
             returned = real_read_text(path)
@@ -409,27 +409,23 @@ def test_wrapper_reads_settings_twice_independently_in_the_existing_order(
 
     rendered = step1_research.build_step1_prompt_text()
 
-    assert settings_read_count == 2
+    assert settings_read_count == 1
     read_paths = [event[0] for event in read_events]
     assert read_paths == [
         expected_template_path,
         expected_settings_path,
         expected_portfolio_path,
-        expected_settings_path,
     ]
 
-    # The first settings read supplies raw prompt injection ...
-    assert "FIRST_SETTINGS_UNIQUE_MARKER_9f3a1c" in rendered
-    # ... and is never parsed as strategy settings: rendering succeeded even
-    # though FIRST_SETTINGS_TEXT would raise if parsed (proven above).
-
-    # The second settings read alone supplies the approved-list derivation.
+    assert "STRATEGY_S1_UNIQUE_MARKER_9f3a1c" in rendered
     expected_approved_json = json.dumps(
-        ["TICKER_SECOND_A", "TICKER_SECOND_B"],
+        ["TICKER_S1_A", "TICKER_S1_B"],
         ensure_ascii=False,
         indent=2,
     )
     assert expected_approved_json in rendered
+    assert "STRATEGY_S2_UNIQUE_MARKER_4b8de0" not in rendered
+    assert "TICKER_S2_A" not in rendered
 
 
 # ---------------------------------------------------------------------------
