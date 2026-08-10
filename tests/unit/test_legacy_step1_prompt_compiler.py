@@ -359,8 +359,9 @@ def test_independent_reference_composition_matches_committed_inputs() -> None:
 
 # ---------------------------------------------------------------------------
 # Single-snapshot consistency (§8 / §10): build_step1_prompt_text() must read
-# inputs/current/strategy_settings.yaml once in the order template -> settings
-# -> portfolio, and derive both injected representations from that one read.
+# inputs/current/strategy_settings.yaml once as bytes in the order template ->
+# settings -> portfolio, then derive both injected representations from that
+# one retained source read.
 # ---------------------------------------------------------------------------
 
 S1_SETTINGS_TEXT = (
@@ -377,41 +378,142 @@ S2_SETTINGS_TEXT = (
 )
 
 
+def test_private_strategy_byte_decoder_matches_legacy_read_text(
+    tmp_path: Path,
+) -> None:
+    raw_bytes = (
+        b"\xef\xbb\xbfmarker: caf\xc3\xa9\r\n"
+        b"second: \xe6\x9d\xb1\xe4\xba\xac\r"
+        b"third: \xce\xa9\n"
+        b"last: no-trailing-newline"
+    )
+    path = tmp_path / "strategy_settings.yaml"
+    path.write_bytes(raw_bytes)
+
+    assert step1_research._decode_legacy_text_from_exact_bytes(  # noqa: SLF001
+        raw_bytes
+    ) == path.read_text(encoding="utf-8")
+
+
+def test_strategy_loader_preserves_strict_invalid_utf8_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "strategy_settings.yaml").write_bytes(b"\xff")
+    monkeypatch.setattr(step1_research, "current_inputs_dir", lambda: tmp_path)
+
+    with pytest.raises(UnicodeDecodeError) as raised:
+        step1_research.load_strategy_settings_yaml_text()
+
+    assert raised.value.encoding == "utf-8"
+    assert raised.value.object == b"\xff"
+    assert raised.value.start == 0
+    assert raised.value.end == 1
+
+
+def test_strategy_loader_preserves_missing_error_and_cause(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "strategy_settings.yaml"
+    monkeypatch.setattr(step1_research, "current_inputs_dir", lambda: tmp_path)
+
+    with pytest.raises(
+        FileNotFoundError,
+        match=re.escape(f"Missing required strategy settings YAML input: {path}"),
+    ) as raised:
+        step1_research.load_strategy_settings_yaml_text()
+
+    assert isinstance(raised.value.__cause__, FileNotFoundError)
+
+
+@pytest.mark.parametrize("text", ["", " \t\r\n"], ids=["empty", "whitespace"])
+def test_strategy_loader_validates_decoded_empty_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    text: str,
+) -> None:
+    path = tmp_path / "strategy_settings.yaml"
+    path.write_bytes(text.encode("utf-8"))
+    monkeypatch.setattr(step1_research, "current_inputs_dir", lambda: tmp_path)
+
+    with pytest.raises(
+        ValueError,
+        match=re.escape(f"Required strategy settings YAML input is empty: {path}"),
+    ):
+        step1_research.load_strategy_settings_yaml_text()
+
+
+def test_strategy_loader_follows_strategy_settings_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "actual_strategy_settings.yaml"
+    target.write_bytes(b"strategy_marker: follows-symlink\r\n")
+    strategy_path = tmp_path / "strategy_settings.yaml"
+    strategy_path.symlink_to(target)
+    monkeypatch.setattr(step1_research, "current_inputs_dir", lambda: tmp_path)
+
+    assert step1_research.load_strategy_settings_yaml_text() == target.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_strategy_loader_preserves_directory_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "strategy_settings.yaml").mkdir()
+    monkeypatch.setattr(step1_research, "current_inputs_dir", lambda: tmp_path)
+
+    with pytest.raises(IsADirectoryError):
+        step1_research.load_strategy_settings_yaml_text()
+
+
 def test_render_uses_one_strategy_snapshot_for_settings_and_approved_list(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     real_read_text = step1_research.read_text
+    real_read_bytes = Path.read_bytes
     expected_template_path = step1_research.resolve_step1_prompt_template_path()
     expected_settings_path = step1_research.current_inputs_dir() / "strategy_settings.yaml"
     expected_portfolio_path = step1_research.current_inputs_dir() / "portfolio_snapshot.txt"
 
-    read_events: list[tuple[Path, str]] = []
-    settings_read_count = 0
+    read_events: list[Path] = []
+    strategy_byte_read_count = 0
 
     def fake_read_text(path: str | Path) -> str:
-        nonlocal settings_read_count
         normalized = Path(path)
-
         if normalized == expected_settings_path:
-            settings_read_count += 1
+            pytest.fail("strategy settings must be acquired through Path.read_bytes")
+
+        returned = real_read_text(path)
+        read_events.append(normalized)
+        return returned
+
+    def fake_read_bytes(path: Path) -> bytes:
+        nonlocal strategy_byte_read_count
+        normalized = Path(path)
+        if normalized == expected_settings_path:
+            strategy_byte_read_count += 1
             returned = (
                 S1_SETTINGS_TEXT
-                if settings_read_count == 1
+                if strategy_byte_read_count == 1
                 else S2_SETTINGS_TEXT
-            )
+            ).encode("utf-8")
         else:
-            returned = real_read_text(path)
+            returned = real_read_bytes(path)
 
-        read_events.append((normalized, returned))
+        read_events.append(normalized)
         return returned
 
     monkeypatch.setattr(step1_research, "read_text", fake_read_text)
+    monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
 
     rendered = step1_research.build_step1_prompt_text()
 
-    assert settings_read_count == 1
-    read_paths = [event[0] for event in read_events]
-    assert read_paths == [
+    assert strategy_byte_read_count == 1
+    assert read_events == [
         expected_template_path,
         expected_settings_path,
         expected_portfolio_path,

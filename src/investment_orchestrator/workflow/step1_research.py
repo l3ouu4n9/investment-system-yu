@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import date, datetime, timezone
+import io
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -532,12 +533,30 @@ def _require_non_empty_text(path: Path, *, label: str) -> str:
     return text
 
 
+def _decode_legacy_text_from_exact_bytes(raw_bytes: bytes) -> str:
+    """Decode exact source bytes with Legacy ``Path.read_text`` semantics."""
+    return io.TextIOWrapper(
+        io.BytesIO(raw_bytes),
+        encoding="utf-8",
+        errors="strict",
+        newline=None,
+    ).read()
+
+
 def load_strategy_settings_yaml_text() -> str:
     """Read the operator-maintained strategy settings YAML exactly as stored on disk."""
-    return _require_non_empty_text(
-        current_inputs_dir() / "strategy_settings.yaml",
-        label="strategy settings YAML input",
-    )
+    path = current_inputs_dir() / "strategy_settings.yaml"
+    try:
+        raw_bytes = path.read_bytes()
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"Missing required strategy settings YAML input: {path}"
+        ) from exc
+
+    text = _decode_legacy_text_from_exact_bytes(raw_bytes)
+    if not text.strip():
+        raise ValueError(f"Required strategy settings YAML input is empty: {path}")
+    return text
 
 
 def load_strategy_settings() -> dict[str, Any]:
