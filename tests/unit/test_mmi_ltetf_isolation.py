@@ -74,6 +74,9 @@ H1_LEGACY_MAPPING_REPORT_RELATIVE_PATH = (
     "src/investment_orchestrator/offline/"
     "mmi_h1_legacy_step1_mapping_report_v1.py"
 )
+H1_MAPPED_RECOGNITION_RELATIVE_PATH = (
+    "src/investment_orchestrator/research/h1_mapped_recognition.py"
+)
 H2C_CAPTURE_SESSION_RELATIVE_PATH = (
     "src/investment_orchestrator/offline/"
     "mmi_h2c_manual_capture_session.py"
@@ -318,6 +321,7 @@ def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -
         H2C_PREPARED_CASE_RELATIVE_PATH,
         H2_COMPARISON_REPORT_RELATIVE_PATH,
         H2C_ARCHIVED_SOURCE_RELATIVE_PATH,
+        H1_MAPPED_RECOGNITION_RELATIVE_PATH,
     }
     assert {
         imported
@@ -583,6 +587,7 @@ def test_v2_prompt_envelope_and_response_graph_is_exact_and_dormant() -> None:
         "validated_grounded_analysis_response_v2.py",
         H2C_CONSUME_ENGINE_RELATIVE_PATH,
         H2C_CAPTURE_SESSION_RELATIVE_PATH,
+        H1_MAPPED_RECOGNITION_RELATIVE_PATH,
     )
     assert consumers(
         "investment_orchestrator.mmi."
@@ -724,7 +729,7 @@ def test_reachable_schema_validation_call_graph_does_not_write(
 
 def test_ltetf_inventory_classification_is_unchanged_except_inventory_content() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
-    assert len(inventory.production_paths) == 154
+    assert len(inventory.production_paths) == 155
     assert inventory.dynamic_findings == ()
     assert inventory.observer_external_consumers == EXPECTED_EXTERNAL_CONSUMERS
     assert inventory.report_artifact_readers == ()

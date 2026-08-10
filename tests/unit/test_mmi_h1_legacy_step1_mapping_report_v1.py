@@ -640,12 +640,14 @@ def test_no_production_module_imports_or_consumes_the_report_only_adapter() -> N
     offline_root = package_root / "offline"
     target = "investment_orchestrator.offline.mmi_h1_legacy_step1_mapping_report_v1"
     target_leaf = "mmi_h1_legacy_step1_mapping_report_v1"
+    approved_bridge = Path("research/h1_mapped_recognition.py")
+    importers: list[Path] = []
     for path in package_root.rglob("*.py"):
         if offline_root in path.parents:
             continue
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source)
-        assert not any(
+        if any(
             (
                 isinstance(node, ast.Import)
                 and any(alias.name == target for alias in node.names)
@@ -660,4 +662,6 @@ def test_no_production_module_imports_or_consumes_the_report_only_adapter() -> N
                 and any(alias.name == target_leaf for alias in node.names)
             )
             for node in ast.walk(tree)
-        ), path
+        ):
+            importers.append(path.relative_to(package_root))
+    assert importers == [approved_bridge]
