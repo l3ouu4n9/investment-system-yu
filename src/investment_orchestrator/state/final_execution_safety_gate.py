@@ -10,6 +10,19 @@ It fails closed: anything missing / malformed / blocked / not-STRICT_FRESH /
 explicitly-blockered yields ``ready_for_order_compilation=False`` and a NO_TRADE
 recommendation. It never fabricates a decision packet, audit packet, or order
 output, and it does not change order-compiler / broker / execution logic.
+
+Permission-artifact validity is NOT re-implemented here. The Step 1 permission
+artifact is first proven against the authoritative permission contract by
+reusing the pure evaluator ``evaluate_step2_research_gate`` and reading ONLY its
+``malformed_reasons`` (the artifact-validity facet). That evaluator's ``allowed``
+/ ``mode`` fields describe Step 2 *workflow admission* and are deliberately NOT
+consulted here: a well-formed artifact may be non-admissible for Step 2 (the
+promoted audit-only state, for example) yet still be a perfectly valid
+permission artifact. Artifact validity and order eligibility are separate
+questions, and this gate answers them separately.
+
+An artifact the contract rejects contributes no permission claims at all: no
+coercion, no repair, no fallback to a prior decision.
 """
 
 from __future__ import annotations
@@ -21,6 +34,9 @@ from pathlib import Path
 from typing import Any
 
 from investment_orchestrator.common.io import write_json
+from investment_orchestrator.state.research_degraded_mode_gate import (
+    evaluate_step2_research_gate,
+)
 
 
 GATE_REASON = "final_execution_safety_gate"
@@ -101,18 +117,41 @@ def evaluate_final_execution_safety(
     if not permission_present:
         fail_reasons.append("missing or malformed Step 1 research degraded-mode decision artifact.")
 
-    permission = step1_permission if permission_present else {}
+    # B0. Prove the artifact conforms to the authoritative permission contract
+    # BEFORE any authority-bearing field is read from it. Only the validity
+    # facet (``malformed_reasons``) is consumed; Step 2 workflow admission
+    # (``allowed`` / ``mode``) is not this gate's question.
+    contract_malformed = (
+        evaluate_step2_research_gate(step1_permission).malformed_reasons
+        if permission_present
+        else []
+    )
+    permission_contract_valid = permission_present and not contract_malformed
+    checked["step1_permission_contract_valid"] = permission_contract_valid
+    if contract_malformed:
+        fail_reasons.append(
+            "Step 1 permission artifact is invalid under the authoritative research "
+            "permission contract: " + " ".join(contract_malformed)
+        )
+
+    # An artifact that fails the contract contributes NO permission claims. The
+    # specific permission diagnostics below are likewise emitted only for a
+    # present, contract-valid artifact, so an invalid one reports the single
+    # primary contract failure instead of cascading misreadings of its fields.
+    permission = step1_permission if permission_contract_valid else {}
     state = permission.get("state")
     allowed_actions = _string_list(permission.get("allowed_actions"))
 
-    state_ok = permission_present and state == ACTIONABLE_REQUIRED_STATE
+    state_ok = permission_contract_valid and state == ACTIONABLE_REQUIRED_STATE
     checked["step1_state_strict_fresh"] = state_ok
-    if permission_present and not state_ok:
+    if permission_contract_valid and not state_ok:
         fail_reasons.append(f"Step 1 research state {state} is not {ACTIONABLE_REQUIRED_STATE}.")
 
-    order_compilation_allowed = permission_present and REQUIRED_ALLOWED_ACTION in allowed_actions
+    order_compilation_allowed = (
+        permission_contract_valid and REQUIRED_ALLOWED_ACTION in allowed_actions
+    )
     checked["order_compilation_allowed"] = order_compilation_allowed
-    if permission_present and not order_compilation_allowed:
+    if permission_contract_valid and not order_compilation_allowed:
         fail_reasons.append(
             f"Step 1 permission does not allow {REQUIRED_ALLOWED_ACTION}."
         )
@@ -128,9 +167,11 @@ def evaluate_final_execution_safety(
 
     # B (cont). If the run carries buy intent, NEW_BUY must be permitted.
     has_buy_intent = _has_buy_intent(step2_decision_packet, step3_audited_packet)
-    new_buy_ok = (not has_buy_intent) or (permission_present and NEW_BUY_ACTION in allowed_actions)
+    new_buy_ok = (not has_buy_intent) or (
+        permission_contract_valid and NEW_BUY_ACTION in allowed_actions
+    )
     checked["new_buy_allowed_if_needed"] = new_buy_ok
-    if has_buy_intent and not new_buy_ok:
+    if has_buy_intent and not new_buy_ok and permission_contract_valid:
         fail_reasons.append(
             f"run carries buy intent but Step 1 permission does not allow {NEW_BUY_ACTION}."
         )

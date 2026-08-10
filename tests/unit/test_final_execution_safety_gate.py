@@ -13,6 +13,9 @@ from investment_orchestrator.state.final_execution_safety_gate import (
     evaluate_final_execution_safety,
     final_execution_safety_blocked_artifact_payload,
 )
+from investment_orchestrator.state.research_degraded_mode_gate import (
+    evaluate_step2_research_gate,
+)
 from investment_orchestrator.workflow import (
     step1_research,
     step2_decision_builder,
@@ -100,6 +103,7 @@ def test_valid_strict_fresh_structured_no_blockers_allows() -> None:
     assert result.fail_reasons == []
     assert result.recommended_result is None
     assert result.is_deterministic is True
+    assert result.checked_conditions["step1_permission_contract_valid"] is True
     assert all(result.checked_conditions.values())
 
 
@@ -522,3 +526,435 @@ def test_promoted_step2_decision_only_state_still_blocks_final_execution_safety_
     assert result.checked_conditions["step1_state_strict_fresh"] is False
     assert result.checked_conditions["order_compilation_allowed"] is False
     assert result.recommended_result == "NO_TRADE"
+
+
+# --- Step 1 permission-artifact contract validity ----------------------------
+#
+# The final gate must never read authority from a permission artifact that the
+# AUTHORITATIVE permission owner (``evaluate_step2_research_gate``) rejects as
+# malformed. These tests use that owner as an INDEPENDENT ORACLE: the expected
+# validity of each artifact is computed from it, never from the gate under test.
+#
+# Artifact validity and order eligibility are deliberately separate questions.
+# A well-formed artifact stays contract-VALID even when policy blocks it, and
+# these tests must not tighten policy: unknown-but-well-typed states and
+# well-typed state/action mismatches stay valid and are blocked by the existing
+# state conditions, exactly as before.
+
+
+_MISSING = object()
+
+
+def permission_with(**overrides: Any) -> dict[str, Any]:
+    """Build a STRICT_FRESH permission artifact with fields overridden/removed."""
+    permission = step1_permission()
+    for key, value in overrides.items():
+        if value is _MISSING:
+            permission.pop(key, None)
+        else:
+            permission[key] = value
+    return permission
+
+
+def buy_intent_packets() -> dict[str, Any]:
+    """Best-case residual Step 2/3 packets: fully structured, carrying buy intent."""
+    return dict(
+        step2_decision_packet=step2_decision_packet(
+            buy_side_delta_table=[{"ticker": "QQQ", "action": "NEW_BUY"}],
+            execution_plan_drafts_8_5=[{"ticker": "QQQ"}],
+        ),
+        step3_audited_packet=step3_audited_packet(
+            final_buy_side_delta_table=[{"ticker": "QQQ", "action": "NEW_BUY"}],
+            final_execution_plans=[{"ticker": "QQQ"}],
+        ),
+    )
+
+
+def test_reported_case_string_boolean_manual_review_is_not_order_ready() -> None:
+    """The exact reported case: ``manual_review_required`` is the STRING "false"."""
+    permission = permission_with(manual_review_required="false")
+
+    # Independent oracle: the authoritative permission owner rejects it.
+    assert evaluate_step2_research_gate(permission).malformed_reasons
+
+    result = evaluate_final_execution_safety(
+        step1_permission=permission,
+        step2_decision_packet=step2_decision_packet(),
+        step3_audited_packet=step3_audited_packet(),
+    )
+
+    assert result.ready_for_order_compilation is False
+    assert result.blocked is True
+    assert result.checked_conditions["step1_permission_contract_valid"] is False
+    assert result.recommended_result == "NO_TRADE"
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["true", 0, 1, None, _MISSING, []],
+    ids=["str_true", "int_0", "int_1", "none", "missing", "empty_list"],
+)
+def test_non_boolean_manual_review_is_not_order_ready(value: Any) -> None:
+    """Every non-boolean ``manual_review_required`` fails the contract, not just "false".
+
+    ``"true"`` is the sharpest: an artifact whose author demanded manual review
+    must never be read as having cleared it.
+    """
+    permission = permission_with(manual_review_required=value)
+
+    assert evaluate_step2_research_gate(permission).malformed_reasons
+
+    result = evaluate_final_execution_safety(
+        step1_permission=permission,
+        step2_decision_packet=step2_decision_packet(),
+        step3_audited_packet=step3_audited_packet(),
+    )
+
+    assert result.ready_for_order_compilation is False
+    assert result.checked_conditions["step1_permission_contract_valid"] is False
+
+
+def test_non_string_item_in_allowed_actions_is_not_order_ready() -> None:
+    """A non-string action item must not be silently filtered into a valid claim."""
+    permission = permission_with(
+        allowed_actions=["HOLD", "NO_TRADE", "NEW_BUY", "ORDER_COMPILATION", 123]
+    )
+
+    assert evaluate_step2_research_gate(permission).malformed_reasons
+
+    result = evaluate_final_execution_safety(
+        step1_permission=permission,
+        step2_decision_packet=step2_decision_packet(),
+        step3_audited_packet=step3_audited_packet(),
+    )
+
+    assert result.ready_for_order_compilation is False
+    assert result.checked_conditions["step1_permission_contract_valid"] is False
+    # The surviving string items must NOT be honoured as a permission claim.
+    assert result.checked_conditions["order_compilation_allowed"] is False
+
+
+def test_invalid_permission_contributes_no_permission_claims() -> None:
+    """An invalid artifact yields zero authority and one primary diagnostic."""
+    result = evaluate_final_execution_safety(
+        step1_permission=permission_with(manual_review_required="false"),
+        **buy_intent_packets(),
+    )
+
+    assert result.ready_for_order_compilation is False
+    # No inferred state / ORDER_COMPILATION / NEW_BUY from an unreadable artifact.
+    assert result.checked_conditions["step1_permission_contract_valid"] is False
+    assert result.checked_conditions["step1_state_strict_fresh"] is False
+    assert result.checked_conditions["order_compilation_allowed"] is False
+    assert result.checked_conditions["new_buy_allowed_if_needed"] is False
+    # One primary contract diagnostic, not a cascade of field misreadings.
+    assert len(result.fail_reasons) == 1
+    assert "authoritative research permission contract" in result.fail_reasons[0]
+
+
+@pytest.mark.parametrize(
+    ("state", "allowed_actions"),
+    [
+        ("STRICT_STALE", ["HOLD", "NO_TRADE", "SELL"]),
+        ("DEGRADED_WITH_LAST_GOOD", ["HOLD", "NO_TRADE"]),
+        ("DEGRADED_NO_RESEARCH", ["HOLD", "NO_TRADE"]),
+        ("INVALID_CONTRACT", ["HOLD", "NO_TRADE"]),
+        ("NO_OUTPUT", ["HOLD", "NO_TRADE"]),
+        ("MANUAL_REVIEW_REQUIRED", ["HOLD", "NO_TRADE"]),
+        ("STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES", ["HOLD", "NO_TRADE"]),
+    ],
+)
+def test_valid_blocked_states_stay_contract_valid_and_not_order_ready(
+    state: str,
+    allowed_actions: list[str],
+) -> None:
+    """Valid non-actionable artifacts are VALID; policy — not validity — blocks them."""
+    permission = step1_permission(state=state, allowed_actions=allowed_actions)
+
+    assert evaluate_step2_research_gate(permission).malformed_reasons == []
+
+    result = evaluate_final_execution_safety(
+        step1_permission=permission,
+        step2_decision_packet=step2_decision_packet(),
+        step3_audited_packet=step3_audited_packet(),
+    )
+
+    assert result.checked_conditions["step1_permission_contract_valid"] is True
+    assert result.ready_for_order_compilation is False
+    assert result.checked_conditions["step1_state_strict_fresh"] is False
+    assert result.recommended_result == "NO_TRADE"
+
+
+@pytest.mark.parametrize(
+    ("state", "allowed_actions"),
+    [
+        (
+            "STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY",
+            ["HOLD", "NO_TRADE", "PROMOTED_RESEARCH_DECISION"],
+        ),
+        (
+            "STRICT_FRESH_COMPILED_ACTIONABLE_STEP3_AUDIT_ONLY",
+            ["HOLD", "NO_TRADE", "PROMOTED_RESEARCH_DECISION", "PROMOTED_RESEARCH_AUDIT"],
+        ),
+    ],
+)
+def test_promoted_states_stay_contract_valid_and_not_order_ready(
+    state: str,
+    allowed_actions: list[str],
+) -> None:
+    """Promoted artifacts are well-formed; neither must satisfy STRICT_FRESH admission.
+
+    Their permission artifact is valid on its own terms — proving validity must
+    NOT require passing a normal STRICT_FRESH workflow path — yet they remain
+    non-order-authorizing for their existing policy reasons.
+    """
+    permission = step1_permission(state=state, allowed_actions=allowed_actions)
+
+    assert evaluate_step2_research_gate(permission).malformed_reasons == []
+
+    result = evaluate_final_execution_safety(
+        step1_permission=permission,
+        step2_decision_packet=step2_decision_packet(),
+        step3_audited_packet=step3_audited_packet(),
+    )
+
+    assert result.checked_conditions["step1_permission_contract_valid"] is True
+    assert result.ready_for_order_compilation is False
+    assert result.checked_conditions["step1_state_strict_fresh"] is False
+    assert result.checked_conditions["order_compilation_allowed"] is False
+
+
+def test_well_typed_unknown_state_stays_contract_valid_and_not_order_ready() -> None:
+    """Scope guard: this correction must not become unknown-state validation policy."""
+    permission = step1_permission(state="SOME_UNKNOWN_STATE")
+
+    assert evaluate_step2_research_gate(permission).malformed_reasons == []
+
+    result = evaluate_final_execution_safety(
+        step1_permission=permission,
+        step2_decision_packet=step2_decision_packet(),
+        step3_audited_packet=step3_audited_packet(),
+    )
+
+    assert result.checked_conditions["step1_permission_contract_valid"] is True
+    assert result.ready_for_order_compilation is False
+    assert result.checked_conditions["step1_state_strict_fresh"] is False
+
+
+def test_well_typed_state_action_mismatch_stays_contract_valid_and_not_order_ready() -> None:
+    """Scope guard: no complete ``_ALLOWED_ACTIONS_BY_STATE`` equality is introduced.
+
+    A STRICT_STALE artifact claiming ORDER_COMPILATION is well-typed, so the
+    authoritative owner does NOT call it malformed and neither may this gate.
+    The existing state condition still prevents order readiness.
+    """
+    permission = step1_permission(
+        state="STRICT_STALE",
+        allowed_actions=["HOLD", "NO_TRADE", "SELL", "NEW_BUY", "ORDER_COMPILATION"],
+    )
+
+    assert evaluate_step2_research_gate(permission).malformed_reasons == []
+
+    result = evaluate_final_execution_safety(
+        step1_permission=permission,
+        step2_decision_packet=step2_decision_packet(),
+        step3_audited_packet=step3_audited_packet(),
+    )
+
+    assert result.checked_conditions["step1_permission_contract_valid"] is True
+    assert result.ready_for_order_compilation is False
+    assert result.checked_conditions["step1_state_strict_fresh"] is False
+
+
+def test_residual_step2_step3_artifacts_cannot_rescue_invalid_permission() -> None:
+    """Downstream artifacts cannot authenticate permission authority."""
+    packets = buy_intent_packets()
+
+    # Control: with a VALID permission this exact input IS order-ready, so the
+    # permission artifact is provably the only thing blocking the case below.
+    control = evaluate_final_execution_safety(step1_permission=step1_permission(), **packets)
+    assert control.ready_for_order_compilation is True
+
+    result = evaluate_final_execution_safety(
+        step1_permission=permission_with(manual_review_required="false"),
+        **packets,
+    )
+
+    assert result.ready_for_order_compilation is False
+    assert result.checked_conditions["step1_permission_contract_valid"] is False
+
+
+# Independently declared representative permission artifacts. Written as
+# literals on purpose: the oracle must not inherit any assumption from the gate
+# under test.
+_REPRESENTATIVE_PERMISSION_ARTIFACTS: list[tuple[str, Any]] = [
+    (
+        "valid_strict_fresh",
+        {
+            "state": "STRICT_FRESH",
+            "allowed_actions": ["HOLD", "NO_TRADE", "NEW_BUY", "ORDER_COMPILATION"],
+            "manual_review_required": False,
+        },
+    ),
+    (
+        "valid_strict_stale",
+        {
+            "state": "STRICT_STALE",
+            "allowed_actions": ["HOLD", "NO_TRADE", "SELL"],
+            "manual_review_required": False,
+        },
+    ),
+    (
+        "valid_manual_review_required",
+        {
+            "state": "MANUAL_REVIEW_REQUIRED",
+            "allowed_actions": ["HOLD", "NO_TRADE"],
+            "manual_review_required": True,
+        },
+    ),
+    (
+        "valid_promoted_step2_decision_only",
+        {
+            "state": "STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY",
+            "allowed_actions": ["HOLD", "NO_TRADE", "PROMOTED_RESEARCH_DECISION"],
+            "manual_review_required": False,
+        },
+    ),
+    (
+        "valid_promoted_step3_audit_only",
+        {
+            "state": "STRICT_FRESH_COMPILED_ACTIONABLE_STEP3_AUDIT_ONLY",
+            "allowed_actions": [
+                "HOLD",
+                "NO_TRADE",
+                "PROMOTED_RESEARCH_DECISION",
+                "PROMOTED_RESEARCH_AUDIT",
+            ],
+            "manual_review_required": False,
+        },
+    ),
+    (
+        "valid_unknown_state",
+        {
+            "state": "SOME_UNKNOWN_STATE",
+            "allowed_actions": ["HOLD", "NO_TRADE", "ORDER_COMPILATION"],
+            "manual_review_required": False,
+        },
+    ),
+    (
+        "invalid_manual_review_string",
+        {
+            "state": "STRICT_FRESH",
+            "allowed_actions": ["HOLD", "NO_TRADE", "NEW_BUY", "ORDER_COMPILATION"],
+            "manual_review_required": "false",
+        },
+    ),
+    (
+        "invalid_manual_review_missing",
+        {
+            "state": "STRICT_FRESH",
+            "allowed_actions": ["HOLD", "NO_TRADE", "NEW_BUY", "ORDER_COMPILATION"],
+        },
+    ),
+    (
+        "invalid_allowed_actions_item_type",
+        {
+            "state": "STRICT_FRESH",
+            "allowed_actions": ["NEW_BUY", "ORDER_COMPILATION", 7],
+            "manual_review_required": False,
+        },
+    ),
+    (
+        "invalid_allowed_actions_container_type",
+        {
+            "state": "STRICT_FRESH",
+            "allowed_actions": "NEW_BUY,ORDER_COMPILATION",
+            "manual_review_required": False,
+        },
+    ),
+    (
+        "invalid_state_type",
+        {
+            "state": 123,
+            "allowed_actions": ["HOLD", "NO_TRADE", "NEW_BUY", "ORDER_COMPILATION"],
+            "manual_review_required": False,
+        },
+    ),
+    (
+        "invalid_state_empty",
+        {
+            "state": "",
+            "allowed_actions": ["HOLD", "NO_TRADE", "NEW_BUY", "ORDER_COMPILATION"],
+            "manual_review_required": False,
+        },
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "permission",
+    [permission for _, permission in _REPRESENTATIVE_PERMISSION_ARTIFACTS],
+    ids=[label for label, _ in _REPRESENTATIVE_PERMISSION_ARTIFACTS],
+)
+def test_authoritative_validity_and_final_safety_agree(permission: Any) -> None:
+    """One-way authority invariant: contract-INVALID can never be order-ready.
+
+    Deliberately NOT ``gate.allowed == ready_for_order_compilation``: workflow
+    admission and artifact validity are different questions, and asserting that
+    equality would be wrong (a valid promoted artifact is order-ineligible, and
+    the decision-only artifact is Step 2-admissible yet order-ineligible).
+    """
+    contract_invalid = bool(evaluate_step2_research_gate(permission).malformed_reasons)
+
+    result = evaluate_final_execution_safety(
+        step1_permission=permission,
+        **buy_intent_packets(),
+    )
+
+    assert result.checked_conditions["step1_permission_contract_valid"] is not contract_invalid
+    if contract_invalid:
+        assert result.ready_for_order_compilation is False
+
+
+def test_step4_direct_invocation_fails_closed_on_malformed_permission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direct supported Step 4 path: malformed permission + valid residual artifacts.
+
+    The operator need never have run Step 2/3 this run — the residual artifacts
+    satisfy the presence-only upstream guard and no block artifact exists
+    anywhere. Final safety must be independently fail-closed.
+    """
+    prepare_tmp_repo(tmp_path, monkeypatch)
+    write_full_upstream(tmp_path, strict_fresh_permission=False)
+    write_json(
+        step1_research.step1_research_degraded_mode_decision_path(),
+        permission_with(manual_review_required="false"),
+    )
+
+    # No upstream block artifact exists: the final gate is what must refuse.
+    assert not step2_decision_builder.step2_blocked_by_research_gate_path().exists()
+    assert not step3_audit_engine.step3_blocked_by_upstream_gate_path().exists()
+    monkeypatch.setattr(
+        step4_order_compiler,
+        "build_step4_prompt_text",
+        lambda: pytest.fail("Step 4 rendered a prompt despite an invalid permission artifact"),
+    )
+
+    with pytest.raises(FinalExecutionSafetyGateError):
+        step4_order_compiler.render_step4_prompt()
+
+    assert not step4_order_compiler.step4_prompt_path().exists()
+    assert not step4_order_compiler.step4_blocked_by_upstream_gate_path().exists()
+    assert not step4_order_compiler.step4_template4_orders_path().exists()
+    assert not step4_order_compiler.step4_order_state_export_path().exists()
+    assert not step4_order_compiler.step4_exec_summary_path().exists()
+
+    block_path = step4_order_compiler.step4_blocked_by_final_execution_safety_gate_path()
+    payload = json.loads(block_path.read_text(encoding="utf-8"))
+    assert payload["blocked"] is True
+    assert payload["reason"] == "final_execution_safety_gate"
+    assert payload["ready_for_order_compilation"] is False
+    assert payload["recommended_result"] == "NO_TRADE"
+    assert payload["checked_conditions"]["step1_permission_contract_valid"] is False
