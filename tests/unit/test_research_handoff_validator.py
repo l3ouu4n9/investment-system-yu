@@ -8,7 +8,10 @@ from typing import Any
 import pytest
 
 from investment_orchestrator.parsers.extract_research_json import parse_research_output_text
-from investment_orchestrator.validators.validate_research_handoff import validate_research_handoff
+from investment_orchestrator.validators.validate_research_handoff import (
+    LEGACY_RESEARCH_HANDOFF_STRICT_VALIDATOR_CONTRACT_VERSION,
+    validate_research_handoff,
+)
 from investment_orchestrator.validators.validate_research_output import validate_research_output
 from investment_orchestrator.workflow import step1_research
 
@@ -128,6 +131,33 @@ def test_minimal_valid_handoff_fixture_passes_with_valid_strategy_settings() -> 
     assert result.fail_reasons == []
     assert result.missing_fields == []
     assert result.blocker_reasons == []
+
+
+def test_strict_validator_contract_version_is_pinned() -> None:
+    assert (
+        LEGACY_RESEARCH_HANDOFF_STRICT_VALIDATOR_CONTRACT_VERSION
+        == "legacy_research_handoff_strict_validator_v1"
+    )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        pytest.param("handoff_version", "unexpected_handoff_v1", id="version"),
+        pytest.param("handoff_scope", "unexpected_scope", id="scope"),
+        pytest.param("not_order_instruction", False, id="not-order"),
+    ],
+)
+def test_fixed_strategy_a_handoff_literals_fail_closed(
+    field_name: str,
+    invalid_value: Any,
+) -> None:
+    payload = valid_handoff()
+    payload["strategy_a_research_handoff"][field_name] = invalid_value
+
+    result = validate_research_handoff(payload, strategy_settings=strategy_settings())
+
+    assert result.valid is False
 
 
 def test_validator_derives_required_universe_from_strategy_settings() -> None:

@@ -4,9 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Final
 
 
+LEGACY_RESEARCH_HANDOFF_STRICT_VALIDATOR_CONTRACT_VERSION: Final = (
+    "legacy_research_handoff_strict_validator_v1"
+)
+
+# This code-owned identity denotes the validator semantics in this module. Bump it
+# only when those semantics intentionally change.
 BASE_ROLE_KEYS = (
     "benchmark_carrier_core",
     "diversified_core_buffer",
