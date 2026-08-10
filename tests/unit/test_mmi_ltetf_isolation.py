@@ -122,6 +122,43 @@ EXPECTED_EXTERNAL_CONSUMERS = (
     "src/investment_orchestrator/cli/observe_ltetf_target_architecture_gaps.py",
     "src/investment_orchestrator/cli/weekly_shadow_01_report_publisher_cli.py",
 )
+CURRENT_SOURCE_LOCATOR_MODULE = (
+    "investment_orchestrator.production_inputs.current_source_locator"
+)
+PRODUCTION_INPUTS_PATHS = (
+    "src/investment_orchestrator/production_inputs/__init__.py",
+    (
+        "src/investment_orchestrator/production_inputs/"
+        "current_source_locator.py"
+    ),
+)
+# The approved downward dependency: exactly these two MMI owners may consume
+# exactly these locator names.  MMI keeps every secure-I/O and provenance
+# behaviour; the locator owns only the checkout root and the two source paths.
+MMI_CURRENT_SOURCE_LOCATOR_CONSUMERS = (
+    "src/investment_orchestrator/mmi/contracts.py",
+    "src/investment_orchestrator/mmi/source_capture.py",
+)
+ALLOWED_CURRENT_SOURCE_LOCATOR_IMPORTS = frozenset(
+    {
+        CURRENT_SOURCE_LOCATOR_MODULE,
+        f"{CURRENT_SOURCE_LOCATOR_MODULE}.PORTFOLIO_SNAPSHOT_PATH_COMPONENTS",
+        f"{CURRENT_SOURCE_LOCATOR_MODULE}.STRATEGY_SETTINGS_PATH_COMPONENTS",
+        f"{CURRENT_SOURCE_LOCATOR_MODULE}.ProductionCheckoutLayoutError",
+        f"{CURRENT_SOURCE_LOCATOR_MODULE}._lexical_checkout_root",
+    }
+)
+PROHIBITED_PRODUCTION_INPUTS_IMPORT_PREFIXES = (
+    "investment_orchestrator.mmi",
+    "investment_orchestrator.workflow",
+    "investment_orchestrator.state",
+    "investment_orchestrator.permissions",
+    "investment_orchestrator.research",
+    "investment_orchestrator.orders",
+    "investment_orchestrator.broker",
+    "investment_orchestrator.observability",
+    "ctypes",
+)
 PROHIBITED_IMPORT_PREFIXES = (
     "investment_orchestrator.observability",
     "investment_orchestrator.workflow",
@@ -272,6 +309,10 @@ def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -
                     }
                     and imported == "investment_orchestrator.mmi"
                 )
+                or (
+                    path in MMI_CURRENT_SOURCE_LOCATOR_CONSUMERS
+                    and imported in ALLOWED_CURRENT_SOURCE_LOCATOR_IMPORTS
+                )
                 or imported.startswith("investment_orchestrator.mmi.")
             ), (path, imported)
 
@@ -405,6 +446,59 @@ def test_ctypes_authority_is_exactly_source_capture_openat2_only() -> None:
     ] == [("use_errno", True)]
     assert "ctypes.util" not in source
     assert "find_library" not in source
+
+
+def test_current_source_locator_is_a_leaf_owner_with_no_upward_import() -> None:
+    """The locator sits strictly below MMI and owns no observation capability.
+
+    ``mmi.contracts`` and ``mmi.source_capture`` may read the canonical checkout
+    root and the two source paths from it.  Nothing else may consume it, and it
+    may consume nothing upward — in particular no ``ctypes``, so the sole
+    ``openat2`` authority remains ``mmi/source_capture.py``.
+    """
+    inventory = ltetf._scan_production_inventory(repo_root())
+    imports_by_path = dict(inventory.imports_by_path)
+    assert tuple(
+        path
+        for path in inventory.production_paths
+        if "/production_inputs/" in path
+    ) == PRODUCTION_INPUTS_PATHS
+    for path in PRODUCTION_INPUTS_PATHS:
+        imports = imports_by_path[path]
+        assert not any(
+            imported == prefix or imported.startswith(f"{prefix}.")
+            for imported in imports
+            for prefix in PROHIBITED_PRODUCTION_INPUTS_IMPORT_PREFIXES
+        ), (path, imports)
+        assert not any(
+            imported == prefix or imported.startswith(f"{prefix}.")
+            for imported in imports
+            for prefix in PROHIBITED_IMPORT_PREFIXES
+        ), (path, imports)
+        assert {imported.split(".", 1)[0] for imported in imports} <= {
+            "__future__",
+            "os",
+            "pathlib",
+            "typing",
+        }, (path, imports)
+    locator_consumers = tuple(
+        path
+        for path, imports in inventory.imports_by_path
+        if any(
+            imported == CURRENT_SOURCE_LOCATOR_MODULE
+            or imported.startswith(f"{CURRENT_SOURCE_LOCATOR_MODULE}.")
+            for imported in imports
+        )
+    )
+    assert set(locator_consumers) == set(
+        MMI_CURRENT_SOURCE_LOCATOR_CONSUMERS
+    )
+    for path in MMI_CURRENT_SOURCE_LOCATOR_CONSUMERS:
+        assert {
+            imported
+            for imported in imports_by_path[path]
+            if imported.startswith("investment_orchestrator.production_inputs")
+        } <= ALLOWED_CURRENT_SOURCE_LOCATOR_IMPORTS
 
 
 def test_schema_helper_is_imported_by_exact_symbol_only() -> None:
@@ -729,7 +823,8 @@ def test_reachable_schema_validation_call_graph_does_not_write(
 
 def test_ltetf_inventory_classification_is_unchanged_except_inventory_content() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
-    assert len(inventory.production_paths) == 155
+    # 155 + exactly the two new canonical CURRENT-source locator modules.
+    assert len(inventory.production_paths) == 157
     assert inventory.dynamic_findings == ()
     assert inventory.observer_external_consumers == EXPECTED_EXTERNAL_CONSUMERS
     assert inventory.report_artifact_readers == ()

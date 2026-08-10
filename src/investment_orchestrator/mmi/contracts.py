@@ -35,6 +35,10 @@ from investment_orchestrator.mmi.canonical import (
     domain_separated_sha256,
     record_identity_sha256,
 )
+from investment_orchestrator.production_inputs.current_source_locator import (
+    PORTFOLIO_SNAPSHOT_PATH_COMPONENTS,
+    STRATEGY_SETTINGS_PATH_COMPONENTS,
+)
 
 
 AUTHORITY_EFFECT_NONE: Final = "NONE"
@@ -644,18 +648,18 @@ class MmiSourceSpec:
 _STRATEGY_SETTINGS_SPEC: Final = MmiSourceSpec(
     role=MmiSourceRole.STRATEGY_SETTINGS,
     source_id="MMI_STRATEGY_SETTINGS",
-    path_components=("inputs", "current", "strategy_settings.yaml"),
+    path_components=STRATEGY_SETTINGS_PATH_COMPONENTS,
     repository_relative_locator=PurePosixPath(
-        "inputs/current/strategy_settings.yaml"
+        *STRATEGY_SETTINGS_PATH_COMPONENTS
     ),
     maximum_bytes=262_144,
 )
 _PORTFOLIO_SNAPSHOT_SPEC: Final = MmiSourceSpec(
     role=MmiSourceRole.PORTFOLIO_SNAPSHOT,
     source_id="MMI_PORTFOLIO_SNAPSHOT",
-    path_components=("inputs", "current", "portfolio_snapshot.txt"),
+    path_components=PORTFOLIO_SNAPSHOT_PATH_COMPONENTS,
     repository_relative_locator=PurePosixPath(
-        "inputs/current/portfolio_snapshot.txt"
+        *PORTFOLIO_SNAPSHOT_PATH_COMPONENTS
     ),
     maximum_bytes=1_048_576,
 )

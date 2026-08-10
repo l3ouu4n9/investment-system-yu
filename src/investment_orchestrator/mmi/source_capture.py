@@ -29,6 +29,10 @@ from investment_orchestrator.mmi.contracts import (
     MmiSourceSpec,
     _create_mmi_captured_source,
 )
+from investment_orchestrator.production_inputs.current_source_locator import (
+    ProductionCheckoutLayoutError,
+    _lexical_checkout_root,
+)
 
 
 _SHA256_RE: Final = re.compile(r"^[0-9a-f]{64}$")
@@ -974,36 +978,22 @@ def _validate_built_source_record(
 def _lexical_production_checkout(
     module_file: str | Path,
 ) -> tuple[Path, Path]:
+    """Resolve this module's checkout through the canonical locator owner.
+
+    The fail-closed lexical semantics are owned by
+    ``production_inputs.current_source_locator``; MMI supplies only its own
+    module suffix and maps the neutral layout rejection onto the unchanged MMI
+    diagnostic.
+    """
     try:
-        raw = os.fspath(module_file)
-    except TypeError:
+        return _lexical_checkout_root(
+            module_file,
+            module_path_components=_PRODUCTION_MODULE_SUFFIX,
+        )
+    except ProductionCheckoutLayoutError:
         raise _CaptureFailure(
             "MMI_SOURCE_PRODUCTION_LAYOUT_UNSUPPORTED"
         ) from None
-    if (
-        type(raw) is not str
-        or not os.path.isabs(raw)
-        or "\x00" in raw
-        or os.path.normpath(raw) != raw
-    ):
-        raise _CaptureFailure(
-            "MMI_SOURCE_PRODUCTION_LAYOUT_UNSUPPORTED"
-        )
-    module_path = Path(raw)
-    if tuple(module_path.parts[-len(_PRODUCTION_MODULE_SUFFIX) :]) != (
-        _PRODUCTION_MODULE_SUFFIX
-    ):
-        raise _CaptureFailure(
-            "MMI_SOURCE_PRODUCTION_LAYOUT_UNSUPPORTED"
-        )
-    repository_root = module_path
-    for _component in _PRODUCTION_MODULE_SUFFIX:
-        repository_root = repository_root.parent
-    if not repository_root.is_absolute():
-        raise _CaptureFailure(
-            "MMI_SOURCE_PRODUCTION_LAYOUT_UNSUPPORTED"
-        )
-    return repository_root, module_path
 
 
 def _capture_fixed_source_bytes(
