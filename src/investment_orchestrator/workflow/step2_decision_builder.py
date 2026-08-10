@@ -47,7 +47,6 @@ from investment_orchestrator.state.research_degraded_mode_gate import (
     ResearchDegradedModeGateError,
     ResearchDegradedModeGateResult,
     enforce_step2_research_gate,
-    load_and_evaluate_step2_research_gate,
 )
 from investment_orchestrator.validators.strategy_settings import parse_strategy_settings_text
 from investment_orchestrator.workflow.step1_research import (
@@ -226,12 +225,27 @@ def render_step2_prompt() -> dict[str, str]:
 def parse_step2_output() -> dict[str, str]:
     """Parse and validate the manual Step 2 output artifacts.
 
+    Admission is enforced before the raw response is read or any Step 2 output
+    is extracted or persisted. A denied state therefore writes only the existing
+    deterministic research-gate block artifact through the gate owner.
+
     On a promoted decision-only run (R2E.5b-6c) the parse additionally refreshes
     the deterministic decision-only marker and reports it: the parsed decision
     packet is a research decision only — order_compilation_allowed stays false
     and Step 3/4 remain blocked. The LLM decision packet itself is written
     verbatim (never mutated by deterministic code).
     """
+    gate = enforce_step2_research_gate(
+        source_artifact_path=step1_research_degraded_mode_decision_path(),
+        blocked_artifact_path=step2_blocked_by_research_gate_path(),
+        repo_root_path=repo_root(),
+    )
+    promoted_context = (
+        _load_promoted_step2_context_or_block(gate)
+        if gate.mode == MODE_PROMOTED_STEP2_DECISION_ONLY
+        else None
+    )
+
     template2_text, decision_packet = extract_template2_and_decision_packet(
         raw_output_path=step2_raw_output_path(),
         template2_output_path=step2_template2_output_path(),
@@ -245,9 +259,7 @@ def parse_step2_output() -> dict[str, str]:
             decision_packet.get("MARKET_DATA_SNAPSHOT", {}).get("snapshot_type", "")
         ),
     }
-    gate = load_and_evaluate_step2_research_gate(step1_research_degraded_mode_decision_path())
-    if gate.allowed and gate.mode == MODE_PROMOTED_STEP2_DECISION_ONLY:
-        promoted_context = _load_promoted_step2_context_or_block(gate)
+    if promoted_context is not None:
         marker_path = _write_promoted_decision_only_marker(gate, promoted_context)
         result["mode"] = gate.mode
         result["step2_promoted_decision_only_path"] = str(marker_path)

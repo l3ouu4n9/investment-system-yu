@@ -525,24 +525,27 @@ def extract_template2_and_decision_packet(
     return template2_text, decision_packet
 
 
-def main() -> int:
-    import argparse
+# --- standalone CLI safety boundary -------------------------------------------
 
-    parser = argparse.ArgumentParser(
-        description="Extract TEMPLATE2_OUTPUT and DECISION_PACKET from a manual Step 2 output."
-    )
-    parser.add_argument("--raw-output", required=True, help="Path to step2 raw_output.txt")
-    parser.add_argument("--template2-output", required=True, help="Path to write template2_output.txt")
-    parser.add_argument("--decision-packet", required=True, help="Path to write decision_packet.json")
-    args = parser.parse_args()
+PRIMARY_PATH_HINT = "PYTHONPATH=src uv run python -m investment_orchestrator.cli.run_step2 parse"
+_STANDALONE_CLI_REFUSAL = (
+    "refusing to run: this standalone Step 2 extractor is not the primary research-admission "
+    "path and cannot enforce the Step 2 research gate.\n"
+    f"Use the gated workflow path instead:\n    {PRIMARY_PATH_HINT}"
+)
 
-    extract_template2_and_decision_packet(
-        raw_output_path=Path(args.raw_output),
-        template2_output_path=Path(args.template2_output),
-        decision_packet_path=Path(args.decision_packet),
-    )
-    print(args.decision_packet)
-    return 0
+
+def main(_argv: list[str] | None = None) -> int:
+    """Refuse the ungated standalone writer before reading or writing any path.
+
+    ``extract_template2_and_decision_packet`` remains a reusable content parser
+    for the gated workflow and tests. Canonical Step 2 artifacts may only be
+    written through ``run_step2 parse``, which owns research admission.
+    """
+    import sys
+
+    print(_STANDALONE_CLI_REFUSAL, file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":
