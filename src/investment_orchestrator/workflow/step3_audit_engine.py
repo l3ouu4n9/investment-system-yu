@@ -38,13 +38,16 @@ from investment_orchestrator.state.research_availability import (
 )
 from investment_orchestrator.state.research_degraded_mode_gate import (
     MODE_PROMOTED_STEP2_DECISION_ONLY,
+    MODE_STRICT_FRESH_ACTIONABLE,
     NO_TRADE_PENDING_FINAL_GATES,
     PROMOTED_SOURCE,
+    ResearchDegradedModeGateResult,
     load_and_evaluate_step2_research_gate,
 )
 from investment_orchestrator.state.upstream_artifact_guard import (
     UpstreamArtifactGuardError,
     enforce_upstream_artifact_guard,
+    resolve_upstream_permission_metadata,
 )
 from investment_orchestrator.validators.strategy_settings import parse_strategy_settings_text
 from investment_orchestrator.workflow.step1_research import (
@@ -84,6 +87,7 @@ STEP3_PROMOTED_AUDIT_ONLY_DOWNSTREAM_BLOCK_SCHEMA_VERSION = (
     "step3_promoted_audit_only_downstream_block_v1"
 )
 MODE_PROMOTED_STEP3_AUDIT_ONLY = "promoted_step3_audit_only"
+STEP3_RESEARCH_ADMISSION_DENIED_REASON = "step3_research_admission_denied"
 PROMOTED_DECISION_ONLY_NO_AUDIT_REASON = "promoted_step2_decision_only_no_audit_permission"
 PROMOTED_STEP3_AUDIT_ONLY_VERIFICATION_FAILED_REASON = (
     "promoted_step3_audit_only_verification_failed"
@@ -159,18 +163,42 @@ def step3_promoted_audit_only_downstream_block_path() -> Path:
     return step3_artifact_dir() / STEP3_PROMOTED_AUDIT_ONLY_DOWNSTREAM_BLOCK_FILENAME
 
 
-def enforce_step3_upstream_guard() -> None:
-    """Fail closed before Step 3 consumes blocked or missing Step 2 artifacts.
+def enforce_step3_upstream_guard() -> dict[str, Any] | None:
+    """Resolve and enforce current Step 3 admission before any Step 3 work.
 
-    R2E.5b-6c: the promoted Step 2 decision-only mode permits Step 2 ONLY. When
-    the research gate resolves to that mode, Step 3 deterministically blocks
-    (``promoted_step2_decision_only_no_audit_permission``) regardless of which
-    Step 2 artifacts exist — a decision-only packet must never be audited into
-    order readiness without a future explicit audit-permission PR.
+    This is the single shared admission boundary for both ``run_step3 render``
+    and ``run_step3 parse``; neither duplicates normal state policy. Ordering is
+    authoritative, and the current permission decision is read and interpreted
+    exactly once per invocation:
+
+    1. exact promoted Step 3 audit-only recognition + provenance verification
+       (R2E.5b-6f). On success the resolved promoted context is returned and the
+       normal policy below is deliberately not consulted.
+    2. R2E.5b-6c: the promoted Step 2 decision-only mode permits Step 2 ONLY.
+       When the research gate resolves to that mode, Step 3 deterministically
+       blocks (``promoted_step2_decision_only_no_audit_permission``) regardless
+       of which Step 2 artifacts exist — a decision-only packet must never be
+       audited into order readiness without a future explicit audit-permission
+       PR.
+    3. current normal research admission: the authoritative Step 2 research gate
+       must *currently* resolve to the STRICT_FRESH actionable mode. Every other
+       current state — including a missing, malformed, or otherwise gate-denied
+       permission decision — fails closed here, before any residual Step 2
+       content is read and before any Step 3 artifact is produced.
+    4. the existing generic upstream artifact guard, which keeps its own
+       ownership: upstream block presence and required artifact presence.
+
+    Residual Step 2 artifacts never confer Step 3 authority by presence alone.
+    Admission is a property of the *current* permission decision, not of files
+    left on disk by an earlier admitted run.
     """
-    if _load_promoted_step3_context_if_state_or_block() is not None:
-        return
-    _enforce_step3_promoted_decision_only_block()
+    promoted_context = _load_promoted_step3_context_if_state_or_block()
+    if promoted_context is not None:
+        return promoted_context
+
+    gate = load_and_evaluate_step2_research_gate(step1_research_degraded_mode_decision_path())
+    _enforce_step3_promoted_decision_only_block(gate)
+    _enforce_step3_normal_research_admission(gate)
     enforce_upstream_artifact_guard(
         blocked_artifact_path=step3_blocked_by_upstream_gate_path(),
         upstream_blocked_artifacts=[step2_blocked_by_research_gate_path()],
@@ -183,11 +211,70 @@ def enforce_step3_upstream_guard() -> None:
         repo_root_path=repo_root(),
         permission_fallback_artifacts=[step1_research_degraded_mode_decision_path()],
     )
+    return None
 
 
-def _enforce_step3_promoted_decision_only_block() -> None:
+def _enforce_step3_normal_research_admission(gate: ResearchDegradedModeGateResult) -> None:
+    """Require the current gate result that authorizes normal Step 3.
+
+    Normal Step 3 is admitted only by the existing authoritative research-gate
+    result for normal actionable work: literal ``STRICT_FRESH`` resolved to
+    ``MODE_STRICT_FRESH_ACTIONABLE`` with ``step3_allowed``. The gate already
+    owns the exact state, the permission semantics, manual-review validity, the
+    mode, and the NEW_BUY / ORDER_COMPILATION policy, so nothing is
+    reinterpreted here: there is no local state whitelist and no inference from
+    artifact presence.
+
+    Denial writes the existing normal Step 3 block artifact and raises. No
+    preexisting Step 3 prompt/raw/audit/packet file is written, truncated, or
+    removed — the fresh block artifact is what makes those stale bytes unusable
+    downstream.
+    """
+    if gate.allowed and gate.mode == MODE_STRICT_FRESH_ACTIONABLE and gate.step3_allowed:
+        return
+
+    permission, read_errors = resolve_upstream_permission_metadata(
+        blocked_by_artifact=None,
+        fallback_artifacts=[
+            step2_blocked_by_research_gate_path(),
+            step1_research_degraded_mode_decision_path(),
+        ],
+        repo_root_path=repo_root(),
+    )
+    blocked_artifact_path = step3_blocked_by_upstream_gate_path()
+    write_json(
+        blocked_artifact_path,
+        {
+            "blocked": True,
+            "reason": STEP3_RESEARCH_ADMISSION_DENIED_REASON,
+            "state": gate.state,
+            "mode": gate.mode,
+            "allowed_actions": list(gate.allowed_actions),
+            "blocked_actions": list(gate.blocked_actions),
+            "order_compilation_allowed": gate.order_compilation_allowed,
+            "new_buy_permission": gate.new_buy_permission,
+            "step3_allowed": gate.step3_allowed,
+            "step4_allowed": gate.step4_allowed,
+            "manual_review_required": gate.manual_review_required,
+            "blocker_reasons": list(gate.blocker_reasons),
+            "malformed_reasons": list(gate.malformed_reasons),
+            "source_artifact": _display_path(step1_research_degraded_mode_decision_path()),
+            "recommended_result": "NO_TRADE",
+            "report_only": False,
+            "upstream_permission": permission,
+            "upstream_permission_read_errors": read_errors,
+        },
+    )
+    raise UpstreamArtifactGuardError(
+        "Step 3 blocked by current research admission: "
+        f"reason={STEP3_RESEARCH_ADMISSION_DENIED_REASON}; state={gate.state}; "
+        f"mode={gate.mode}; manual_review_required={gate.manual_review_required}; "
+        f"blocked_artifact={_display_path(blocked_artifact_path)}"
+    )
+
+
+def _enforce_step3_promoted_decision_only_block(gate: ResearchDegradedModeGateResult) -> None:
     """Block Step 3 when Step 2 ran (or would run) in promoted decision-only mode."""
-    gate = load_and_evaluate_step2_research_gate(step1_research_degraded_mode_decision_path())
     if not (gate.allowed and gate.mode == MODE_PROMOTED_STEP2_DECISION_ONLY):
         return
     blocked_artifact_path = step3_blocked_by_promoted_decision_only_gate_path()
@@ -488,10 +575,12 @@ def _promoted_step3_source_metadata_block(promoted_context: dict[str, Any]) -> s
 
 
 def render_step3_prompt() -> dict[str, str]:
-    """Write the rendered Step 3 prompt and prepare the manual output artifact."""
-    promoted_context = _load_promoted_step3_context_if_state_or_block()
-    if promoted_context is None:
-        enforce_step3_upstream_guard()
+    """Write the rendered Step 3 prompt and prepare the manual output artifact.
+
+    Admission is resolved once by the shared Step 3 guard before any Step 2
+    residual content is read and before any Step 3 artifact is written.
+    """
+    promoted_context = enforce_step3_upstream_guard()
 
     artifact_dir = step3_artifact_dir()
     prompt_output_path = step3_prompt_path()
@@ -532,8 +621,13 @@ def render_step3_prompt() -> dict[str, str]:
 
 
 def parse_step3_output() -> dict[str, str]:
-    """Parse and validate the manual Step 3 output artifacts."""
-    promoted_context = _load_promoted_step3_context_if_state_or_block()
+    """Parse and validate the manual Step 3 output artifacts.
+
+    Admission is resolved once by the shared Step 3 guard — the same boundary
+    ``render`` passes — before the Step 3 raw output is read, before any audit
+    output is constructed, and before any Step 3 artifact is persisted.
+    """
+    promoted_context = enforce_step3_upstream_guard()
     if promoted_context is not None:
         audit_text = _require_non_empty_text(
             step3_raw_output_path(),
@@ -574,8 +668,6 @@ def parse_step3_output() -> dict[str, str]:
                 "promoted_final_safety_preflight_passed", ""
             ),
         }
-
-    enforce_step3_upstream_guard()
 
     template3_audit_text, template2_patch_text, audited_packet = extract_audit_and_audited_packet(
         raw_output_path=step3_raw_output_path(),

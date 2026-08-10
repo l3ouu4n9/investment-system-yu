@@ -260,30 +260,27 @@ def extract_audit_and_audited_packet(
     return template3_audit_text, template2_patch_text, audited_packet
 
 
-def main() -> int:
-    import argparse
+# --- standalone CLI safety boundary -------------------------------------------
 
-    parser = argparse.ArgumentParser(
-        description="Extract TEMPLATE3_AUDIT, optional TEMPLATE2_PATCH, and AUDITED_DECISION_PACKET from Step 3 output."
-    )
-    parser.add_argument("--raw-output", required=True, help="Path to step3 raw_output.txt")
-    parser.add_argument("--template3-audit", required=True, help="Path to write template3_audit.txt")
-    parser.add_argument("--template2-patch", required=True, help="Path to write template2_patch.txt")
-    parser.add_argument(
-        "--audited-decision-packet",
-        required=True,
-        help="Path to write audited_decision_packet.json",
-    )
-    args = parser.parse_args()
+PRIMARY_PATH_HINT = "PYTHONPATH=src uv run python -m investment_orchestrator.cli.run_step3 parse"
+_STANDALONE_CLI_REFUSAL = (
+    "refusing to run: this standalone Step 3 extractor is not the primary research-admission "
+    "path and cannot enforce the Step 3 upstream/research gate.\n"
+    f"Use the gated workflow path instead:\n    {PRIMARY_PATH_HINT}"
+)
 
-    extract_audit_and_audited_packet(
-        raw_output_path=Path(args.raw_output),
-        template3_audit_path=Path(args.template3_audit),
-        template2_patch_path=Path(args.template2_patch),
-        audited_decision_packet_path=Path(args.audited_decision_packet),
-    )
-    print(args.audited_decision_packet)
-    return 0
+
+def main(_argv: list[str] | None = None) -> int:
+    """Refuse the ungated standalone writer before reading or writing any path.
+
+    ``extract_audit_and_audited_packet`` remains a reusable content parser for
+    the gated workflow and tests. Canonical Step 3 artifacts may only be written
+    through ``run_step3 parse``, which owns Step 3 admission.
+    """
+    import sys
+
+    print(_STANDALONE_CLI_REFUSAL, file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":

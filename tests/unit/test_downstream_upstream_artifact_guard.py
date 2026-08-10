@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -184,6 +185,10 @@ def test_step3_blocks_before_prompt_render_when_step2_research_gate_blocked(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     prepare_tmp_repo(tmp_path, monkeypatch)
+    # Current research admission is satisfied (STRICT_FRESH), so this test keeps
+    # exercising what the generic upstream artifact guard actually owns: the
+    # presence of an upstream block artifact.
+    write_step1_strict_fresh_permission()
     write_json(step2_decision_builder.step2_blocked_by_research_gate_path(), {"blocked": True})
     write_json(step2_decision_builder.step2_decision_packet_path(), {"stale": "must_not_be_read"})
     monkeypatch.setattr(
@@ -206,10 +211,13 @@ def test_step3_blocks_before_prompt_render_when_step2_research_gate_blocked(
         == "artifacts/current/step2_decision_builder/step2_blocked_by_research_gate.json"
     )
     assert payload["missing_required_artifacts"] == []
-    # Minimal upstream blocked artifact carries no permission fields and no Step 1
-    # decision exists: metadata is unresolved but the gate still failed closed.
-    assert payload["upstream_permission"] is None
-    assert payload["upstream_permission_read_errors"]
+    # The minimal upstream blocked artifact carries no permission fields, so the
+    # metadata falls back to the Step 1 decision and the miss is recorded.
+    assert payload["upstream_permission"]["state"] == "STRICT_FRESH"
+    assert any(
+        "step2_blocked_by_research_gate.json" in err
+        for err in payload["upstream_permission_read_errors"]
+    )
     assert any(
         "upstream_gate_already_blocked" in note
         for note in payload["stale_or_inconsistent_artifacts"]
@@ -221,6 +229,9 @@ def test_step3_missing_decision_packet_blocks_with_missing_required_artifact(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     prepare_tmp_repo(tmp_path, monkeypatch)
+    # Admitted current state: the missing residual artifact — not the research
+    # state — must be what blocks, preserving the failure classification.
+    write_step1_strict_fresh_permission()
     write_text(step2_decision_builder.step2_prompt_path(), "STEP2 PROMPT\n")
     write_text(step2_decision_builder.step2_raw_output_path(), "STEP2 RAW\n")
     write_text(step2_decision_builder.step2_template2_output_path(), "TEMPLATE2 OUTPUT\n")
@@ -238,7 +249,7 @@ def test_step3_missing_decision_packet_blocks_with_missing_required_artifact(
     ]
     # No upstream blocked artifact triggered this; stale note stays empty.
     assert payload["stale_or_inconsistent_artifacts"] == []
-    assert payload["upstream_permission"] is None
+    assert payload["upstream_permission"]["state"] == "STRICT_FRESH"
 
 
 def test_step3_allowed_upstream_artifacts_preserve_existing_render_behavior(
@@ -246,6 +257,7 @@ def test_step3_allowed_upstream_artifacts_preserve_existing_render_behavior(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     prepare_tmp_repo(tmp_path, monkeypatch)
+    write_step1_strict_fresh_permission()
     write_step2_normal_artifacts()
 
     result = step3_audit_engine.render_step3_prompt()
@@ -254,6 +266,39 @@ def test_step3_allowed_upstream_artifacts_preserve_existing_render_behavior(
     assert step3_audit_engine.step3_prompt_path().exists()
     assert step3_audit_engine.step3_raw_output_path().read_text(encoding="utf-8") == ""
     assert not step3_audit_engine.step3_blocked_by_upstream_gate_path().exists()
+
+
+def test_step3_residual_step2_artifacts_alone_no_longer_admit_step3(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Previously this exact setup rendered a Step 3 prompt; it must now fail closed.
+
+    The residual Step 2 files are byte-identical to the ones the admitted
+    ``STRICT_FRESH`` case above renders from, and no Step 2 block artifact
+    exists — the *only* difference is the absent current permission decision.
+    """
+    prepare_tmp_repo(tmp_path, monkeypatch)
+    write_step2_normal_artifacts()
+    monkeypatch.setattr(
+        step3_audit_engine,
+        "load_decision_packet_text",
+        lambda: pytest.fail("Step 3 consumed residual Step 2 content without admission"),
+    )
+
+    with pytest.raises(UpstreamArtifactGuardError, match="current research admission"):
+        step3_audit_engine.render_step3_prompt()
+
+    assert not step3_audit_engine.step3_prompt_path().exists()
+    assert not step3_audit_engine.step3_raw_output_path().exists()
+    payload = read_json_file(step3_audit_engine.step3_blocked_by_upstream_gate_path())
+    assert_common_blocked_payload(payload)
+    assert payload["reason"] == "step3_research_admission_denied"
+    assert payload["state"] == "MISSING_RESEARCH_PERMISSION"
+    assert payload["step3_allowed"] is False
+    assert payload["step4_allowed"] is False
+    assert payload["order_compilation_allowed"] is False
+    assert payload["new_buy_permission"] is False
 
 
 def test_step4_blocks_before_prompt_render_when_step2_research_gate_blocked(
@@ -478,3 +523,335 @@ def test_metadata_enrichment_read_failure_records_error_and_still_blocks(
         "research_degraded_mode_decision.json" in err
         for err in payload["upstream_permission_read_errors"]
     )
+
+
+# --- Step 3 current-state admission ------------------------------------------
+#
+# The nine currently recognized normal states that must never enter Step 3 are
+# declared here independently of the production gate/availability modules: this
+# matrix is the authority the implementation is checked against, not a mirror of
+# it. ``STRICT_FRESH_COMPILED_ACTIONABLE_STEP2_DECISION_ONLY`` and
+# ``STRICT_FRESH_COMPILED_ACTIONABLE_STEP3_AUDIT_ONLY`` are deliberately absent:
+# they own separate, already-covered promoted paths.
+
+STEP3_BLOCKED_RECOGNIZED_STATES = (
+    "STRICT_STALE",
+    "STRICT_FRESH_EVIDENCE_ONLY",
+    "STRICT_FRESH_GROUNDED_MEMO_NON_ACTIONABLE",
+    "STRICT_FRESH_COMPILED_ACTIONABLE_PENDING_GATES",
+    "DEGRADED_WITH_LAST_GOOD",
+    "DEGRADED_NO_RESEARCH",
+    "INVALID_CONTRACT",
+    "NO_OUTPUT",
+    "MANUAL_REVIEW_REQUIRED",
+)
+
+STEP3_ADMISSION_DENIED_REASON = "step3_research_admission_denied"
+
+
+def write_step1_permission_for_state(state: str) -> None:
+    """Write a well-formed Step 1 permission artifact for a recognized state."""
+    write_json(
+        step1_research.step1_research_degraded_mode_decision_path(),
+        {
+            "state": state,
+            "research_availability": state.lower(),
+            "allowed_actions": ["HOLD", "NO_TRADE"],
+            "blocked_actions": ["NEW_BUY", "ORDER_COMPILATION"],
+            "manual_review_required": state == "MANUAL_REVIEW_REQUIRED",
+            "blocker_reasons": [f"{state} blocks actionable work"],
+            "non_blocker_reasons": [],
+            "recommended_result": "NO_TRADE",
+            "report_only": True,
+        },
+    )
+
+
+def step3_raw_output_text() -> str:
+    """A Step 3 raw response the reusable content parser accepts."""
+    return (
+        "TEMPLATE3_AUDIT_START\nAUDIT BODY\nTEMPLATE3_AUDIT_END\n"
+        "AUDITED_DECISION_PACKET_START\n"
+        + json.dumps(audited_decision_packet())
+        + "\nAUDITED_DECISION_PACKET_END\n"
+    )
+
+
+def seed_prior_step3_outputs() -> dict[Path, bytes]:
+    """Seed preexisting Step 3 prompt/raw/audit/patch/packet artifacts."""
+    write_text(step3_audit_engine.step3_prompt_path(), "PRIOR STEP3 PROMPT\n")
+    write_text(step3_audit_engine.step3_raw_output_path(), "PRIOR STEP3 RAW\n")
+    write_text(step3_audit_engine.step3_template3_audit_path(), "PRIOR TEMPLATE3 AUDIT\n")
+    write_text(step3_audit_engine.step3_template2_patch_path(), "PRIOR TEMPLATE2 PATCH\n")
+    write_json(
+        step3_audit_engine.step3_audited_decision_packet_path(),
+        {"audit_passed": True, "prior": "must_not_be_repaired"},
+    )
+    return {
+        path: path.read_bytes()
+        for path in (
+            step3_audit_engine.step3_prompt_path(),
+            step3_audit_engine.step3_raw_output_path(),
+            step3_audit_engine.step3_template3_audit_path(),
+            step3_audit_engine.step3_template2_patch_path(),
+            step3_audit_engine.step3_audited_decision_packet_path(),
+        )
+    }
+
+
+def assert_prior_step3_outputs_unchanged(prior: dict[Path, bytes]) -> None:
+    """Old Step 3 bytes must survive a denial exactly — never repaired or deleted."""
+    for path, original in prior.items():
+        assert path.is_file(), f"denied Step 3 invocation deleted {path.name}"
+        current = path.read_bytes()
+        assert hashlib.sha256(current).hexdigest() == hashlib.sha256(original).hexdigest()
+        assert current == original
+
+
+def step3_dir_filenames() -> set[str]:
+    return {path.name for path in step3_audit_engine.step3_artifact_dir().iterdir()}
+
+
+def forbid_step3_content_work(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tripwires on every residual-content read and Step 3 content write."""
+    for attribute, label in (
+        ("load_template2_output_text", "Step 2 template2 output"),
+        ("load_decision_packet_text", "Step 2 decision packet"),
+        ("build_step3_prompt_text", "Step 3 prompt body"),
+    ):
+        monkeypatch.setattr(
+            step3_audit_engine,
+            attribute,
+            lambda *_a, _label=label, **_k: pytest.fail(
+                f"denied Step 3 invocation consumed {_label}"
+            ),
+        )
+    monkeypatch.setattr(
+        step3_audit_engine,
+        "extract_audit_and_audited_packet",
+        lambda **_kwargs: pytest.fail("denied Step 3 invocation reached the Step 3 extractor"),
+    )
+
+
+@pytest.mark.parametrize("state", STEP3_BLOCKED_RECOGNIZED_STATES)
+@pytest.mark.parametrize("command", ["render", "parse"])
+def test_step3_guard_rejects_every_blocked_recognized_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    state: str,
+    command: str,
+) -> None:
+    """Every blocked recognized state fails closed before any Step 3 work.
+
+    Residual Step 2 artifacts are complete and valid and no Step 2 block artifact
+    exists, so nothing except the current permission decision denies the run.
+    """
+    prepare_tmp_repo(tmp_path, monkeypatch)
+    write_step2_normal_artifacts()
+    write_step1_permission_for_state(state)
+    prior = seed_prior_step3_outputs()
+    seeded_filenames = step3_dir_filenames()
+    forbid_step3_content_work(monkeypatch)
+
+    invoke = (
+        step3_audit_engine.render_step3_prompt
+        if command == "render"
+        else step3_audit_engine.parse_step3_output
+    )
+    with pytest.raises(UpstreamArtifactGuardError, match="current research admission"):
+        invoke()
+
+    payload = read_json_file(step3_audit_engine.step3_blocked_by_upstream_gate_path())
+    assert_common_blocked_payload(payload)
+    assert payload["reason"] == STEP3_ADMISSION_DENIED_REASON
+    assert payload["state"] == state
+    assert payload["mode"] == "blocked"
+    assert payload["step3_allowed"] is False
+    assert payload["step4_allowed"] is False
+    assert payload["order_compilation_allowed"] is False
+    assert payload["new_buy_permission"] is False
+    assert payload["manual_review_required"] is (state == "MANUAL_REVIEW_REQUIRED")
+
+    # No new Step 3 artifact beyond the block itself, and old bytes are intact.
+    assert step3_dir_filenames() == seeded_filenames | {
+        "step3_blocked_by_upstream_gate.json"
+    }
+    assert_prior_step3_outputs_unchanged(prior)
+    assert not step3_audit_engine.step3_promoted_audit_only_path().exists()
+    assert not step3_audit_engine.step3_blocked_by_promoted_decision_only_gate_path().exists()
+
+
+@pytest.mark.parametrize("command", ["render", "parse"])
+def test_step3_missing_permission_decision_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+) -> None:
+    prepare_tmp_repo(tmp_path, monkeypatch)
+    write_step2_normal_artifacts()
+    forbid_step3_content_work(monkeypatch)
+    assert not step1_research.step1_research_degraded_mode_decision_path().exists()
+
+    invoke = (
+        step3_audit_engine.render_step3_prompt
+        if command == "render"
+        else step3_audit_engine.parse_step3_output
+    )
+    with pytest.raises(UpstreamArtifactGuardError, match="current research admission"):
+        invoke()
+
+    payload = read_json_file(step3_audit_engine.step3_blocked_by_upstream_gate_path())
+    assert payload["reason"] == STEP3_ADMISSION_DENIED_REASON
+    assert payload["state"] == "MISSING_RESEARCH_PERMISSION"
+    assert not step3_audit_engine.step3_prompt_path().exists()
+    assert not step3_audit_engine.step3_audited_decision_packet_path().exists()
+
+
+@pytest.mark.parametrize(
+    ("label", "decision_text"),
+    [
+        ("malformed_json", "{not json"),
+        ("non_object_root", "[]"),
+        ("state_not_a_string", json.dumps({"state": 7, "allowed_actions": [], "manual_review_required": False})),
+        (
+            "unknown_state",
+            json.dumps(
+                {
+                    "state": "H1_SOME_FUTURE_STATE",
+                    "research_availability": "h1_some_future_state",
+                    "allowed_actions": ["HOLD", "NO_TRADE", "NEW_BUY", "ORDER_COMPILATION"],
+                    "blocked_actions": [],
+                    "manual_review_required": False,
+                }
+            ),
+        ),
+    ],
+)
+def test_step3_malformed_or_unknown_permission_decision_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    label: str,
+    decision_text: str,
+) -> None:
+    """Malformed and unknown current decisions fail closed before Step 3 work.
+
+    ``unknown_state`` deliberately claims the full actionable action set: an
+    unrecognized state can never buy Step 3 admission by widening its own
+    ``allowed_actions``. This is also why a future availability state needs no
+    Step 3-specific branch — it is simply not the admitted normal state.
+    """
+    prepare_tmp_repo(tmp_path, monkeypatch)
+    write_step2_normal_artifacts()
+    write_text(step1_research.step1_research_degraded_mode_decision_path(), decision_text)
+    prior = seed_prior_step3_outputs()
+    forbid_step3_content_work(monkeypatch)
+
+    with pytest.raises(UpstreamArtifactGuardError, match="current research admission"):
+        step3_audit_engine.render_step3_prompt()
+
+    payload = read_json_file(step3_audit_engine.step3_blocked_by_upstream_gate_path())
+    assert payload["reason"] == STEP3_ADMISSION_DENIED_REASON
+    if label == "unknown_state":
+        assert payload["state"] == "H1_SOME_FUTURE_STATE"
+    else:
+        assert payload["state"] == "MALFORMED_RESEARCH_PERMISSION"
+        assert payload["malformed_reasons"]
+    assert_prior_step3_outputs_unchanged(prior)
+
+
+def test_strict_fresh_render_admits_before_reading_residual_step2_content(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepare_tmp_repo(tmp_path, monkeypatch)
+    write_step1_strict_fresh_permission()
+    write_step2_normal_artifacts()
+
+    calls: list[str] = []
+    real_guard = step3_audit_engine.enforce_step3_upstream_guard
+    real_loader = step3_audit_engine.load_decision_packet_text
+
+    def tracked_guard() -> Any:
+        calls.append("admission")
+        return real_guard()
+
+    def tracked_loader() -> str:
+        calls.append("decision_packet")
+        return real_loader()
+
+    monkeypatch.setattr(step3_audit_engine, "enforce_step3_upstream_guard", tracked_guard)
+    monkeypatch.setattr(step3_audit_engine, "load_decision_packet_text", tracked_loader)
+
+    result = step3_audit_engine.render_step3_prompt()
+
+    assert calls == ["admission", "decision_packet"]
+    assert result["prompt_path"] == str(step3_audit_engine.step3_prompt_path())
+    assert step3_audit_engine.step3_prompt_path().is_file()
+    assert not step3_audit_engine.step3_blocked_by_upstream_gate_path().exists()
+
+
+def test_strict_fresh_parse_admits_before_extracting_step3_content(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepare_tmp_repo(tmp_path, monkeypatch)
+    write_step1_strict_fresh_permission()
+    write_step2_normal_artifacts()
+    write_text(step3_audit_engine.step3_raw_output_path(), step3_raw_output_text())
+
+    calls: list[str] = []
+    real_guard = step3_audit_engine.enforce_step3_upstream_guard
+    real_extract = step3_audit_engine.extract_audit_and_audited_packet
+
+    def tracked_guard() -> Any:
+        calls.append("admission")
+        return real_guard()
+
+    def tracked_extract(**kwargs: Any) -> Any:
+        calls.append("extract")
+        return real_extract(**kwargs)
+
+    monkeypatch.setattr(step3_audit_engine, "enforce_step3_upstream_guard", tracked_guard)
+    monkeypatch.setattr(step3_audit_engine, "extract_audit_and_audited_packet", tracked_extract)
+
+    result = step3_audit_engine.parse_step3_output()
+
+    assert calls == ["admission", "extract"]
+    assert result["audited_decision_packet_path"] == str(
+        step3_audit_engine.step3_audited_decision_packet_path()
+    )
+    assert result["audit_passed"] == "True"
+    assert step3_audit_engine.step3_template3_audit_path().is_file()
+    assert not step3_audit_engine.step3_blocked_by_upstream_gate_path().exists()
+
+
+def test_denied_step3_block_propagates_to_step4_upstream_guard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Step 3 block artifact is the shared invariant Step 4 refuses on."""
+    prepare_tmp_repo(tmp_path, monkeypatch)
+    write_step2_normal_artifacts()
+    write_step3_normal_artifacts()
+    write_step1_permission_for_state("DEGRADED_NO_RESEARCH")
+
+    with pytest.raises(UpstreamArtifactGuardError, match="current research admission"):
+        step3_audit_engine.render_step3_prompt()
+    assert step3_audit_engine.step3_blocked_by_upstream_gate_path().is_file()
+
+    monkeypatch.setattr(
+        step4_order_compiler,
+        "load_audited_decision_packet",
+        lambda: pytest.fail("Step 4 consumed residual artifacts after a Step 3 block"),
+    )
+    with pytest.raises(UpstreamArtifactGuardError):
+        step4_order_compiler.render_step4_prompt()
+
+    payload = read_json_file(step4_order_compiler.step4_blocked_by_upstream_gate_path())
+    assert_common_blocked_payload(payload)
+    assert payload["reason"] == "upstream_research_gate_blocked"
+    assert (
+        payload["blocked_by_artifact"]
+        == "artifacts/current/step3_audit_engine/step3_blocked_by_upstream_gate.json"
+    )
+    assert not step4_order_compiler.step4_prompt_path().exists()
