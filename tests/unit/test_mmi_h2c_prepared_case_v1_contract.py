@@ -656,9 +656,10 @@ def test_owner_has_no_forbidden_capability_or_workflow_imports() -> None:
         "investment_orchestrator.common.schema_validation",
         "investment_orchestrator.mmi.canonical",
         # The resumption wrapper reconstructs the existing sealed context
-        # type through the existing owner.  It reads no clock: the live
-        # factory and both private clock seams stay unimported.
+        # type through the current validated-resumption owner.  It reads no
+        # clock: the live factory and both private clock seams stay unimported.
         "investment_orchestrator.mmi.contracts",
+        "investment_orchestrator.mmi.run_context_resumption",
     }
     contracts_source = Path(contracts.__file__).read_text(encoding="utf-8")
     assert "_SystemUtcClock" in contracts_source

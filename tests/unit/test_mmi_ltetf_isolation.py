@@ -60,6 +60,7 @@ MMI_PRODUCTION_PATHS = (
     "src/investment_orchestrator/mmi/portfolio_projection.py",
     "src/investment_orchestrator/mmi/raw_response_envelope.py",
     "src/investment_orchestrator/mmi/raw_response_envelope_v2.py",
+    "src/investment_orchestrator/mmi/run_context_resumption.py",
     "src/investment_orchestrator/mmi/source_capture.py",
     (
         "src/investment_orchestrator/mmi/"
@@ -345,6 +346,7 @@ def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -
         "src/investment_orchestrator/mmi/canonical.py",
         "src/investment_orchestrator/mmi/contracts.py",
         "src/investment_orchestrator/mmi/grounded_prompt_v2.py",
+        "src/investment_orchestrator/mmi/run_context_resumption.py",
         (
             "src/investment_orchestrator/mmi/"
             "validated_grounded_analysis_response.py"
@@ -844,8 +846,9 @@ def test_reachable_schema_validation_call_graph_does_not_write(
 
 def test_ltetf_inventory_classification_is_unchanged_except_inventory_content() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
-    # 155 + exactly the two new canonical CURRENT-source locator modules.
-    assert len(inventory.production_paths) == 157
+    # 155 + exactly the two canonical CURRENT-source locator modules + P2a's
+    # one current-lane validated-resumption owner.
+    assert len(inventory.production_paths) == 158
     assert inventory.dynamic_findings == ()
     assert inventory.observer_external_consumers == EXPECTED_EXTERNAL_CONSUMERS
     assert inventory.report_artifact_readers == ()

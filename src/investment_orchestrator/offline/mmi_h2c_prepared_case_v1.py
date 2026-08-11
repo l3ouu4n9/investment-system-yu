@@ -23,7 +23,6 @@ from collections.abc import Mapping
 from datetime import datetime
 import hashlib
 import json
-import re
 from typing import Final, Literal, NoReturn
 
 from investment_orchestrator.common.schema_validation import (
@@ -35,9 +34,10 @@ from investment_orchestrator.mmi.canonical import (
     canonical_json_bytes,
     record_identity_sha256,
 )
-from investment_orchestrator.mmi.contracts import (
-    MmiProjectionRunContext,
-    mint_mmi_projection_run_context_from_canonical_timestamp,
+from investment_orchestrator.mmi.contracts import MmiProjectionRunContext
+from investment_orchestrator.mmi.run_context_resumption import (
+    MmiRunContextResumptionError,
+    resume_mmi_projection_run_context_from_validated_artifact,
 )
 
 
@@ -64,7 +64,6 @@ _LEGACY_COMPILER_CONTRACT_VERSION: Final = (
     "mmi_legacy_step1_compatibility_compiler_v1"
 )
 _ZERO_SHA256: Final = "0" * 64
-_SHA256_RE: Final = re.compile(r"^[0-9a-f]{64}$")
 
 _PreparedCaseErrorCode = Literal["MMI_H2C_PREPARED_CASE_V1_INVALID"]
 
@@ -283,6 +282,13 @@ def validate_mmi_h2c_prepared_case_v1(
     _validate_prepared_case_snapshot(value=prepared_case)
 
 
+def _validate_mmi_h2c_prepared_case_for_resumption(
+    prepared_case: Mapping[str, object],
+) -> None:
+    """Apply this owner's closed validator to a detached resumption snapshot."""
+    validate_mmi_h2c_prepared_case_v1(prepared_case=prepared_case)
+
+
 def resume_mmi_h2c_prepared_case_run_context(
     *,
     prepared_case: Mapping[str, object],
@@ -303,26 +309,15 @@ def resume_mmi_h2c_prepared_case_run_context(
     grants no availability, permission, gate, publication, order, broker or
     execution authority.
     """
-    if (
-        type(expected_prepared_case_identity_sha256) is not str
-        or _SHA256_RE.fullmatch(expected_prepared_case_identity_sha256)
-        is None
-    ):
+    try:
+        return resume_mmi_projection_run_context_from_validated_artifact(
+            artifact=prepared_case,
+            expected_artifact_identity_sha256=(
+                expected_prepared_case_identity_sha256
+            ),
+            validate_artifact=_validate_mmi_h2c_prepared_case_for_resumption,
+            artifact_identity_field=_IDENTITY_FIELD,
+            maximum_canonical_bytes=_MAXIMUM_CANONICAL_BYTES,
+        )
+    except MmiRunContextResumptionError:
         _fail()
-    snapshot = _snapshot_mapping(
-        prepared_case,
-        maximum_bytes=_MAXIMUM_CANONICAL_BYTES,
-    )
-    validate_mmi_h2c_prepared_case_v1(prepared_case=snapshot)
-    if snapshot.get(_IDENTITY_FIELD) != (
-        expected_prepared_case_identity_sha256
-    ):
-        _fail()
-    evaluation_timestamp_utc = snapshot.get("evaluation_timestamp_utc")
-    # The validator above already accepted this exact canonical timestamp, so
-    # a disagreement here is contract drift rather than operator input.
-    if type(evaluation_timestamp_utc) is not str:
-        raise RuntimeError("validated prepared case omitted its timestamp")
-    return mint_mmi_projection_run_context_from_canonical_timestamp(
-        evaluation_timestamp_utc=evaluation_timestamp_utc,
-    )

@@ -9,6 +9,7 @@ Phase B engine invariant and belongs to that later owner.
 
 from __future__ import annotations
 
+import ast
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -20,6 +21,7 @@ import pytest
 
 from investment_orchestrator.common.paths import repo_root
 from investment_orchestrator.mmi import contracts
+from investment_orchestrator.mmi import run_context_resumption as resumption
 from investment_orchestrator.mmi.analyst_visible_evidence_view_v2 import (
     build_mmi_analyst_visible_evidence_view_v2,
 )
@@ -68,6 +70,7 @@ OTHER_SHA256 = "1" * 64
 PRODUCTION_ROOT = "src/investment_orchestrator"
 CONTRACTS_RELATIVE = f"{PRODUCTION_ROOT}/mmi/contracts.py"
 PREPARED_CASE_RELATIVE = f"{PRODUCTION_ROOT}/offline/mmi_h2c_prepared_case_v1.py"
+RESUMPTION_RELATIVE = f"{PRODUCTION_ROOT}/mmi/run_context_resumption.py"
 CONSUME_CASE_RELATIVE = f"{PRODUCTION_ROOT}/offline/mmi_h2c_consume_persisted_case_v1.py"
 ARCHIVED_SOURCE_RELATIVE = f"{PRODUCTION_ROOT}/offline/mmi_h2c_archived_source_v1.py"
 
@@ -244,6 +247,27 @@ def _production_sources() -> Iterator[tuple[str, str]]:
         )
 
 
+def _imports_current_resumption_owner(source: str) -> bool:
+    """Recognize every direct production import form for the current owner."""
+    owner_module = "investment_orchestrator.mmi.run_context_resumption"
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            if any(alias.name == owner_module for alias in node.names):
+                return True
+        elif isinstance(node, ast.ImportFrom):
+            if node.module == owner_module:
+                return True
+            if (
+                node.module == "investment_orchestrator.mmi"
+                and any(
+                    alias.name == "run_context_resumption"
+                    for alias in node.names
+                )
+            ):
+                return True
+    return False
+
+
 # --------------------------------------------------------------------------
 # Low-level canonical-timestamp mint.
 # --------------------------------------------------------------------------
@@ -398,6 +422,31 @@ def test_wrong_expected_identity_fails_closed(phase_a: _PhaseA) -> None:
     assert raised.value.code == PREPARED_CASE_INVALID
 
 
+def test_expected_identity_mismatch_fails_before_mint(
+    phase_a: _PhaseA,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    def _forbidden_mint(*, evaluation_timestamp_utc: str) -> object:
+        nonlocal called
+        called = True
+        raise AssertionError(evaluation_timestamp_utc)
+
+    monkeypatch.setattr(
+        resumption._contracts,
+        "mint_mmi_projection_run_context_from_canonical_timestamp",
+        _forbidden_mint,
+    )
+    with pytest.raises(owner.MmiH2cPreparedCaseV1Error) as raised:
+        owner.resume_mmi_h2c_prepared_case_run_context(
+            prepared_case=phase_a.prepared_case,
+            expected_prepared_case_identity_sha256=OTHER_SHA256,
+        )
+    assert raised.value.code == PREPARED_CASE_INVALID
+    assert not called
+
+
 @pytest.mark.parametrize(
     "expected",
     [
@@ -459,6 +508,30 @@ def test_non_canonical_embedded_timestamp_never_reaches_the_mint(
     assert raised.value.code == PREPARED_CASE_INVALID
 
 
+def test_invalid_artifact_fails_before_mint(
+    phase_a: _PhaseA,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    def _forbidden_mint(*, evaluation_timestamp_utc: str) -> object:
+        nonlocal called
+        called = True
+        raise AssertionError(evaluation_timestamp_utc)
+
+    tampered = dict(phase_a.prepared_case)
+    tampered["evaluation_timestamp_utc"] = "2026-07-26T15:30:45Z"
+    monkeypatch.setattr(
+        resumption._contracts,
+        "mint_mmi_projection_run_context_from_canonical_timestamp",
+        _forbidden_mint,
+    )
+    with pytest.raises(owner.MmiH2cPreparedCaseV1Error) as raised:
+        _resume(tampered)
+    assert raised.value.code == PREPARED_CASE_INVALID
+    assert not called
+
+
 class _FlippingMapping(Mapping[str, object]):
     """A mapping that serves tampered content after its first read."""
 
@@ -503,6 +576,33 @@ def test_unstable_mapping_cannot_bypass_snapshot_once(
         ),
     )
     assert unstable.materializations == 1
+    assert resumed.evaluation_timestamp_utc == PHASE_A_TIMESTAMP
+
+
+def test_resumption_mints_only_the_validated_snapshot_timestamp(
+    phase_a: _PhaseA,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actual_mint = (
+        resumption._contracts
+        .mint_mmi_projection_run_context_from_canonical_timestamp
+    )
+    observed: list[str] = []
+
+    def _recording_mint(
+        *,
+        evaluation_timestamp_utc: str,
+    ) -> MmiProjectionRunContext:
+        observed.append(evaluation_timestamp_utc)
+        return actual_mint(evaluation_timestamp_utc=evaluation_timestamp_utc)
+
+    monkeypatch.setattr(
+        resumption._contracts,
+        "mint_mmi_projection_run_context_from_canonical_timestamp",
+        _recording_mint,
+    )
+    resumed = _resume(phase_a.prepared_case)
+    assert observed == [PHASE_A_TIMESTAMP]
     assert resumed.evaluation_timestamp_utc == PHASE_A_TIMESTAMP
 
 
@@ -607,7 +707,53 @@ def test_low_level_mint_has_exactly_one_production_consumer() -> None:
         and "mint_mmi_projection_run_context_from_canonical_timestamp"
         in source
     ]
+    assert consumers == [RESUMPTION_RELATIVE]
+
+
+def test_offline_wrapper_delegates_to_the_current_resumption_owner() -> None:
+    source = dict(_production_sources())[PREPARED_CASE_RELATIVE]
+    assert (
+        "investment_orchestrator.mmi.run_context_resumption" in source
+    )
+    assert (
+        "mint_mmi_projection_run_context_from_canonical_timestamp"
+        not in source
+    )
+
+
+def test_current_resumption_owner_has_exactly_one_production_consumer() -> None:
+    consumers = [
+        relative
+        for relative, source in _production_sources()
+        if relative != RESUMPTION_RELATIVE
+        and _imports_current_resumption_owner(source)
+    ]
     assert consumers == [PREPARED_CASE_RELATIVE]
+
+
+def test_current_resumption_owner_has_no_bare_timestamp_api() -> None:
+    signature = inspect.signature(
+        resumption.resume_mmi_projection_run_context_from_validated_artifact
+    )
+    assert tuple(signature.parameters) == (
+        "artifact",
+        "expected_artifact_identity_sha256",
+        "validate_artifact",
+        "artifact_identity_field",
+        "maximum_canonical_bytes",
+    )
+    assert all(
+        item.kind is inspect.Parameter.KEYWORD_ONLY
+        and item.default is inspect.Parameter.empty
+        for item in signature.parameters.values()
+    )
+    assert not {
+        name for name in signature.parameters if "timestamp" in name
+    }
+    assert (
+        "mint_mmi_projection_run_context_from_canonical_timestamp"
+        not in resumption.__all__
+    )
 
 
 def test_resumption_wrapper_has_zero_production_consumers() -> None:
