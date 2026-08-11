@@ -38,13 +38,13 @@ from investment_orchestrator.mmi.contracts import (
 
 )
 
-from investment_orchestrator.offline._mmi_h2c_stable_read_v1 import (
+from investment_orchestrator.mmi.stable_read import (
 
-    MmiH2cStableReadError,
+    MmiStableReadError as MmiH2cStableReadError,
 
-    MmiH2cStableReadErrorCode,
+    MmiStableReadErrorCode as MmiH2cStableReadErrorCode,
 
-    _stable_read_exact_bytes,
+    stable_read_exact_bytes as _stable_read_exact_bytes,
 
 )
 

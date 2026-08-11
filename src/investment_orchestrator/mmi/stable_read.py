@@ -1,4 +1,4 @@
-"""Stable relative-file read primitive for MMI H2C case paths."""
+"""Stable relative-file read primitive for bounded exact byte acquisition."""
 
 import errno
 import os
@@ -8,13 +8,20 @@ from enum import Enum
 from typing import NoReturn
 
 
-class MmiH2cStableReadErrorCode(str, Enum):
+__all__ = (
+    "MmiStableReadError",
+    "MmiStableReadErrorCode",
+    "stable_read_exact_bytes",
+)
+
+
+class MmiStableReadErrorCode(str, Enum):
     STABLE_READ_INPUT_INVALID = "STABLE_READ_INPUT_INVALID"
     STABLE_READ_CAPABILITY_UNAVAILABLE = "STABLE_READ_CAPABILITY_UNAVAILABLE"
 
 
-class MmiH2cStableReadError(RuntimeError):
-    def __init__(self, code: MmiH2cStableReadErrorCode) -> None:
+class MmiStableReadError(RuntimeError):
+    def __init__(self, code: MmiStableReadErrorCode) -> None:
         super().__init__(code.value)
         self.code = code
 
@@ -39,9 +46,9 @@ _CONTROLLED_CAPABILITY_ERRNOS = frozenset(
 
 def _translate_stable_read_oserror(exc: OSError) -> NoReturn:
     if exc.errno in _CONTROLLED_INPUT_ERRNOS or exc.errno == errno.EINVAL:
-        raise MmiH2cStableReadError(MmiH2cStableReadErrorCode.STABLE_READ_INPUT_INVALID)
+        raise MmiStableReadError(MmiStableReadErrorCode.STABLE_READ_INPUT_INVALID)
     if exc.errno in _CONTROLLED_CAPABILITY_ERRNOS:
-        raise MmiH2cStableReadError(MmiH2cStableReadErrorCode.STABLE_READ_CAPABILITY_UNAVAILABLE)
+        raise MmiStableReadError(MmiStableReadErrorCode.STABLE_READ_CAPABILITY_UNAVAILABLE)
     raise exc
 
 
@@ -84,8 +91,8 @@ def _read_to_eof_once(fd: int, *, maximum_bytes: int) -> bytes:
     return b"".join(chunks)
 
 
-def _stable_read_exact_bytes(
-    case_fd: int,
+def stable_read_exact_bytes(
+    directory_fd: int,
     relative_path: str,
     *,
     maximum_bytes: int,
@@ -95,20 +102,20 @@ def _stable_read_exact_bytes(
     )
     fd: int | None = None
     try:
-        fd = os.open(relative_path, flags, dir_fd=case_fd)
+        fd = os.open(relative_path, flags, dir_fd=directory_fd)
         status = os.fstat(fd)
         if not stat.S_ISREG(status.st_mode):
             raise OSError(errno.EINVAL, "not a regular file")
         before = _read_witness(status)
         if before.size < 1 or before.size > maximum_bytes:
-            raise MmiH2cStableReadError(MmiH2cStableReadErrorCode.STABLE_READ_INPUT_INVALID)
+            raise MmiStableReadError(MmiStableReadErrorCode.STABLE_READ_INPUT_INVALID)
         exact_bytes = _read_to_eof_once(
             fd,
             maximum_bytes=maximum_bytes,
         )
         after = _read_witness(os.fstat(fd))
         if before != after or len(exact_bytes) != before.size:
-            raise MmiH2cStableReadError(MmiH2cStableReadErrorCode.STABLE_READ_INPUT_INVALID)
+            raise MmiStableReadError(MmiStableReadErrorCode.STABLE_READ_INPUT_INVALID)
         return exact_bytes
     except OSError as exc:
         _translate_stable_read_oserror(exc)

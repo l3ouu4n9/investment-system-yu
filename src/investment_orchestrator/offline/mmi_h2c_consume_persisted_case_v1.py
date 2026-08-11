@@ -126,10 +126,10 @@ from investment_orchestrator.validators.strategy_settings import (
     StrategySettingsValidationError,
     parse_strategy_settings_text,
 )
-from investment_orchestrator.offline._mmi_h2c_stable_read_v1 import (
-    MmiH2cStableReadError,
-    MmiH2cStableReadErrorCode,
-    _stable_read_exact_bytes as _neutral_stable_read_exact_bytes,
+from investment_orchestrator.mmi.stable_read import (
+    MmiStableReadError as MmiH2cStableReadError,
+    MmiStableReadErrorCode as MmiH2cStableReadErrorCode,
+    stable_read_exact_bytes as _neutral_stable_read_exact_bytes,
 )
 
 

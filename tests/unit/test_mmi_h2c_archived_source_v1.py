@@ -1102,7 +1102,7 @@ def test_mid_read_mutation(case_fd, monkeypatch) -> None:
 
     import investment_orchestrator.offline.mmi_h2c_archived_source_v1 as mod
 
-    from investment_orchestrator.offline._mmi_h2c_stable_read_v1 import MmiH2cStableReadError, MmiH2cStableReadErrorCode
+    from investment_orchestrator.mmi.stable_read import MmiStableReadError as MmiH2cStableReadError, MmiStableReadErrorCode as MmiH2cStableReadErrorCode
 
 
     original = os.read

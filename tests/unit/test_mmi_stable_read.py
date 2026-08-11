@@ -6,10 +6,10 @@ from unittest import mock
 
 import pytest
 
-from investment_orchestrator.offline._mmi_h2c_stable_read_v1 import (
-    MmiH2cStableReadError,
-    MmiH2cStableReadErrorCode,
-    _stable_read_exact_bytes,
+from investment_orchestrator.mmi.stable_read import (
+    MmiStableReadError,
+    MmiStableReadErrorCode,
+    stable_read_exact_bytes,
 )
 
 
@@ -18,7 +18,7 @@ def test_stable_read_exact_bytes_success(tmp_path: Path) -> None:
     test_file.write_bytes(b"hello world")
     case_fd = os.open(os.fspath(tmp_path), os.O_RDONLY | os.O_DIRECTORY)
     try:
-        result = _stable_read_exact_bytes(
+        result = stable_read_exact_bytes(
             case_fd, "test.txt", maximum_bytes=100
         )
         assert result == b"hello world"
@@ -33,9 +33,9 @@ def test_stable_read_symlink_rejection(tmp_path: Path) -> None:
     os.symlink("target.txt", link)
     case_fd = os.open(os.fspath(tmp_path), os.O_RDONLY | os.O_DIRECTORY)
     try:
-        with pytest.raises(MmiH2cStableReadError) as exc_info:
-            _stable_read_exact_bytes(case_fd, "link.txt", maximum_bytes=100)
-        assert exc_info.value.code == MmiH2cStableReadErrorCode.STABLE_READ_INPUT_INVALID
+        with pytest.raises(MmiStableReadError) as exc_info:
+            stable_read_exact_bytes(case_fd, "link.txt", maximum_bytes=100)
+        assert exc_info.value.code == MmiStableReadErrorCode.STABLE_READ_INPUT_INVALID
     finally:
         os.close(case_fd)
 
@@ -44,9 +44,9 @@ def test_stable_read_directory_rejection(tmp_path: Path) -> None:
     (tmp_path / "subdir").mkdir()
     case_fd = os.open(os.fspath(tmp_path), os.O_RDONLY | os.O_DIRECTORY)
     try:
-        with pytest.raises(MmiH2cStableReadError) as exc_info:
-            _stable_read_exact_bytes(case_fd, "subdir", maximum_bytes=100)
-        assert exc_info.value.code == MmiH2cStableReadErrorCode.STABLE_READ_INPUT_INVALID
+        with pytest.raises(MmiStableReadError) as exc_info:
+            stable_read_exact_bytes(case_fd, "subdir", maximum_bytes=100)
+        assert exc_info.value.code == MmiStableReadErrorCode.STABLE_READ_INPUT_INVALID
     finally:
         os.close(case_fd)
 
@@ -56,9 +56,9 @@ def test_stable_read_maximum_plus_one_rejected(tmp_path: Path) -> None:
     test_file.write_bytes(b"hello world")
     case_fd = os.open(os.fspath(tmp_path), os.O_RDONLY | os.O_DIRECTORY)
     try:
-        with pytest.raises(MmiH2cStableReadError) as exc_info:
-            _stable_read_exact_bytes(case_fd, "test.txt", maximum_bytes=10)
-        assert exc_info.value.code == MmiH2cStableReadErrorCode.STABLE_READ_INPUT_INVALID
+        with pytest.raises(MmiStableReadError) as exc_info:
+            stable_read_exact_bytes(case_fd, "test.txt", maximum_bytes=10)
+        assert exc_info.value.code == MmiStableReadErrorCode.STABLE_READ_INPUT_INVALID
     finally:
         os.close(case_fd)
 
@@ -68,9 +68,9 @@ def test_stable_read_zero_bytes_rejected(tmp_path: Path) -> None:
     test_file.write_bytes(b"")
     case_fd = os.open(os.fspath(tmp_path), os.O_RDONLY | os.O_DIRECTORY)
     try:
-        with pytest.raises(MmiH2cStableReadError) as exc_info:
-            _stable_read_exact_bytes(case_fd, "test.txt", maximum_bytes=100)
-        assert exc_info.value.code == MmiH2cStableReadErrorCode.STABLE_READ_INPUT_INVALID
+        with pytest.raises(MmiStableReadError) as exc_info:
+            stable_read_exact_bytes(case_fd, "test.txt", maximum_bytes=100)
+        assert exc_info.value.code == MmiStableReadErrorCode.STABLE_READ_INPUT_INVALID
     finally:
         os.close(case_fd)
 
@@ -97,9 +97,9 @@ def test_stable_read_exact_bytes_single_open_close_oracle(tmp_path: Path) -> Non
         return original_close(fd)
 
     try:
-        with mock.patch("investment_orchestrator.offline._mmi_h2c_stable_read_v1.os.open", side_effect=tracked_open):
-            with mock.patch("investment_orchestrator.offline._mmi_h2c_stable_read_v1.os.close", side_effect=tracked_close):
-                result = _stable_read_exact_bytes(case_fd, "test.txt", maximum_bytes=100)
+        with mock.patch("investment_orchestrator.mmi.stable_read.os.open", side_effect=tracked_open):
+            with mock.patch("investment_orchestrator.mmi.stable_read.os.close", side_effect=tracked_close):
+                result = stable_read_exact_bytes(case_fd, "test.txt", maximum_bytes=100)
 
         assert result == b"hello world"
         assert len(open_calls) == 1
@@ -139,12 +139,12 @@ def test_stable_read_fifo_nonblocking_oracle(tmp_path: Path) -> None:
         return original_close(fd)
 
     try:
-        with mock.patch("investment_orchestrator.offline._mmi_h2c_stable_read_v1.os.open", side_effect=tracked_open):
-            with mock.patch("investment_orchestrator.offline._mmi_h2c_stable_read_v1.os.close", side_effect=tracked_close):
-                with pytest.raises(MmiH2cStableReadError) as exc_info:
-                    _stable_read_exact_bytes(case_fd, "test_fifo", maximum_bytes=100)
+        with mock.patch("investment_orchestrator.mmi.stable_read.os.open", side_effect=tracked_open):
+            with mock.patch("investment_orchestrator.mmi.stable_read.os.close", side_effect=tracked_close):
+                with pytest.raises(MmiStableReadError) as exc_info:
+                    stable_read_exact_bytes(case_fd, "test_fifo", maximum_bytes=100)
 
-        assert exc_info.value.code == MmiH2cStableReadErrorCode.STABLE_READ_INPUT_INVALID
+        assert exc_info.value.code == MmiStableReadErrorCode.STABLE_READ_INPUT_INVALID
         assert len(open_calls) == 1
         assert len(close_calls) == 1
 
@@ -158,7 +158,7 @@ def test_stable_read_fifo_nonblocking_oracle(tmp_path: Path) -> None:
     finally:
         os.close(case_fd)
 
-@mock.patch("investment_orchestrator.offline._mmi_h2c_stable_read_v1.os.fstat")
+@mock.patch("investment_orchestrator.mmi.stable_read.os.fstat")
 def test_stable_read_mid_read_mutation_via_witness(mock_fstat, tmp_path: Path) -> None:
     # A cleaner test using mocked fstat that returns different witnesses.
     case_fd = 999
@@ -181,30 +181,30 @@ def test_stable_read_mid_read_mutation_via_witness(mock_fstat, tmp_path: Path) -
 
     mock_fstat.side_effect = [FakeStat(), FakeStatMutated()]
 
-    with mock.patch("investment_orchestrator.offline._mmi_h2c_stable_read_v1.os.open", return_value=123):
-        with mock.patch("investment_orchestrator.offline._mmi_h2c_stable_read_v1.os.read", side_effect=[b"hello", b""]):
-            with mock.patch("investment_orchestrator.offline._mmi_h2c_stable_read_v1.os.close"):
-                with pytest.raises(MmiH2cStableReadError) as exc_info:
-                    _stable_read_exact_bytes(case_fd, "test.txt", maximum_bytes=100)
-                assert exc_info.value.code == MmiH2cStableReadErrorCode.STABLE_READ_INPUT_INVALID
+    with mock.patch("investment_orchestrator.mmi.stable_read.os.open", return_value=123):
+        with mock.patch("investment_orchestrator.mmi.stable_read.os.read", side_effect=[b"hello", b""]):
+            with mock.patch("investment_orchestrator.mmi.stable_read.os.close"):
+                with pytest.raises(MmiStableReadError) as exc_info:
+                    stable_read_exact_bytes(case_fd, "test.txt", maximum_bytes=100)
+                assert exc_info.value.code == MmiStableReadErrorCode.STABLE_READ_INPUT_INVALID
 
 
-@mock.patch("investment_orchestrator.offline._mmi_h2c_stable_read_v1.os.open")
+@mock.patch("investment_orchestrator.mmi.stable_read.os.open")
 def test_stable_read_capability_unavailable(mock_open, tmp_path: Path) -> None:
     mock_open.side_effect = OSError(errno.EMFILE, "Too many open files")
     case_fd = 999
 
-    with pytest.raises(MmiH2cStableReadError) as exc_info:
-        _stable_read_exact_bytes(case_fd, "test.txt", maximum_bytes=100)
-    assert exc_info.value.code == MmiH2cStableReadErrorCode.STABLE_READ_CAPABILITY_UNAVAILABLE
+    with pytest.raises(MmiStableReadError) as exc_info:
+        stable_read_exact_bytes(case_fd, "test.txt", maximum_bytes=100)
+    assert exc_info.value.code == MmiStableReadErrorCode.STABLE_READ_CAPABILITY_UNAVAILABLE
 
 
-@mock.patch("investment_orchestrator.offline._mmi_h2c_stable_read_v1.os.open")
+@mock.patch("investment_orchestrator.mmi.stable_read.os.open")
 def test_stable_read_unexpected_error_not_swallowed(mock_open, tmp_path: Path) -> None:
     # A totally unexpected OS error like EIO or something not in the controlled list
     mock_open.side_effect = OSError(errno.EIO, "Input/output error")
     case_fd = 999
 
     with pytest.raises(OSError) as exc_info:
-        _stable_read_exact_bytes(case_fd, "test.txt", maximum_bytes=100)
+        stable_read_exact_bytes(case_fd, "test.txt", maximum_bytes=100)
     assert exc_info.value.errno == errno.EIO
