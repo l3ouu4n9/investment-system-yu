@@ -30,6 +30,7 @@ from investment_orchestrator.mmi.contracts import (
 )
 from investment_orchestrator.mmi import source_capture
 from investment_orchestrator.mmi.source_capture import (
+    _capture_mmi_source_absence_at_root,
     _capture_mmi_source_at_root,
     capture_current_mmi_source,
 )
@@ -3191,3 +3192,122 @@ def test_capture_performs_no_write_or_discovery_operation(
     assert result.valid
     assert path.read_bytes() == raw
     assert after == before
+
+
+def test_absence_prover_confirms_a_missing_leaf_under_an_intact_checkout(
+    tmp_path: Path,
+) -> None:
+    # A valid checkout with validating markers and an intact ``inputs/current``
+    # parent chain, where only the portfolio leaf is absent.
+    module = _install_checkout(tmp_path, b"value: exact\n")
+    leaf = tmp_path / "inputs" / "current" / "portfolio_snapshot.txt"
+    assert not leaf.exists()
+
+    result = _capture_mmi_source_absence_at_root(
+        tmp_path,
+        role=MmiSourceRole.PORTFOLIO_SNAPSHOT,
+        _production_module_path=module,
+    )
+
+    assert result.status is MmiProjectionResultCategory.PROJECTION_VALID_COMPLETE
+    assert result.reason_codes == ("MMI_SOURCE_CONFIRMED_ABSENT",)
+    assert result.valid
+    assert result.source is None
+    assert result.authority_effect == "NONE"
+    # Proving absence captures nothing and writes nothing.
+    assert not leaf.exists()
+
+
+def test_absence_prover_rejects_a_missing_intermediate_parent(
+    tmp_path: Path,
+) -> None:
+    module = _install_checkout(tmp_path, b"value: exact\n")
+    (tmp_path / "inputs" / "current" / "strategy_settings.yaml").unlink()
+
+    def _absence():
+        return _capture_mmi_source_absence_at_root(
+            tmp_path,
+            role=MmiSourceRole.PORTFOLIO_SNAPSHOT,
+            _production_module_path=module,
+        )
+
+    def _present_source():
+        return _capture_mmi_source_at_root(
+            tmp_path,
+            role=MmiSourceRole.PORTFOLIO_SNAPSHOT,
+            expected_source_sha256="0" * 64,
+            _production_module_path=module,
+        )
+
+    # Baseline: the leaf is absent but every parent component is intact.
+    assert _absence().reason_codes == ("MMI_SOURCE_CONFIRMED_ABSENT",)
+    intact_parents_present_source = _present_source().reason_codes
+
+    # Only the innermost required directory is removed.
+    (tmp_path / "inputs" / "current").rmdir()
+    inner_missing = _absence()
+    inner_missing_present_source = _present_source().reason_codes
+
+    # Both required directories are removed.
+    (tmp_path / "inputs").rmdir()
+    outer_missing = _absence()
+
+    for blocked in (inner_missing, outer_missing):
+        assert blocked.status is MmiProjectionResultCategory.PROJECTION_BLOCKED
+        assert blocked.reason_codes == ("MMI_SOURCE_PARENT_DIRECTORY_MISSING",)
+        assert "MMI_SOURCE_CONFIRMED_ABSENT" not in blocked.reason_codes
+        assert not blocked.valid
+        assert blocked.source is None
+
+    # The rejected sentinel approach cannot make this distinction: expected-SHA
+    # capture reports the identical MMI_SOURCE_MISSING code whether the parent
+    # chain is intact or broken, which is why absence needs its own prover.
+    assert intact_parents_present_source == ("MMI_SOURCE_MISSING",)
+    assert inner_missing_present_source == ("MMI_SOURCE_MISSING",)
+
+
+def test_absence_prover_rejects_a_leaf_present_at_any_observation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _install_checkout(tmp_path, b"value: exact\n")
+    leaf = tmp_path / "inputs" / "current" / "portfolio_snapshot.txt"
+
+    def _absence():
+        return _capture_mmi_source_absence_at_root(
+            tmp_path,
+            role=MmiSourceRole.PORTFOLIO_SNAPSHOT,
+            _production_module_path=module,
+        )
+
+    # A leaf that is present before the observation begins.
+    leaf.write_bytes(b"ticker,budget\n")
+    already_present = _absence()
+    leaf.unlink()
+
+    # A leaf that appears after the first observation saw genuine absence.  The
+    # real path verification still runs; creating the leaf inside it proves the
+    # second observation is load-bearing, because the first one alone would have
+    # returned confirmed absence.
+    original_verify = source_capture._verify_complete_opened_path
+    observed_first_absence: list[bool] = []
+
+    def _verify_then_create(root_anchor, opened_components):
+        observed_first_absence.append(not leaf.exists())
+        original_verify(root_anchor, opened_components)
+        leaf.write_bytes(b"ticker,budget\n")
+
+    monkeypatch.setattr(
+        source_capture,
+        "_verify_complete_opened_path",
+        _verify_then_create,
+    )
+    appeared_mid_observation = _absence()
+
+    assert observed_first_absence == [True]
+    for blocked in (already_present, appeared_mid_observation):
+        assert blocked.status is MmiProjectionResultCategory.PROJECTION_BLOCKED
+        assert blocked.reason_codes == ("MMI_SOURCE_PRESENT",)
+        assert "MMI_SOURCE_CONFIRMED_ABSENT" not in blocked.reason_codes
+        assert not blocked.valid
+        assert blocked.source is None

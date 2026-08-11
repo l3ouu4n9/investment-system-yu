@@ -276,20 +276,53 @@ def _same_directory_binding(
     )
 
 
+def _entry_stat_or_absent(
+    name: str,
+    *,
+    directory_fd: int,
+) -> os.stat_result | None:
+    """Observe one no-follow entry, reporting genuine absence as ``None``.
+
+    This is the single owner of the entry-observation errno taxonomy.  Only a
+    definitive ``ENOENT`` becomes ``None``; every other failure stays a
+    controlled capture failure so no caller can read a permission, link, or
+    device error as absence.
+    """
+    try:
+        return os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except OSError as exc:
+        if exc.errno == errno.ENOENT:
+            return None
+        if exc.errno in {errno.ELOOP, errno.EMLINK}:
+            raise _CaptureFailure("MMI_SOURCE_SYMLINK_REJECTED") from None
+        raise _CaptureFailure("MMI_SOURCE_UNREADABLE") from None
+
+
 def _entry_stat(
     name: str,
     *,
     directory_fd: int,
     missing_code: str = "MMI_SOURCE_MISSING",
 ) -> os.stat_result:
-    try:
-        return os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-    except OSError as exc:
-        if exc.errno == errno.ENOENT:
-            raise _CaptureFailure(missing_code) from None
-        if exc.errno in {errno.ELOOP, errno.EMLINK}:
-            raise _CaptureFailure("MMI_SOURCE_SYMLINK_REJECTED") from None
-        raise _CaptureFailure("MMI_SOURCE_UNREADABLE") from None
+    observed = _entry_stat_or_absent(name, directory_fd=directory_fd)
+    if observed is None:
+        raise _CaptureFailure(missing_code)
+    return observed
+
+
+def _require_absent_entry(name: str, *, directory_fd: int) -> None:
+    """Require one no-follow entry to be genuinely absent from its parent.
+
+    Any observable entry occupying the code-owned name fails closed.  A
+    symlink -- including a dangling symlink, whose ``lstat`` succeeds -- is
+    reported through the existing symlink rejection rather than as absence.
+    """
+    observed = _entry_stat_or_absent(name, directory_fd=directory_fd)
+    if observed is None:
+        return
+    if stat.S_ISLNK(observed.st_mode):
+        raise _CaptureFailure("MMI_SOURCE_SYMLINK_REJECTED")
+    raise _CaptureFailure("MMI_SOURCE_PRESENT")
 
 
 def _open_relative(
@@ -1309,4 +1342,212 @@ def capture_current_mmi_source(
         _PRODUCTION_MODULE_FILE,
         role,
         expected_source_sha256=expected_source_sha256,
+    )
+
+
+def _observe_fixed_source_absence(
+    repository_root: Path,
+    *,
+    spec: MmiSourceSpec,
+    production_module_path: Path | None = None,
+) -> MmiSourceCaptureResult:
+    if not _required_filesystem_primitives_available():
+        raise _CaptureFailure("MMI_SOURCE_FILESYSTEM_PRIMITIVES_UNAVAILABLE")
+    if not spec.path_components or any(
+        component in {"", ".", ".."} or "/" in component
+        for component in spec.path_components
+    ):
+        raise _CaptureFailure("MMI_SOURCE_INTERNAL_INVARIANT_FAILED")
+    directory_flags = (
+        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+    )
+    leaf_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+    descriptors: list[int] = []
+    opened_components: list[_OpenedComponent] = []
+    success: MmiSourceCaptureResult | None = None
+    pending_failure: _CaptureFailure | _CaptureContractFailure | None = None
+    try:
+        root_anchor, repository_root_fd = _open_absolute_repository_root(
+            repository_root,
+            directory_flags=directory_flags,
+            descriptors=descriptors,
+            opened_components=opened_components,
+        )
+        marker_materials: list[
+            tuple[_MarkerSpec, int, _FileWitness]
+        ] = []
+        module_component: _OpenedComponent | None = None
+        if production_module_path is not None:
+            for marker_spec in _PRODUCTION_MARKERS:
+                marker_fd, marker_witness = _open_fixed_regular_path(
+                    repository_root_fd,
+                    marker_spec.path_components,
+                    maximum_bytes=marker_spec.maximum_bytes,
+                    directory_flags=directory_flags,
+                    leaf_flags=leaf_flags,
+                    descriptors=descriptors,
+                    opened_components=opened_components,
+                    missing_code="MMI_SOURCE_REPOSITORY_MARKER_INVALID",
+                )
+                marker_materials.append(
+                    (marker_spec, marker_fd, marker_witness)
+                )
+                if marker_spec.path_components == _PRODUCTION_MODULE_SUFFIX:
+                    module_component = opened_components[-1]
+            if module_component is None:
+                raise _CaptureFailure(
+                    "MMI_SOURCE_INTERNAL_INVARIANT_FAILED"
+                )
+
+        # Every required parent component must exist and be a trusted
+        # directory before any absence claim is permitted.  A missing
+        # intermediate component is a broken checkout layout, never a
+        # legitimate optional-source absence, so it carries its own code and
+        # can never be confused with the absent leaf below.
+        parent_fd = repository_root_fd
+        for component in spec.path_components[:-1]:
+            parent_fd = _open_directory_component(
+                parent_fd,
+                component,
+                directory_flags=directory_flags,
+                descriptors=descriptors,
+                opened_components=opened_components,
+                missing_code="MMI_SOURCE_PARENT_DIRECTORY_MISSING",
+            )
+        for marker_spec, marker_fd, marker_witness in marker_materials:
+            marker_bytes = _read_exact_bounded(
+                marker_fd,
+                expected_size=marker_witness.size,
+            )
+            _validate_marker_bytes(marker_spec, marker_bytes)
+        if production_module_path is not None:
+            if module_component is None:
+                raise _CaptureFailure(
+                    "MMI_SOURCE_INTERNAL_INVARIANT_FAILED"
+                )
+            try:
+                module_lexical = os.stat(
+                    os.fspath(production_module_path),
+                    follow_symlinks=False,
+                )
+            except OSError:
+                raise _CaptureFailure(
+                    "MMI_SOURCE_REPOSITORY_ROOT_UNTRUSTED"
+                ) from None
+            if stat.S_ISLNK(module_lexical.st_mode):
+                raise _CaptureFailure(
+                    "MMI_SOURCE_REPOSITORY_ROOT_UNTRUSTED"
+                )
+            if _witness(module_lexical) != module_component.witness:
+                raise _CaptureFailure(
+                    "MMI_SOURCE_REPOSITORY_ROOT_UNTRUSTED"
+                )
+        # Observe the leaf, re-verify the complete opened path against its
+        # recorded witnesses, then observe the leaf again.  A leaf that
+        # appears, or any component whose binding moves, during the
+        # observation fails closed instead of becoming confirmed absence.
+        leaf_name = spec.path_components[-1]
+        _require_absent_entry(leaf_name, directory_fd=parent_fd)
+        _verify_complete_opened_path(root_anchor, opened_components)
+        _require_absent_entry(leaf_name, directory_fd=parent_fd)
+        success = _capture_result(
+            MmiProjectionResultCategory.PROJECTION_VALID_COMPLETE,
+            "MMI_SOURCE_CONFIRMED_ABSENT",
+        )
+    except _CaptureFailure as exc:
+        pending_failure = exc
+    except _CaptureContractFailure as exc:
+        pending_failure = exc
+    except (OSError, TypeError, ValueError):
+        pending_failure = _CaptureFailure("MMI_SOURCE_UNREADABLE")
+    finally:
+        close_failed = False
+        for descriptor in reversed(descriptors):
+            try:
+                os.close(descriptor)
+            except OSError:
+                close_failed = True
+        if close_failed and pending_failure is None:
+            pending_failure = _CaptureFailure(
+                "MMI_SOURCE_DESCRIPTOR_CLOSE_FAILED"
+            )
+    if pending_failure is not None:
+        raise pending_failure
+    if success is None:
+        raise _CaptureFailure("MMI_SOURCE_INTERNAL_INVARIANT_FAILED")
+    return success
+
+
+def _capture_mmi_source_absence_at_root(
+    repository_root: Path,
+    *,
+    role: MmiSourceRole,
+    _production_module_path: Path | None = None,
+) -> MmiSourceCaptureResult:
+    """Internal test surface retaining the production role/path contract."""
+    if type(role) is not MmiSourceRole:
+        return _capture_result(
+            MmiProjectionResultCategory.PROJECTION_BLOCKED,
+            "MMI_SOURCE_ROLE_INVALID",
+        )
+    if not isinstance(repository_root, Path):
+        return _capture_result(
+            MmiProjectionResultCategory.PROJECTION_BLOCKED,
+            "MMI_SOURCE_REPOSITORY_ROOT_INVALID",
+        )
+    spec = MMI_SOURCE_CATALOG[role]
+    try:
+        return _observe_fixed_source_absence(
+            repository_root,
+            spec=spec,
+            production_module_path=_production_module_path,
+        )
+    except _CaptureFailure as exc:
+        return _capture_result(
+            MmiProjectionResultCategory.PROJECTION_BLOCKED,
+            exc.code,
+        )
+    except _CaptureContractFailure as exc:
+        return _capture_result(
+            MmiProjectionResultCategory.PROJECTION_CONTRACT_FAILURE,
+            exc.code,
+        )
+
+
+def _capture_current_mmi_source_absence_from_module_path(
+    module_file: str | Path,
+    role: MmiSourceRole,
+) -> MmiSourceCaptureResult:
+    try:
+        repository_root, module_path = _lexical_production_checkout(
+            module_file
+        )
+    except _CaptureFailure as exc:
+        return _capture_result(
+            MmiProjectionResultCategory.PROJECTION_BLOCKED,
+            exc.code,
+        )
+    return _capture_mmi_source_absence_at_root(
+        repository_root,
+        role=role,
+        _production_module_path=module_path,
+    )
+
+
+def capture_current_mmi_source_absence(
+    role: MmiSourceRole,
+) -> MmiSourceCaptureResult:
+    """Prove one code-owned current source is absent, capturing nothing.
+
+    Success means only that the code-owned leaf is absent while the checkout,
+    repository markers, and every required parent component are present and
+    trusted.  It takes no expected digest, reads no bytes, and never returns an
+    ``MmiCapturedSource``; a present, symlinked, unreadable, or unstable source,
+    and a missing intermediate parent, each fail closed under their own reason
+    code.  This is a source-capture primitive and owns no caller policy about
+    whether an absent source is acceptable.
+    """
+    return _capture_current_mmi_source_absence_from_module_path(
+        _PRODUCTION_MODULE_FILE,
+        role,
     )
