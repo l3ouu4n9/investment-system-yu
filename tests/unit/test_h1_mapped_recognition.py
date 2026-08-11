@@ -39,7 +39,7 @@ from investment_orchestrator.mmi.raw_response_envelope_v2 import (
 from investment_orchestrator.mmi.validated_grounded_analysis_response_v2 import (
     build_mmi_validated_grounded_analysis_response_v2,
 )
-from investment_orchestrator.offline.mmi_h1_legacy_step1_mapping_report_v1 import (
+from investment_orchestrator.mmi.mmi_h1_legacy_step1_mapping_report_v1 import (
     build_mmi_h1_legacy_step1_mapping_report_v1,
 )
 from investment_orchestrator.research import h1_mapped_recognition as bridge

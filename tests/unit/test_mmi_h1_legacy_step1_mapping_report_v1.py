@@ -44,10 +44,10 @@ from investment_orchestrator.mmi.raw_response_envelope_v2 import (
 from investment_orchestrator.mmi.validated_grounded_analysis_response_v2 import (
     build_mmi_validated_grounded_analysis_response_v2,
 )
-from investment_orchestrator.offline import (
+from investment_orchestrator.mmi import (
     mmi_h1_legacy_step1_mapping_report_v1 as owner,
 )
-from investment_orchestrator.offline.mmi_h1_legacy_step1_mapping_report_v1 import (
+from investment_orchestrator.mmi.mmi_h1_legacy_step1_mapping_report_v1 import (
     MmiH1LegacyStep1MappingReportV1Error,
     build_mmi_h1_legacy_step1_mapping_report_v1,
     validate_mmi_h1_legacy_step1_mapping_report_v1,
@@ -637,13 +637,14 @@ def test_invalid_upstream_and_authority_bearing_prose_fail_closed(
 
 def test_no_production_module_imports_or_consumes_the_report_only_adapter() -> None:
     package_root = repo_root() / "src/investment_orchestrator"
-    offline_root = package_root / "offline"
-    target = "investment_orchestrator.offline.mmi_h1_legacy_step1_mapping_report_v1"
+    owner_path = Path("mmi/mmi_h1_legacy_step1_mapping_report_v1.py")
+    target = "investment_orchestrator.mmi.mmi_h1_legacy_step1_mapping_report_v1"
     target_leaf = "mmi_h1_legacy_step1_mapping_report_v1"
     approved_bridge = Path("research/h1_mapped_recognition.py")
     importers: list[Path] = []
     for path in package_root.rglob("*.py"):
-        if offline_root in path.parents:
+        relative = path.relative_to(package_root)
+        if relative == owner_path:
             continue
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source)
@@ -658,10 +659,10 @@ def test_no_production_module_imports_or_consumes_the_report_only_adapter() -> N
             )
             or (
                 isinstance(node, ast.ImportFrom)
-                and node.module == "investment_orchestrator.offline"
+                and node.module == "investment_orchestrator.mmi"
                 and any(alias.name == target_leaf for alias in node.names)
             )
             for node in ast.walk(tree)
         ):
-            importers.append(path.relative_to(package_root))
+            importers.append(relative)
     assert importers == [approved_bridge]

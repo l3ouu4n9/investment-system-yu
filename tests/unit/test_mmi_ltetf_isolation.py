@@ -52,6 +52,10 @@ MMI_PRODUCTION_PATHS = (
         "src/investment_orchestrator/mmi/"
         "legacy_step1_compatibility_candidate_v1.py"
     ),
+    (
+        "src/investment_orchestrator/mmi/"
+        "mmi_h1_legacy_step1_mapping_report_v1.py"
+    ),
     "src/investment_orchestrator/mmi/policy_projection.py",
     "src/investment_orchestrator/mmi/portfolio_projection.py",
     "src/investment_orchestrator/mmi/raw_response_envelope.py",
@@ -71,7 +75,7 @@ H2_COMPARISON_REPORT_RELATIVE_PATH = (
     "mmi_legacy_step1_comparison_report_v1.py"
 )
 H1_LEGACY_MAPPING_REPORT_RELATIVE_PATH = (
-    "src/investment_orchestrator/offline/"
+    "src/investment_orchestrator/mmi/"
     "mmi_h1_legacy_step1_mapping_report_v1.py"
 )
 H1_MAPPED_RECOGNITION_RELATIVE_PATH = (
@@ -271,6 +275,22 @@ def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -
                     "portfolio_snapshot_existing_orders."
                     "parse_existing_buy_open_orders_summary"
                 )
+                or imported
+                == (
+                    "investment_orchestrator.validators."
+                    "validate_research_handoff"
+                )
+                or imported
+                == (
+                    "investment_orchestrator.validators."
+                    "validate_research_handoff.BASE_ROLE_KEYS"
+                )
+                or imported
+                == (
+                    "investment_orchestrator.validators."
+                    "validate_research_handoff."
+                    "LEGACY_RESEARCH_HANDOFF_STRICT_VALIDATOR_CONTRACT_VERSION"
+                )
                 or (
                     path
                     == (
@@ -345,14 +365,15 @@ def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -
             for imported in imports
         )
     )
-    # Only closed report-only H1/H2 owners and explicit report-only H2c owners
+    # Only closed report-only H2 owners and explicit report-only H2c owners
     # may read MMI outside the package; none is an admission or action
-    # consumer.  The H2c case-bundle owner structurally envelopes MMI artifact
-    # mappings; its only consumer is the explicit foreground capture session
-    # asserted below.  The Phase A preparation engine reads the same live
-    # chain report-only and has no production consumer of its own.
+    # consumer.  The H1 mapping adapter now lives inside the MMI package
+    # itself, so it is no longer an external reader.  The H2c case-bundle
+    # owner structurally envelopes MMI artifact mappings; its only consumer
+    # is the explicit foreground capture session asserted below.  The Phase A
+    # preparation engine reads the same live chain report-only and has no
+    # production consumer of its own.
     assert set(external_mmi_readers) == {
-        H1_LEGACY_MAPPING_REPORT_RELATIVE_PATH,
         H2C_CASE_BUNDLE_RELATIVE_PATH,
         H2C_CONSUME_ENGINE_RELATIVE_PATH,
         H2C_RECEIPT_RELATIVE_PATH,

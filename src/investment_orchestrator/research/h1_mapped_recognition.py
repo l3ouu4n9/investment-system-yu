@@ -16,7 +16,7 @@ from typing import Final, Literal, NoReturn
 from investment_orchestrator.mmi.raw_response_envelope_v2 import (
     validate_mmi_raw_response_envelope_v2,
 )
-from investment_orchestrator.offline.mmi_h1_legacy_step1_mapping_report_v1 import (
+from investment_orchestrator.mmi.mmi_h1_legacy_step1_mapping_report_v1 import (
     MmiH1LegacyStep1MappingReportV1Error,
     validate_mmi_h1_legacy_step1_mapping_report_v1,
 )

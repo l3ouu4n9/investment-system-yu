@@ -1,6 +1,6 @@
 """Closed, report-only H1-to-Legacy-Step-1 role mapping.
 
-This offline adapter classifies the complete legacy strict-handoff role
+This deterministic mapper classifies the complete legacy strict-handoff role
 inventory against source-bound H1 artifacts.  It is not a Legacy handoff
 compiler, a production reader, an availability signal, or an authorization
 surface.  In particular, H1 qualitative text never supplies mapping values.

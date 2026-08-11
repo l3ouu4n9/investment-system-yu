@@ -47,7 +47,7 @@ OWNER_RELATIVE_PATH = (
     "mmi_legacy_step1_comparison_report_v1.py"
 )
 H1_LEGACY_MAPPING_REPORT_RELATIVE_PATH = (
-    "src/investment_orchestrator/offline/"
+    "src/investment_orchestrator/mmi/"
     "mmi_h1_legacy_step1_mapping_report_v1.py"
 )
 H1_MODULE = (
