@@ -9,6 +9,7 @@ including its single strategy-settings snapshot behavior.
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -544,69 +545,89 @@ def test_portfolio_loader_validates_decoded_empty_text(
         step1_research.load_portfolio_snapshot_text()
 
 
-def test_render_uses_one_strategy_snapshot_for_settings_and_approved_list(
+PORTFOLIO_P1_TEXT = "portfolio_snapshot_marker: PORTFOLIO_P1_UNIQUE_MARKER\n"
+PORTFOLIO_P2_TEXT = "portfolio_snapshot_marker: PORTFOLIO_P2_MUST_NOT_APPEAR\n"
+
+
+class _RecordedStep1Sources:
+    """Acquisition history for one Step 1 render."""
+
+    def __init__(self, *, template_path: Path, strategy_path: Path, portfolio_path: Path) -> None:
+        self.template_path = template_path
+        self.strategy_path = strategy_path
+        self.portfolio_path = portfolio_path
+        self.read_events: list[Path] = []
+        self.strategy_byte_reads = 0
+        self.portfolio_byte_reads = 0
+
+
+def _install_recorded_step1_sources(
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
+) -> _RecordedStep1Sources:
+    """Serve B1/P1 to the first acquisition and B2/P2 to any second, recording order.
+
+    Acquiring either source through ``read_text`` fails outright, so the
+    recorded byte reads are the complete acquisition history. Serving distinct
+    second-acquisition buffers is what makes a hidden reread observable rather
+    than merely uncounted.
+    """
     real_read_text = step1_research.read_text
     real_read_bytes = Path.read_bytes
-    expected_template_path = step1_research.resolve_step1_prompt_template_path()
-    expected_settings_path = step1_research.current_inputs_dir() / "strategy_settings.yaml"
-    expected_portfolio_path = step1_research.current_inputs_dir() / "portfolio_snapshot.txt"
-
-    read_events: list[Path] = []
-    strategy_byte_read_count = 0
-    portfolio_byte_read_count = 0
-
-    portfolio_p1_text = "portfolio_snapshot_marker: PORTFOLIO_P1_UNIQUE_MARKER\n"
-    portfolio_p2_text = "portfolio_snapshot_marker: PORTFOLIO_P2_MUST_NOT_APPEAR\n"
+    recorder = _RecordedStep1Sources(
+        template_path=step1_research.resolve_step1_prompt_template_path(),
+        strategy_path=step1_research.current_inputs_dir() / "strategy_settings.yaml",
+        portfolio_path=step1_research.current_inputs_dir() / "portfolio_snapshot.txt",
+    )
 
     def fake_read_text(path: str | Path) -> str:
         normalized = Path(path)
-        if normalized == expected_settings_path:
+        if normalized == recorder.strategy_path:
             pytest.fail("strategy settings must be acquired through Path.read_bytes")
-        if normalized == expected_portfolio_path:
+        if normalized == recorder.portfolio_path:
             pytest.fail("portfolio snapshot must be acquired through Path.read_bytes")
 
         returned = real_read_text(path)
-        read_events.append(normalized)
+        recorder.read_events.append(normalized)
         return returned
 
     def fake_read_bytes(path: Path) -> bytes:
-        nonlocal strategy_byte_read_count, portfolio_byte_read_count
         normalized = Path(path)
-        if normalized == expected_settings_path:
-            strategy_byte_read_count += 1
+        if normalized == recorder.strategy_path:
+            recorder.strategy_byte_reads += 1
             returned = (
                 S1_SETTINGS_TEXT
-                if strategy_byte_read_count == 1
+                if recorder.strategy_byte_reads == 1
                 else S2_SETTINGS_TEXT
             ).encode("utf-8")
-        elif normalized == expected_portfolio_path:
-            portfolio_byte_read_count += 1
+        elif normalized == recorder.portfolio_path:
+            recorder.portfolio_byte_reads += 1
             returned = (
-                portfolio_p1_text
-                if portfolio_byte_read_count == 1
-                else portfolio_p2_text
+                PORTFOLIO_P1_TEXT
+                if recorder.portfolio_byte_reads == 1
+                else PORTFOLIO_P2_TEXT
             ).encode("utf-8")
         else:
             returned = real_read_bytes(path)
 
-        read_events.append(normalized)
+        recorder.read_events.append(normalized)
         return returned
 
     monkeypatch.setattr(step1_research, "read_text", fake_read_text)
     monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
+    return recorder
 
-    rendered = step1_research.build_step1_prompt_text()
 
-    assert strategy_byte_read_count == 1
-    assert portfolio_byte_read_count == 1
-    assert read_events == [
-        expected_template_path,
-        expected_settings_path,
-        expected_portfolio_path,
+def _assert_single_acquisition_in_order(recorder: _RecordedStep1Sources) -> None:
+    assert recorder.strategy_byte_reads == 1
+    assert recorder.portfolio_byte_reads == 1
+    assert recorder.read_events == [
+        recorder.template_path,
+        recorder.strategy_path,
+        recorder.portfolio_path,
     ]
 
+
+def _assert_prompt_carries_only_the_first_acquisition(rendered: str) -> None:
     assert "STRATEGY_S1_UNIQUE_MARKER_9f3a1c" in rendered
     expected_approved_json = json.dumps(
         ["TICKER_S1_A", "TICKER_S1_B"],
@@ -616,8 +637,64 @@ def test_render_uses_one_strategy_snapshot_for_settings_and_approved_list(
     assert expected_approved_json in rendered
     assert "STRATEGY_S2_UNIQUE_MARKER_4b8de0" not in rendered
     assert "TICKER_S2_A" not in rendered
-    assert portfolio_p1_text in rendered
-    assert portfolio_p2_text not in rendered
+    assert PORTFOLIO_P1_TEXT in rendered
+    assert PORTFOLIO_P2_TEXT not in rendered
+
+
+def test_render_uses_one_strategy_snapshot_for_settings_and_approved_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = _install_recorded_step1_sources(monkeypatch)
+
+    rendered = step1_research.build_step1_prompt_text()
+
+    _assert_single_acquisition_in_order(recorder)
+    _assert_prompt_carries_only_the_first_acquisition(rendered)
+
+
+def test_render_commits_digests_of_the_exact_first_acquisition_buffers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The persisted digests must originate from the exact rendered B1/P1.
+
+    A producer that reopened either source to hash it would consume the B2/P2
+    buffers this fake serves to a second acquisition, so both the read counts
+    and the committed digests would diverge. Expected digests are computed here
+    directly from the same literal buffers the fake serves — never by rereading
+    a fixture back through a production helper.
+    """
+    monkeypatch.setattr(step1_research, "repo_root", lambda: tmp_path)
+    recorder = _install_recorded_step1_sources(monkeypatch)
+
+    result = step1_research.render_step1_prompt()
+
+    _assert_single_acquisition_in_order(recorder)
+    _assert_prompt_carries_only_the_first_acquisition(
+        Path(result["prompt_path"]).read_text(encoding="utf-8")
+    )
+
+    commitment = json.loads(
+        (
+            tmp_path
+            / "artifacts"
+            / "current"
+            / "step1_research"
+            / "render_source_commitment.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert commitment["strategy_settings_sha256"] == hashlib.sha256(
+        S1_SETTINGS_TEXT.encode("utf-8")
+    ).hexdigest()
+    assert commitment["portfolio_snapshot_sha256"] == hashlib.sha256(
+        PORTFOLIO_P1_TEXT.encode("utf-8")
+    ).hexdigest()
+    assert commitment["strategy_settings_sha256"] != hashlib.sha256(
+        S2_SETTINGS_TEXT.encode("utf-8")
+    ).hexdigest()
+    assert commitment["portfolio_snapshot_sha256"] != hashlib.sha256(
+        PORTFOLIO_P2_TEXT.encode("utf-8")
+    ).hexdigest()
 
 
 # ---------------------------------------------------------------------------

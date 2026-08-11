@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import date, datetime, timezone
+import hashlib
 import io
+import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
 
 from investment_orchestrator.common.io import (
+    atomic_write_text,
     ensure_dir,
     file_exists,
     read_json,
@@ -216,6 +220,13 @@ STEP1A_ARTIFACT_SWITCH_STATUS_FILENAME = "step1a_artifact_switch_status.json"
 STEP1A_RETIREMENT_OBSERVATION_FILENAME = "step1a_retirement_observation.json"
 RESEARCH_ANCHORS_INPUT_FILENAME = "research_anchors.yaml"
 RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME = "research_anchor_approvals.yaml"
+
+# Report-only render-source continuity leaves (S1P-1). Private: no external
+# consumer exists, and nothing may read either file as machine authority.
+_RENDER_SOURCE_COMMITMENT_FILENAME = "render_source_commitment.json"
+_RENDER_SOURCE_CONTINUITY_REPORT_FILENAME = "render_source_continuity_report.json"
+_RENDER_SOURCE_COMMITMENT_SCHEMA_VERSION = "step1_render_source_commitment_v1"
+_LOWERCASE_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 
 def current_inputs_dir() -> Path:
@@ -511,6 +522,16 @@ def step1a_retirement_observation_path() -> Path:
     return step1_artifact_dir() / STEP1A_RETIREMENT_OBSERVATION_FILENAME
 
 
+def _step1_render_source_commitment_path() -> Path:
+    """Return the report-only render-source commitment path (S1P-1)."""
+    return step1_artifact_dir() / _RENDER_SOURCE_COMMITMENT_FILENAME
+
+
+def _step1_render_source_continuity_report_path() -> Path:
+    """Return the report-only render-source continuity report path (S1P-1)."""
+    return step1_artifact_dir() / _RENDER_SOURCE_CONTINUITY_REPORT_FILENAME
+
+
 def resolve_step1_prompt_template_path() -> Path:
     """Resolve the formal Step 1 prompt template from prompts/."""
     return require_prompt_path("research_dual_lane.txt")
@@ -543,9 +564,25 @@ def _decode_legacy_text_from_exact_bytes(raw_bytes: bytes) -> str:
     ).read()
 
 
-def load_strategy_settings_yaml_text() -> str:
-    """Read the operator-maintained strategy settings YAML exactly as stored on disk."""
-    path = current_inputs_dir() / "strategy_settings.yaml"
+def _strategy_settings_input_path() -> Path:
+    """Return the fixed CURRENT strategy-settings source path."""
+    return current_inputs_dir() / "strategy_settings.yaml"
+
+
+def _portfolio_snapshot_input_path() -> Path:
+    """Return the fixed CURRENT portfolio-snapshot source path."""
+    return current_inputs_dir() / "portfolio_snapshot.txt"
+
+
+def _load_strategy_settings_exact_bytes_and_text() -> tuple[bytes, str]:
+    """Acquire the strategy settings source once and retain its exact bytes.
+
+    This owns the whole strategy source contract: one ``Path.read_bytes`` of the
+    fixed CURRENT path, the missing-file translation, the shared Legacy decoder,
+    and the decoded-text nonempty validation. Retaining the buffer is what lets
+    a render describe the source it actually consumed without reopening it.
+    """
+    path = _strategy_settings_input_path()
     try:
         raw_bytes = path.read_bytes()
     except FileNotFoundError as exc:
@@ -556,7 +593,12 @@ def load_strategy_settings_yaml_text() -> str:
     text = _decode_legacy_text_from_exact_bytes(raw_bytes)
     if not text.strip():
         raise ValueError(f"Required strategy settings YAML input is empty: {path}")
-    return text
+    return raw_bytes, text
+
+
+def load_strategy_settings_yaml_text() -> str:
+    """Read the operator-maintained strategy settings YAML exactly as stored on disk."""
+    return _load_strategy_settings_exact_bytes_and_text()[1]
 
 
 def load_strategy_settings() -> dict[str, Any]:
@@ -572,9 +614,13 @@ def load_strategy_settings_for_handoff_validation() -> dict[str, Any] | None:
         return None
 
 
-def load_portfolio_snapshot_text() -> str:
-    """Read the operator-maintained portfolio snapshot exactly as stored on disk."""
-    path = current_inputs_dir() / "portfolio_snapshot.txt"
+def _load_portfolio_snapshot_exact_bytes_and_text() -> tuple[bytes, str]:
+    """Acquire the portfolio snapshot source once and retain its exact bytes.
+
+    Mirrors :func:`_load_strategy_settings_exact_bytes_and_text` for the second
+    fixed CURRENT source; see there for why the buffer is retained.
+    """
+    path = _portfolio_snapshot_input_path()
     try:
         raw_bytes = path.read_bytes()
     except FileNotFoundError as exc:
@@ -585,7 +631,12 @@ def load_portfolio_snapshot_text() -> str:
     text = _decode_legacy_text_from_exact_bytes(raw_bytes)
     if not text.strip():
         raise ValueError(f"Required portfolio snapshot input is empty: {path}")
-    return text
+    return raw_bytes, text
+
+
+def load_portfolio_snapshot_text() -> str:
+    """Read the operator-maintained portfolio snapshot exactly as stored on disk."""
+    return _load_portfolio_snapshot_exact_bytes_and_text()[1]
 
 
 def load_current_run_user_approved_extended_etf_static_list_json() -> str:
@@ -595,29 +646,95 @@ def load_current_run_user_approved_extended_etf_static_list_json() -> str:
     )
 
 
-def build_step1_prompt_text() -> str:
-    """Render the Step 1 prompt without mutating the source prompt file."""
-    template_text = read_text(resolve_step1_prompt_template_path())
-    strategy_settings_text = load_strategy_settings_yaml_text()
-    portfolio_snapshot_text = load_portfolio_snapshot_text()
+def _build_step1_prompt_text_with_render_sources(
+    template_path: Path,
+) -> tuple[str, bytes, bytes]:
+    """Run one Step 1 render acquisition and return the prompt with its exact sources.
+
+    The acquisition order stays template -> strategy -> portfolio, each source
+    opened exactly once. The two returned buffers are the ONLY authorized digest
+    inputs: a render describes the bytes it actually compiled, never a reread.
+    """
+    template_text = read_text(template_path)
+    strategy_settings_bytes, strategy_settings_text = (
+        _load_strategy_settings_exact_bytes_and_text()
+    )
+    portfolio_snapshot_bytes, portfolio_snapshot_text = (
+        _load_portfolio_snapshot_exact_bytes_and_text()
+    )
     approved_extended_etf_json = derive_legacy_approved_extended_etf_json(
         strategy_settings_text=strategy_settings_text,
     )
-    return compile_legacy_step1_prompt_text(
+    prompt_text = compile_legacy_step1_prompt_text(
         template_text=template_text,
         strategy_settings_text=strategy_settings_text,
         portfolio_snapshot_text=portfolio_snapshot_text,
         approved_extended_etf_json=approved_extended_etf_json,
     )
+    return prompt_text, strategy_settings_bytes, portfolio_snapshot_bytes
+
+
+def build_step1_prompt_text() -> str:
+    """Render the Step 1 prompt without mutating the source prompt file."""
+    prompt_text, _strategy_settings_bytes, _portfolio_snapshot_bytes = (
+        _build_step1_prompt_text_with_render_sources(
+            resolve_step1_prompt_template_path()
+        )
+    )
+    return prompt_text
+
+
+def _serialize_step1_render_source_commitment(
+    *,
+    strategy_settings_sha256: str,
+    portfolio_snapshot_sha256: str,
+) -> str:
+    """Serialize the closed render-source commitment payload deterministically."""
+    payload = {
+        "schema_version": _RENDER_SOURCE_COMMITMENT_SCHEMA_VERSION,
+        "strategy_settings_sha256": strategy_settings_sha256,
+        "portfolio_snapshot_sha256": portfolio_snapshot_sha256,
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
 
 
 def render_step1_prompt() -> dict[str, str]:
-    """Write the rendered Step 1 prompt and prepare the manual output artifact."""
+    """Write the rendered Step 1 prompt and prepare the manual output artifact.
+
+    This also publishes the report-only ``render_source_commitment.json``
+    (S1P-1): the SHA-256 of the exact strategy and portfolio buffers THIS render
+    compiled. The commitment is written last and atomically, which makes it the
+    durable completion point — every earlier failure below leaves no commitment
+    at all, so no surviving commitment can ever describe a prompt that was not
+    fully published. It records nothing about raw_output.txt, which may legally
+    outlive a rerender, and no gate, permission, state, pointer, publication, or
+    order path reads it.
+    """
     artifact_dir = step1_artifact_dir()
     prompt_output_path = step1_prompt_path()
     raw_output_path = step1_raw_output_path()
+    template_path = resolve_step1_prompt_template_path()
+    commitment_path = _step1_render_source_commitment_path()
+    continuity_report_path = _step1_render_source_continuity_report_path()
 
-    write_rendered_prompt(prompt_output_path, build_step1_prompt_text())
+    (
+        prompt_text,
+        strategy_settings_bytes,
+        portfolio_snapshot_bytes,
+    ) = _build_step1_prompt_text_with_render_sources(template_path)
+    commitment_text = _serialize_step1_render_source_commitment(
+        strategy_settings_sha256=hashlib.sha256(strategy_settings_bytes).hexdigest(),
+        portfolio_snapshot_sha256=hashlib.sha256(portfolio_snapshot_bytes).hexdigest(),
+    )
+
+    # Everything above succeeded in memory, so retire the previous run's
+    # evidence before any new bytes land. Deleting the report first and the
+    # commitment second means no window exists where a commitment is present
+    # without a matching prompt having been re-published.
+    continuity_report_path.unlink(missing_ok=True)
+    commitment_path.unlink(missing_ok=True)
+
+    write_rendered_prompt(prompt_output_path, prompt_text)
     if not file_exists(raw_output_path):
         write_text(raw_output_path, "")
     metadata_path = ensure_manual_output_metadata_template(
@@ -625,13 +742,15 @@ def render_step1_prompt() -> dict[str, str]:
         prompt_path=prompt_output_path,
     )
 
-    return {
+    result = {
         "artifact_dir": str(artifact_dir),
         "prompt_path": str(prompt_output_path),
         "raw_output_path": str(raw_output_path),
         "raw_output_metadata_path": str(metadata_path),
-        "prompt_template_path": str(resolve_step1_prompt_template_path()),
+        "prompt_template_path": str(template_path),
     }
+    atomic_write_text(commitment_path, commitment_text)
+    return result
 
 
 def render_step1_analyst_memo_prompt(
@@ -697,11 +816,187 @@ def parse_step1_analyst_memo_output(
     return result
 
 
+class _Step1SourceCommitmentError(Exception):
+    """Private carrier for exactly one closed source-commitment reason code."""
+
+    def __init__(self, reason_code: str) -> None:
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+
+
+def _reject_duplicate_commitment_members(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    """Fail closed on duplicate JSON members instead of letting the last one win."""
+    keys = [key for key, _value in pairs]
+    if len(set(keys)) != len(keys):
+        raise _Step1SourceCommitmentError("SOURCE_COMMITMENT_INVALID_CONTRACT")
+    return dict(pairs)
+
+
+def _load_step1_render_source_commitment_digests() -> tuple[str, str]:
+    """Read and validate ``render_source_commitment.json``; return its two digests.
+
+    Single owning parser/validator for that artifact. Any problem raises
+    :class:`_Step1SourceCommitmentError` carrying exactly one closed reason
+    code, in this precedence: absent source, unreadable source, JSON syntax,
+    the structure required to read a version, the version itself, then the v1
+    field contract. Applying v1 field rules only AFTER the version is confirmed
+    is what stops an unsupported future version from being misreported as a
+    generic contract violation.
+    """
+    path = _step1_render_source_commitment_path()
+    try:
+        raw_bytes = path.read_bytes()
+    except FileNotFoundError as exc:
+        raise _Step1SourceCommitmentError("SOURCE_COMMITMENT_MISSING") from exc
+    except OSError as exc:
+        raise _Step1SourceCommitmentError("SOURCE_COMMITMENT_UNREADABLE") from exc
+
+    try:
+        text = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise _Step1SourceCommitmentError("SOURCE_COMMITMENT_UNREADABLE") from exc
+
+    try:
+        payload = json.loads(
+            text, object_pairs_hook=_reject_duplicate_commitment_members
+        )
+    except json.JSONDecodeError as exc:
+        raise _Step1SourceCommitmentError("SOURCE_COMMITMENT_INVALID_JSON") from exc
+
+    if not isinstance(payload, dict):
+        raise _Step1SourceCommitmentError("SOURCE_COMMITMENT_INVALID_CONTRACT")
+    schema_version = payload.get("schema_version")
+    if not isinstance(schema_version, str):
+        raise _Step1SourceCommitmentError("SOURCE_COMMITMENT_INVALID_CONTRACT")
+    if schema_version != _RENDER_SOURCE_COMMITMENT_SCHEMA_VERSION:
+        raise _Step1SourceCommitmentError(
+            "SOURCE_COMMITMENT_UNSUPPORTED_SCHEMA_VERSION"
+        )
+
+    if set(payload) != {
+        "schema_version",
+        "strategy_settings_sha256",
+        "portfolio_snapshot_sha256",
+    }:
+        raise _Step1SourceCommitmentError("SOURCE_COMMITMENT_INVALID_CONTRACT")
+
+    digests: list[str] = []
+    for key in ("strategy_settings_sha256", "portfolio_snapshot_sha256"):
+        value = payload[key]
+        if not isinstance(value, str) or _LOWERCASE_SHA256_RE.fullmatch(value) is None:
+            raise _Step1SourceCommitmentError("SOURCE_COMMITMENT_INVALID_CONTRACT")
+        digests.append(value)
+    return digests[0], digests[1]
+
+
+def _read_current_source_bytes_for_continuity(path: Path) -> bytes | None:
+    """Read one fixed CURRENT source's exact bytes; ``None`` on a role-local failure.
+
+    Only ``OSError`` is expected here. The bytes are never decoded, so a source
+    holding invalid UTF-8 is still perfectly hashable and is NOT a read failure.
+    """
+    try:
+        return path.read_bytes()
+    except OSError:
+        return None
+
+
+def _evaluate_step1_render_source_continuity() -> list[str]:
+    """Return this parse's closed continuity reason codes in canonical order."""
+    try:
+        strategy_expected_sha256, portfolio_expected_sha256 = (
+            _load_step1_render_source_commitment_digests()
+        )
+    except _Step1SourceCommitmentError as exc:
+        # A commitment problem is a singleton outcome: with nothing valid to
+        # compare against, the current sources are not read at all.
+        return [exc.reason_code]
+
+    strategy_bytes = _read_current_source_bytes_for_continuity(
+        _strategy_settings_input_path()
+    )
+    portfolio_bytes = _read_current_source_bytes_for_continuity(
+        _portfolio_snapshot_input_path()
+    )
+
+    reason_codes: list[str] = []
+    if strategy_bytes is None:
+        reason_codes.append("STRATEGY_CURRENT_SOURCE_READ_FAILED")
+    if portfolio_bytes is None:
+        reason_codes.append("PORTFOLIO_CURRENT_SOURCE_READ_FAILED")
+    if (
+        strategy_bytes is not None
+        and hashlib.sha256(strategy_bytes).hexdigest() != strategy_expected_sha256
+    ):
+        reason_codes.append("STRATEGY_SHA256_MISMATCH")
+    if (
+        portfolio_bytes is not None
+        and hashlib.sha256(portfolio_bytes).hexdigest() != portfolio_expected_sha256
+    ):
+        reason_codes.append("PORTFOLIO_SHA256_MISMATCH")
+    return reason_codes
+
+
+def _write_step1_render_source_continuity_report() -> None:
+    """Refresh the report-only render-source continuity evidence (S1P-1).
+
+    A ``SOURCE_ENDPOINT_COMPLETE_MATCH`` claims exactly one thing: during THIS
+    parse invocation's sequential endpoint check, both fixed CURRENT raw source
+    byte streams SHA-256-equal the values atomically recorded from the exact
+    buffers used by the most recently successfully completed standard Step 1
+    render. It does not claim the two endpoints were read simultaneously, nor
+    that either source held still between them.
+
+    It proves nothing about prompt.txt being unchanged, the prompt having been
+    submitted, a response being bound to that prompt, operator identity, model
+    or provider identity, response authenticity, freshness, T1, H1
+    availability, permissions, gates, final safety, continuous source
+    stability, or tamper resistance.
+
+    Report-only: every outcome below leaves Legacy parse, availability,
+    permissions, gates, Step 2/3, final safety, publication, pointers, and
+    order paths exactly as they were.
+    """
+    report_path = _step1_render_source_continuity_report_path()
+
+    # Load-bearing: a parse must never proceed with an earlier parse's report
+    # still on disk, so a failed deletion propagates rather than degrading.
+    report_path.unlink(missing_ok=True)
+
+    reason_codes = _evaluate_step1_render_source_continuity()
+    payload = {
+        "schema_version": "step1_render_source_continuity_report_v1",
+        "status": (
+            "SOURCE_ENDPOINT_COMPLETE_MATCH"
+            if not reason_codes
+            else "SOURCE_ENDPOINT_UNVERIFIED"
+        ),
+        "reason_codes": reason_codes,
+        "authority_effect": "NONE",
+    }
+    try:
+        atomic_write_text(
+            report_path,
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        )
+    except OSError:
+        # The stale report was already removed, so a failed write leaves no
+        # stale evidence behind. Legacy parse continues; nothing else changes.
+        return
+
+
 def parse_step1_output(
     *,
     strategy_settings: Mapping[str, Any] | None = None,
 ) -> dict[str, str]:
     """Parse and validate the manual Step 1 output into research_output.json."""
+    # Report-only layer -1 (S1P-1): deliberately first, so every supported parse
+    # attempt either refreshes continuity evidence or leaves none at all. Its
+    # outcome never reaches the Legacy parse below.
+    _write_step1_render_source_continuity_report()
+
     handoff_strategy_settings = (
         strategy_settings
         if strategy_settings is not None
