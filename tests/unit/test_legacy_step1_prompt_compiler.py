@@ -652,6 +652,44 @@ def test_render_uses_one_strategy_snapshot_for_settings_and_approved_list(
     _assert_prompt_carries_only_the_first_acquisition(rendered)
 
 
+def _read_render_commitment(tmp_path: Path) -> dict[str, str]:
+    """Load the single v2 render commitment this render published."""
+    return json.loads(
+        (
+            tmp_path / "artifacts" / "current" / "step1_research" / "render_commitment.json"
+        ).read_text(encoding="utf-8")
+    )
+
+
+def _write_real_step1_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point Step 1 at an isolated root holding genuine, re-readable sources.
+
+    Unlike the B1/B2 recorder, these sources return the SAME bytes on every
+    acquisition, so a parse-time endpoint check reads them without tripping the
+    recorder's deliberate second-acquisition divergence.
+    """
+    monkeypatch.setattr(step1_research, "repo_root", lambda: tmp_path)
+    inputs = tmp_path / "inputs" / "current"
+    inputs.mkdir(parents=True, exist_ok=True)
+    (inputs / "strategy_settings.yaml").write_text(S1_SETTINGS_TEXT, encoding="utf-8")
+    (inputs / "portfolio_snapshot.txt").write_text(PORTFOLIO_P1_TEXT, encoding="utf-8")
+
+
+def _capture_writer_prompt_text(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record the exact prompt text the render hands to the prompt writer."""
+    captured: list[str] = []
+    real_write_rendered_prompt = step1_research.write_rendered_prompt
+
+    def capturing_write_rendered_prompt(path: str | Path, text: str) -> Path:
+        captured.append(text)
+        return real_write_rendered_prompt(path, text)
+
+    monkeypatch.setattr(
+        step1_research, "write_rendered_prompt", capturing_write_rendered_prompt
+    )
+    return captured
+
+
 def test_render_commits_digests_of_the_exact_first_acquisition_buffers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -674,15 +712,7 @@ def test_render_commits_digests_of_the_exact_first_acquisition_buffers(
         Path(result["prompt_path"]).read_text(encoding="utf-8")
     )
 
-    commitment = json.loads(
-        (
-            tmp_path
-            / "artifacts"
-            / "current"
-            / "step1_research"
-            / "render_source_commitment.json"
-        ).read_text(encoding="utf-8")
-    )
+    commitment = _read_render_commitment(tmp_path)
     assert commitment["strategy_settings_sha256"] == hashlib.sha256(
         S1_SETTINGS_TEXT.encode("utf-8")
     ).hexdigest()
@@ -694,6 +724,131 @@ def test_render_commits_digests_of_the_exact_first_acquisition_buffers(
     ).hexdigest()
     assert commitment["portfolio_snapshot_sha256"] != hashlib.sha256(
         PORTFOLIO_P2_TEXT.encode("utf-8")
+    ).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Prompt digest causality: prompt_sha256 must be SHA-256 of the UTF-8 encoding
+# of the exact prompt text handed to the writer, and must not be originated by
+# reading prompt.txt back off the filesystem.
+# ---------------------------------------------------------------------------
+
+
+def test_prompt_digest_equals_the_hash_of_the_exact_writer_input_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The committed prompt digest is hashed from the writer's input argument.
+
+    The expected value comes from an independent SHA oracle applied to the text
+    intercepted on its way into the writer — not from any production helper and
+    not from the persisted artifact.
+    """
+    monkeypatch.setattr(step1_research, "repo_root", lambda: tmp_path)
+    recorder = _install_recorded_step1_sources(monkeypatch)
+    captured = _capture_writer_prompt_text(monkeypatch)
+
+    step1_research.render_step1_prompt()
+
+    assert len(captured) == 1
+    assert _read_render_commitment(tmp_path)["prompt_sha256"] == hashlib.sha256(
+        captured[0].encode("utf-8")
+    ).hexdigest()
+    # Still exactly one acquisition per source, and no prompt read of any kind.
+    _assert_single_acquisition_in_order(recorder)
+    assert step1_research.step1_prompt_path() not in recorder.read_events
+
+
+def test_prompt_digest_survives_a_writer_that_persists_different_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Decisive no-reread oracle: divergent persisted bytes cannot move the digest.
+
+    The writer is replaced with one that persists bytes DIFFERENT from the text
+    it was handed. A digest originated by rereading ``prompt.txt`` would follow
+    the persisted bytes; the closed contract requires it to follow the writer
+    input, so the persisted-byte hash must NOT appear in the commitment. The
+    divergence is then visible exactly where it should be — at parse time.
+    """
+    _write_real_step1_inputs(tmp_path, monkeypatch)
+    captured: list[str] = []
+    divergent_bytes = b"PERSISTED_BYTES_THAT_ARE_NOT_THE_WRITER_INPUT\n"
+
+    def diverging_write_rendered_prompt(path: str | Path, text: str) -> Path:
+        captured.append(text)
+        output_path = Path(path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(divergent_bytes)
+        return output_path
+
+    monkeypatch.setattr(
+        step1_research, "write_rendered_prompt", diverging_write_rendered_prompt
+    )
+
+    step1_research.render_step1_prompt()
+
+    committed = _read_render_commitment(tmp_path)["prompt_sha256"]
+    assert len(captured) == 1
+    assert committed == hashlib.sha256(captured[0].encode("utf-8")).hexdigest()
+    assert committed != hashlib.sha256(divergent_bytes).hexdigest()
+    assert step1_research.step1_prompt_path().read_bytes() == divergent_bytes
+
+
+def test_a_writer_newline_divergence_surfaces_as_a_parse_time_prompt_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cross-platform caveat is reported, never normalized away.
+
+    This simulates a text-mode writer that translates newlines on persistence.
+    The contract deliberately does not hide that: it becomes a report-only
+    ``PROMPT_SHA256_MISMATCH`` rather than a silently normalized match.
+    """
+    _write_real_step1_inputs(tmp_path, monkeypatch)
+
+    def crlf_translating_write_rendered_prompt(path: str | Path, text: str) -> Path:
+        output_path = Path(path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(text.replace("\n", "\r\n").encode("utf-8"))
+        return output_path
+
+    monkeypatch.setattr(
+        step1_research, "write_rendered_prompt", crlf_translating_write_rendered_prompt
+    )
+    step1_research.render_step1_prompt()
+
+    step1_research._write_step1_render_continuity_report()  # noqa: SLF001
+    report = json.loads(
+        (
+            tmp_path
+            / "artifacts"
+            / "current"
+            / "step1_research"
+            / "render_continuity_report.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert report["status"] == "RENDER_ENDPOINT_UNVERIFIED"
+    assert report["reason_codes"] == ["PROMPT_SHA256_MISMATCH"]
+    assert report["authority_effect"] == "NONE"
+
+
+def test_the_standard_writer_persists_the_writer_input_bytes_on_this_platform(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exact stable prompt output: persisted bytes equal the UTF-8 writer input."""
+    monkeypatch.setattr(step1_research, "repo_root", lambda: tmp_path)
+    _install_recorded_step1_sources(monkeypatch)
+    captured = _capture_writer_prompt_text(monkeypatch)
+
+    result = step1_research.render_step1_prompt()
+
+    assert len(captured) == 1
+    assert Path(result["prompt_path"]).read_bytes() == captured[0].encode("utf-8")
+    assert _read_render_commitment(tmp_path)["prompt_sha256"] == hashlib.sha256(
+        Path(result["prompt_path"]).read_bytes()
     ).hexdigest()
 
 

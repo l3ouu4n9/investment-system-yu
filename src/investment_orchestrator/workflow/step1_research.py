@@ -221,11 +221,20 @@ STEP1A_RETIREMENT_OBSERVATION_FILENAME = "step1a_retirement_observation.json"
 RESEARCH_ANCHORS_INPUT_FILENAME = "research_anchors.yaml"
 RESEARCH_ANCHOR_APPROVALS_INPUT_FILENAME = "research_anchor_approvals.yaml"
 
-# Report-only render-source continuity leaves (S1P-1). Private: no external
-# consumer exists, and nothing may read either file as machine authority.
-_RENDER_SOURCE_COMMITMENT_FILENAME = "render_source_commitment.json"
-_RENDER_SOURCE_CONTINUITY_REPORT_FILENAME = "render_source_continuity_report.json"
-_RENDER_SOURCE_COMMITMENT_SCHEMA_VERSION = "step1_render_source_commitment_v1"
+# Report-only render continuity leaves (S1P-2). Private: no external consumer
+# exists, and nothing may read either file as machine authority.
+_RENDER_COMMITMENT_FILENAME = "render_commitment.json"
+_RENDER_CONTINUITY_REPORT_FILENAME = "render_continuity_report.json"
+_RENDER_COMMITMENT_SCHEMA_VERSION = "step1_render_commitment_v2"
+
+# Retired S1P-1 source-only leaves. Their v1 schemas keep their original
+# meaning forever (strategy + portfolio identity only); v2 retires them rather
+# than redefining them, so archived v1 trees stay readable as v1. These names
+# survive here solely so a current tree written before the upgrade cannot leave
+# a stale success artifact beside fresh v2 evidence.
+_RETIRED_RENDER_SOURCE_COMMITMENT_FILENAME = "render_source_commitment.json"
+_RETIRED_RENDER_SOURCE_CONTINUITY_REPORT_FILENAME = "render_source_continuity_report.json"
+
 _LOWERCASE_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 
@@ -522,14 +531,28 @@ def step1a_retirement_observation_path() -> Path:
     return step1_artifact_dir() / STEP1A_RETIREMENT_OBSERVATION_FILENAME
 
 
-def _step1_render_source_commitment_path() -> Path:
-    """Return the report-only render-source commitment path (S1P-1)."""
-    return step1_artifact_dir() / _RENDER_SOURCE_COMMITMENT_FILENAME
+def _step1_render_commitment_path() -> Path:
+    """Return the report-only render commitment path (S1P-2)."""
+    return step1_artifact_dir() / _RENDER_COMMITMENT_FILENAME
 
 
-def _step1_render_source_continuity_report_path() -> Path:
-    """Return the report-only render-source continuity report path (S1P-1)."""
-    return step1_artifact_dir() / _RENDER_SOURCE_CONTINUITY_REPORT_FILENAME
+def _step1_render_continuity_report_path() -> Path:
+    """Return the report-only render continuity report path (S1P-2)."""
+    return step1_artifact_dir() / _RENDER_CONTINUITY_REPORT_FILENAME
+
+
+def _step1_retired_render_source_commitment_path() -> Path:
+    """Return the retired S1P-1 source-only commitment path.
+
+    Only ever deleted, never read: a v1 artifact records source identity alone
+    and can never supply the prompt identity the v2 contract requires.
+    """
+    return step1_artifact_dir() / _RETIRED_RENDER_SOURCE_COMMITMENT_FILENAME
+
+
+def _step1_retired_render_source_continuity_report_path() -> Path:
+    """Return the retired S1P-1 source-only continuity report path."""
+    return step1_artifact_dir() / _RETIRED_RENDER_SOURCE_CONTINUITY_REPORT_FILENAME
 
 
 def resolve_step1_prompt_template_path() -> Path:
@@ -684,16 +707,18 @@ def build_step1_prompt_text() -> str:
     return prompt_text
 
 
-def _serialize_step1_render_source_commitment(
+def _serialize_step1_render_commitment(
     *,
     strategy_settings_sha256: str,
     portfolio_snapshot_sha256: str,
+    prompt_sha256: str,
 ) -> str:
-    """Serialize the closed render-source commitment payload deterministically."""
+    """Serialize the closed v2 render commitment payload deterministically."""
     payload = {
-        "schema_version": _RENDER_SOURCE_COMMITMENT_SCHEMA_VERSION,
+        "schema_version": _RENDER_COMMITMENT_SCHEMA_VERSION,
         "strategy_settings_sha256": strategy_settings_sha256,
         "portfolio_snapshot_sha256": portfolio_snapshot_sha256,
+        "prompt_sha256": prompt_sha256,
     }
     return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
 
@@ -701,37 +726,50 @@ def _serialize_step1_render_source_commitment(
 def render_step1_prompt() -> dict[str, str]:
     """Write the rendered Step 1 prompt and prepare the manual output artifact.
 
-    This also publishes the report-only ``render_source_commitment.json``
-    (S1P-1): the SHA-256 of the exact strategy and portfolio buffers THIS render
-    compiled. The commitment is written last and atomically, which makes it the
-    durable completion point — every earlier failure below leaves no commitment
-    at all, so no surviving commitment can ever describe a prompt that was not
-    fully published. It records nothing about raw_output.txt, which may legally
-    outlive a rerender, and no gate, permission, state, pointer, publication, or
-    order path reads it.
+    This also publishes the report-only ``render_commitment.json`` (S1P-2): the
+    SHA-256 of the exact strategy and portfolio buffers THIS render compiled and
+    of the exact prompt text it handed to the writer. The commitment is written
+    last and atomically, which makes it the single durable completion point —
+    every earlier failure below leaves no commitment at all, so no surviving
+    commitment can ever describe a prompt that was not fully published. It
+    records nothing about raw_output.txt, which may legally outlive a rerender,
+    and no gate, permission, state, pointer, publication, or order path reads it.
     """
     artifact_dir = step1_artifact_dir()
     prompt_output_path = step1_prompt_path()
     raw_output_path = step1_raw_output_path()
     template_path = resolve_step1_prompt_template_path()
-    commitment_path = _step1_render_source_commitment_path()
-    continuity_report_path = _step1_render_source_continuity_report_path()
+    commitment_path = _step1_render_commitment_path()
+    continuity_report_path = _step1_render_continuity_report_path()
+    retired_commitment_path = _step1_retired_render_source_commitment_path()
+    retired_report_path = _step1_retired_render_source_continuity_report_path()
 
     (
         prompt_text,
         strategy_settings_bytes,
         portfolio_snapshot_bytes,
     ) = _build_step1_prompt_text_with_render_sources(template_path)
-    commitment_text = _serialize_step1_render_source_commitment(
+    # The prompt digest originates from the exact text handed to the writer,
+    # never from a reread. Hashing what the render INTENDED keeps a write-stage
+    # defect visible: the parse-time comparison against the persisted bytes is
+    # what would surface it, whereas hashing the file back would launder it into
+    # the commitment. The committed value therefore identifies the UTF-8
+    # encoding of that text alone, and claims nothing about the persisted bytes
+    # on a platform whose text-mode writer translates newlines.
+    commitment_text = _serialize_step1_render_commitment(
         strategy_settings_sha256=hashlib.sha256(strategy_settings_bytes).hexdigest(),
         portfolio_snapshot_sha256=hashlib.sha256(portfolio_snapshot_bytes).hexdigest(),
+        prompt_sha256=hashlib.sha256(prompt_text.encode("utf-8")).hexdigest(),
     )
 
-    # Everything above succeeded in memory, so retire the previous run's
-    # evidence before any new bytes land. Deleting the report first and the
-    # commitment second means no window exists where a commitment is present
-    # without a matching prompt having been re-published.
+    # Everything above succeeded in memory, so retire every previous run's
+    # evidence before any new bytes land: reports before commitments (evidence
+    # before claims) and retired v1 leaves before current v2 leaves. Because all
+    # four deletions precede prompt mutation, a commitment surviving a failed
+    # render necessarily still describes an unmutated prompt.
+    retired_report_path.unlink(missing_ok=True)
     continuity_report_path.unlink(missing_ok=True)
+    retired_commitment_path.unlink(missing_ok=True)
     commitment_path.unlink(missing_ok=True)
 
     write_rendered_prompt(prompt_output_path, prompt_text)
@@ -816,8 +854,8 @@ def parse_step1_analyst_memo_output(
     return result
 
 
-class _Step1SourceCommitmentError(Exception):
-    """Private carrier for exactly one closed source-commitment reason code."""
+class _Step1RenderCommitmentError(Exception):
+    """Private carrier for exactly one closed render-commitment reason code."""
 
     def __init__(self, reason_code: str) -> None:
         super().__init__(reason_code)
@@ -830,72 +868,83 @@ def _reject_duplicate_commitment_members(
     """Fail closed on duplicate JSON members instead of letting the last one win."""
     keys = [key for key, _value in pairs]
     if len(set(keys)) != len(keys):
-        raise _Step1SourceCommitmentError("SOURCE_COMMITMENT_INVALID_CONTRACT")
+        raise _Step1RenderCommitmentError("RENDER_COMMITMENT_INVALID_CONTRACT")
     return dict(pairs)
 
 
-def _load_step1_render_source_commitment_digests() -> tuple[str, str]:
-    """Read and validate ``render_source_commitment.json``; return its two digests.
+def _load_step1_render_commitment_digests() -> tuple[str, str, str]:
+    """Read and validate ``render_commitment.json``; return its three digests.
 
     Single owning parser/validator for that artifact. Any problem raises
-    :class:`_Step1SourceCommitmentError` carrying exactly one closed reason
+    :class:`_Step1RenderCommitmentError` carrying exactly one closed reason
     code, in this precedence: absent source, unreadable source, JSON syntax,
-    the structure required to read a version, the version itself, then the v1
-    field contract. Applying v1 field rules only AFTER the version is confirmed
-    is what stops an unsupported future version from being misreported as a
-    generic contract violation.
+    the structure required to read a version, the version itself, then the v2
+    field contract. Applying v2 field rules only AFTER the version is confirmed
+    is what stops an unsupported version from being misreported as a generic
+    contract violation.
+
+    The retired ``render_source_commitment.json`` is never opened here: a v1
+    artifact carries source identity only, so reading it would have to invent
+    the prompt identity this contract requires. Its absence at the v2 path is
+    simply ``RENDER_COMMITMENT_MISSING``.
     """
-    path = _step1_render_source_commitment_path()
+    path = _step1_render_commitment_path()
     try:
         raw_bytes = path.read_bytes()
     except FileNotFoundError as exc:
-        raise _Step1SourceCommitmentError("SOURCE_COMMITMENT_MISSING") from exc
+        raise _Step1RenderCommitmentError("RENDER_COMMITMENT_MISSING") from exc
     except OSError as exc:
-        raise _Step1SourceCommitmentError("SOURCE_COMMITMENT_UNREADABLE") from exc
+        raise _Step1RenderCommitmentError("RENDER_COMMITMENT_UNREADABLE") from exc
 
     try:
         text = raw_bytes.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise _Step1SourceCommitmentError("SOURCE_COMMITMENT_UNREADABLE") from exc
+        raise _Step1RenderCommitmentError("RENDER_COMMITMENT_UNREADABLE") from exc
 
     try:
         payload = json.loads(
             text, object_pairs_hook=_reject_duplicate_commitment_members
         )
     except json.JSONDecodeError as exc:
-        raise _Step1SourceCommitmentError("SOURCE_COMMITMENT_INVALID_JSON") from exc
+        raise _Step1RenderCommitmentError("RENDER_COMMITMENT_INVALID_JSON") from exc
 
     if not isinstance(payload, dict):
-        raise _Step1SourceCommitmentError("SOURCE_COMMITMENT_INVALID_CONTRACT")
+        raise _Step1RenderCommitmentError("RENDER_COMMITMENT_INVALID_CONTRACT")
     schema_version = payload.get("schema_version")
     if not isinstance(schema_version, str):
-        raise _Step1SourceCommitmentError("SOURCE_COMMITMENT_INVALID_CONTRACT")
-    if schema_version != _RENDER_SOURCE_COMMITMENT_SCHEMA_VERSION:
-        raise _Step1SourceCommitmentError(
-            "SOURCE_COMMITMENT_UNSUPPORTED_SCHEMA_VERSION"
+        raise _Step1RenderCommitmentError("RENDER_COMMITMENT_INVALID_CONTRACT")
+    if schema_version != _RENDER_COMMITMENT_SCHEMA_VERSION:
+        raise _Step1RenderCommitmentError(
+            "RENDER_COMMITMENT_UNSUPPORTED_SCHEMA_VERSION"
         )
 
     if set(payload) != {
         "schema_version",
         "strategy_settings_sha256",
         "portfolio_snapshot_sha256",
+        "prompt_sha256",
     }:
-        raise _Step1SourceCommitmentError("SOURCE_COMMITMENT_INVALID_CONTRACT")
+        raise _Step1RenderCommitmentError("RENDER_COMMITMENT_INVALID_CONTRACT")
 
     digests: list[str] = []
-    for key in ("strategy_settings_sha256", "portfolio_snapshot_sha256"):
+    for key in (
+        "strategy_settings_sha256",
+        "portfolio_snapshot_sha256",
+        "prompt_sha256",
+    ):
         value = payload[key]
         if not isinstance(value, str) or _LOWERCASE_SHA256_RE.fullmatch(value) is None:
-            raise _Step1SourceCommitmentError("SOURCE_COMMITMENT_INVALID_CONTRACT")
+            raise _Step1RenderCommitmentError("RENDER_COMMITMENT_INVALID_CONTRACT")
         digests.append(value)
-    return digests[0], digests[1]
+    return digests[0], digests[1], digests[2]
 
 
-def _read_current_source_bytes_for_continuity(path: Path) -> bytes | None:
-    """Read one fixed CURRENT source's exact bytes; ``None`` on a role-local failure.
+def _read_current_endpoint_bytes_for_continuity(path: Path) -> bytes | None:
+    """Read one fixed CURRENT endpoint's exact bytes; ``None`` on a role-local failure.
 
-    Only ``OSError`` is expected here. The bytes are never decoded, so a source
-    holding invalid UTF-8 is still perfectly hashable and is NOT a read failure.
+    Only ``OSError`` is expected here. The bytes are never decoded, so an
+    endpoint holding invalid UTF-8 is still perfectly hashable and is NOT a read
+    failure. This is used for both operator sources and the rendered prompt.
     """
     try:
         return path.read_bytes()
@@ -903,29 +952,35 @@ def _read_current_source_bytes_for_continuity(path: Path) -> bytes | None:
         return None
 
 
-def _evaluate_step1_render_source_continuity() -> list[str]:
+def _evaluate_step1_render_continuity() -> list[str]:
     """Return this parse's closed continuity reason codes in canonical order."""
     try:
-        strategy_expected_sha256, portfolio_expected_sha256 = (
-            _load_step1_render_source_commitment_digests()
-        )
-    except _Step1SourceCommitmentError as exc:
+        (
+            strategy_expected_sha256,
+            portfolio_expected_sha256,
+            prompt_expected_sha256,
+        ) = _load_step1_render_commitment_digests()
+    except _Step1RenderCommitmentError as exc:
         # A commitment problem is a singleton outcome: with nothing valid to
-        # compare against, the current sources are not read at all.
+        # compare against, the current endpoints are not read at all.
         return [exc.reason_code]
 
-    strategy_bytes = _read_current_source_bytes_for_continuity(
+    strategy_bytes = _read_current_endpoint_bytes_for_continuity(
         _strategy_settings_input_path()
     )
-    portfolio_bytes = _read_current_source_bytes_for_continuity(
+    portfolio_bytes = _read_current_endpoint_bytes_for_continuity(
         _portfolio_snapshot_input_path()
     )
+    prompt_bytes = _read_current_endpoint_bytes_for_continuity(step1_prompt_path())
 
     reason_codes: list[str] = []
     if strategy_bytes is None:
         reason_codes.append("STRATEGY_CURRENT_SOURCE_READ_FAILED")
     if portfolio_bytes is None:
         reason_codes.append("PORTFOLIO_CURRENT_SOURCE_READ_FAILED")
+    if prompt_bytes is None:
+        # The prompt is a rendered artifact rather than an operator source.
+        reason_codes.append("PROMPT_CURRENT_ARTIFACT_READ_FAILED")
     if (
         strategy_bytes is not None
         and hashlib.sha256(strategy_bytes).hexdigest() != strategy_expected_sha256
@@ -936,42 +991,54 @@ def _evaluate_step1_render_source_continuity() -> list[str]:
         and hashlib.sha256(portfolio_bytes).hexdigest() != portfolio_expected_sha256
     ):
         reason_codes.append("PORTFOLIO_SHA256_MISMATCH")
+    if (
+        prompt_bytes is not None
+        and hashlib.sha256(prompt_bytes).hexdigest() != prompt_expected_sha256
+    ):
+        reason_codes.append("PROMPT_SHA256_MISMATCH")
     return reason_codes
 
 
-def _write_step1_render_source_continuity_report() -> None:
-    """Refresh the report-only render-source continuity evidence (S1P-1).
+def _write_step1_render_continuity_report() -> None:
+    """Refresh the report-only render continuity evidence (S1P-2).
 
-    A ``SOURCE_ENDPOINT_COMPLETE_MATCH`` claims exactly one thing: during THIS
-    parse invocation's sequential endpoint check, both fixed CURRENT raw source
-    byte streams SHA-256-equal the values atomically recorded from the exact
-    buffers used by the most recently successfully completed standard Step 1
-    render. It does not claim the two endpoints were read simultaneously, nor
-    that either source held still between them.
+    A ``RENDER_ENDPOINT_COMPLETE_MATCH`` claims exactly one thing: during THIS
+    parse invocation's sequential endpoint check, the current strategy raw
+    bytes, the current portfolio raw bytes, and the current persisted prompt
+    bytes SHA-256-equal the values atomically recorded by the most recently
+    successfully completed standard Step 1 render — where ``prompt_sha256``
+    identifies the UTF-8 encoding of the exact prompt text that render supplied
+    to the writer. It does not claim the three endpoints were read
+    simultaneously, nor that any of them held still between them.
 
-    It proves nothing about prompt.txt being unchanged, the prompt having been
-    submitted, a response being bound to that prompt, operator identity, model
-    or provider identity, response authenticity, freshness, T1, H1
-    availability, permissions, gates, final safety, continuous source
-    stability, or tamper resistance.
+    It proves nothing about the prompt having been submitted, a response being
+    bound to that prompt, operator identity, model or provider identity,
+    response authenticity, freshness, T1, H1 availability, permissions, gates,
+    final safety, continuous stability, tamper resistance, or cross-platform
+    persisted prompt-byte identity beyond this parse-time comparison.
 
     Report-only: every outcome below leaves Legacy parse, availability,
     permissions, gates, Step 2/3, final safety, publication, pointers, and
     order paths exactly as they were.
     """
-    report_path = _step1_render_source_continuity_report_path()
+    report_path = _step1_render_continuity_report_path()
+    retired_report_path = _step1_retired_render_source_continuity_report_path()
 
-    # Load-bearing: a parse must never proceed with an earlier parse's report
-    # still on disk, so a failed deletion propagates rather than degrading.
+    # Load-bearing: a parse must never proceed while ANY earlier parse's report
+    # can survive, so both the retired v1 report and the current v2 report are
+    # removed first and a failed deletion propagates rather than degrading. A
+    # surviving v1 COMPLETE_MATCH beside a fresh v2 UNVERIFIED would be exactly
+    # the stale-success evidence this policy exists to prevent.
+    retired_report_path.unlink(missing_ok=True)
     report_path.unlink(missing_ok=True)
 
-    reason_codes = _evaluate_step1_render_source_continuity()
+    reason_codes = _evaluate_step1_render_continuity()
     payload = {
-        "schema_version": "step1_render_source_continuity_report_v1",
+        "schema_version": "step1_render_continuity_report_v2",
         "status": (
-            "SOURCE_ENDPOINT_COMPLETE_MATCH"
+            "RENDER_ENDPOINT_COMPLETE_MATCH"
             if not reason_codes
-            else "SOURCE_ENDPOINT_UNVERIFIED"
+            else "RENDER_ENDPOINT_UNVERIFIED"
         ),
         "reason_codes": reason_codes,
         "authority_effect": "NONE",
@@ -982,7 +1049,7 @@ def _write_step1_render_source_continuity_report() -> None:
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
         )
     except OSError:
-        # The stale report was already removed, so a failed write leaves no
+        # Both stale reports were already removed, so a failed write leaves no
         # stale evidence behind. Legacy parse continues; nothing else changes.
         return
 
@@ -992,10 +1059,10 @@ def parse_step1_output(
     strategy_settings: Mapping[str, Any] | None = None,
 ) -> dict[str, str]:
     """Parse and validate the manual Step 1 output into research_output.json."""
-    # Report-only layer -1 (S1P-1): deliberately first, so every supported parse
+    # Report-only layer -1 (S1P-2): deliberately first, so every supported parse
     # attempt either refreshes continuity evidence or leaves none at all. Its
     # outcome never reaches the Legacy parse below.
-    _write_step1_render_source_continuity_report()
+    _write_step1_render_continuity_report()
 
     handoff_strategy_settings = (
         strategy_settings
