@@ -359,9 +359,9 @@ def test_independent_reference_composition_matches_committed_inputs() -> None:
 
 # ---------------------------------------------------------------------------
 # Single-snapshot consistency (§8 / §10): build_step1_prompt_text() must read
-# inputs/current/strategy_settings.yaml once as bytes in the order template ->
-# settings -> portfolio, then derive both injected representations from that
-# one retained source read.
+# inputs/current/strategy_settings.yaml and portfolio_snapshot.txt once each as
+# bytes in the order template -> settings -> portfolio, then derive both
+# strategy representations from that one retained strategy source read.
 # ---------------------------------------------------------------------------
 
 S1_SETTINGS_TEXT = (
@@ -470,6 +470,80 @@ def test_strategy_loader_preserves_directory_error(
         step1_research.load_strategy_settings_yaml_text()
 
 
+def test_portfolio_loader_uses_one_exact_byte_read_and_legacy_text_semantics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw_bytes = (
+        b"\xef\xbb\xbfportfolio: caf\xc3\xa9\r\n"
+        b"second: \xe6\x9d\xb1\xe4\xba\xac\r"
+        b"third: \xce\xa9\n"
+        b"last: no-trailing-newline"
+    )
+    expected_text = (
+        "\ufeffportfolio: café\n"
+        "second: 東京\n"
+        "third: Ω\n"
+        "last: no-trailing-newline"
+    )
+    path = tmp_path / "portfolio_snapshot.txt"
+    path.write_bytes(raw_bytes)
+    monkeypatch.setattr(step1_research, "current_inputs_dir", lambda: tmp_path)
+
+    real_read_bytes = Path.read_bytes
+    byte_read_paths: list[Path] = []
+
+    def fake_read_bytes(read_path: Path) -> bytes:
+        byte_read_paths.append(read_path)
+        return real_read_bytes(read_path)
+
+    def forbidden_read_text(*args: object, **kwargs: object) -> str:
+        pytest.fail("portfolio snapshot must not be reopened through Path.read_text")
+
+    monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
+    monkeypatch.setattr(Path, "read_text", forbidden_read_text)
+
+    assert step1_research.load_portfolio_snapshot_text() == expected_text
+    assert byte_read_paths == [path]
+
+
+def test_portfolio_loader_preserves_missing_error_and_cause(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "portfolio_snapshot.txt"
+    monkeypatch.setattr(step1_research, "current_inputs_dir", lambda: tmp_path)
+
+    with pytest.raises(
+        FileNotFoundError,
+        match=re.escape(f"Missing required portfolio snapshot input: {path}"),
+    ) as raised:
+        step1_research.load_portfolio_snapshot_text()
+
+    assert isinstance(raised.value.__cause__, FileNotFoundError)
+
+
+@pytest.mark.parametrize(
+    "raw_bytes",
+    [b"", b" \t\r\n\r "],
+    ids=["empty", "whitespace-after-universal-newlines"],
+)
+def test_portfolio_loader_validates_decoded_empty_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    raw_bytes: bytes,
+) -> None:
+    path = tmp_path / "portfolio_snapshot.txt"
+    path.write_bytes(raw_bytes)
+    monkeypatch.setattr(step1_research, "current_inputs_dir", lambda: tmp_path)
+
+    with pytest.raises(
+        ValueError,
+        match=re.escape(f"Required portfolio snapshot input is empty: {path}"),
+    ):
+        step1_research.load_portfolio_snapshot_text()
+
+
 def test_render_uses_one_strategy_snapshot_for_settings_and_approved_list(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -481,18 +555,24 @@ def test_render_uses_one_strategy_snapshot_for_settings_and_approved_list(
 
     read_events: list[Path] = []
     strategy_byte_read_count = 0
+    portfolio_byte_read_count = 0
+
+    portfolio_p1_text = "portfolio_snapshot_marker: PORTFOLIO_P1_UNIQUE_MARKER\n"
+    portfolio_p2_text = "portfolio_snapshot_marker: PORTFOLIO_P2_MUST_NOT_APPEAR\n"
 
     def fake_read_text(path: str | Path) -> str:
         normalized = Path(path)
         if normalized == expected_settings_path:
             pytest.fail("strategy settings must be acquired through Path.read_bytes")
+        if normalized == expected_portfolio_path:
+            pytest.fail("portfolio snapshot must be acquired through Path.read_bytes")
 
         returned = real_read_text(path)
         read_events.append(normalized)
         return returned
 
     def fake_read_bytes(path: Path) -> bytes:
-        nonlocal strategy_byte_read_count
+        nonlocal strategy_byte_read_count, portfolio_byte_read_count
         normalized = Path(path)
         if normalized == expected_settings_path:
             strategy_byte_read_count += 1
@@ -500,6 +580,13 @@ def test_render_uses_one_strategy_snapshot_for_settings_and_approved_list(
                 S1_SETTINGS_TEXT
                 if strategy_byte_read_count == 1
                 else S2_SETTINGS_TEXT
+            ).encode("utf-8")
+        elif normalized == expected_portfolio_path:
+            portfolio_byte_read_count += 1
+            returned = (
+                portfolio_p1_text
+                if portfolio_byte_read_count == 1
+                else portfolio_p2_text
             ).encode("utf-8")
         else:
             returned = real_read_bytes(path)
@@ -513,6 +600,7 @@ def test_render_uses_one_strategy_snapshot_for_settings_and_approved_list(
     rendered = step1_research.build_step1_prompt_text()
 
     assert strategy_byte_read_count == 1
+    assert portfolio_byte_read_count == 1
     assert read_events == [
         expected_template_path,
         expected_settings_path,
@@ -528,6 +616,8 @@ def test_render_uses_one_strategy_snapshot_for_settings_and_approved_list(
     assert expected_approved_json in rendered
     assert "STRATEGY_S2_UNIQUE_MARKER_4b8de0" not in rendered
     assert "TICKER_S2_A" not in rendered
+    assert portfolio_p1_text in rendered
+    assert portfolio_p2_text not in rendered
 
 
 # ---------------------------------------------------------------------------

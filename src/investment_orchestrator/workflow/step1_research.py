@@ -574,10 +574,18 @@ def load_strategy_settings_for_handoff_validation() -> dict[str, Any] | None:
 
 def load_portfolio_snapshot_text() -> str:
     """Read the operator-maintained portfolio snapshot exactly as stored on disk."""
-    return _require_non_empty_text(
-        current_inputs_dir() / "portfolio_snapshot.txt",
-        label="portfolio snapshot input",
-    )
+    path = current_inputs_dir() / "portfolio_snapshot.txt"
+    try:
+        raw_bytes = path.read_bytes()
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"Missing required portfolio snapshot input: {path}"
+        ) from exc
+
+    text = _decode_legacy_text_from_exact_bytes(raw_bytes)
+    if not text.strip():
+        raise ValueError(f"Required portfolio snapshot input is empty: {path}")
+    return text
 
 
 def load_current_run_user_approved_extended_etf_static_list_json() -> str:
