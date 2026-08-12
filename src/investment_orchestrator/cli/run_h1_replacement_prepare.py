@@ -5,6 +5,12 @@ an operator can pipe or copy them verbatim into the LLM of their choosing.
 Every operational message goes to standard error.  This CLI submits nothing,
 retrieves nothing, and exposes no provider, model, network, response-path, or
 availability option.
+
+Preparation destroys the previous H1 mapping completion before it does anything
+else, so this CLI first clears the current Step 1 availability claim that
+completion justified.  The clear is unconditional and non-configurable; a failed
+clear aborts before the engine is entered, and preparation never establishes H1
+recognition — only a later successful consume can do that.
 """
 
 from __future__ import annotations
@@ -17,6 +23,12 @@ from investment_orchestrator.workflow.h1_replacement_handoff import (
     H1ReplacementHandoffError,
     prepare_h1_replacement_handoff,
 )
+from investment_orchestrator.workflow.step1_research import (
+    refresh_research_availability_for_h1_replacement,
+)
+
+
+AVAILABILITY_LIFECYCLE_EXIT_CODE = 4
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -47,6 +59,25 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     """Prepare one handoff, then write only its prompt bytes to stdout."""
     args = _parser().parse_args(argv)
+
+    # Clear before the engine can invalidate the old mapping completion. On
+    # failure nothing has been invalidated, so the surviving availability claim
+    # still matches a surviving completion; the engine must not be entered.
+    try:
+        availability = refresh_research_availability_for_h1_replacement()
+    except Exception as exc:  # noqa: BLE001 - fail closed before any invalidation
+        sys.stderr.write(
+            "H1_AVAILABILITY_CLEAR_FAILED stage=prepare "
+            f"error={type(exc).__name__}: {' '.join(str(exc).split())}\n"
+        )
+        return AVAILABILITY_LIFECYCLE_EXIT_CODE
+    sys.stderr.write(
+        "research_availability_state_after_clear="
+        f"{availability['research_availability_state']}\n"
+        "research_availability_decision_present="
+        f"{availability['research_availability_decision_present']}\n"
+    )
+
     try:
         result = prepare_h1_replacement_handoff(
             strategy_settings_expected_sha256=(

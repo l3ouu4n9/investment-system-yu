@@ -58,6 +58,7 @@ from investment_orchestrator.research.h1_mapped_recognition import (
     H1MappedRecognitionFacts,
 )
 from investment_orchestrator.workflow import h1_replacement_handoff as handoff
+from investment_orchestrator.workflow import step1_research
 from investment_orchestrator.workflow.h1_replacement_handoff import (
     H1ReplacementHandoffError,
     H1ReplacementHandoffErrorCode as Code,
@@ -76,15 +77,29 @@ MAPPING_LEAF = "h1_legacy_step1_mapping_report.json"
 OTHER_SHA256 = "1" * 64
 
 PRODUCTION_ROOT = "src/investment_orchestrator"
-NEW_PRODUCTION_PATHS = (
-    f"{PRODUCTION_ROOT}/cli/run_h1_replacement_consume.py",
-    f"{PRODUCTION_ROOT}/cli/run_h1_replacement_prepare.py",
+# The P2b engines stay fully isolated: no availability, permission, state,
+# order, broker, observability, current->offline, or network/provider/SDK
+# dependency of any kind.
+P2B_ENGINE_PATHS = (
     f"{PRODUCTION_ROOT}/mmi/mmi_h1_prepared_handoff_v1.py",
     f"{PRODUCTION_ROOT}/workflow/h1_replacement_handoff.py",
 )
+# P3 wires the two operator CLIs to exactly one Step 1 availability lifecycle
+# hook. That single seam is their ONLY relaxation; every other prohibition below
+# still applies to them unchanged.
+P3_OPERATOR_CLI_PATHS = (
+    f"{PRODUCTION_ROOT}/cli/run_h1_replacement_consume.py",
+    f"{PRODUCTION_ROOT}/cli/run_h1_replacement_prepare.py",
+)
+NEW_PRODUCTION_PATHS = P2B_ENGINE_PATHS + P3_OPERATOR_CLI_PATHS
+AUTHORIZED_STEP1_SEAM_MODULE = "investment_orchestrator.workflow.step1_research"
+AUTHORIZED_STEP1_SEAM_NAMES = {"refresh_research_availability_for_h1_replacement"}
 EXISTING_H1_AVAILABILITY_PARAMETER_PATHS = {
     f"{PRODUCTION_ROOT}/state/research_availability.py",
     f"{PRODUCTION_ROOT}/workflow/step1_research.py",
+    # P3: the consume CLI hands the engine's exact validated facts object to the
+    # Step 1 hook. The prepare CLI never does — preparation clears only.
+    f"{PRODUCTION_ROOT}/cli/run_h1_replacement_consume.py",
 }
 
 
@@ -173,6 +188,10 @@ def env(
     )
     monkeypatch.setattr(contracts, "_SystemUtcClock", _FixedClock)
     monkeypatch.setattr(handoff, "_handoff_directory", lambda: directory)
+    # P3: the operator CLIs now clear the current Step 1 availability artifacts
+    # before entering either engine. Redirect the Step 1 root so that clear can
+    # never touch the working tree's real artifacts/current/step1_research.
+    monkeypatch.setattr(step1_research, "repo_root", lambda: checkout_root)
     return _Environment(
         checkout_root=checkout_root,
         directory=directory,
@@ -774,6 +793,20 @@ def _imports(relative_path: str) -> set[str]:
     return names
 
 
+def _imported_names_from(relative_path: str, module: str) -> set[str]:
+    """Return exactly the names one file imports from one module."""
+    tree = ast.parse(
+        (repo_root() / relative_path).read_text(encoding="utf-8"),
+        filename=relative_path,
+    )
+    return {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == module
+        for alias in node.names
+    }
+
+
 def test_p2b_wires_no_availability_and_no_current_to_offline_dependency() -> None:
     forbidden_prefixes = (
         "investment_orchestrator.offline",
@@ -798,12 +831,37 @@ def test_p2b_wires_no_availability_and_no_current_to_offline_dependency() -> Non
         "asyncio",
         "threading",
     )
-    for relative_path in NEW_PRODUCTION_PATHS:
+    # P3 relaxes exactly one prefix, for exactly the two operator CLIs. The
+    # current->offline prohibition and every state / permission / order / broker
+    # / observability / network / provider / SDK prohibition still binds them,
+    # and the P2b engines remain subject to the complete list.
+    cli_forbidden_prefixes = tuple(
+        prefix
+        for prefix in forbidden_prefixes
+        if prefix != AUTHORIZED_STEP1_SEAM_MODULE
+    )
+    assert len(cli_forbidden_prefixes) == len(forbidden_prefixes) - 1
+    for relative_path, prefixes in (
+        *((path, forbidden_prefixes) for path in P2B_ENGINE_PATHS),
+        *((path, cli_forbidden_prefixes) for path in P3_OPERATOR_CLI_PATHS),
+    ):
         for imported in _imports(relative_path):
             assert not any(
                 imported == prefix or imported.startswith(f"{prefix}.")
-                for prefix in forbidden_prefixes
+                for prefix in prefixes
             ), (relative_path, imported)
+
+    # The authorized seam is one hook and nothing else: neither CLI may reach
+    # any other Step 1 surface, and the P2b engines may not reach it at all.
+    for relative_path in P3_OPERATOR_CLI_PATHS:
+        assert (
+            _imported_names_from(relative_path, AUTHORIZED_STEP1_SEAM_MODULE)
+            == AUTHORIZED_STEP1_SEAM_NAMES
+        ), relative_path
+    for relative_path in P2B_ENGINE_PATHS:
+        assert not _imported_names_from(
+            relative_path, AUTHORIZED_STEP1_SEAM_MODULE
+        ), relative_path
 
     # H1 stays dormant: the availability parameter exists only where it
     # already did, and no P2b module mentions it or the availability owner.

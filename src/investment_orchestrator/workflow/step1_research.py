@@ -1819,6 +1819,97 @@ def refresh_promoted_step3_audit_only_permission_after_step2(
     }
 
 
+def _invalidate_current_research_availability_artifacts() -> None:
+    """Remove every current Step 1 artifact that can carry an availability state claim.
+
+    Exactly three leaves qualify: the authority-bearing degraded-mode decision
+    that Step 2/3/4, the final safety gate, and the weekly router consume, plus
+    its two report-only diagnostics. The promoted dry-run artifacts are derived
+    from a decision rather than being one, are recomputed from the fresh decision
+    on every evaluation, and no consumer reads them as the current Step 1
+    permission claim, so they are deliberately out of scope.
+
+    The authority-bearing decision is removed FIRST. If a later diagnostic
+    deletion then fails, the consumed permission claim is already gone and
+    downstream authority fails closed on a missing artifact, so no rollback is
+    needed and none is provided. A failed deletion propagates rather than
+    degrading — this deletion, not the rebuild in the caller, is what guarantees
+    an H1 recognition claim cannot outlive the mapping completion that justified
+    it.
+    """
+    step1_research_degraded_mode_decision_path().unlink(missing_ok=True)
+    step1_research_availability_path().unlink(missing_ok=True)
+    step1_research_freshness_report_path().unlink(missing_ok=True)
+
+
+def refresh_research_availability_for_h1_replacement(
+    *,
+    h1_mapped_facts: Any | None = None,
+    strategy_settings: Mapping[str, Any] | None = None,
+) -> dict[str, str]:
+    """Clear, then optionally re-derive, the current Step 1 availability claim.
+
+    The manual H1 replacement prepare / consume CLIs own the calls. With
+    ``h1_mapped_facts`` omitted this is the pre-attempt CLEAR: both P2b engines
+    destroy the ``mmi_h1_legacy_step1_mapping_report_v1`` completion within a few
+    statements of entry, so the availability claim that completion justified is
+    removed BEFORE either engine runs. A failed clear therefore aborts the
+    operator command with nothing invalidated, and a successful clear leaves no
+    H1 claim regardless of how the engine then fails. With a validated
+    ``H1MappedRecognitionFacts`` this is the post-consume SUCCESS REFRESH.
+
+    Deletion happens first and unconditionally; the Legacy rebuild below is NOT
+    load-bearing. Base context that cannot be read, or a write the report-only
+    seam swallows, simply leaves the three state artifacts absent, and the
+    existing missing-permission handling downstream owns that fail-closed
+    outcome. No candidate or payload is fabricated to fill the gap, and there is
+    no retry, backup, or rollback.
+
+    The facts object is threaded through unchanged: it is never serialized,
+    copied into a dict, persisted, reconstructed, or rebuilt from the mapping
+    report, and nothing here discovers artifacts, writes a pointer or last-good
+    handoff, or changes any state, freshness, or permission policy.
+    """
+    _invalidate_current_research_availability_artifacts()
+
+    settings = (
+        strategy_settings
+        if strategy_settings is not None
+        else load_strategy_settings_for_handoff_validation()
+    )
+    candidate = _read_json_if_exists(step1_research_handoff_candidate_path())
+    candidate_validation = _read_json_if_exists(
+        step1_research_handoff_candidate_validation_path()
+    )
+    payload = _read_json_if_exists(step1_research_output_path())
+    if not isinstance(candidate, Mapping) or not isinstance(payload, Mapping):
+        # No current Legacy base context exists to re-derive from. The three
+        # state artifacts stay deleted; the previously cleared H1 claim does not
+        # reappear and no substitute availability result is invented.
+        return {
+            "research_availability_state": "",
+            "research_availability_decision_present": "False",
+            "h1_mapped_selected": "False",
+        }
+
+    availability, _ = _evaluate_research_availability_report_only(
+        candidate=candidate,
+        candidate_validation=candidate_validation,
+        strategy_settings=settings,
+        payload=payload,
+        h1_mapped_facts=h1_mapped_facts,
+    )
+    return {
+        "research_availability_state": availability.state,
+        # Reported from disk, not from the returned result: the report-only
+        # evaluator swallows write failures, so only presence proves publication.
+        "research_availability_decision_present": str(
+            file_exists(step1_research_degraded_mode_decision_path())
+        ),
+        "h1_mapped_selected": str(availability.h1_mapped_selected),
+    }
+
+
 # S1A-11: the ONLY normalized paths the runtime-parity comparator may report for
 # the evidence_packet disk-writer switch to use the Step 1A source. The normalizer
 # only ever normalizes generated_at keys, so these are the sole expected entries;
