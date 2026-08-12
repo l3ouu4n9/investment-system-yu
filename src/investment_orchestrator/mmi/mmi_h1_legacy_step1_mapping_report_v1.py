@@ -180,9 +180,24 @@ _H1_QUALITATIVE_ARRAY_FIELDS: Final = (
     "contradictions",
     "research_questions",
 )
+# Rejects only deterministically recognizable STRUCTURED authority attempts.
+# Ordinary descriptive English is not such an attempt: the evidence view this
+# prose describes owns field names like ``open_buy_status`` and
+# ``SELL_ELIGIBILITY_INCOMPLETE``, so grounded prose legitimately carries the
+# roots "buy" and "sell" while asserting nothing.  Qualitative text supplies no
+# mapping value, reaches no persisted field, and cannot alter availability,
+# allowed actions, gates, or orders, so this guard is content hygiene, not the
+# authority boundary.
+#
+# The ``(?-i:...)`` scopes are load-bearing and must not be "simplified" away.
+# Branch 1 matches only canonical code forms, so ``SELL`` is rejected while
+# "Sell-side" is not.  Branch 2 keeps the action verb case-insensitive (so
+# ``Buy AAPL`` cannot bypass by casing) while requiring a genuinely uppercase
+# instrument token -- without that scope the enclosing IGNORECASE makes
+# ``[A-Z]`` match any letter and "open-buy source" is read as a recommendation.
 _AUTHORITY_BEARING_PROSE_RE: Final = re.compile(
-    r"\b(?:hold|no[_ -]?trade|sell|new[_ -]?buy|order[_ -]?compilation)\b"
-    r"|\b(?:buy|sell)\s+(?:\$?\d|[A-Z][A-Z0-9.-]{0,15}\b)"
+    r"(?-i:\b(?:HOLD|NO[_ ]?TRADE|SELL|NEW[_ ]?BUY|ORDER[_ ]?COMPILATION)\b)"
+    r"|\b(?:buy|sell)\s+(?:\$?\d|(?-i:[A-Z][A-Z0-9.-]{0,15})\b)"
     r"|\b(?:target[_ ]?weights?|budgets?|caps?|quantities?|permissions?|"
     r"freshness|availability|actionability|gates?|publication|pointers?|"
     r"role assignment|universe inclusion|instrument membership)\s*"

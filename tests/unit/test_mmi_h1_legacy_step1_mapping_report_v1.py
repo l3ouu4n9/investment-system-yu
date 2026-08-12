@@ -635,6 +635,60 @@ def test_invalid_upstream_and_authority_bearing_prose_fail_closed(
     )
 
 
+# --- qualitative admission: structured attempts only -------------------------
+# The guard admits descriptive prose and rejects deterministically recognizable
+# structured authority attempts.  Prose supplies no mapping value and reaches no
+# persisted field, so the downstream permission owners are unchanged and are
+# deliberately not retested here.
+
+
+@pytest.mark.parametrize(
+    "rationale",
+    [
+        # The evidence view this prose describes owns the colliding field names,
+        # so a grounded response cannot avoid the "buy" / "sell" roots.
+        "The open-buy source status is validated.",
+        "Sell-side constraints are incomplete.",
+        "sell eligibility is incomplete.",
+    ],
+)
+def test_grounded_descriptive_prose_is_admitted(
+    tmp_path_factory: pytest.TempPathFactory, rationale: str
+) -> None:
+    report = _build(_inputs(tmp_path_factory, rationale=rationale))
+
+    assert report["report_only"] is True
+    assert report["authority_effect"] == "NONE"
+
+
+@pytest.mark.parametrize(
+    "rationale",
+    [
+        # Action + instrument, across casing: the verb stays case-insensitive so
+        # capitalization cannot bypass the guard.
+        "buy AAPL is proposed by prose",
+        "Buy AAPL is proposed by prose",
+        "SELL AAPL is proposed by prose",
+        # Action + quantity / dollar amount.
+        "buy $500 is proposed by prose",
+        "sell 100 is proposed by prose",
+        # Canonical decision-code forms.
+        "HOLD is proposed by prose",
+        "NO_TRADE is proposed by prose",
+        "NEW_BUY is proposed by prose",
+    ],
+)
+def test_structured_authority_attempts_are_rejected(
+    tmp_path_factory: pytest.TempPathFactory, rationale: str
+) -> None:
+    with pytest.raises(MmiH1LegacyStep1MappingReportV1Error) as exc_info:
+        _build(_inputs(tmp_path_factory, rationale=rationale))
+
+    assert exc_info.value.code == (
+        "MMI_H1_LEGACY_MAPPING_AUTHORITY_BEARING_QUALITATIVE_INPUT"
+    )
+
+
 def test_only_approved_report_only_owners_consume_the_mapping_adapter() -> None:
     """Exactly two report-only consumers may import this deterministic mapper.
 
