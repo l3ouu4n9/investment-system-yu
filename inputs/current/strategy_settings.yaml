@@ -1,5 +1,5 @@
-as_of: "2026-08-03"
-run_timestamp_et: "2026-08-03 12:00 ET"
+as_of: "2026-08-12"
+run_timestamp_et: "2026-08-12 12:46 ET"
 benchmark: "QQQ"
 tax_intent: "LTCG_only"
 min_holding_period: ">=12m"
@@ -9,7 +9,7 @@ hard_cap_open_orders_budget: 41935.2
 # legs only (NEW_ORDER/BUY/SUBMIT_BUY/EXECUTE_BUY); replacement/cancel/keep legs are
 # excluded and remain governed by hard_cap_open_orders_budget. Conservative placeholder
 # (~half of current open-order headroom, well under the hard cap) — review each run.
-target_new_buy_budget_this_run: 12000.00
+target_new_buy_budget_this_run: 8000.0
 relative_rotation_enabled: true
 
 relative_rotation_guardrails:

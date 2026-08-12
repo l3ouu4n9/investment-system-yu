@@ -1,5 +1,5 @@
 【輸入 2｜Portfolio Snapshot（PATCH: base ETF holdings required; extended ETF holdings optional）】
-# updated 2026-08-03
+# updated 2026-08-12
 
 (1) current_holdings_base（REQUIRED；六檔 base ETF 必填）
 格式：TICKER | shares | avg_cost
