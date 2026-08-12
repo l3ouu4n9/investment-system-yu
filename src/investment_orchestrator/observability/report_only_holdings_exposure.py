@@ -52,6 +52,10 @@ from investment_orchestrator.mmi.stable_read import (
     MmiStableReadErrorCode,
     stable_read_exact_bytes,
 )
+from investment_orchestrator.market.us_equity_session_calendar import (
+    MarkFreshnessStatus,
+    assess_manual_mark_freshness,
+)
 
 
 __all__ = (
@@ -96,6 +100,7 @@ class ExposureObservationStatus(str, Enum):
     UNAVAILABLE = "UNAVAILABLE"
     INVALID = "INVALID"
     MANUAL_REVIEW = "MANUAL_REVIEW"
+    VALID_REPORT_ONLY = "VALID_REPORT_ONLY"
 
 
 class _ExposureInputError(ValueError):
@@ -163,6 +168,14 @@ class ExposureProjection:
     holdings_observation_date: str
     valuation_mark_source_id: str
     mark_as_of_date: str
+    calendar_id: str | None
+    calendar_schedule_sha256: str | None
+    calendar_coverage_start_date: str | None
+    calendar_coverage_end_date: str | None
+    trusted_evaluation_timestamp_utc: str | None
+    latest_completed_session_date: str | None
+    latest_completed_session_close_timestamp_et: str | None
+    freshness_status: str | None
     policy_projection_identity_sha256: str
     currency: str
     positions: tuple[ExposurePosition, ...]
@@ -293,8 +306,6 @@ def _reject_duplicate_json_keys(
 
 def _parse_manual_valuation(
     raw_bytes: bytes,
-    *,
-    evaluation_date: date,
 ) -> _ManualValuation:
     text = _decode_utf8(
         raw_bytes,
@@ -336,10 +347,6 @@ def _parse_manual_valuation(
         payload.get("mark_as_of_date"),
         code="REPORT_ONLY_EXPOSURE_VALUATION_DATE_INVALID",
     )
-    if mark_as_of_date > evaluation_date:
-        raise _ExposureInputError(
-            "REPORT_ONLY_EXPOSURE_VALUATION_DATE_FUTURE"
-        )
     raw_marks = payload.get("marks")
     if type(raw_marks) is not list:
         raise _ExposureInputError(
@@ -556,6 +563,14 @@ def _derive_projection(
     holdings_observation_date: str,
     policy_roles: Mapping[str, str],
     policy_projection_identity_sha256: str,
+    calendar_id: str | None = None,
+    calendar_schedule_sha256: str | None = None,
+    calendar_coverage_start_date: str | None = None,
+    calendar_coverage_end_date: str | None = None,
+    trusted_evaluation_timestamp_utc: str | None = None,
+    latest_completed_session_date: str | None = None,
+    latest_completed_session_close_timestamp_et: str | None = None,
+    verified_mark_as_of_date: date | None = None,
 ) -> tuple[ExposureProjection, tuple[str, ...]]:
     holding_tickers = {position.ticker for position in holdings.positions}
     valuation_tickers = {mark.ticker for mark in valuation.marks}
@@ -605,7 +620,25 @@ def _derive_projection(
             portfolio_scope_id=holdings.portfolio_scope_id,
             holdings_observation_date=holdings_observation_date,
             valuation_mark_source_id=valuation.mark_source_id,
-            mark_as_of_date=valuation.mark_as_of_date.isoformat(),
+            mark_as_of_date=(
+                verified_mark_as_of_date
+                if verified_mark_as_of_date is not None
+                else valuation.mark_as_of_date
+            ).isoformat(),
+            calendar_id=calendar_id,
+            calendar_schedule_sha256=calendar_schedule_sha256,
+            calendar_coverage_start_date=calendar_coverage_start_date,
+            calendar_coverage_end_date=calendar_coverage_end_date,
+            trusted_evaluation_timestamp_utc=trusted_evaluation_timestamp_utc,
+            latest_completed_session_date=latest_completed_session_date,
+            latest_completed_session_close_timestamp_et=(
+                latest_completed_session_close_timestamp_et
+            ),
+            freshness_status=(
+                MarkFreshnessStatus.FRESH.value
+                if calendar_id is not None
+                else None
+            ),
             policy_projection_identity_sha256=policy_projection_identity_sha256,
             currency="USD",
             positions=tuple(rows),
@@ -633,12 +666,11 @@ def observe_current_report_only_holdings_exposure(
     strategy_settings_expected_sha256: str,
     portfolio_snapshot_expected_sha256: str,
 ) -> ExposureObservationResult:
-    """Observe current strict holdings and marks without current-valid status.
+    """Observe current strict holdings and marks without authority effects.
 
     The existing MMI source capture and projection owners supply source-bound
-    universe roles and the sole canonical portfolio date.  There is no trusted
-    completed-US-session owner yet, so structurally complete observations end
-    ``UNAVAILABLE/REPORT_ONLY_EXPOSURE_FRESHNESS_OWNER_BLOCKED``.  This entry
+    universe roles and the sole canonical portfolio date.  The session owner
+    alone determines whether a parsed manual mark date is fresh.  This entry
     point deliberately has no caller-supplied evaluation or session date.
     """
     run_context = begin_mmi_projection_run()
@@ -686,10 +718,7 @@ def observe_current_report_only_holdings_exposure(
                 invalid_reasons.append(exc.code)
     if valuation_source is not None:
         try:
-            valuation = _parse_manual_valuation(
-                valuation_source.raw_bytes,
-                evaluation_date=run_context.evaluation_time_utc.date(),
-            )
+            valuation = _parse_manual_valuation(valuation_source.raw_bytes)
         except _ExposureInputError as exc:
             invalid_reasons.append(exc.code)
 
@@ -768,7 +797,62 @@ def observe_current_report_only_holdings_exposure(
             ("REPORT_ONLY_EXPOSURE_TICKER_OUTSIDE_DETERMINISTIC_POLICY",),
             projection,
         )
+    freshness = assess_manual_mark_freshness(
+        mark_as_of_date=valuation.mark_as_of_date,
+        run_context=run_context,
+    )
+    if freshness.status is MarkFreshnessStatus.INVALID:
+        return _result(ExposureObservationStatus.INVALID, freshness.reason_codes)
+    if freshness.status is MarkFreshnessStatus.UNAVAILABLE:
+        return _result(ExposureObservationStatus.UNAVAILABLE, freshness.reason_codes)
+    if freshness.status is not MarkFreshnessStatus.FRESH:
+        return _result(
+            ExposureObservationStatus.INVALID,
+            ("US_EQUITY_SESSION_MARK_DATE_STATUS_INVALID",),
+        )
+    if freshness.mark_as_of_date != valuation.mark_as_of_date:
+        return _result(
+            ExposureObservationStatus.INVALID,
+            ("US_EQUITY_SESSION_MARK_DATE_PROVENANCE_MISMATCH",),
+        )
+    completed_session = freshness.completed_session
+    if completed_session is None:
+        return _result(
+            ExposureObservationStatus.INVALID,
+            ("US_EQUITY_SESSION_FRESHNESS_FACT_UNAVAILABLE",),
+        )
+    try:
+        projection, unclassified = _derive_projection(
+            holdings=holdings,
+            valuation=valuation,
+            portfolio_source=portfolio_source,
+            valuation_source=valuation_source,
+            holdings_observation_date=holdings_observation_date,
+            policy_roles=policy_roles,
+            policy_projection_identity_sha256=policy_identity,
+            calendar_id=completed_session.calendar_id,
+            calendar_schedule_sha256=completed_session.calendar_schedule_sha256,
+            calendar_coverage_start_date=completed_session.coverage_start_date,
+            calendar_coverage_end_date=completed_session.coverage_end_date,
+            trusted_evaluation_timestamp_utc=(
+                completed_session.trusted_evaluation_timestamp_utc
+            ),
+            latest_completed_session_date=completed_session.session_date,
+            latest_completed_session_close_timestamp_et=(
+                completed_session.official_close_timestamp_et
+            ),
+            verified_mark_as_of_date=freshness.mark_as_of_date,
+        )
+    except _ExposureInputError as exc:
+        return _result(ExposureObservationStatus.INVALID, (exc.code,))
+    if unclassified:
+        return _result(
+            ExposureObservationStatus.MANUAL_REVIEW,
+            ("REPORT_ONLY_EXPOSURE_TICKER_OUTSIDE_DETERMINISTIC_POLICY",),
+            projection,
+        )
     return _result(
-        ExposureObservationStatus.UNAVAILABLE,
-        ("REPORT_ONLY_EXPOSURE_FRESHNESS_OWNER_BLOCKED",),
+        ExposureObservationStatus.VALID_REPORT_ONLY,
+        freshness.reason_codes,
+        projection,
     )

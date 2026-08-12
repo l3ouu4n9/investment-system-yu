@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from dataclasses import replace
+from datetime import date, datetime, timezone
 import hashlib
 import inspect
 import json
@@ -11,16 +12,22 @@ from pathlib import Path
 import pytest
 
 from investment_orchestrator.common.paths import repo_root
-from investment_orchestrator.mmi.contracts import MmiSourceRole
+from investment_orchestrator.mmi.contracts import (
+    MmiSourceRole,
+    _begin_mmi_projection_run_with_clock,
+)
 from investment_orchestrator.mmi.source_capture import (
     _capture_mmi_source_at_root,
 )
 from investment_orchestrator.observability import (
     report_only_holdings_exposure as exposure,
 )
+from investment_orchestrator.market import us_equity_session_calendar as calendar
 
 
-_EVALUATION_DATE = datetime(2026, 8, 12, 12, tzinfo=timezone.utc).date()
+class _FixedClock:
+    def now_utc(self) -> datetime:
+        return datetime(2026, 8, 12, 20, tzinfo=timezone.utc)
 
 
 def _strict_section(rows: tuple[str, ...] = ("QQQ | 2.5", "SMH | 3")) -> bytes:
@@ -122,6 +129,11 @@ def _observe(
 
     monkeypatch.setattr(exposure, "capture_current_mmi_source", _capture)
     monkeypatch.setattr(exposure, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        exposure,
+        "begin_mmi_projection_run",
+        lambda: _begin_mmi_projection_run_with_clock(_FixedClock()),
+    )
     return exposure.observe_current_report_only_holdings_exposure(
         strategy_settings_expected_sha256="a" * 64,
         portfolio_snapshot_expected_sha256="b" * 64,
@@ -166,7 +178,7 @@ def test_existing_canonical_portfolio_date_is_the_only_projection_date(
     assert not hasattr(strict_holdings, "holdings_as_of_date")
 
 
-def test_no_public_bare_date_builder_or_valid_current_status_exists() -> None:
+def test_public_observer_has_no_bare_date_or_session_bypass() -> None:
     assert not hasattr(exposure, "build_report_only_holdings_exposure")
     public_parameters = inspect.signature(
         exposure.observe_current_report_only_holdings_exposure
@@ -175,9 +187,9 @@ def test_no_public_bare_date_builder_or_valid_current_status_exists() -> None:
         "strategy_settings_expected_sha256",
         "portfolio_snapshot_expected_sha256",
     }
-    assert "VALID_REPORT_ONLY" not in {
-        status.value for status in exposure.ExposureObservationStatus
-    }
+    assert "evaluation_date" not in public_parameters
+    assert "evaluation_timestamp" not in public_parameters
+    assert "completed_trading_session_date" not in public_parameters
     assert tuple(exposure.__all__) == (
         "ExposureObservationResult",
         "ExposureObservationStatus",
@@ -187,10 +199,19 @@ def test_no_public_bare_date_builder_or_valid_current_status_exists() -> None:
     )
 
 
-def test_structurally_valid_sources_remain_freshness_blocked_when_all_tickers_are_source_bound(
+def test_complete_fresh_sources_return_valid_report_only_with_bound_calendar_provenance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    freshness_results: list[calendar.MarkFreshnessResult] = []
+    freshness_owner = exposure.assess_manual_mark_freshness
+
+    def _capture_freshness(**kwargs: object) -> calendar.MarkFreshnessResult:
+        result = freshness_owner(**kwargs)
+        freshness_results.append(result)
+        return result
+
+    monkeypatch.setattr(exposure, "assess_manual_mark_freshness", _capture_freshness)
     result = _observe(
         tmp_path,
         monkeypatch,
@@ -203,9 +224,102 @@ def test_structurally_valid_sources_remain_freshness_blocked_when_all_tickers_ar
             ]
         ),
     )
-    assert result.status is exposure.ExposureObservationStatus.UNAVAILABLE
-    assert result.reason_codes == ("REPORT_ONLY_EXPOSURE_FRESHNESS_OWNER_BLOCKED",)
+    assert result.status is exposure.ExposureObservationStatus.VALID_REPORT_ONLY
+    assert result.reason_codes == ("US_EQUITY_SESSION_MARK_DATE_FRESH",)
     assert result.authority_effect == "NONE"
+    assert result.projection is not None
+    assert result.projection.authority_effect == "NONE"
+    assert result.projection.calendar_id == "US_EQUITY_REGULAR"
+    assert result.projection.calendar_schedule_sha256 == (
+        "a7142dcf13f52f30f07cc48942abe1e325ace21d644a2198c5e5667cf9d20007"
+    )
+    assert result.projection.latest_completed_session_date == "2026-08-12"
+    assert result.projection.latest_completed_session_close_timestamp_et == (
+        "2026-08-12T16:00:00-04:00"
+    )
+    assert result.projection.freshness_status == "FRESH"
+    assert freshness_results[0].mark_as_of_date == date(2026, 8, 12)
+    assert result.projection.mark_as_of_date == (
+        freshness_results[0].mark_as_of_date.isoformat()
+    )
+    projection_fields = set(result.projection.__dataclass_fields__)
+    assert not {
+        "target_commitment",
+        "desired_increment",
+        "final_increment",
+        "priority",
+        "order",
+        "quantity",
+    } & projection_fields
+
+
+def test_observer_rejects_a_freshness_mark_date_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    freshness_owner = exposure.assess_manual_mark_freshness
+
+    def _mismatched_freshness(**kwargs: object) -> calendar.MarkFreshnessResult:
+        result = freshness_owner(**kwargs)
+        assert result.status is calendar.MarkFreshnessStatus.FRESH
+        return replace(result, mark_as_of_date=date(2026, 8, 11))
+
+    monkeypatch.setattr(
+        exposure,
+        "assess_manual_mark_freshness",
+        _mismatched_freshness,
+    )
+    result = _observe(tmp_path, monkeypatch)
+    assert result.status is exposure.ExposureObservationStatus.INVALID
+    assert result.reason_codes == ("US_EQUITY_SESSION_MARK_DATE_PROVENANCE_MISMATCH",)
+    assert result.projection is None
+
+
+@pytest.mark.parametrize(
+    ("mark_as_of", "status", "reason"),
+    (
+        (
+            "2026-08-11",
+            exposure.ExposureObservationStatus.UNAVAILABLE,
+            "US_EQUITY_SESSION_MARK_DATE_STALE",
+        ),
+        (
+            "2026-08-13",
+            exposure.ExposureObservationStatus.INVALID,
+            "US_EQUITY_SESSION_MARK_DATE_AFTER_EVALUATION",
+        ),
+        (
+            "2026-08-08",
+            exposure.ExposureObservationStatus.INVALID,
+            "US_EQUITY_SESSION_MARK_DATE_NON_SESSION",
+        ),
+    ),
+)
+def test_observer_consumes_one_calendar_owned_mark_freshness_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mark_as_of: str,
+    status: exposure.ExposureObservationStatus,
+    reason: str,
+) -> None:
+    result = _observe(
+        tmp_path,
+        monkeypatch,
+        valuation_bytes=_valuation(as_of=mark_as_of),
+    )
+    assert result.status is status
+    assert result.reason_codes == (reason,)
+    assert result.projection is None
+
+
+def test_calendar_unavailability_remains_observer_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(calendar, "repo_root", lambda: tmp_path)
+    result = _observe(tmp_path, monkeypatch)
+    assert result.status is exposure.ExposureObservationStatus.UNAVAILABLE
+    assert result.reason_codes == ("US_EQUITY_SESSION_CALENDAR_SOURCE_UNAVAILABLE",)
     assert result.projection is None
 
 
@@ -369,7 +483,6 @@ def test_private_decimal_arithmetic_has_one_market_value_owner(tmp_path: Path) -
     )
     valuation = exposure._parse_manual_valuation(
         valuation_source.raw_bytes,
-        evaluation_date=run_context.evaluation_time_utc.date(),
     )
     projection, unknown = exposure._derive_projection(
         holdings=holdings,
@@ -395,6 +508,7 @@ def test_private_decimal_arithmetic_has_one_market_value_owner(tmp_path: Path) -
 def test_observer_is_not_imported_by_existing_authority_bearing_flows() -> None:
     root = Path(__file__).resolve().parents[2] / "src/investment_orchestrator"
     module_file = root / "observability/report_only_holdings_exposure.py"
+    calendar_file = root / "market/us_equity_session_calendar.py"
     prohibited = (
         "investment_orchestrator.workflow",
         "investment_orchestrator.state",
@@ -405,8 +519,11 @@ def test_observer_is_not_imported_by_existing_authority_bearing_flows() -> None:
     )
     module_text = module_file.read_text(encoding="utf-8")
     assert all(value not in module_text for value in prohibited)
+    calendar_text = calendar_file.read_text(encoding="utf-8")
+    assert all(value not in calendar_text for value in prohibited)
     assert all(
         "report_only_holdings_exposure" not in candidate.read_text(encoding="utf-8")
+        and "us_equity_session_calendar" not in candidate.read_text(encoding="utf-8")
         for candidate in root.rglob("*.py")
-        if candidate != module_file
+        if candidate not in {module_file, calendar_file}
     )
