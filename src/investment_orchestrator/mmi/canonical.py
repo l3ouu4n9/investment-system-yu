@@ -60,6 +60,9 @@ _MMI_LEGACY_STEP1_COMPARISON_REPORT_V1_IDENTITY_DOMAIN: Final = (
 _MMI_H1_LEGACY_STEP1_MAPPING_REPORT_V1_IDENTITY_DOMAIN: Final = (
     b"mmi_h1_legacy_step1_mapping_report_v1\0"
 )
+_MMI_H1_PREPARED_HANDOFF_V1_IDENTITY_DOMAIN: Final = (
+    b"mmi_h1_prepared_handoff_v1\0"
+)
 _MMI_H2C_DUAL_SIDE_MANUAL_HANDOFF_CONTEXT_RECEIPT_V1_IDENTITY_DOMAIN: Final = (
     b"mmi_h2c_dual_side_manual_handoff_context_receipt_v1\0"
 )
@@ -78,6 +81,11 @@ MAX_MMI_LEGACY_STEP1_COMPATIBILITY_CANDIDATE_V1_CANONICAL_BYTES: Final = (
 )
 MAX_MMI_LEGACY_STEP1_COMPARISON_REPORT_V1_CANONICAL_BYTES: Final = 65_536
 MAX_MMI_H1_LEGACY_STEP1_MAPPING_REPORT_V1_CANONICAL_BYTES: Final = 65_536
+# Exact nine-field envelope framing with an empty embedded grounded prompt
+# (517 bytes) less that ``{}`` placeholder, plus the existing independently
+# derived 393,852-byte G2 bound.  The owner's contract test reproduces this
+# arithmetic without importing the constant.
+MAX_MMI_H1_PREPARED_HANDOFF_V1_CANONICAL_BYTES: Final = 394_367
 MAX_MMI_H2C_DUAL_SIDE_MANUAL_HANDOFF_CONTEXT_RECEIPT_V1_CANONICAL_BYTES: Final = (
     1_114
 )

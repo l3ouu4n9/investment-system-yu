@@ -731,7 +731,7 @@ def test_inventory_and_persistent_identity_domain_counts_are_exact() -> None:
         if name.endswith("_DOMAIN")
         and type(value) is bytes
     }
-    assert len(domains) == len(set(domains.values())) == 20
+    assert len(domains) == len(set(domains.values())) == 21
     assert domains[
         "_MMI_ANALYST_VISIBLE_EVIDENCE_VIEW_V2_IDENTITY_DOMAIN"
     ] == IDENTITY_DOMAIN

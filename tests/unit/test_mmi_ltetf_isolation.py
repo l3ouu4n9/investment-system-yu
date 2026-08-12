@@ -56,6 +56,7 @@ MMI_PRODUCTION_PATHS = (
         "src/investment_orchestrator/mmi/"
         "mmi_h1_legacy_step1_mapping_report_v1.py"
     ),
+    "src/investment_orchestrator/mmi/mmi_h1_prepared_handoff_v1.py",
     "src/investment_orchestrator/mmi/policy_projection.py",
     "src/investment_orchestrator/mmi/portfolio_projection.py",
     "src/investment_orchestrator/mmi/raw_response_envelope.py",
@@ -82,6 +83,18 @@ H1_LEGACY_MAPPING_REPORT_RELATIVE_PATH = (
 )
 H1_MAPPED_RECOGNITION_RELATIVE_PATH = (
     "src/investment_orchestrator/research/h1_mapped_recognition.py"
+)
+H1_PREPARED_HANDOFF_RELATIVE_PATH = (
+    "src/investment_orchestrator/mmi/mmi_h1_prepared_handoff_v1.py"
+)
+H1_REPLACEMENT_HANDOFF_RELATIVE_PATH = (
+    "src/investment_orchestrator/workflow/h1_replacement_handoff.py"
+)
+H1_REPLACEMENT_PREPARE_CLI_RELATIVE_PATH = (
+    "src/investment_orchestrator/cli/run_h1_replacement_prepare.py"
+)
+H1_REPLACEMENT_CONSUME_CLI_RELATIVE_PATH = (
+    "src/investment_orchestrator/cli/run_h1_replacement_consume.py"
 )
 H2C_CAPTURE_SESSION_RELATIVE_PATH = (
     "src/investment_orchestrator/offline/"
@@ -347,6 +360,7 @@ def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -
         "src/investment_orchestrator/mmi/canonical.py",
         "src/investment_orchestrator/mmi/contracts.py",
         "src/investment_orchestrator/mmi/grounded_prompt_v2.py",
+        "src/investment_orchestrator/mmi/mmi_h1_prepared_handoff_v1.py",
         "src/investment_orchestrator/mmi/run_context_resumption.py",
         (
             "src/investment_orchestrator/mmi/"
@@ -375,7 +389,9 @@ def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -
     # owner structurally envelopes MMI artifact mappings; its only consumer
     # is the explicit foreground capture session asserted below.  The Phase A
     # preparation engine reads the same live chain report-only and has no
-    # production consumer of its own.
+    # production consumer of its own.  P2b adds exactly one more external
+    # reader: the current-lane H1 replacement prepare/consume composer, whose
+    # only consumers are its two foreground CLIs.
     assert set(external_mmi_readers) == {
         H2C_CASE_BUNDLE_RELATIVE_PATH,
         H2C_CONSUME_ENGINE_RELATIVE_PATH,
@@ -387,6 +403,7 @@ def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -
         H2_COMPARISON_REPORT_RELATIVE_PATH,
         H2C_ARCHIVED_SOURCE_RELATIVE_PATH,
         H1_MAPPED_RECOGNITION_RELATIVE_PATH,
+        H1_REPLACEMENT_HANDOFF_RELATIVE_PATH,
     }
     assert {
         imported
@@ -562,6 +579,7 @@ def test_schema_helper_is_imported_by_exact_symbol_only() -> None:
             "src/investment_orchestrator/mmi/"
             "validated_grounded_analysis_response_v2.py"
         ),
+        "src/investment_orchestrator/mmi/mmi_h1_prepared_handoff_v1.py",
     ):
         tree = ast.parse(_mmi_sources()[relative])
         imports = [
@@ -689,6 +707,7 @@ def test_v2_prompt_envelope_and_response_graph_is_exact_and_dormant() -> None:
         H2C_CONSUME_ENGINE_RELATIVE_PATH,
         H2C_CAPTURE_SESSION_RELATIVE_PATH,
         H2C_PREPARE_ENGINE_RELATIVE_PATH,
+        H1_REPLACEMENT_HANDOFF_RELATIVE_PATH,
     )
     assert consumers(
         "investment_orchestrator.mmi.grounded_prompt_v2"
@@ -697,6 +716,7 @@ def test_v2_prompt_envelope_and_response_graph_is_exact_and_dormant() -> None:
         H2C_CONSUME_ENGINE_RELATIVE_PATH,
         H2C_CAPTURE_SESSION_RELATIVE_PATH,
         H2C_PREPARE_ENGINE_RELATIVE_PATH,
+        H1_REPLACEMENT_HANDOFF_RELATIVE_PATH,
     )
     assert consumers(
         "investment_orchestrator.mmi.raw_response_envelope_v2"
@@ -706,6 +726,7 @@ def test_v2_prompt_envelope_and_response_graph_is_exact_and_dormant() -> None:
         H2C_CONSUME_ENGINE_RELATIVE_PATH,
         H2C_CAPTURE_SESSION_RELATIVE_PATH,
         H1_MAPPED_RECOGNITION_RELATIVE_PATH,
+        H1_REPLACEMENT_HANDOFF_RELATIVE_PATH,
     )
     assert consumers(
         "investment_orchestrator.mmi."
@@ -715,6 +736,7 @@ def test_v2_prompt_envelope_and_response_graph_is_exact_and_dormant() -> None:
         "legacy_step1_compatibility_candidate_v1.py",
         H2C_CONSUME_ENGINE_RELATIVE_PATH,
         H2C_CAPTURE_SESSION_RELATIVE_PATH,
+        H1_REPLACEMENT_HANDOFF_RELATIVE_PATH,
     )
     # The H1 mapping adapter is report-only; H2c remains foreground-only.
     assert consumers(
@@ -725,7 +747,26 @@ def test_v2_prompt_envelope_and_response_graph_is_exact_and_dormant() -> None:
         H2C_CONSUME_ENGINE_RELATIVE_PATH,
         H2C_CAPTURE_SESSION_RELATIVE_PATH,
         H2_COMPARISON_REPORT_RELATIVE_PATH,
+        H1_REPLACEMENT_HANDOFF_RELATIVE_PATH,
     )
+    # P2b: the current H1 mapping contract, the new prepared-handoff
+    # contract, and the composer itself each have an exact closed consumer
+    # set that stops at the two foreground CLIs.
+    assert set(consumers(
+        "investment_orchestrator.mmi.mmi_h1_legacy_step1_mapping_report_v1"
+    )) == {
+        H1_MAPPED_RECOGNITION_RELATIVE_PATH,
+        H1_REPLACEMENT_HANDOFF_RELATIVE_PATH,
+    }
+    assert consumers(
+        "investment_orchestrator.mmi.mmi_h1_prepared_handoff_v1"
+    ) == (H1_REPLACEMENT_HANDOFF_RELATIVE_PATH,)
+    assert set(consumers(
+        "investment_orchestrator.workflow.h1_replacement_handoff"
+    )) == {
+        H1_REPLACEMENT_CONSUME_CLI_RELATIVE_PATH,
+        H1_REPLACEMENT_PREPARE_CLI_RELATIVE_PATH,
+    }
     assert consumers(
         "investment_orchestrator.offline."
         "mmi_legacy_step1_comparison_report_v1"
@@ -743,7 +784,11 @@ def test_v2_prompt_envelope_and_response_graph_is_exact_and_dormant() -> None:
     ) == (H2C_CONSUME_ENGINE_RELATIVE_PATH,)
     assert set(consumers(
         "investment_orchestrator.mmi.stable_read"
-    )) == {H2C_CONSUME_ENGINE_RELATIVE_PATH, H2C_ARCHIVED_SOURCE_RELATIVE_PATH}
+    )) == {
+        H2C_CONSUME_ENGINE_RELATIVE_PATH,
+        H2C_ARCHIVED_SOURCE_RELATIVE_PATH,
+        H1_REPLACEMENT_HANDOFF_RELATIVE_PATH,
+    }
     # D4b: the dormant prepared-case contract gains exactly one production
     # consumer, the Phase A engine, which itself stays consumer-free.
     assert set(consumers(
@@ -848,8 +893,9 @@ def test_reachable_schema_validation_call_graph_does_not_write(
 def test_ltetf_inventory_classification_is_unchanged_except_inventory_content() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
     # 155 + exactly the two canonical CURRENT-source locator modules + P2a's
-    # one current-lane validated-resumption owner.
-    assert len(inventory.production_paths) == 158
+    # one current-lane validated-resumption owner + P2b's four current-lane
+    # H1 replacement modules (contract owner, composer, two CLIs).
+    assert len(inventory.production_paths) == 162
     assert inventory.dynamic_findings == ()
     assert inventory.observer_external_consumers == EXPECTED_EXTERNAL_CONSUMERS
     assert inventory.report_artifact_readers == ()

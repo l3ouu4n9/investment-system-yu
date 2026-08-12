@@ -358,6 +358,7 @@ def live_operational_input_access_forbidden() -> Iterator[None]:
     """
     patch = pytest.MonkeyPatch()
     real_capture_at_root = source_capture._capture_mmi_source_at_root
+    real_absence_at_root = source_capture._capture_mmi_source_absence_at_root
     real_read_bytes = Path.read_bytes
     real_read_text = Path.read_text
     real_path_open = Path.open
@@ -368,8 +369,18 @@ def live_operational_input_access_forbidden() -> Iterator[None]:
             raise _forbidden(f"capture at repository root {repository_root!r}")
         return real_capture_at_root(repository_root, **kwargs)
 
+    def guarded_absence_at_root(repository_root, **kwargs):
+        if _is_live_repository_root(repository_root):
+            raise _forbidden(
+                f"absence proof at repository root {repository_root!r}"
+            )
+        return real_absence_at_root(repository_root, **kwargs)
+
     def blocked_current_capture(*_args: object, **_kwargs: object):
         raise _forbidden("capture_current_mmi_source")
+
+    def blocked_current_absence(*_args: object, **_kwargs: object):
+        raise _forbidden("capture_current_mmi_source_absence")
 
     def guarded_read_bytes(self, *args, **kwargs):
         if _is_live_operational_path(self):
@@ -406,6 +417,21 @@ def live_operational_input_access_forbidden() -> Iterator[None]:
         "_capture_current_mmi_source_from_module_path",
         blocked_current_capture,
     )
+    patch.setattr(
+        source_capture,
+        "_capture_mmi_source_absence_at_root",
+        guarded_absence_at_root,
+    )
+    patch.setattr(
+        source_capture,
+        "capture_current_mmi_source_absence",
+        blocked_current_absence,
+    )
+    patch.setattr(
+        source_capture,
+        "_capture_current_mmi_source_absence_from_module_path",
+        blocked_current_absence,
+    )
     patch.setattr(Path, "read_bytes", guarded_read_bytes)
     patch.setattr(Path, "read_text", guarded_read_text)
     patch.setattr(Path, "open", guarded_path_open)
@@ -436,4 +462,20 @@ def assert_live_operational_inputs_are_unreachable() -> None:
             repo_root(),
             role=MmiSourceRole.STRATEGY_SETTINGS,
             expected_source_sha256="0" * 64,
+        )
+    # P2b introduced the first production consumer of the absence prover, so
+    # its three entry points are blocked on exactly the same terms.
+    with pytest.raises(LiveOperationalInputAccess):
+        source_capture.capture_current_mmi_source_absence(
+            MmiSourceRole.PORTFOLIO_SNAPSHOT,
+        )
+    with pytest.raises(LiveOperationalInputAccess):
+        source_capture._capture_current_mmi_source_absence_from_module_path(
+            source_capture._PRODUCTION_MODULE_FILE,
+            MmiSourceRole.PORTFOLIO_SNAPSHOT,
+        )
+    with pytest.raises(LiveOperationalInputAccess):
+        source_capture._capture_mmi_source_absence_at_root(
+            repo_root(),
+            role=MmiSourceRole.PORTFOLIO_SNAPSHOT,
         )

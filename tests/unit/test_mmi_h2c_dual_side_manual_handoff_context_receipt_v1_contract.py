@@ -203,7 +203,7 @@ def test_portable_owner_has_only_narrow_structural_helpers() -> None:
 
 def test_identity_domain_and_inventory_increase_once() -> None:
     domains = _identity_domains()
-    assert len(domains) == len(set(domains)) == 20
+    assert len(domains) == len(set(domains)) == 21
     assert domains.count(
         b"mmi_h2c_dual_side_manual_handoff_context_receipt_v1\0"
     ) == 1
@@ -211,6 +211,6 @@ def test_identity_domain_and_inventory_increase_once() -> None:
         canonical.MAX_MMI_H2C_DUAL_SIDE_MANUAL_HANDOFF_CONTEXT_RECEIPT_V1_CANONICAL_BYTES
         == 1114
     )
-    assert len(tuple((repo_root() / "schemas").glob("*.schema.json"))) == 46
+    assert len(tuple((repo_root() / "schemas").glob("*.schema.json"))) == 47
     assert mmi.__all__ == ()
     assert not hasattr(package, "__all__")

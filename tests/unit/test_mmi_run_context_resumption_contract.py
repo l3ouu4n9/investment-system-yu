@@ -71,6 +71,9 @@ PRODUCTION_ROOT = "src/investment_orchestrator"
 CONTRACTS_RELATIVE = f"{PRODUCTION_ROOT}/mmi/contracts.py"
 PREPARED_CASE_RELATIVE = f"{PRODUCTION_ROOT}/offline/mmi_h2c_prepared_case_v1.py"
 RESUMPTION_RELATIVE = f"{PRODUCTION_ROOT}/mmi/run_context_resumption.py"
+H1_PREPARED_HANDOFF_RELATIVE = (
+    f"{PRODUCTION_ROOT}/mmi/mmi_h1_prepared_handoff_v1.py"
+)
 CONSUME_CASE_RELATIVE = f"{PRODUCTION_ROOT}/offline/mmi_h2c_consume_persisted_case_v1.py"
 ARCHIVED_SOURCE_RELATIVE = f"{PRODUCTION_ROOT}/offline/mmi_h2c_archived_source_v1.py"
 
@@ -721,14 +724,20 @@ def test_offline_wrapper_delegates_to_the_current_resumption_owner() -> None:
     )
 
 
-def test_current_resumption_owner_has_exactly_one_production_consumer() -> None:
+def test_current_resumption_owner_has_exactly_two_production_consumers() -> None:
+    """Both consumers are explicitly reviewed prepared-artifact wrappers.
+
+    P2a's offline H2c prepared case and P2b's current H1 prepared handoff each
+    supply their own closed validator, identity field, and size cap, and each
+    reaches the low-level mint only through this owner.
+    """
     consumers = [
         relative
         for relative, source in _production_sources()
         if relative != RESUMPTION_RELATIVE
         and _imports_current_resumption_owner(source)
     ]
-    assert consumers == [PREPARED_CASE_RELATIVE]
+    assert consumers == [H1_PREPARED_HANDOFF_RELATIVE, PREPARED_CASE_RELATIVE]
 
 
 def test_current_resumption_owner_has_no_bare_timestamp_api() -> None:

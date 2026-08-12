@@ -635,12 +635,22 @@ def test_invalid_upstream_and_authority_bearing_prose_fail_closed(
     )
 
 
-def test_no_production_module_imports_or_consumes_the_report_only_adapter() -> None:
+def test_only_approved_report_only_owners_consume_the_mapping_adapter() -> None:
+    """Exactly two report-only consumers may import this deterministic mapper.
+
+    The recognition bridge turns a validated report into ephemeral facts, and
+    the current H1 replacement composer builds the report as its consume
+    completion artifact.  Neither is an availability, permission, gate,
+    publication, or order consumer.
+    """
     package_root = repo_root() / "src/investment_orchestrator"
     owner_path = Path("mmi/mmi_h1_legacy_step1_mapping_report_v1.py")
     target = "investment_orchestrator.mmi.mmi_h1_legacy_step1_mapping_report_v1"
     target_leaf = "mmi_h1_legacy_step1_mapping_report_v1"
-    approved_bridge = Path("research/h1_mapped_recognition.py")
+    approved_consumers = {
+        Path("research/h1_mapped_recognition.py"),
+        Path("workflow/h1_replacement_handoff.py"),
+    }
     importers: list[Path] = []
     for path in package_root.rglob("*.py"):
         relative = path.relative_to(package_root)
@@ -665,4 +675,5 @@ def test_no_production_module_imports_or_consumes_the_report_only_adapter() -> N
             for node in ast.walk(tree)
         ):
             importers.append(relative)
-    assert importers == [approved_bridge]
+    assert len(importers) == len(approved_consumers)
+    assert set(importers) == approved_consumers
