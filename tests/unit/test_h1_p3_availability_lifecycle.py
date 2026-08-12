@@ -15,7 +15,7 @@ only as the downstream oracle for a missing permission artifact.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 import errno
 import json
 from pathlib import Path
@@ -32,6 +32,9 @@ from investment_orchestrator.common.io import write_json
 from investment_orchestrator.state.research_degraded_mode_gate import (
     MISSING_RESEARCH_PERMISSION,
     load_and_evaluate_step2_research_gate,
+)
+from investment_orchestrator.research.h1_mapped_recognition import (
+    H1MappedRecognitionFacts,
 )
 from investment_orchestrator.workflow import step1_research
 from investment_orchestrator.workflow.h1_replacement_handoff import (
@@ -92,6 +95,23 @@ def _write_legacy_base_context(step1_root: _Step1Root) -> None:
     """Provide the minimum current Legacy inputs a rebuild needs to run."""
     write_json(step1_research.step1_research_handoff_candidate_path(), {})
     write_json(step1_research.step1_research_output_path(), {})
+
+
+def _fresh_h1_facts() -> H1MappedRecognitionFacts:
+    """Build typed facts while leaving their upstream factory contract in its own suite."""
+    facts = object.__new__(H1MappedRecognitionFacts)
+    for field in fields(H1MappedRecognitionFacts):
+        object.__setattr__(facts, field.name, f"{field.name}_value")
+    object.__setattr__(facts, "source_kind", "H1_ROLE_MAPPED")
+    object.__setattr__(facts, "policy_as_of_date", "2026-06-25")
+    object.__setattr__(facts, "portfolio_source_date", "2026-06-25")
+    object.__setattr__(
+        facts, "policy_source_run_timestamp_utc", "2026-06-25T09:00:00.000000Z"
+    )
+    object.__setattr__(
+        facts, "context_evaluation_timestamp_utc", "2026-06-25T12:00:00.000000Z"
+    )
+    return facts
 
 
 def _h1_claiming_artifacts(step1_root: _Step1Root) -> list[str]:
@@ -277,15 +297,55 @@ def test_new_prepare_clears_the_claim_first_and_never_refreshes_h1(
     assert b"research_availability_state_after_clear=" in stream.err
 
 
-def test_missing_legacy_base_context_leaves_the_decision_absent_and_fails_closed(
+def test_successful_raw_reparse_refutes_no_output_and_leaves_no_decision(
     step1_root: _Step1Root,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _write_stale_h1_claim(step1_root)
-    # No candidate and no parsed payload exist, so there is nothing to
-    # re-derive from; deletion has already happened by the time that is known.
+    raw_fixture = (
+        Path(__file__).resolve().parents[1]
+        / "fixtures"
+        / "step1_contract_failures"
+        / "current_research_output_minimal.json"
+    )
+    step1_research.step1_raw_output_path().write_text(
+        raw_fixture.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    warrants: list[step1_research._NoOutputWarrantResult] = []
+    real_resolve = step1_research._resolve_no_output_warrant_for_h1_refresh
 
-    summary = step1_research.refresh_research_availability_for_h1_replacement()
+    def recording_resolve() -> step1_research._NoOutputWarrant:
+        warrant = real_resolve()
+        warrants.append(warrant.result)
+        return warrant
 
+    def unexpected_call(**_kwargs: object):
+        raise AssertionError("availability evaluator/writer must not run")
+
+    monkeypatch.setattr(
+        step1_research,
+        "_resolve_no_output_warrant_for_h1_refresh",
+        recording_resolve,
+    )
+    monkeypatch.setattr(
+        step1_research,
+        "_write_no_output_research_availability_artifacts_report_only",
+        unexpected_call,
+    )
+    monkeypatch.setattr(
+        step1_research,
+        "_evaluate_research_availability_report_only",
+        unexpected_call,
+    )
+
+    summary = step1_research.refresh_research_availability_for_h1_replacement(
+        h1_mapped_facts=_fresh_h1_facts(),
+        strategy_settings={"as_of": "2026-06-30"},
+    )
+
+    assert warrants == [step1_research._NoOutputWarrantResult.NO_BASE_CONTEXT]
+    assert summary["research_availability_state"] == ""
     assert summary["research_availability_decision_present"] == "False"
     assert summary["h1_mapped_selected"] == "False"
     for path in step1_root.state_paths:
@@ -300,6 +360,144 @@ def test_missing_legacy_base_context_leaves_the_decision_absent_and_fails_closed
     assert gate.order_compilation_allowed is False
     assert gate.step3_allowed is False
     assert gate.step4_allowed is False
+
+
+def test_genuine_raw_absence_successful_consume_selects_h1_with_same_facts(
+    step1_root: _Step1Root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    facts = _fresh_h1_facts()
+    warrants: list[step1_research._NoOutputWarrantResult] = []
+    evaluated_facts: list[object] = []
+    real_resolve = step1_research._resolve_no_output_warrant_for_h1_refresh
+    real_evaluate = step1_research.evaluate_research_availability
+
+    def recording_resolve() -> step1_research._NoOutputWarrant:
+        warrant = real_resolve()
+        warrants.append(warrant.result)
+        return warrant
+
+    def recording_evaluate(**kwargs: object):
+        evaluated_facts.append(kwargs.get("h1_mapped_facts"))
+        return real_evaluate(**kwargs)
+
+    settings_path = step1_root.root / "inputs" / "current" / "strategy_settings.yaml"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(
+        'as_of: "2026-06-30"\ncore_universe: []\nsatellite_universe: []\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        consume_cli,
+        "consume_h1_replacement_handoff",
+        lambda **_kwargs: _FakeConsumeResult(mapped_recognition_facts=facts),
+    )
+    monkeypatch.setattr(
+        step1_research,
+        "_resolve_no_output_warrant_for_h1_refresh",
+        recording_resolve,
+    )
+    monkeypatch.setattr(
+        step1_research,
+        "evaluate_research_availability",
+        recording_evaluate,
+    )
+
+    assert consume_cli.main(_consume_argv()) == 0
+
+    assert warrants == [
+        step1_research._NoOutputWarrantResult.OUTPUT_UNAVAILABLE,
+        step1_research._NoOutputWarrantResult.OUTPUT_UNAVAILABLE,
+    ]
+    assert len(evaluated_facts) == 2
+    assert evaluated_facts[0] is None
+    assert evaluated_facts[1] is facts
+    decision = json.loads(step1_root.decision_path.read_text(encoding="utf-8"))
+    assert decision["state"] == H1_STATE
+    assert decision["h1_mapped_selected"] is True
+
+
+def test_schema_invalid_raw_is_f4_output_unavailable(
+    step1_root: _Step1Root,
+) -> None:
+    step1_research.step1_raw_output_path().write_text("{}", encoding="utf-8")
+
+    warrant = step1_research._resolve_no_output_warrant_for_h1_refresh()
+
+    assert warrant.result is step1_research._NoOutputWarrantResult.OUTPUT_UNAVAILABLE
+    assert warrant.detail.startswith(
+        "Step 1 raw output failed research-output schema validation:"
+    )
+
+
+def test_generic_raw_oserror_propagates_outside_warrant_membership(
+    step1_root: _Step1Root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = OSError(errno.EIO, "raw device failure")
+    monkeypatch.setattr(
+        step1_research,
+        "read_text",
+        lambda _path: (_ for _ in ()).throw(failure),
+    )
+    monkeypatch.setattr(
+        step1_research,
+        "_write_no_output_research_availability_artifacts_report_only",
+        lambda **_kwargs: pytest.fail("NO_OUTPUT writer must not run"),
+    )
+    monkeypatch.setattr(
+        step1_research,
+        "_evaluate_research_availability_report_only",
+        lambda **_kwargs: pytest.fail("parsed availability evaluator must not run"),
+    )
+
+    with pytest.raises(OSError, match="raw device failure") as caught:
+        step1_research.refresh_research_availability_for_h1_replacement(
+            strategy_settings={"as_of": "2026-06-30"},
+        )
+
+    assert caught.value is failure
+
+
+def test_strict_no_output_refresh_reraises_exact_evaluator_failure(
+    step1_root: _Step1Root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = RuntimeError("sentinel evaluator failure")
+    monkeypatch.setattr(
+        step1_research,
+        "evaluate_research_availability",
+        lambda **_kwargs: (_ for _ in ()).throw(failure),
+    )
+
+    with pytest.raises(RuntimeError, match="sentinel evaluator failure") as caught:
+        step1_research.refresh_research_availability_for_h1_replacement(
+            strategy_settings={"as_of": "2026-06-30"},
+        )
+
+    assert caught.value is failure
+
+
+def test_strict_no_output_refresh_reraises_exact_persistence_failure(
+    step1_root: _Step1Root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = OSError(errno.EIO, "sentinel availability write failure")
+    write_paths: list[Path] = []
+
+    def failing_write(path: Path, _payload: object):
+        write_paths.append(path)
+        raise failure
+
+    monkeypatch.setattr(step1_research, "write_json", failing_write)
+
+    with pytest.raises(OSError, match="sentinel availability write failure") as caught:
+        step1_research.refresh_research_availability_for_h1_replacement(
+            strategy_settings={"as_of": "2026-06-30"},
+        )
+
+    assert caught.value is failure
+    assert write_paths == [step1_root.availability_path]
 
 
 def test_a_failed_clear_aborts_before_either_engine_can_invalidate_anything(

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from enum import Enum
 import hashlib
 import io
 import json
@@ -22,6 +24,10 @@ from investment_orchestrator.common.io import (
     write_text,
 )
 from investment_orchestrator.common.paths import repo_root, require_prompt_path
+from investment_orchestrator.common.schema_validation import (
+    ArtifactSchemaError,
+    load_artifact_schema,
+)
 from investment_orchestrator.llm.legacy_step1_prompt_compiler import (
     compile_legacy_step1_prompt_text,
     derive_legacy_approved_extended_etf_json,
@@ -34,7 +40,11 @@ from investment_orchestrator.normalizers.research_handoff_candidate import (
     normalize_research_handoff_candidate,
     research_handoff_normalization_result_to_dict,
 )
-from investment_orchestrator.parsers.extract_research_json import extract_research_json
+from investment_orchestrator.parsers.extract_research_json import (
+    ResearchExtractionError,
+    extract_research_json,
+    parse_research_output_text,
+)
 from investment_orchestrator.research.analyst_memo import (
     analyst_memo_parse_result_to_dict,
     evidence_universe_from_packet,
@@ -236,6 +246,17 @@ _RETIRED_RENDER_SOURCE_COMMITMENT_FILENAME = "render_source_commitment.json"
 _RETIRED_RENDER_SOURCE_CONTINUITY_REPORT_FILENAME = "render_source_continuity_report.json"
 
 _LOWERCASE_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+
+
+class _NoOutputWarrantResult(Enum):
+    OUTPUT_UNAVAILABLE = "OUTPUT_UNAVAILABLE"
+    NO_BASE_CONTEXT = "NO_BASE_CONTEXT"
+
+
+@dataclass(frozen=True)
+class _NoOutputWarrant:
+    result: _NoOutputWarrantResult
+    detail: str
 
 
 def current_inputs_dir() -> Path:
@@ -1842,6 +1863,54 @@ def _invalidate_current_research_availability_artifacts() -> None:
     step1_research_freshness_report_path().unlink(missing_ok=True)
 
 
+def _resolve_no_output_warrant_for_h1_refresh() -> _NoOutputWarrant:
+    """Distinguish genuine Legacy output unavailability from missing context."""
+    try:
+        raw_text = read_text(step1_raw_output_path())
+    except FileNotFoundError:
+        return _NoOutputWarrant(
+            _NoOutputWarrantResult.OUTPUT_UNAVAILABLE,
+            "Step 1 raw output is absent.",
+        )
+    except PermissionError:
+        return _NoOutputWarrant(
+            _NoOutputWarrantResult.NO_BASE_CONTEXT,
+            "Step 1 raw output is not readable: PermissionError.",
+        )
+    except IsADirectoryError:
+        return _NoOutputWarrant(
+            _NoOutputWarrantResult.NO_BASE_CONTEXT,
+            "Step 1 raw output path is a directory.",
+        )
+    except UnicodeDecodeError:
+        return _NoOutputWarrant(
+            _NoOutputWarrantResult.NO_BASE_CONTEXT,
+            "Step 1 raw output is not valid UTF-8.",
+        )
+
+    # Successful preload proves that a later ArtifactSchemaError originates
+    # from validating the raw output instance, not from schema infrastructure.
+    load_artifact_schema("research_output.schema.json")
+
+    try:
+        parse_research_output_text(raw_text)
+    except ResearchExtractionError as exc:
+        return _NoOutputWarrant(
+            _NoOutputWarrantResult.OUTPUT_UNAVAILABLE,
+            f"Step 1 raw output extraction failed: {exc}",
+        )
+    except ArtifactSchemaError as exc:
+        return _NoOutputWarrant(
+            _NoOutputWarrantResult.OUTPUT_UNAVAILABLE,
+            f"Step 1 raw output failed research-output schema validation: {exc}",
+        )
+
+    return _NoOutputWarrant(
+        _NoOutputWarrantResult.NO_BASE_CONTEXT,
+        "Step 1 raw output validates, but derived base context is absent.",
+    )
+
+
 def refresh_research_availability_for_h1_replacement(
     *,
     h1_mapped_facts: Any | None = None,
@@ -1859,11 +1928,11 @@ def refresh_research_availability_for_h1_replacement(
     ``H1MappedRecognitionFacts`` this is the post-consume SUCCESS REFRESH.
 
     Deletion happens first and unconditionally; the Legacy rebuild below is NOT
-    load-bearing. Base context that cannot be read, or a write the report-only
-    seam swallows, simply leaves the three state artifacts absent, and the
-    existing missing-permission handling downstream owns that fail-closed
-    outcome. No candidate or payload is fabricated to fill the gap, and there is
-    no retry, backup, or rollback.
+    load-bearing. When derived context is absent, only a narrow raw-output
+    warrant may invoke the existing NO_OUTPUT owner. An unreadable or valid raw
+    output leaves no decision, and existing missing-permission handling
+    downstream owns that fail-closed outcome. No candidate or payload is
+    fabricated to fill the gap, and there is no retry, backup, or rollback.
 
     The facts object is threaded through unchanged: it is never serialized,
     copied into a dict, persisted, reconstructed, or rebuilt from the mapping
@@ -1883,9 +1952,28 @@ def refresh_research_availability_for_h1_replacement(
     )
     payload = _read_json_if_exists(step1_research_output_path())
     if not isinstance(candidate, Mapping) or not isinstance(payload, Mapping):
-        # No current Legacy base context exists to re-derive from. The three
-        # state artifacts stay deleted; the previously cleared H1 claim does not
-        # reappear and no substitute availability result is invented.
+        warrant = _resolve_no_output_warrant_for_h1_refresh()
+        if warrant.result is _NoOutputWarrantResult.OUTPUT_UNAVAILABLE:
+            availability = _write_no_output_research_availability_artifacts_report_only(
+                strategy_settings=settings,
+                diagnostic_reason=(
+                    "H1 availability refresh confirmed Legacy output unavailability."
+                ),
+                parse_error=warrant.detail,
+                h1_mapped_facts=h1_mapped_facts,
+                raise_on_failure=True,
+            )
+            if availability is not None:
+                return {
+                    "research_availability_state": availability.state,
+                    "research_availability_decision_present": str(
+                        file_exists(step1_research_degraded_mode_decision_path())
+                    ),
+                    "h1_mapped_selected": str(availability.h1_mapped_selected),
+                }
+
+        # The raw output refuted NO_OUTPUT, or the best-effort NO_OUTPUT writer
+        # did not return an authoritative result. No H1 state is inferred here.
         return {
             "research_availability_state": "",
             "research_availability_decision_present": "False",
@@ -4599,11 +4687,13 @@ def _write_no_output_research_availability_artifacts_report_only(
     strategy_settings: Mapping[str, Any] | None,
     diagnostic_reason: str,
     parse_error: str | None = None,
+    h1_mapped_facts: Any | None = None,
+    raise_on_failure: bool = False,
 ):
     """Best-effort PR C artifacts for no-output / parse-failure Step 1 runs.
 
-    This preserves the original parser error behavior: callers still raise
-    after this report-only observer writes conservative degraded-mode artifacts.
+    The original parser caller still raises after this observer writes its
+    conservative artifacts; H1 refresh may instead consume the returned result.
     """
     try:
         last_good = read_last_good_research_handoff(step1_state_dir())
@@ -4619,6 +4709,7 @@ def _write_no_output_research_availability_artifacts_report_only(
             last_good_handoff=last_good.handoff,
             last_good_metadata=last_good.metadata,
             parsed_output_available=False,
+            h1_mapped_facts=h1_mapped_facts,
         )
         diagnostic = {
             "diagnostic_reason": diagnostic_reason,
@@ -4638,6 +4729,8 @@ def _write_no_output_research_availability_artifacts_report_only(
         )
         return availability
     except Exception:
+        if raise_on_failure:
+            raise
         # Best-effort only: never mask the original parse failure.
         return None
 
