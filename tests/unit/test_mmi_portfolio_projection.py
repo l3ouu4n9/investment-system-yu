@@ -47,7 +47,9 @@ from investment_orchestrator.mmi.policy_projection import (
     build_mmi_policy_projection,
 )
 from investment_orchestrator.mmi.portfolio_projection import (
+    StrictCurrentOpenBuyCommitmentError,
     build_mmi_portfolio_snapshot_projection,
+    resolve_strict_current_open_buy_commitments,
     validate_mmi_portfolio_snapshot_projection,
 )
 from investment_orchestrator.mmi.source_capture import (
@@ -967,6 +969,130 @@ def test_explicit_valid_empty_section_means_zero_open_buy_budget_only(
         "UNSTRUCTURED_NOT_PROJECTED"
     )
     assert projection["cash"]["status"] == "UNAVAILABLE_NOT_PROJECTED"
+
+
+def test_unstated_ladder_overflowing_reconstruction_stays_source_validated(
+    tmp_path: Path,
+) -> None:
+    """An unstated ladder whose price makes an eager reconstructed notional
+    cross the canonical 48-digit rendering bound must not become
+    projection-invalid.  Prior MMI projection semantics never required that
+    reconstruction for an unstated ladder, so Budget's own (separately owned)
+    monetary derivation must not retroactively tighten MMI admission.
+    """
+    overflowing_price = "9" * 48
+    rows = [
+        _open_buy_row(
+            "QQQ",
+            budget="1",
+            stated_notional="",
+            residual="",
+            highest_limit=overflowing_price,
+            lowest_limit=overflowing_price,
+            live_step_count="1",
+            steps=f"L1@{overflowing_price}",
+            quantities="L1:2",
+        ),
+    ]
+    projection, _, _, _, _ = _valid_projection(tmp_path, rows=rows)
+    assert projection["open_buy_orders"] == {
+        "status": "SOURCE_VALIDATED",
+        "records": [
+            {
+                "ticker": "QQQ",
+                "reserved_budget_decimal": "1",
+                "stated_compiled_notional_decimal": None,
+                "policy_membership_classification": "CORE",
+                "policy_role_annotation": "CORE",
+                "outside_policy_universe": False,
+            },
+        ],
+        "total_reserved_budget_decimal": "1",
+    }
+    assert "PORTFOLIO_OPEN_BUY_ORDERS_PARSE_FAILED" not in _gap_codes(
+        projection
+    )
+
+    # Same source facts, resolved independently by the Budget commitment
+    # resolver.  The ladder is structurally complete, but its exact monetary
+    # reconstruction cannot be canonically rendered, so Budget closes to its
+    # own existing fail-closed UNAVAILABLE classification.  It never feeds
+    # back into (and never re-tightens) the MMI admission proven above.
+    with pytest.raises(StrictCurrentOpenBuyCommitmentError) as unavailable:
+        resolve_strict_current_open_buy_commitments(
+            _snapshot(rows=rows).decode("utf-8")
+        )
+    assert unavailable.value.unavailable is True
+    assert unavailable.value.code == "OPEN_BUY_COMMITMENT_NOT_PROVABLE"
+
+
+def test_strict_current_open_buy_commitments_require_complete_strict_domain() -> None:
+    valid = resolve_strict_current_open_buy_commitments(
+        _snapshot(
+            rows=[
+                _open_buy_row(
+                    "QQQ",
+                    budget="100",
+                    stated_notional="30.5",
+                    residual="69.5",
+                ),
+                _open_buy_row(
+                    "VOO",
+                    budget="100",
+                    highest_limit="20",
+                    lowest_limit="20",
+                    live_step_count="1",
+                    steps="L1@20",
+                    quantities="L1:2",
+                ),
+            ]
+        ).decode("utf-8")
+    )
+    assert [row.commitment for row in valid.commitments] == ["30.5", "40"]
+    assert [row.commitment_source for row in valid.commitments] == [
+        "STATED_COMPILED_NOTIONAL",
+        "RECONSTRUCTED_REMAINING_LIMIT_NOTIONAL",
+    ]
+    assert valid.total_commitment == "70.5"
+
+    empty = resolve_strict_current_open_buy_commitments(
+        _snapshot(rows=[]).decode("utf-8")
+    )
+    assert empty.commitments == ()
+    assert empty.total_commitment == "0"
+
+    with pytest.raises(StrictCurrentOpenBuyCommitmentError) as unavailable:
+        resolve_strict_current_open_buy_commitments(
+            _snapshot(rows=[_open_buy_row("QQQ", budget="100")]).decode("utf-8")
+        )
+    assert unavailable.value.unavailable is True
+    assert unavailable.value.code == "OPEN_BUY_COMMITMENT_NOT_PROVABLE"
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        _open_buy_row("qqq", budget="100", stated_notional="50", residual="50"),
+        _open_buy_row(
+            "QQQ",
+            budget="100",
+            highest_limit="20",
+            lowest_limit="10",
+            live_step_count="1",
+            steps="L1@10;L1@20",
+            quantities="L1:1",
+        ),
+    ],
+)
+def test_strict_current_open_buy_commitments_reject_ambiguous_source_rows(
+    row: str,
+) -> None:
+    with pytest.raises(StrictCurrentOpenBuyCommitmentError) as invalid:
+        resolve_strict_current_open_buy_commitments(
+            _snapshot(rows=[row]).decode("utf-8")
+        )
+    assert invalid.value.unavailable is False
+    assert invalid.value.code == "MMI_PORTFOLIO_OPEN_BUY_ORDERS_PARSE_FAILED"
 
 
 def test_exact_maximum_open_buy_record_count_is_accepted(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Context, Decimal, InvalidOperation, localcontext
 import hashlib
@@ -169,6 +170,52 @@ class _PortfolioContractFailure(RuntimeError):
 
 class _OpenBuyParseFailure(RuntimeError):
     """Internal marker; raw parser diagnostics never cross the boundary."""
+
+
+@dataclass(frozen=True, slots=True)
+class StrictCurrentOpenBuyCommitment:
+    """One exact current BUY commitment from strict portfolio source facts."""
+
+    ticker: str
+    commitment_decimal: Decimal
+    commitment: str
+    commitment_source: str
+
+
+@dataclass(frozen=True, slots=True)
+class StrictCurrentOpenBuyCommitmentResult:
+    """Complete strict section-(2a) commitment facts, with no order authority."""
+
+    commitments: tuple[StrictCurrentOpenBuyCommitment, ...]
+    total_commitment_decimal: Decimal
+    total_commitment: str
+
+
+class StrictCurrentOpenBuyCommitmentError(ValueError):
+    """Closed strict-source result for current BUY commitment proof."""
+
+    def __init__(self, code: str, *, unavailable: bool) -> None:
+        super().__init__(code)
+        self.code = code
+        self.unavailable = unavailable
+
+
+@dataclass(frozen=True, slots=True)
+class _StrictOpenBuyRow:
+    """Internal exact source facts shared by strict projection and capacity use.
+
+    This carries only structural facts (ticker, stated fields, steps,
+    quantities).  It never carries a precomputed monetary reconstruction: MMI
+    projection semantics never required one for an unstated ladder, and the
+    Budget commitment resolver derives that value itself, only when it
+    actually needs it.
+    """
+
+    ticker: str
+    reserved_budget_decimal: str
+    stated_compiled_notional_decimal: str | None
+    steps: Mapping[str, Decimal]
+    quantities: Mapping[str, Decimal]
 
 
 def _build_result(
@@ -652,16 +699,21 @@ def _reconstruct_summary_notional(
     )
 
 
-def _strict_open_buy_records(
+def _strict_open_buy_source_rows(
     text: str,
-    *,
-    policy_roles: Mapping[str, str],
-) -> tuple[list[dict[str, object]], str]:
+) -> tuple[_StrictOpenBuyRow, ...]:
+    """Parse one complete strict section-(2a) domain from source bytes.
+
+    This is the one structural owner for strict open-BUY rows.  It rejects
+    malformed data-like lines, duplicate ticker or ladder identifiers, and
+    incomplete price/quantity domains before any consumer can treat a section
+    as empty or reconstruct a monetary commitment.
+    """
     rows = _extract_strict_open_buy_rows(text)
     if len(rows) > MAXIMUM_OPEN_BUY_RECORDS:
         raise _OpenBuyParseFailure
     tickers: list[str] = []
-    parsed_values: list[dict[str, object]] = []
+    parsed_rows: list[_StrictOpenBuyRow] = []
     for fields in rows:
         ticker = fields[0]
         if not ticker or _TICKER_RE.fullmatch(ticker) is None:
@@ -743,16 +795,14 @@ def _strict_open_buy_records(
             != stated_text
         ):
             raise _OpenBuyParseFailure
-        parsed_values.append(
-            {
-                "ticker": ticker,
-                "budget_text": budget_text,
-                "budget_decimal": budget_decimal,
-                "stated_text": stated_text,
-                "stated_decimal": stated_decimal,
-                "steps": steps,
-                "quantities": quantities,
-            }
+        parsed_rows.append(
+            _StrictOpenBuyRow(
+                ticker=ticker,
+                reserved_budget_decimal=budget_text,
+                stated_compiled_notional_decimal=stated_text,
+                steps=steps,
+                quantities=quantities,
+            )
         )
     try:
         with localcontext(Context(prec=256)):
@@ -767,56 +817,134 @@ def _strict_open_buy_records(
         or list(parser_result.orders) != tickers
     ):
         raise _OpenBuyParseFailure
-    records: list[dict[str, object]] = []
-    for expected in parsed_values:
-        ticker = expected["ticker"]
-        budget_text = expected["budget_text"]
-        budget_decimal = expected["budget_decimal"]
-        stated_text = expected["stated_text"]
-        stated_decimal = expected["stated_decimal"]
-        steps = expected["steps"]
-        quantities = expected["quantities"]
-        if (
-            type(ticker) is not str
-            or type(budget_text) is not str
-            or type(budget_decimal) is not Decimal
-            or (
-                stated_text is not None
-                and type(stated_text) is not str
-            )
-            or (
-                stated_decimal is not None
-                and type(stated_decimal) is not Decimal
-            )
-            or type(steps) is not dict
-            or type(quantities) is not dict
-        ):
-            raise _OpenBuyParseFailure
-        parsed = parser_result.orders.get(ticker)
+    for strict_row in parsed_rows:
+        parsed = parser_result.orders.get(strict_row.ticker)
         if (
             parsed is None
             or parsed.data_gap
             or parsed.diagnostics
-            or parsed.ticker != ticker
-            or parsed.budget != budget_decimal
-            or parsed.stated_compiled_notional != stated_decimal
-            or parsed.steps != steps
-            or parsed.qtys != quantities
+            or parsed.ticker != strict_row.ticker
+            or parsed.budget
+            != Decimal(strict_row.reserved_budget_decimal)
+            or parsed.stated_compiled_notional
+            != (
+                Decimal(strict_row.stated_compiled_notional_decimal)
+                if strict_row.stated_compiled_notional_decimal is not None
+                else None
+            )
+            or parsed.steps != strict_row.steps
+            or parsed.qtys != strict_row.quantities
             or (
-                stated_decimal is not None
-                and steps
+                strict_row.stated_compiled_notional_decimal is not None
+                and strict_row.steps
                 and parsed.reconstructed_notional
-                != stated_decimal
+                != Decimal(strict_row.stated_compiled_notional_decimal)
             )
         ):
             raise _OpenBuyParseFailure
+    return tuple(parsed_rows)
+
+
+def resolve_strict_current_open_buy_commitments(
+    portfolio_snapshot_text: str,
+) -> StrictCurrentOpenBuyCommitmentResult:
+    """Resolve exact current commitments from the strict section-(2a) owner.
+
+    A present empty section reaches zero only after strict structural admission.
+    Valid rows require a stated compiled notional, a complete strict ladder
+    reconstruction, or both exact values.  ``budget`` never enters the
+    commitment arithmetic.
+    """
+    if type(portfolio_snapshot_text) is not str:
+        raise StrictCurrentOpenBuyCommitmentError(
+            "MMI_PORTFOLIO_OPEN_BUY_ORDERS_PARSE_FAILED",
+            unavailable=False,
+        )
+    try:
+        rows = _strict_open_buy_source_rows(portfolio_snapshot_text)
+    except _OpenBuyParseFailure:
+        raise StrictCurrentOpenBuyCommitmentError(
+            "MMI_PORTFOLIO_OPEN_BUY_ORDERS_PARSE_FAILED",
+            unavailable=False,
+        ) from None
+    commitments: list[StrictCurrentOpenBuyCommitment] = []
+    commitment_texts: list[str] = []
+    for row in rows:
+        stated = row.stated_compiled_notional_decimal
+        if stated is not None:
+            # The shared structural owner already proved, for any row that
+            # reaches this point, that a complete ladder reconstructs to
+            # exactly this stated value.  Re-deriving it here would be a
+            # second, redundant structural parse owned by this resolver.
+            commitment = stated
+            commitment_source = (
+                "STATED_AND_RECONSTRUCTED"
+                if row.steps
+                else "STATED_COMPILED_NOTIONAL"
+            )
+        elif row.steps:
+            # Reconstruction-only commitment: owned exclusively by this
+            # resolver.  A canonical-rendering overflow here is a Budget
+            # representation limit, not an MMI structural defect, so it
+            # closes to the existing fail-closed UNAVAILABLE classification
+            # rather than an INVALID parse failure.
+            try:
+                commitment = _reconstruct_summary_notional(
+                    row.steps, row.quantities
+                )
+            except _OpenBuyParseFailure:
+                raise StrictCurrentOpenBuyCommitmentError(
+                    "OPEN_BUY_COMMITMENT_NOT_PROVABLE",
+                    unavailable=True,
+                ) from None
+            commitment_source = "RECONSTRUCTED_REMAINING_LIMIT_NOTIONAL"
+        else:
+            raise StrictCurrentOpenBuyCommitmentError(
+                "OPEN_BUY_COMMITMENT_NOT_PROVABLE",
+                unavailable=True,
+            )
+        commitments.append(
+            StrictCurrentOpenBuyCommitment(
+                ticker=row.ticker,
+                commitment_decimal=Decimal(commitment),
+                commitment=commitment,
+                commitment_source=commitment_source,
+            )
+        )
+        commitment_texts.append(commitment)
+    try:
+        total = _sum_canonical_nonnegative_decimals(commitment_texts)
+        total_decimal = Decimal(total)
+    except (InvalidOperation, _OpenBuyParseFailure):
+        raise StrictCurrentOpenBuyCommitmentError(
+            "MMI_PORTFOLIO_OPEN_BUY_ORDERS_PARSE_FAILED",
+            unavailable=False,
+        ) from None
+    return StrictCurrentOpenBuyCommitmentResult(
+        commitments=tuple(commitments),
+        total_commitment_decimal=total_decimal,
+        total_commitment=total,
+    )
+
+
+def _strict_open_buy_records(
+    text: str,
+    *,
+    policy_roles: Mapping[str, str],
+) -> tuple[list[dict[str, object]], str]:
+    strict_rows = _strict_open_buy_source_rows(text)
+    records: list[dict[str, object]] = []
+    for strict_row in strict_rows:
+        ticker = strict_row.ticker
         role = policy_roles.get(ticker)
         outside = role is None
         records.append(
             {
                 "ticker": ticker,
-                "reserved_budget_decimal": budget_text,
-                "stated_compiled_notional_decimal": stated_text,
+                "reserved_budget_decimal": strict_row.reserved_budget_decimal,
+                "stated_compiled_notional_decimal": (
+                    strict_row.stated_compiled_notional_decimal
+                ),
                 "policy_membership_classification": (
                     "OUTSIDE_POLICY_UNIVERSE" if outside else role
                 ),
