@@ -80,7 +80,7 @@ MMI_GROUNDED_PROMPT_EXPECTED_RESPONSE_SCHEMA_VERSION: Final = (
 )
 _MMI_GROUNDED_PROMPT_V2_SCHEMA_VERSION: Final = "mmi_grounded_prompt_v2"
 _MMI_GROUNDED_PROMPT_V2_INSTRUCTION_SET_VERSION: Final = (
-    "mmi_grounded_prompt_instruction_set_v2"
+    "mmi_grounded_prompt_instruction_set_v3"
 )
 _MMI_GROUNDED_ANALYSIS_RESPONSE_V2_SCHEMA_VERSION: Final = (
     "mmi_grounded_analysis_response_v2"

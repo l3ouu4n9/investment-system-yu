@@ -398,7 +398,7 @@ def test_g2_builds_exact_closed_report_only_artifact(
     assert artifact["authority_effect"] == "NONE"
     assert artifact["manual_handoff_required"] is True
     assert artifact["instruction_set_version"] == (
-        "mmi_grounded_prompt_instruction_set_v2"
+        "mmi_grounded_prompt_instruction_set_v3"
     )
     assert artifact["expected_response_schema_version"] == (
         "mmi_grounded_analysis_response_v2"
@@ -544,6 +544,26 @@ def test_g2_prompt_preserves_manual_and_non_authority_boundary(
     assert "ANCHOR_ASSOCIATIONS_STATUS=AVAILABLE\n" not in prompt
     assert "SCHEDULED_EVENTS_STATUS=AVAILABLE\n" not in prompt
     assert "REGIME_OBSERVATION_STATUS=AVAILABLE\n" not in prompt
+
+
+def test_g2_prompt_requires_each_referenced_view_to_include_own_reference(
+    inputs: _Inputs,
+) -> None:
+    prompt = _build_prompt(inputs)["prompt_text"]
+    assert type(prompt) is str
+    assert (
+        "UNAVAILABLE requires null rationale and no references; every other "
+        "evidence status requires a nonempty rationale and 1-8 unique allowed "
+        "references."
+    ) in prompt
+    assert (
+        "For every non-UNAVAILABLE instrument view, references must include "
+        "that instrument's own source-bound POLICY.INSTRUMENT.NNNN reference."
+    ) in prompt
+    assert (
+        "Its position in the references array is not significant."
+        in prompt
+    )
 
 
 def test_g2_prompt_text_utf8_guard_accepts_exact_limit() -> None:

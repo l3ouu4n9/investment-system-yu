@@ -34,7 +34,7 @@
       "$ref": "#/$defs/sha256"
     },
     "instruction_set_version": {
-      "const": "mmi_grounded_prompt_instruction_set_v2"
+      "const": "mmi_grounded_prompt_instruction_set_v3"
     },
     "expected_response_schema_version": {
       "const": "mmi_grounded_analysis_response_v2"

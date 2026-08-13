@@ -73,7 +73,7 @@ def _artifact() -> dict[str, object]:
         "authority_effect": "NONE",
         "analyst_visible_evidence_view_identity_sha256": SHA256,
         "instruction_set_version": (
-            "mmi_grounded_prompt_instruction_set_v2"
+            "mmi_grounded_prompt_instruction_set_v3"
         ),
         "expected_response_schema_version": (
             "mmi_grounded_analysis_response_v2"

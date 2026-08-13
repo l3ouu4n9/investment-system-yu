@@ -566,6 +566,56 @@ def test_evidence_status_conditional_branches_are_enforced(
             _build(inputs, payload=payload)
 
 
+def test_non_unavailable_instrument_view_accepts_own_reference_at_any_position(
+    inputs: _Inputs,
+) -> None:
+    own_reference = "POLICY.INSTRUMENT.0001"
+    for references in (
+        [own_reference],
+        ["POLICY.INSTRUMENT.0002", own_reference],
+    ):
+        payload = _payload(inputs)
+        view = payload["instrument_views"][0]  # type: ignore[index]
+        assert type(view) is dict
+        view["evidence_status"] = "INSUFFICIENT_EVIDENCE"
+        view["rationale_12m_plus"] = "Source-bound evidence remains limited."
+        view["references"] = references
+        artifact = _build(inputs, payload=payload)
+        assert artifact["response_payload"] == payload
+
+
+def test_non_unavailable_instrument_view_requires_own_reference(
+    inputs: _Inputs,
+) -> None:
+    payload = _payload(inputs)
+    view = payload["instrument_views"][0]  # type: ignore[index]
+    assert type(view) is dict
+    view["evidence_status"] = "INSUFFICIENT_EVIDENCE"
+    view["rationale_12m_plus"] = "Source-bound evidence remains limited."
+    view["references"] = ["POLICY.INSTRUMENT.0002"]
+    with pytest.raises(MmiValidatedGroundedAnalysisResponseV2Error) as exc:
+        _build(inputs, payload=payload)
+    assert exc.value.code == (
+        "MMI_VALIDATED_RESPONSE_V2_INSTRUMENT_REFERENCE_MISMATCH"
+    )
+
+
+def test_unavailable_instrument_views_remain_valid_without_references(
+    inputs: _Inputs,
+) -> None:
+    payload = _payload(inputs)
+    artifact = _build(inputs, payload=payload)
+    views = artifact["response_payload"]["instrument_views"]  # type: ignore[index]
+    assert type(views) is list
+    assert all(
+        type(view) is dict
+        and view.get("evidence_status") == "UNAVAILABLE"
+        and view.get("rationale_12m_plus") is None
+        and view.get("references") == []
+        for view in views
+    )
+
+
 def test_component_constants_and_source_reference_membership_are_enforced(
     inputs: _Inputs,
 ) -> None:

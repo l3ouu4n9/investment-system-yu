@@ -88,7 +88,7 @@ _PROMPT_PREFIX: Final = (
     "VERSION_AND_IDENTITY\n"
     "SCHEMA_VERSION=mmi_grounded_prompt_v2\n"
     "ARTIFACT_KIND=MMI_GROUNDED_PROMPT\n"
-    "INSTRUCTION_SET_VERSION=mmi_grounded_prompt_instruction_set_v2\n"
+    f"INSTRUCTION_SET_VERSION={_MMI_GROUNDED_PROMPT_V2_INSTRUCTION_SET_VERSION}\n"
     "EXPECTED_RESPONSE_SCHEMA_VERSION=mmi_grounded_analysis_response_v2\n"
     "PROMPT_CONTEXT_BINDING_SHA256="
 )
@@ -169,6 +169,9 @@ _PROMPT_SUFFIX: Final = (
     "UNAVAILABLE requires null rationale and no references; every other "
     "evidence status requires a nonempty rationale and 1-8 unique allowed "
     "references.\n"
+    "For every non-UNAVAILABLE instrument view, references must include "
+    "that instrument's own source-bound POLICY.INSTRUMENT.NNNN reference. "
+    "Its position in the references array is not significant.\n"
     "Each qualitative array item and the summary contain exactly text, "
     "references, and boolean hypothesis fields, with 1-8 unique allowed "
     "references.\n"

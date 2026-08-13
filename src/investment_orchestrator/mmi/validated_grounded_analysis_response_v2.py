@@ -347,9 +347,9 @@ def _validate_payload_schema(
     _validate_response_payload_canonical_size(payload)
 
 
-def _expected_instrument_tickers(
+def _source_bound_instrument_rows(
     view: Mapping[str, object],
-) -> tuple[str, ...]:
+) -> tuple[tuple[str, str], ...]:
     try:
         policy_view = view["policy_view"]
         if type(policy_view) is not dict:
@@ -357,16 +357,27 @@ def _expected_instrument_tickers(
         instruments = policy_view["analysis_instruments"]
         if type(instruments) is not list:
             raise TypeError
-        tickers = tuple(
-            item["ticker"]
-            for item in instruments
+        rows = tuple(
+            (
+                item["ticker"],
+                f"POLICY.INSTRUMENT.{index:04d}",
+            )
+            for index, item in enumerate(instruments, 1)
             if type(item) is dict and type(item.get("ticker")) is str
         )
     except (KeyError, TypeError):
         _fail("MMI_VALIDATED_RESPONSE_V2_UPSTREAM_INVALID")
-    if len(tickers) != len(instruments):
+    if len(rows) != len(instruments):
         _fail("MMI_VALIDATED_RESPONSE_V2_UPSTREAM_INVALID")
-    return tickers
+    return rows
+
+
+def _expected_instrument_tickers(
+    view: Mapping[str, object],
+) -> tuple[str, ...]:
+    return tuple(
+        ticker for ticker, _ in _source_bound_instrument_rows(view)
+    )
 
 
 def _require_instrument_equality(
@@ -395,26 +406,23 @@ def _require_instrument_equality(
 def _source_bound_reference_catalog(
     view: Mapping[str, object],
 ) -> frozenset[str]:
+    instrument_rows = _source_bound_instrument_rows(view)
     try:
-        policy_view = view["policy_view"]
         limitations = view["known_view_limitations"]
         portfolio_view = view["portfolio_view"]
         if (
-            type(policy_view) is not dict
-            or type(limitations) is not list
+            type(limitations) is not list
             or type(portfolio_view) is not dict
         ):
             raise TypeError
-        instruments = policy_view["analysis_instruments"]
         presence_status = portfolio_view["presence_status"]
-        if type(instruments) is not list or type(presence_status) is not str:
+        if type(presence_status) is not str:
             raise TypeError
     except (KeyError, TypeError):
         _fail("MMI_VALIDATED_RESPONSE_V2_UPSTREAM_INVALID")
     allowed = set(_ALWAYS_ALLOWED_REFERENCES)
     allowed.update(
-        f"POLICY.INSTRUMENT.{index:04d}"
-        for index in range(1, len(instruments) + 1)
+        reference for _, reference in instrument_rows
     )
     allowed.update(
         f"LIMITATION.{index:04d}"
@@ -471,6 +479,37 @@ def _require_reference_membership(
         _fail("MMI_VALIDATED_RESPONSE_V2_REFERENCE_MISMATCH")
 
 
+def _require_instrument_reference_correlation(
+    *,
+    payload: Mapping[str, object],
+    view: Mapping[str, object],
+) -> None:
+    instrument_views = payload.get("instrument_views")
+    if type(instrument_views) is not list:
+        _fail("MMI_VALIDATED_RESPONSE_V2_PAYLOAD_SCHEMA_INVALID")
+    expected_rows = _source_bound_instrument_rows(view)
+    if len(instrument_views) != len(expected_rows):
+        _fail("MMI_VALIDATED_RESPONSE_V2_INSTRUMENT_MISMATCH")
+    for item, (_, required_reference) in zip(
+        instrument_views,
+        expected_rows,
+        strict=True,
+    ):
+        if type(item) is not dict:
+            _fail("MMI_VALIDATED_RESPONSE_V2_PAYLOAD_SCHEMA_INVALID")
+        evidence_status = item.get("evidence_status")
+        references = item.get("references")
+        if type(evidence_status) is not str or type(references) is not list:
+            _fail("MMI_VALIDATED_RESPONSE_V2_PAYLOAD_SCHEMA_INVALID")
+        if (
+            evidence_status != "UNAVAILABLE"
+            and required_reference not in references
+        ):
+            _fail(
+                "MMI_VALIDATED_RESPONSE_V2_INSTRUMENT_REFERENCE_MISMATCH"
+            )
+
+
 def _artifact_identity(artifact: dict[str, object]) -> str:
     try:
         return record_identity_sha256(
@@ -493,6 +532,7 @@ def _derive_provisional_artifact(
 ) -> dict[str, object]:
     _require_instrument_equality(payload=payload, view=view)
     _require_reference_membership(payload=payload, view=view)
+    _require_instrument_reference_correlation(payload=payload, view=view)
     artifact = _provisional_artifact(
         envelope_identity=envelope_identity,
         payload=payload,
