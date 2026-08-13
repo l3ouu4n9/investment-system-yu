@@ -200,6 +200,10 @@ def test_p2a_files_import_no_qualitative_or_consume_types() -> None:
 
 def test_new_p2a_symbols_have_no_other_production_consumer() -> None:
     src_root = repo_root() / "src" / "investment_orchestrator"
+    # P2B is the first explicitly authorized production consumer of
+    # H1MappedResearchSelectionProjection (as a parameter/type annotation).
+    # It does NOT consume the builder, composite, or threading-seam symbols —
+    # those remain exclusively internal to the defining files below.
     guarded_symbols = (
         "H1MappedResearchSelectionProjection",
         "build_h1_mapped_research_selection_projection",
@@ -210,6 +214,13 @@ def test_new_p2a_symbols_have_no_other_production_consumer() -> None:
         src_root / "state" / "research_availability.py",
         src_root / "workflow" / "step1_research.py",
     }
+    # P2B is authorized to import H1MappedResearchSelectionProjection only.
+    p2b_observer = (
+        src_root
+        / "observability"
+        / "report_only_phase3_same_run_research_admission.py"
+    )
+    p2b_allowed_symbols = {"H1MappedResearchSelectionProjection"}
     offenders: list[str] = []
     for path in sorted(src_root.rglob("*.py")):
         if path in defining_files:
@@ -217,5 +228,7 @@ def test_new_p2a_symbols_have_no_other_production_consumer() -> None:
         text = path.read_text(encoding="utf-8")
         for symbol in guarded_symbols:
             if symbol in text:
+                if path == p2b_observer and symbol in p2b_allowed_symbols:
+                    continue
                 offenders.append(f"{path}:{symbol}")
     assert offenders == []
