@@ -324,3 +324,17 @@ TICKER | lt_shares_sellable | acquired_before_date | lot_selection_mode | lt_cos
 
 (4) SELL_POLICY_FLAGS（optional）
 - WASH_SALE_SAFE | false
+
+[STRICT_POSITIVE_ETF_POSITIONS_V1]
+schema_version = strict_positive_etf_positions_v1
+portfolio_scope_id = yu_etf_portfolio
+operator_scope_complete = true
+TICKER | shares
+GRID | 5
+IGV | 5
+QQQ | 83
+SMH | 23
+VOO | 58
+VT | 5
+VTI | 38
+[/STRICT_POSITIVE_ETF_POSITIONS_V1]
