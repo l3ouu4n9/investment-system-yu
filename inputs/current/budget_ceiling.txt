@@ -1,0 +1,3 @@
+schema_version = report_only_budget_ceiling_v1
+currency = USD
+maximum_total_unfilled_buy_commitment = 50000
