@@ -1,0 +1,3 @@
+schema_version = report_only_increment_fraction_v1
+basis = total_holdings_exposure
+increment_fraction = 0.1
