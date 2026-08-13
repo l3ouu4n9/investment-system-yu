@@ -195,8 +195,73 @@ def test_public_observer_has_no_bare_date_or_session_bypass() -> None:
         "ExposureObservationStatus",
         "ExposurePosition",
         "ExposureProjection",
+        "StrictHoldingsDomain",
+        "StrictHoldingsDomainError",
+        "capture_current_validated_strict_holdings_domain",
         "observe_current_report_only_holdings_exposure",
     )
+
+
+def test_strict_holdings_domain_accessor_reuses_existing_source_capture_and_parser(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _strategy_source, portfolio_source = _prepared_current_root(
+        tmp_path,
+        portfolio_bytes=_portfolio(("SMH | 3", "QQQ | 2.5")),
+    )
+
+    def _capture(role: MmiSourceRole, *, expected_source_sha256: str):
+        assert role is MmiSourceRole.PORTFOLIO_SNAPSHOT
+        assert expected_source_sha256 == "b" * 64
+        return type("Result", (), {
+            "valid": True,
+            "authority_effect": "NONE",
+            "source": portfolio_source,
+            "reason_codes": (),
+        })()
+
+    monkeypatch.setattr(exposure, "capture_current_mmi_source", _capture)
+    domain = exposure.capture_current_validated_strict_holdings_domain(
+        portfolio_snapshot_expected_sha256="b" * 64,
+    )
+    assert domain.portfolio_source_sha256 == portfolio_source.source_record[
+        "observed_sha256"
+    ]
+    assert domain.portfolio_source_sha256 == hashlib.sha256(
+        portfolio_source.raw_bytes
+    ).hexdigest()
+    assert domain.portfolio_scope_id == "etf_strategy_portfolio_v1"
+    assert domain.tickers == ("SMH", "QQQ")
+
+
+def test_strict_holdings_domain_binds_the_actual_fixed_source_sha(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    portfolio_bytes = _portfolio(("QQQ | 2.5", "SMH | 3"))
+    _prepared_current_root(tmp_path, portfolio_bytes=portfolio_bytes)
+    expected_sha256 = hashlib.sha256(portfolio_bytes).hexdigest()
+
+    def _capture(role: MmiSourceRole, *, expected_source_sha256: str):
+        return _capture_mmi_source_at_root(
+            tmp_path,
+            role=role,
+            expected_source_sha256=expected_source_sha256,
+        )
+
+    monkeypatch.setattr(exposure, "capture_current_mmi_source", _capture)
+    domain = exposure.capture_current_validated_strict_holdings_domain(
+        portfolio_snapshot_expected_sha256=expected_sha256,
+    )
+    assert domain.portfolio_source_sha256 == expected_sha256
+    assert domain.portfolio_source_sha256 == hashlib.sha256(portfolio_bytes).hexdigest()
+
+    with pytest.raises(exposure.StrictHoldingsDomainError) as exc_info:
+        exposure.capture_current_validated_strict_holdings_domain(
+            portfolio_snapshot_expected_sha256="0" * 64,
+        )
+    assert exc_info.value.reason_codes == ("MMI_SOURCE_EXPECTED_SHA256_MISMATCH",)
 
 
 def test_complete_fresh_sources_return_valid_report_only_with_bound_calendar_provenance(
@@ -509,6 +574,7 @@ def test_observer_is_not_imported_by_existing_authority_bearing_flows() -> None:
     root = Path(__file__).resolve().parents[2] / "src/investment_orchestrator"
     module_file = root / "observability/report_only_holdings_exposure.py"
     calendar_file = root / "market/us_equity_session_calendar.py"
+    capture_file = root / "market/us_equity_yfinance_valuation_capture.py"
     prohibited = (
         "investment_orchestrator.workflow",
         "investment_orchestrator.state",
@@ -521,9 +587,11 @@ def test_observer_is_not_imported_by_existing_authority_bearing_flows() -> None:
     assert all(value not in module_text for value in prohibited)
     calendar_text = calendar_file.read_text(encoding="utf-8")
     assert all(value not in calendar_text for value in prohibited)
+    capture_text = capture_file.read_text(encoding="utf-8")
+    assert all(value not in capture_text for value in prohibited)
     assert all(
         "report_only_holdings_exposure" not in candidate.read_text(encoding="utf-8")
         and "us_equity_session_calendar" not in candidate.read_text(encoding="utf-8")
         for candidate in root.rglob("*.py")
-        if candidate not in {module_file, calendar_file}
+        if candidate not in {module_file, calendar_file, capture_file}
     )

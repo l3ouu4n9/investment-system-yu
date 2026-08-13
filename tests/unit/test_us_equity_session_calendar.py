@@ -78,7 +78,9 @@ def test_public_freshness_entry_has_no_bare_evaluation_or_session_bypass() -> No
         "CompletedUsEquitySession",
         "MarkFreshnessResult",
         "MarkFreshnessStatus",
+        "UsEquitySessionResolutionError",
         "assess_manual_mark_freshness",
+        "resolve_trusted_completed_us_equity_session",
     )
     parameters = inspect.signature(calendar.assess_manual_mark_freshness).parameters
     assert set(parameters) == {"mark_as_of_date", "run_context"}
@@ -93,6 +95,32 @@ def test_public_freshness_entry_has_no_bare_evaluation_or_session_bypass() -> No
     assert result.mark_as_of_date == date(2026, 8, 12)
     assert "mark_as_of_date" in calendar.MarkFreshnessResult.__dataclass_fields__
     assert "mark_as_of_date" not in calendar.CompletedUsEquitySession.__dataclass_fields__
+
+
+def test_completed_session_factory_has_no_caller_date_or_calendar_bypass() -> None:
+    parameters = inspect.signature(
+        calendar.resolve_trusted_completed_us_equity_session
+    ).parameters
+    assert set(parameters) == {"run_context"}
+    assert not {
+        "evaluation_date",
+        "evaluation_timestamp",
+        "session_date",
+        "calendar_path",
+        "calendar_id",
+        "calendar_schedule_sha256",
+    } & set(parameters)
+    completed = calendar.resolve_trusted_completed_us_equity_session(
+        run_context=_context(datetime(2026, 8, 12, 20, tzinfo=timezone.utc)),
+    )
+    assert completed.session_date == "2026-08-12"
+    forged = object.__new__(MmiProjectionRunContext)
+    with pytest.raises(calendar.UsEquitySessionResolutionError) as exc_info:
+        calendar.resolve_trusted_completed_us_equity_session(run_context=forged)
+    assert exc_info.value.status is calendar.MarkFreshnessStatus.INVALID
+    assert exc_info.value.reason_codes == (
+        "US_EQUITY_SESSION_RUN_CONTEXT_INVALID",
+    )
 
 
 def test_exact_approved_schedule_loads_without_a_production_session_count_oracle() -> None:

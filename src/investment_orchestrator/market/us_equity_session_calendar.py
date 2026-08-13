@@ -37,7 +37,9 @@ __all__ = (
     "CompletedUsEquitySession",
     "MarkFreshnessResult",
     "MarkFreshnessStatus",
+    "UsEquitySessionResolutionError",
     "assess_manual_mark_freshness",
+    "resolve_trusted_completed_us_equity_session",
 )
 
 
@@ -62,6 +64,19 @@ class MarkFreshnessStatus(str, Enum):
     FRESH = "FRESH"
     UNAVAILABLE = "UNAVAILABLE"
     INVALID = "INVALID"
+
+
+class UsEquitySessionResolutionError(ValueError):
+    """Closed failure result for the narrow completed-session fact factory."""
+
+    def __init__(
+        self,
+        status: MarkFreshnessStatus,
+        reason_codes: tuple[str, ...],
+    ) -> None:
+        super().__init__(reason_codes[0] if reason_codes else status.value)
+        self.status = status
+        self.reason_codes = reason_codes
 
 
 @dataclass(frozen=True, slots=True)
@@ -350,6 +365,55 @@ def _resolve_latest_completed_session(
     )
 
 
+def _resolve_trusted_completed_us_equity_session(
+    *,
+    run_context: MmiProjectionRunContext,
+) -> tuple[CompletedUsEquitySession, _ValidatedSchedule]:
+    if not _mmi_projection_run_context_provenance_is_valid(run_context):
+        raise UsEquitySessionResolutionError(
+            MarkFreshnessStatus.INVALID,
+            ("US_EQUITY_SESSION_RUN_CONTEXT_INVALID",),
+        )
+    schedule, schedule_reasons, schedule_invalid = _load_approved_schedule()
+    if schedule_invalid:
+        raise UsEquitySessionResolutionError(
+            MarkFreshnessStatus.INVALID,
+            schedule_reasons,
+        )
+    if schedule is None:
+        raise UsEquitySessionResolutionError(
+            MarkFreshnessStatus.UNAVAILABLE,
+            schedule_reasons,
+        )
+    completed_session = _resolve_latest_completed_session(
+        schedule=schedule,
+        run_context=run_context,
+    )
+    if completed_session is None:
+        raise UsEquitySessionResolutionError(
+            MarkFreshnessStatus.UNAVAILABLE,
+            ("US_EQUITY_SESSION_CALENDAR_COVERAGE_INSUFFICIENT",),
+        )
+    return completed_session, schedule
+
+
+def resolve_trusted_completed_us_equity_session(
+    *,
+    run_context: MmiProjectionRunContext,
+) -> CompletedUsEquitySession:
+    """Return the one reviewed-calendar session fact for a trusted MMI run.
+
+    This intentionally accepts no caller date, session, calendar path, or
+    calendar identity.  It is the reusable acquisition seam for code that
+    needs the completed session before it requests external data; the calendar
+    owner remains the only owner of session resolution and coverage semantics.
+    """
+    completed_session, _schedule = _resolve_trusted_completed_us_equity_session(
+        run_context=run_context,
+    )
+    return completed_session
+
+
 def assess_manual_mark_freshness(
     *,
     mark_as_of_date: date,
@@ -364,36 +428,23 @@ def assess_manual_mark_freshness(
     assessed_mark_as_of_date = (
         mark_as_of_date if type(mark_as_of_date) is date else None
     )
-    if (
-        not _mmi_projection_run_context_provenance_is_valid(run_context)
-        or assessed_mark_as_of_date is None
-    ):
+    if assessed_mark_as_of_date is None:
         return _result(
             MarkFreshnessStatus.INVALID,
             ("US_EQUITY_SESSION_RUN_CONTEXT_OR_MARK_DATE_INVALID",),
             mark_as_of_date=assessed_mark_as_of_date,
         )
-    schedule, schedule_reasons, schedule_invalid = _load_approved_schedule()
-    if schedule_invalid:
-        return _result(
-            MarkFreshnessStatus.INVALID,
-            schedule_reasons,
-            mark_as_of_date=assessed_mark_as_of_date,
+    try:
+        completed_session, schedule = _resolve_trusted_completed_us_equity_session(
+            run_context=run_context,
         )
-    if schedule is None:
+    except UsEquitySessionResolutionError as exc:
+        reason_codes = exc.reason_codes
+        if reason_codes == ("US_EQUITY_SESSION_RUN_CONTEXT_INVALID",):
+            reason_codes = ("US_EQUITY_SESSION_RUN_CONTEXT_OR_MARK_DATE_INVALID",)
         return _result(
-            MarkFreshnessStatus.UNAVAILABLE,
-            schedule_reasons,
-            mark_as_of_date=assessed_mark_as_of_date,
-        )
-    completed_session = _resolve_latest_completed_session(
-        schedule=schedule,
-        run_context=run_context,
-    )
-    if completed_session is None:
-        return _result(
-            MarkFreshnessStatus.UNAVAILABLE,
-            ("US_EQUITY_SESSION_CALENDAR_COVERAGE_INSUFFICIENT",),
+            exc.status,
+            reason_codes,
             mark_as_of_date=assessed_mark_as_of_date,
         )
     if assessed_mark_as_of_date < _COVERAGE_START_DATE:

@@ -1,10 +1,12 @@
 """Strict, report-only ETF holdings and manually supplied mark observation.
 
 This observer is intentionally disconnected from every current workflow.  Its
-sole public entry point captures the existing source-bound MMI strategy and
-portfolio sources, reads an optional manual valuation source, and returns an
-in-memory diagnostic.  It never publishes, prompts, grants permission, opens
-a gate, compiles an order, or contacts a provider.
+public observer captures the existing source-bound MMI strategy and portfolio
+sources, reads an optional manual valuation source, and returns an in-memory
+diagnostic.  A second narrow accessor exposes only the existing parser-owned
+strict holdings domain for a separate report-only acquisition boundary.  This
+module never publishes, prompts, grants permission, opens a gate, compiles an
+order, or contacts a provider.
 
 The strict positions section is optional and is the only holdings syntax this
 module reads.  It has no date: the existing ``# updated YYYY-MM-DD`` portfolio
@@ -63,6 +65,9 @@ __all__ = (
     "ExposureObservationStatus",
     "ExposurePosition",
     "ExposureProjection",
+    "StrictHoldingsDomain",
+    "StrictHoldingsDomainError",
+    "capture_current_validated_strict_holdings_domain",
     "observe_current_report_only_holdings_exposure",
 )
 
@@ -109,6 +114,20 @@ class _ExposureInputError(ValueError):
         self.code = code
 
 
+class StrictHoldingsDomainError(ValueError):
+    """Closed current-source failure from the existing strict-holdings owner."""
+
+    def __init__(
+        self,
+        reason_codes: tuple[str, ...],
+        *,
+        unavailable: bool,
+    ) -> None:
+        super().__init__(reason_codes[0] if reason_codes else "STRICT_HOLDINGS_INVALID")
+        self.reason_codes = reason_codes
+        self.unavailable = unavailable
+
+
 @dataclass(frozen=True, slots=True)
 class _CapturedManualValuationSource:
     raw_bytes: bytes
@@ -130,6 +149,15 @@ class _StrictPosition:
 class _StrictHoldings:
     portfolio_scope_id: str
     positions: tuple[_StrictPosition, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class StrictHoldingsDomain:
+    """One source-bound, parser-owned strict holdings ticker domain."""
+
+    portfolio_source_sha256: str
+    portfolio_scope_id: str
+    tickers: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -510,6 +538,47 @@ def _capture_current_mmi_source(
         return result.source, (), False
     return None, reasons or ("MMI_SOURCE_CAPTURE_INVALID",), bool(
         set(reasons) - _CAPTURE_ABSENT_CODES
+    )
+
+
+def capture_current_validated_strict_holdings_domain(
+    *,
+    portfolio_snapshot_expected_sha256: str,
+) -> StrictHoldingsDomain:
+    """Read the fixed current portfolio source through its existing owner.
+
+    This exposes only the parser-owned scope and ticker domain for a separate
+    report-only acquisition boundary.  It accepts no source path, ticker list,
+    valuation date, or holdings facts supplied outside the fixed MMI capture.
+    """
+    source, reasons, source_invalid = _capture_current_mmi_source(
+        MmiSourceRole.PORTFOLIO_SNAPSHOT,
+        expected_sha256=portfolio_snapshot_expected_sha256,
+    )
+    if source is None:
+        raise StrictHoldingsDomainError(
+            reasons,
+            unavailable=not source_invalid,
+        )
+    portfolio_source_sha256 = source.source_record.get("observed_sha256")
+    if type(portfolio_source_sha256) is not str:
+        raise StrictHoldingsDomainError(
+            ("REPORT_ONLY_EXPOSURE_PORTFOLIO_SOURCE_IDENTITY_INVALID",),
+            unavailable=False,
+        )
+    try:
+        holdings = _parse_strict_holdings(source.raw_bytes)
+    except _ExposureInputError as exc:
+        raise StrictHoldingsDomainError(
+            (exc.code,),
+            unavailable=(
+                exc.code == "REPORT_ONLY_EXPOSURE_STRICT_HOLDINGS_SECTION_ABSENT"
+            ),
+        ) from None
+    return StrictHoldingsDomain(
+        portfolio_source_sha256=portfolio_source_sha256,
+        portfolio_scope_id=holdings.portfolio_scope_id,
+        tickers=tuple(position.ticker for position in holdings.positions),
     )
 
 
