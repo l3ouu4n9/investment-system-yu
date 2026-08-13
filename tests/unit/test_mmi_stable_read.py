@@ -199,6 +199,22 @@ def test_stable_read_capability_unavailable(mock_open, tmp_path: Path) -> None:
     assert exc_info.value.code == MmiStableReadErrorCode.STABLE_READ_CAPABILITY_UNAVAILABLE
 
 
+@pytest.mark.parametrize("error_number", (errno.EACCES, errno.EPERM))
+@mock.patch("investment_orchestrator.mmi.stable_read.os.open")
+def test_stable_read_preserves_controlled_input_errno(
+    mock_open,
+    tmp_path: Path,
+    error_number: int,
+) -> None:
+    mock_open.side_effect = OSError(error_number, "permission denied")
+
+    with pytest.raises(MmiStableReadError) as exc_info:
+        stable_read_exact_bytes(999, "test.txt", maximum_bytes=100)
+
+    assert exc_info.value.code == MmiStableReadErrorCode.STABLE_READ_INPUT_INVALID
+    assert exc_info.value.os_error_errno == error_number
+
+
 @mock.patch("investment_orchestrator.mmi.stable_read.os.open")
 def test_stable_read_unexpected_error_not_swallowed(mock_open, tmp_path: Path) -> None:
     # A totally unexpected OS error like EIO or something not in the controlled list

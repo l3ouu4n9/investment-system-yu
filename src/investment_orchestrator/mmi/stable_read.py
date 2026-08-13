@@ -21,9 +21,15 @@ class MmiStableReadErrorCode(str, Enum):
 
 
 class MmiStableReadError(RuntimeError):
-    def __init__(self, code: MmiStableReadErrorCode) -> None:
+    def __init__(
+        self,
+        code: MmiStableReadErrorCode,
+        *,
+        os_error_errno: int | None = None,
+    ) -> None:
         super().__init__(code.value)
         self.code = code
+        self.os_error_errno = os_error_errno
 
 
 _CONTROLLED_INPUT_ERRNOS = frozenset(
@@ -46,9 +52,15 @@ _CONTROLLED_CAPABILITY_ERRNOS = frozenset(
 
 def _translate_stable_read_oserror(exc: OSError) -> NoReturn:
     if exc.errno in _CONTROLLED_INPUT_ERRNOS or exc.errno == errno.EINVAL:
-        raise MmiStableReadError(MmiStableReadErrorCode.STABLE_READ_INPUT_INVALID)
+        raise MmiStableReadError(
+            MmiStableReadErrorCode.STABLE_READ_INPUT_INVALID,
+            os_error_errno=exc.errno,
+        ) from exc
     if exc.errno in _CONTROLLED_CAPABILITY_ERRNOS:
-        raise MmiStableReadError(MmiStableReadErrorCode.STABLE_READ_CAPABILITY_UNAVAILABLE)
+        raise MmiStableReadError(
+            MmiStableReadErrorCode.STABLE_READ_CAPABILITY_UNAVAILABLE,
+            os_error_errno=exc.errno,
+        ) from exc
     raise exc
 
 

@@ -1,17 +1,26 @@
-"""Focused contracts for the isolated holdings/valuation observer."""
+"""Focused contracts for the network-free holdings/capture observer."""
 
 from __future__ import annotations
 
-from dataclasses import replace
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
+import errno
 import hashlib
 import inspect
-import json
 from pathlib import Path
 
 import pytest
 
 from investment_orchestrator.common.paths import repo_root
+from investment_orchestrator.market import (
+    us_equity_session_calendar as calendar,
+)
+from investment_orchestrator.market import (
+    us_equity_yfinance_valuation_capture as capture,
+)
+from investment_orchestrator.market.us_equity_session_calendar import (
+    CompletedUsEquitySession,
+)
+from investment_orchestrator.mmi.canonical import canonical_json_bytes
 from investment_orchestrator.mmi.contracts import (
     MmiSourceRole,
     _begin_mmi_projection_run_with_clock,
@@ -19,10 +28,21 @@ from investment_orchestrator.mmi.contracts import (
 from investment_orchestrator.mmi.source_capture import (
     _capture_mmi_source_at_root,
 )
+from investment_orchestrator.mmi.stable_read import (
+    MmiStableReadError,
+    MmiStableReadErrorCode,
+)
 from investment_orchestrator.observability import (
     report_only_holdings_exposure as exposure,
 )
-from investment_orchestrator.market import us_equity_session_calendar as calendar
+from investment_orchestrator.observability.report_only_holdings_exposure import (
+    StrictHoldingsDomain,
+)
+
+
+_SCHEDULE_SHA256 = (
+    "a7142dcf13f52f30f07cc48942abe1e325ace21d644a2198c5e5667cf9d20007"
+)
 
 
 class _FixedClock:
@@ -30,12 +50,12 @@ class _FixedClock:
         return datetime(2026, 8, 12, 20, tzinfo=timezone.utc)
 
 
-def _strict_section(rows: tuple[str, ...] = ("QQQ | 2.5", "SMH | 3")) -> bytes:
+def _strict_section(rows: tuple[str, ...]) -> bytes:
     return "\n".join(
         (
             "[STRICT_POSITIVE_ETF_POSITIONS_V1]",
             "schema_version = strict_positive_etf_positions_v1",
-            "portfolio_scope_id = etf_strategy_portfolio_v1",
+            "portfolio_scope_id = yu_etf_portfolio",
             "operator_scope_complete = true",
             "TICKER | shares",
             *rows,
@@ -45,34 +65,12 @@ def _strict_section(rows: tuple[str, ...] = ("QQQ | 2.5", "SMH | 3")) -> bytes:
 
 
 def _portfolio(rows: tuple[str, ...] = ("QQQ | 2.5", "SMH | 3")) -> bytes:
-    raw = (repo_root() / "inputs/current/portfolio_snapshot.txt").read_bytes()
-    return raw + b"\n" + _strict_section(rows) + b"\n"
-
-
-def _valuation(
-    marks: list[dict[str, str]] | None = None,
-    *,
-    as_of: str = "2026-08-12",
-    currency: str = "USD",
-    extra: dict[str, object] | None = None,
-) -> bytes:
-    payload: dict[str, object] = {
-        "schema_version": "manual_valuation_marks_v1",
-        "currency": currency,
-        "mark_source_id": "operator_reconciled_close",
-        "mark_as_of_date": as_of,
-        "marks": marks
-        if marks is not None
-        else [
-            {"ticker": "QQQ", "mark": "400.125"},
-            {"ticker": "SMH", "mark": "200.5"},
-        ],
-    }
-    if extra:
-        payload.update(extra)
-    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
-        "utf-8"
+    current = (repo_root() / "inputs/current/portfolio_snapshot.txt").read_bytes()
+    base, marker, _existing = current.partition(
+        b"\n[STRICT_POSITIVE_ETF_POSITIONS_V1]\n"
     )
+    assert marker
+    return base + b"\n" + _strict_section(rows) + b"\n"
 
 
 def _source(root: Path, role: MmiSourceRole):
@@ -90,19 +88,87 @@ def _source(root: Path, role: MmiSourceRole):
     return result.source
 
 
-def _prepared_current_root(tmp_path: Path, *, portfolio_bytes: bytes, valuation_bytes: bytes | None = None) -> tuple[object, object]:
+def _prepared_current_root(
+    tmp_path: Path,
+    *,
+    portfolio_bytes: bytes,
+    manual_valuation_bytes: bytes | None = None,
+) -> tuple[object, object]:
     current = tmp_path / "inputs/current"
-    current.mkdir(parents=True)
+    current.mkdir(parents=True, exist_ok=True)
     (current / "strategy_settings.yaml").write_bytes(
         (repo_root() / "inputs/current/strategy_settings.yaml").read_bytes()
     )
     (current / "portfolio_snapshot.txt").write_bytes(portfolio_bytes)
-    if valuation_bytes is not None:
-        (current / "manual_valuation_marks.json").write_bytes(valuation_bytes)
+    if manual_valuation_bytes is not None:
+        (current / "manual_valuation_marks.json").write_bytes(
+            manual_valuation_bytes
+        )
     return (
         _source(tmp_path, MmiSourceRole.STRATEGY_SETTINGS),
         _source(tmp_path, MmiSourceRole.PORTFOLIO_SNAPSHOT),
     )
+
+
+def _session(
+    *,
+    session_date: str = "2026-08-12",
+    official_close_timestamp_et: str = "2026-08-12T16:00:00-04:00",
+    trusted_evaluation_timestamp_utc: str = "2026-08-12T20:00:00Z",
+    calendar_schedule_sha256: str = _SCHEDULE_SHA256,
+) -> CompletedUsEquitySession:
+    return CompletedUsEquitySession(
+        authority_effect="NONE",
+        calendar_id="US_EQUITY_REGULAR",
+        calendar_schedule_sha256=calendar_schedule_sha256,
+        coverage_start_date="2026-01-01",
+        coverage_end_date="2026-12-31",
+        trusted_evaluation_timestamp_utc=trusted_evaluation_timestamp_utc,
+        session_date=session_date,
+        official_close_timestamp_et=official_close_timestamp_et,
+    )
+
+
+def _write_capture(
+    tmp_path: Path,
+    *,
+    portfolio_source_sha256: str,
+    tickers: tuple[str, ...],
+    marks: dict[str, str] | None = None,
+    completed_session: CompletedUsEquitySession | None = None,
+    mutate: callable | None = None,
+) -> bytes:
+    session = completed_session if completed_session is not None else _session()
+    payload = capture._capture_payload(
+        holdings=StrictHoldingsDomain(
+            portfolio_source_sha256=portfolio_source_sha256,
+            portfolio_scope_id="yu_etf_portfolio",
+            tickers=tickers,
+        ),
+        completed_session=session,
+        yfinance_version="1.4.1",
+        pandas_version="3.0.3",
+        marks=tuple(
+            {
+                "ticker": ticker,
+                "actual_data_date": session.session_date,
+                "provider_field": "Close",
+                "mark": (
+                    marks[ticker]
+                    if marks is not None
+                    else str(index + 100)
+                ),
+            }
+            for index, ticker in enumerate(sorted(tickers))
+        ),
+    )
+    if mutate is not None:
+        mutate(payload)
+    raw = canonical_json_bytes(payload, maximum_bytes=262_144)
+    path = tmp_path / "artifacts/current/us_equity_yfinance_valuation/capture.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(raw)
+    return raw
 
 
 def _observe(
@@ -110,25 +176,67 @@ def _observe(
     monkeypatch: pytest.MonkeyPatch,
     *,
     portfolio_bytes: bytes | None = None,
-    valuation_bytes: bytes | None = None,
+    capture_source_sha256: str | None = None,
+    capture_tickers: tuple[str, ...] | None = None,
+    capture_marks: dict[str, str] | None = None,
+    completed_session: CompletedUsEquitySession | None = None,
+    capture_raw: bytes | None = None,
+    manual_valuation_bytes: bytes | None = None,
 ):
+    selected_portfolio = portfolio_bytes if portfolio_bytes is not None else _portfolio()
     strategy_source, portfolio_source = _prepared_current_root(
         tmp_path,
-        portfolio_bytes=portfolio_bytes if portfolio_bytes is not None else _portfolio(),
-        valuation_bytes=valuation_bytes if valuation_bytes is not None else _valuation(),
+        portfolio_bytes=selected_portfolio,
+        manual_valuation_bytes=manual_valuation_bytes,
     )
+    try:
+        strict_holdings = exposure._parse_strict_holdings(selected_portfolio)
+    except exposure._ExposureInputError:
+        strict_holdings = None
+    if capture_raw is not None:
+        path = tmp_path / "artifacts/current/us_equity_yfinance_valuation/capture.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(capture_raw)
+    elif capture_source_sha256 is not False:
+        _write_capture(
+            tmp_path,
+            portfolio_source_sha256=(
+                capture_source_sha256
+                if capture_source_sha256 is not None
+                else portfolio_source.source_record["observed_sha256"]
+            ),
+            tickers=(
+                capture_tickers
+                if capture_tickers is not None
+                else (
+                    tuple(position.ticker for position in strict_holdings.positions)
+                    if strict_holdings is not None
+                    else ("QQQ",)
+                )
+            ),
+            marks=capture_marks,
+            completed_session=completed_session,
+        )
 
     def _capture(role: MmiSourceRole, *, expected_source_sha256: str):
-        assert expected_source_sha256 == ("a" * 64 if role is MmiSourceRole.STRATEGY_SETTINGS else "b" * 64)
+        assert expected_source_sha256 == (
+            "a" * 64
+            if role is MmiSourceRole.STRATEGY_SETTINGS
+            else "b" * 64
+        )
         return type("Result", (), {
             "valid": True,
             "authority_effect": "NONE",
-            "source": strategy_source if role is MmiSourceRole.STRATEGY_SETTINGS else portfolio_source,
+            "source": (
+                strategy_source
+                if role is MmiSourceRole.STRATEGY_SETTINGS
+                else portfolio_source
+            ),
             "reason_codes": (),
         })()
 
     monkeypatch.setattr(exposure, "capture_current_mmi_source", _capture)
-    monkeypatch.setattr(exposure, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(capture, "repo_root", lambda: tmp_path)
     monkeypatch.setattr(
         exposure,
         "begin_mmi_projection_run",
@@ -151,95 +259,29 @@ def test_strict_section_has_no_independent_holdings_date() -> None:
     assert exc_info.value.code == "REPORT_ONLY_EXPOSURE_STRICT_HOLDINGS_ROW_INVALID"
 
 
-def test_existing_canonical_portfolio_date_is_the_only_projection_date(
-    tmp_path: Path,
-) -> None:
-    strategy_source, portfolio_source = _prepared_current_root(
-        tmp_path,
-        portfolio_bytes=_portfolio(),
-        valuation_bytes=_valuation(),
-    )
-    run_context = exposure.begin_mmi_projection_run()
-    policy = exposure.build_mmi_policy_projection(
-        strategy_source,
-        run_context=run_context,
-    ).projection
-    assert isinstance(policy, dict)
-    projection_result = exposure.build_mmi_portfolio_snapshot_projection(
-        portfolio_source,
-        policy_projection=policy,
-        policy_source=strategy_source,
-        run_context=run_context,
-    )
-    assert projection_result.valid
-    assert isinstance(projection_result.projection, dict)
-    assert projection_result.projection["portfolio_source_date"] == "2026-08-12"
-    strict_holdings = exposure._parse_strict_holdings(portfolio_source.raw_bytes)
-    assert not hasattr(strict_holdings, "holdings_as_of_date")
-
-
-def test_public_observer_has_no_bare_date_or_session_bypass() -> None:
-    assert not hasattr(exposure, "build_report_only_holdings_exposure")
-    public_parameters = inspect.signature(
+def test_public_observer_has_no_caller_valuation_or_session_bypass() -> None:
+    parameters = inspect.signature(
         exposure.observe_current_report_only_holdings_exposure
     ).parameters
-    assert set(public_parameters) == {
+    assert set(parameters) == {
         "strategy_settings_expected_sha256",
         "portfolio_snapshot_expected_sha256",
     }
-    assert "evaluation_date" not in public_parameters
-    assert "evaluation_timestamp" not in public_parameters
-    assert "completed_trading_session_date" not in public_parameters
-    assert tuple(exposure.__all__) == (
-        "ExposureObservationResult",
-        "ExposureObservationStatus",
-        "ExposurePosition",
-        "ExposureProjection",
-        "StrictHoldingsDomain",
-        "StrictHoldingsDomainError",
-        "capture_current_validated_strict_holdings_domain",
-        "observe_current_report_only_holdings_exposure",
-    )
+    assert not {
+        "evaluation_date",
+        "evaluation_timestamp",
+        "completed_trading_session_date",
+        "capture_path",
+        "capture_sha256",
+        "valuation",
+    } & set(parameters)
 
 
-def test_strict_holdings_domain_accessor_reuses_existing_source_capture_and_parser(
+def test_strict_holdings_domain_accessor_binds_existing_observed_sha(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _strategy_source, portfolio_source = _prepared_current_root(
-        tmp_path,
-        portfolio_bytes=_portfolio(("SMH | 3", "QQQ | 2.5")),
-    )
-
-    def _capture(role: MmiSourceRole, *, expected_source_sha256: str):
-        assert role is MmiSourceRole.PORTFOLIO_SNAPSHOT
-        assert expected_source_sha256 == "b" * 64
-        return type("Result", (), {
-            "valid": True,
-            "authority_effect": "NONE",
-            "source": portfolio_source,
-            "reason_codes": (),
-        })()
-
-    monkeypatch.setattr(exposure, "capture_current_mmi_source", _capture)
-    domain = exposure.capture_current_validated_strict_holdings_domain(
-        portfolio_snapshot_expected_sha256="b" * 64,
-    )
-    assert domain.portfolio_source_sha256 == portfolio_source.source_record[
-        "observed_sha256"
-    ]
-    assert domain.portfolio_source_sha256 == hashlib.sha256(
-        portfolio_source.raw_bytes
-    ).hexdigest()
-    assert domain.portfolio_scope_id == "etf_strategy_portfolio_v1"
-    assert domain.tickers == ("SMH", "QQQ")
-
-
-def test_strict_holdings_domain_binds_the_actual_fixed_source_sha(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    portfolio_bytes = _portfolio(("QQQ | 2.5", "SMH | 3"))
+    portfolio_bytes = _portfolio(("SMH | 3", "QQQ | 2.5"))
     _prepared_current_root(tmp_path, portfolio_bytes=portfolio_bytes)
     expected_sha256 = hashlib.sha256(portfolio_bytes).hexdigest()
 
@@ -255,140 +297,234 @@ def test_strict_holdings_domain_binds_the_actual_fixed_source_sha(
         portfolio_snapshot_expected_sha256=expected_sha256,
     )
     assert domain.portfolio_source_sha256 == expected_sha256
-    assert domain.portfolio_source_sha256 == hashlib.sha256(portfolio_bytes).hexdigest()
-
-    with pytest.raises(exposure.StrictHoldingsDomainError) as exc_info:
-        exposure.capture_current_validated_strict_holdings_domain(
-            portfolio_snapshot_expected_sha256="0" * 64,
-        )
-    assert exc_info.value.reason_codes == ("MMI_SOURCE_EXPECTED_SHA256_MISMATCH",)
+    assert domain.tickers == ("SMH", "QQQ")
 
 
-def test_complete_fresh_sources_return_valid_report_only_with_bound_calendar_provenance(
+def test_valid_current_capture_returns_complete_decimal_valid_report_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    freshness_results: list[calendar.MarkFreshnessResult] = []
-    freshness_owner = exposure.assess_manual_mark_freshness
-
-    def _capture_freshness(**kwargs: object) -> calendar.MarkFreshnessResult:
-        result = freshness_owner(**kwargs)
-        freshness_results.append(result)
-        return result
-
-    monkeypatch.setattr(exposure, "assess_manual_mark_freshness", _capture_freshness)
+    marks = {"QQQ": "400.125", "SMH": "200.5"}
+    monkeypatch.setattr(
+        capture,
+        "_provider_modules",
+        lambda: (_ for _ in ()).throw(AssertionError("provider forbidden")),
+    )
     result = _observe(
         tmp_path,
         monkeypatch,
-        portfolio_bytes=_portfolio(("QQQ | 2.5", "SMH | 3", "VOO | 1")),
-        valuation_bytes=_valuation(
-            [
-                {"ticker": "QQQ", "mark": "400.125"},
-                {"ticker": "SMH", "mark": "200.5"},
-                {"ticker": "VOO", "mark": "500"},
-            ]
-        ),
+        capture_marks=marks,
+        manual_valuation_bytes=b'{"malformed":"manual data is not a fallback"}',
     )
+
     assert result.status is exposure.ExposureObservationStatus.VALID_REPORT_ONLY
     assert result.reason_codes == ("US_EQUITY_SESSION_MARK_DATE_FRESH",)
     assert result.authority_effect == "NONE"
     assert result.projection is not None
     assert result.projection.authority_effect == "NONE"
+    assert result.projection.capture_source_kind == "EXTERNAL_MARKET_DATA_CAPTURE"
+    assert result.projection.capture_provider_id == "YAHOO_FINANCE"
+    assert result.projection.capture_session_date == "2026-08-12"
+    assert result.projection.mark_ticker_domain == ("QQQ", "SMH")
+    assert [row.market_value for row in result.projection.positions] == [
+        "1000.3125",
+        "601.5",
+    ]
+    assert result.projection.total_market_value == "1601.8125"
     assert result.projection.calendar_id == "US_EQUITY_REGULAR"
-    assert result.projection.calendar_schedule_sha256 == (
-        "a7142dcf13f52f30f07cc48942abe1e325ace21d644a2198c5e5667cf9d20007"
-    )
+    assert result.projection.calendar_schedule_sha256 == _SCHEDULE_SHA256
     assert result.projection.latest_completed_session_date == "2026-08-12"
     assert result.projection.latest_completed_session_close_timestamp_et == (
         "2026-08-12T16:00:00-04:00"
     )
     assert result.projection.freshness_status == "FRESH"
-    assert freshness_results[0].mark_as_of_date == date(2026, 8, 12)
-    assert result.projection.mark_as_of_date == (
-        freshness_results[0].mark_as_of_date.isoformat()
-    )
-    projection_fields = set(result.projection.__dataclass_fields__)
-    assert not {
-        "target_commitment",
-        "desired_increment",
-        "final_increment",
-        "priority",
-        "order",
-        "quantity",
-    } & projection_fields
 
 
-def test_observer_rejects_a_freshness_mark_date_mismatch(
+def test_capture_artifact_identity_and_source_provenance_bind_projection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    freshness_owner = exposure.assess_manual_mark_freshness
+    result = _observe(tmp_path, monkeypatch)
+    assert result.projection is not None
+    raw = (
+        tmp_path / "artifacts/current/us_equity_yfinance_valuation/capture.json"
+    ).read_bytes()
+    assert result.projection.capture_artifact_sha256 == hashlib.sha256(raw).hexdigest()
+    assert result.projection.capture_trusted_evaluation_timestamp_utc == (
+        "2026-08-12T20:00:00Z"
+    )
+    assert result.projection.portfolio_source_sha256 == hashlib.sha256(
+        _portfolio()
+    ).hexdigest()
 
-    def _mismatched_freshness(**kwargs: object) -> calendar.MarkFreshnessResult:
-        result = freshness_owner(**kwargs)
-        assert result.status is calendar.MarkFreshnessStatus.FRESH
-        return replace(result, mark_as_of_date=date(2026, 8, 11))
 
+def test_absent_capture_is_unavailable_and_never_reads_manual_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(
         exposure,
-        "assess_manual_mark_freshness",
-        _mismatched_freshness,
+        "_capture_manual_valuation_source",
+        lambda: (_ for _ in ()).throw(AssertionError("manual fallback forbidden")),
     )
-    result = _observe(tmp_path, monkeypatch)
-    assert result.status is exposure.ExposureObservationStatus.INVALID
-    assert result.reason_codes == ("US_EQUITY_SESSION_MARK_DATE_PROVENANCE_MISMATCH",)
+    result = _observe(
+        tmp_path,
+        monkeypatch,
+        capture_source_sha256=False,
+        manual_valuation_bytes=b'{"not":"a valuation fallback"}',
+    )
+    assert result.status is exposure.ExposureObservationStatus.UNAVAILABLE
     assert result.projection is None
+    assert result.reason_codes == ("YFINANCE_CAPTURE_CURRENT_SOURCE_UNAVAILABLE",)
+
+
+def test_permission_denied_capture_is_unavailable_without_manual_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        exposure,
+        "_capture_manual_valuation_source",
+        lambda: (_ for _ in ()).throw(AssertionError("manual fallback forbidden")),
+    )
+
+    def _permission_denied(*_args: object, **_kwargs: object) -> bytes:
+        raise MmiStableReadError(
+            MmiStableReadErrorCode.STABLE_READ_INPUT_INVALID,
+            os_error_errno=errno.EACCES,
+        )
+
+    monkeypatch.setattr(capture, "stable_read_exact_bytes", _permission_denied)
+    result = _observe(tmp_path, monkeypatch)
+
+    assert result.status is exposure.ExposureObservationStatus.UNAVAILABLE
+    assert result.projection is None
+    assert result.reason_codes == (
+        "YFINANCE_CAPTURE_CURRENT_SOURCE_UNREADABLE",
+    )
 
 
 @pytest.mark.parametrize(
-    ("mark_as_of", "status", "reason"),
+    "raw",
+    (b"{", b'{"authority_effect":"NONE"}'),
+)
+def test_present_malformed_capture_is_invalid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    raw: bytes,
+) -> None:
+    result = _observe(tmp_path, monkeypatch, capture_raw=raw)
+    assert result.status is exposure.ExposureObservationStatus.INVALID
+    assert result.projection is None
+
+
+def test_canonical_byte_mutation_is_invalid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = _observe(tmp_path, monkeypatch, capture_raw=b"{}\n")
+    assert result.status is exposure.ExposureObservationStatus.INVALID
+    assert result.projection is None
+
+
+def test_current_portfolio_source_mismatch_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = _observe(
+        tmp_path,
+        monkeypatch,
+        capture_source_sha256="0" * 64,
+    )
+    assert result.status is exposure.ExposureObservationStatus.UNAVAILABLE
+    assert result.reason_codes == (
+        "REPORT_ONLY_EXPOSURE_CAPTURE_PORTFOLIO_SOURCE_MISMATCH",
+    )
+
+
+def test_same_source_capture_domain_contradiction_is_invalid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = _observe(
+        tmp_path,
+        monkeypatch,
+        capture_tickers=("QQQ",),
+    )
+    assert result.status is exposure.ExposureObservationStatus.INVALID
+    assert result.reason_codes == (
+        "REPORT_ONLY_EXPOSURE_CAPTURE_TICKER_DOMAIN_MISMATCH",
+    )
+
+
+@pytest.mark.parametrize(
+    ("completed_session", "status", "reason"),
     (
         (
-            "2026-08-11",
+            _session(
+                session_date="2026-08-11",
+                official_close_timestamp_et="2026-08-11T16:00:00-04:00",
+                trusted_evaluation_timestamp_utc="2026-08-11T20:00:00Z",
+            ),
             exposure.ExposureObservationStatus.UNAVAILABLE,
             "US_EQUITY_SESSION_MARK_DATE_STALE",
         ),
         (
-            "2026-08-13",
+            _session(
+                session_date="2026-08-13",
+                official_close_timestamp_et="2026-08-13T16:00:00-04:00",
+                trusted_evaluation_timestamp_utc="2026-08-13T20:00:00Z",
+            ),
             exposure.ExposureObservationStatus.INVALID,
             "US_EQUITY_SESSION_MARK_DATE_AFTER_EVALUATION",
         ),
-        (
-            "2026-08-08",
-            exposure.ExposureObservationStatus.INVALID,
-            "US_EQUITY_SESSION_MARK_DATE_NON_SESSION",
-        ),
     ),
 )
-def test_observer_consumes_one_calendar_owned_mark_freshness_result(
+def test_capture_session_freshness_rejects_stale_and_future(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    mark_as_of: str,
+    completed_session: CompletedUsEquitySession,
     status: exposure.ExposureObservationStatus,
     reason: str,
 ) -> None:
     result = _observe(
         tmp_path,
         monkeypatch,
-        valuation_bytes=_valuation(as_of=mark_as_of),
+        completed_session=completed_session,
     )
     assert result.status is status
     assert result.reason_codes == (reason,)
     assert result.projection is None
 
 
-def test_calendar_unavailability_remains_observer_unavailable(
+def test_capture_calendar_or_close_provenance_mismatch_is_invalid(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(calendar, "repo_root", lambda: tmp_path)
-    result = _observe(tmp_path, monkeypatch)
-    assert result.status is exposure.ExposureObservationStatus.UNAVAILABLE
-    assert result.reason_codes == ("US_EQUITY_SESSION_CALENDAR_SOURCE_UNAVAILABLE",)
-    assert result.projection is None
+    result = _observe(
+        tmp_path,
+        monkeypatch,
+        completed_session=_session(calendar_schedule_sha256="f" * 64),
+    )
+    assert result.status is exposure.ExposureObservationStatus.INVALID
+    assert result.reason_codes == (
+        "REPORT_ONLY_EXPOSURE_CAPTURE_CALENDAR_PROVENANCE_MISMATCH",
+    )
+
+    result = _observe(
+        tmp_path,
+        monkeypatch,
+        completed_session=_session(
+            official_close_timestamp_et="2026-08-12T15:00:00-04:00",
+        ),
+    )
+    assert result.status is exposure.ExposureObservationStatus.INVALID
+    assert result.reason_codes == (
+        "REPORT_ONLY_EXPOSURE_CAPTURE_SESSION_PROVENANCE_MISMATCH",
+    )
 
 
-def test_malformed_present_holdings_beat_freshness_blocker(
+def test_malformed_holdings_precede_a_valid_capture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -396,7 +532,6 @@ def test_malformed_present_holdings_beat_freshness_blocker(
         tmp_path,
         monkeypatch,
         portfolio_bytes=_portfolio(("QQQ | 0",)),
-        valuation_bytes=_valuation([{"ticker": "QQQ", "mark": "400"}]),
     )
     assert result.status is exposure.ExposureObservationStatus.INVALID
     assert result.reason_codes == (
@@ -404,104 +539,28 @@ def test_malformed_present_holdings_beat_freshness_blocker(
     )
 
 
-def test_malformed_present_valuation_beats_freshness_blocker(
+def test_missing_strict_holdings_precede_capture_read(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    current = (repo_root() / "inputs/current/portfolio_snapshot.txt").read_bytes()
+    without_strict, marker, _existing = current.partition(
+        b"\n[STRICT_POSITIVE_ETF_POSITIONS_V1]\n"
+    )
+    assert marker
     result = _observe(
         tmp_path,
         monkeypatch,
-        valuation_bytes=_valuation(
-            [
-                {"ticker": "QQQ", "mark": "400.125"},
-                {"ticker": "SMH", "mark": "0"},
-            ]
-        ),
-    )
-    assert result.status is exposure.ExposureObservationStatus.INVALID
-    assert result.reason_codes == ("REPORT_ONLY_EXPOSURE_VALUATION_MARK_INVALID",)
-
-
-def test_missing_required_section_and_valuation_source_are_unavailable(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    strategy_source, portfolio_source = _prepared_current_root(
-        tmp_path,
-        portfolio_bytes=(repo_root() / "inputs/current/portfolio_snapshot.txt").read_bytes(),
-        valuation_bytes=None,
-    )
-
-    def _capture(role: MmiSourceRole, *, expected_source_sha256: str):
-        return type("Result", (), {
-            "valid": True,
-            "authority_effect": "NONE",
-            "source": strategy_source if role is MmiSourceRole.STRATEGY_SETTINGS else portfolio_source,
-            "reason_codes": (),
-        })()
-
-    monkeypatch.setattr(exposure, "capture_current_mmi_source", _capture)
-    monkeypatch.setattr(exposure, "repo_root", lambda: tmp_path)
-    result = exposure.observe_current_report_only_holdings_exposure(
-        strategy_settings_expected_sha256="a" * 64,
-        portfolio_snapshot_expected_sha256="b" * 64,
+        portfolio_bytes=without_strict,
+        capture_source_sha256=False,
     )
     assert result.status is exposure.ExposureObservationStatus.UNAVAILABLE
-    assert set(result.reason_codes) == {
-        "REPORT_ONLY_EXPOSURE_STRICT_HOLDINGS_SECTION_ABSENT",
-        "REPORT_ONLY_EXPOSURE_VALUATION_SOURCE_ABSENT",
-    }
-
-
-def test_present_nonregular_valuation_source_is_invalid(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    strategy_source, portfolio_source = _prepared_current_root(
-        tmp_path,
-        portfolio_bytes=_portfolio(),
-        valuation_bytes=None,
-    )
-    valuation_path = tmp_path / "inputs/current/manual_valuation_marks.json"
-    target = tmp_path / "operator_marks.json"
-    target.write_bytes(_valuation())
-    valuation_path.symlink_to(target)
-
-    def _capture(role: MmiSourceRole, *, expected_source_sha256: str):
-        return type("Result", (), {
-            "valid": True,
-            "authority_effect": "NONE",
-            "source": strategy_source if role is MmiSourceRole.STRATEGY_SETTINGS else portfolio_source,
-            "reason_codes": (),
-        })()
-
-    monkeypatch.setattr(exposure, "capture_current_mmi_source", _capture)
-    monkeypatch.setattr(exposure, "repo_root", lambda: tmp_path)
-    result = exposure.observe_current_report_only_holdings_exposure(
-        strategy_settings_expected_sha256="a" * 64,
-        portfolio_snapshot_expected_sha256="b" * 64,
-    )
-    assert result.status is exposure.ExposureObservationStatus.INVALID
-    assert result.reason_codes == ("REPORT_ONLY_EXPOSURE_VALUATION_SOURCE_INVALID",)
-
-
-def test_domain_equality_and_no_partial_total_are_required(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    result = _observe(
-        tmp_path,
-        monkeypatch,
-        valuation_bytes=_valuation([{"ticker": "QQQ", "mark": "400"}]),
-    )
-    assert result.status is exposure.ExposureObservationStatus.INVALID
     assert result.reason_codes == (
-        "REPORT_ONLY_EXPOSURE_VALUATION_TICKER_DOMAIN_MISMATCH",
+        "REPORT_ONLY_EXPOSURE_STRICT_HOLDINGS_SECTION_ABSENT",
     )
-    assert result.projection is None
 
 
-def test_policy_roles_are_source_bound_and_unknown_holding_is_manual_review(
+def test_unknown_policy_ticker_remains_manual_review_after_capture_proof(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -509,89 +568,40 @@ def test_policy_roles_are_source_bound_and_unknown_holding_is_manual_review(
         tmp_path,
         monkeypatch,
         portfolio_bytes=_portfolio(("QQQ | 1", "ZZZ | 2")),
-        valuation_bytes=_valuation(
-            [
-                {"ticker": "QQQ", "mark": "400"},
-                {"ticker": "ZZZ", "mark": "100"},
-            ]
-        ),
+        capture_marks={"QQQ": "400", "ZZZ": "100"},
     )
     assert result.status is exposure.ExposureObservationStatus.MANUAL_REVIEW
     assert result.reason_codes == (
         "REPORT_ONLY_EXPOSURE_TICKER_OUTSIDE_DETERMINISTIC_POLICY",
     )
     assert result.projection is not None
-    assert result.projection.policy_projection_identity_sha256
     assert result.projection.positions[1].classification == "UNCLASSIFIED"
-    assert "policy_role_by_ticker" not in Path(exposure.__file__).read_text(encoding="utf-8")
 
 
-def test_private_decimal_arithmetic_has_one_market_value_owner(tmp_path: Path) -> None:
-    strategy_source, portfolio_source = _prepared_current_root(
-        tmp_path,
-        portfolio_bytes=_portfolio(),
-        valuation_bytes=_valuation(),
-    )
-    run_context = exposure.begin_mmi_projection_run()
-    policy = exposure.build_mmi_policy_projection(
-        strategy_source,
-        run_context=run_context,
-    ).projection
-    assert isinstance(policy, dict)
-    roles, identity = exposure._policy_roles_and_identity(policy)
-    holdings = exposure._parse_strict_holdings(portfolio_source.raw_bytes)
-    valuation_source = exposure._CapturedManualValuationSource(
-        raw_bytes=_valuation(),
-        observed_sha256=hashlib.sha256(_valuation()).hexdigest(),
-        observed_size_bytes=len(_valuation()),
-        repository_relative_locator="inputs/current/manual_valuation_marks.json",
-    )
-    valuation = exposure._parse_manual_valuation(
-        valuation_source.raw_bytes,
-    )
-    projection, unknown = exposure._derive_projection(
-        holdings=holdings,
-        valuation=valuation,
-        portfolio_source=portfolio_source,
-        valuation_source=valuation_source,
-        holdings_observation_date="2026-08-12",
-        policy_roles=roles,
-        policy_projection_identity_sha256=identity,
-    )
-    assert unknown == ()
-    assert [row.market_value for row in projection.positions] == ["1000.3125", "601.5"]
-    assert projection.total_market_value == "1601.8125"
-    assert projection.portfolio_source_sha256 == hashlib.sha256(
-        portfolio_source.raw_bytes
-    ).hexdigest()
-    assert projection.valuation_source_sha256 == hashlib.sha256(
-        valuation_source.raw_bytes
-    ).hexdigest()
-    assert "market_value" not in _valuation().decode("utf-8")
-
-
-def test_observer_is_not_imported_by_existing_authority_bearing_flows() -> None:
+def test_observer_stays_provider_free_and_disconnected_from_authority_flows() -> None:
     root = Path(__file__).resolve().parents[2] / "src/investment_orchestrator"
     module_file = root / "observability/report_only_holdings_exposure.py"
     calendar_file = root / "market/us_equity_session_calendar.py"
     capture_file = root / "market/us_equity_yfinance_valuation_capture.py"
-    prohibited = (
-        "investment_orchestrator.workflow",
-        "investment_orchestrator.state",
-        "investment_orchestrator.permissions",
-        "investment_orchestrator.orders",
-        "investment_orchestrator.broker",
-        "investment_orchestrator.llm",
-    )
     module_text = module_file.read_text(encoding="utf-8")
-    assert all(value not in module_text for value in prohibited)
-    calendar_text = calendar_file.read_text(encoding="utf-8")
-    assert all(value not in calendar_text for value in prohibited)
-    capture_text = capture_file.read_text(encoding="utf-8")
-    assert all(value not in capture_text for value in prohibited)
+    assert "import yfinance" not in module_text
+    assert "yf.download" not in module_text
+    assert "subprocess" not in module_text
+    assert all(
+        value not in module_text
+        for value in (
+            "investment_orchestrator.workflow",
+            "investment_orchestrator.state",
+            "investment_orchestrator.permissions",
+            "investment_orchestrator.orders",
+            "investment_orchestrator.broker",
+            "investment_orchestrator.llm",
+        )
+    )
     assert all(
         "report_only_holdings_exposure" not in candidate.read_text(encoding="utf-8")
         and "us_equity_session_calendar" not in candidate.read_text(encoding="utf-8")
+        and "us_equity_yfinance_valuation_capture" not in candidate.read_text(encoding="utf-8")
         for candidate in root.rglob("*.py")
         if candidate not in {module_file, calendar_file, capture_file}
     )

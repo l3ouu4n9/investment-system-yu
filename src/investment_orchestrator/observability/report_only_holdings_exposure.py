@@ -1,12 +1,12 @@
-"""Strict, report-only ETF holdings and manually supplied mark observation.
+"""Strict, report-only ETF holdings and normalized-market-capture observation.
 
 This observer is intentionally disconnected from every current workflow.  Its
 public observer captures the existing source-bound MMI strategy and portfolio
-sources, reads an optional manual valuation source, and returns an in-memory
-diagnostic.  A second narrow accessor exposes only the existing parser-owned
-strict holdings domain for a separate report-only acquisition boundary.  This
-module never publishes, prompts, grants permission, opens a gate, compiles an
-order, or contacts a provider.
+sources, reads the fixed normalized valuation capture through its owning
+market module, and returns an in-memory diagnostic.  A second narrow accessor
+exposes only the existing parser-owned strict holdings domain for the separate
+report-only acquisition boundary.  This module never publishes, prompts,
+grants permission, opens a gate, compiles an order, or contacts a provider.
 
 The strict positions section is optional and is the only holdings syntax this
 module reads.  It has no date: the existing ``# updated YYYY-MM-DD`` portfolio
@@ -27,7 +27,7 @@ import os
 from pathlib import Path
 import re
 import stat
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from investment_orchestrator.common.paths import repo_root
 from investment_orchestrator.mmi.canonical import (
@@ -58,6 +58,11 @@ from investment_orchestrator.market.us_equity_session_calendar import (
     MarkFreshnessStatus,
     assess_manual_mark_freshness,
 )
+
+if TYPE_CHECKING:
+    from investment_orchestrator.market.us_equity_yfinance_valuation_capture import (
+        ValidatedYfinanceValuationCapture,
+    )
 
 
 __all__ = (
@@ -191,10 +196,14 @@ class ExposureProjection:
     authority_effect: str
     portfolio_source_sha256: str
     portfolio_source_record_identity_sha256: str
-    valuation_source_sha256: str
     portfolio_scope_id: str
     holdings_observation_date: str
-    valuation_mark_source_id: str
+    capture_artifact_sha256: str
+    capture_source_kind: str
+    capture_provider_id: str
+    capture_session_date: str
+    capture_trusted_evaluation_timestamp_utc: str
+    mark_ticker_domain: tuple[str, ...]
     mark_as_of_date: str
     calendar_id: str | None
     calendar_schedule_sha256: str | None
@@ -541,6 +550,27 @@ def _capture_current_mmi_source(
     )
 
 
+def _read_current_normalized_valuation_capture() -> tuple[
+    "ValidatedYfinanceValuationCapture | None",
+    tuple[str, ...],
+    bool,
+]:
+    """Use the fixed capture-reader seam without importing any provider client."""
+    from investment_orchestrator.market.us_equity_yfinance_valuation_capture import (
+        CurrentYfinanceValuationCaptureError,
+        read_current_validated_us_equity_yfinance_valuation_capture,
+    )
+
+    try:
+        return (
+            read_current_validated_us_equity_yfinance_valuation_capture(),
+            (),
+            False,
+        )
+    except CurrentYfinanceValuationCaptureError as exc:
+        return None, exc.reason_codes, not exc.unavailable
+
+
 def capture_current_validated_strict_holdings_domain(
     *,
     portfolio_snapshot_expected_sha256: str,
@@ -582,8 +612,13 @@ def capture_current_validated_strict_holdings_domain(
     )
 
 
-def _source_sha256(source: MmiCapturedSource) -> str:
-    return hashlib.sha256(source.raw_bytes).hexdigest()
+def _source_observed_sha256(source: MmiCapturedSource) -> str:
+    value = source.source_record.get("observed_sha256")
+    if type(value) is not str:
+        raise _ExposureInputError(
+            "REPORT_ONLY_EXPOSURE_PORTFOLIO_SOURCE_IDENTITY_INVALID"
+        )
+    return value
 
 
 def _source_record_identity(source: MmiCapturedSource) -> str:
@@ -626,9 +661,8 @@ def _policy_roles_and_identity(
 def _derive_projection(
     *,
     holdings: _StrictHoldings,
-    valuation: _ManualValuation,
+    normalized_capture: "ValidatedYfinanceValuationCapture",
     portfolio_source: MmiCapturedSource,
-    valuation_source: _CapturedManualValuationSource,
     holdings_observation_date: str,
     policy_roles: Mapping[str, str],
     policy_projection_identity_sha256: str,
@@ -639,23 +673,31 @@ def _derive_projection(
     trusted_evaluation_timestamp_utc: str | None = None,
     latest_completed_session_date: str | None = None,
     latest_completed_session_close_timestamp_et: str | None = None,
-    verified_mark_as_of_date: date | None = None,
 ) -> tuple[ExposureProjection, tuple[str, ...]]:
-    holding_tickers = {position.ticker for position in holdings.positions}
-    valuation_tickers = {mark.ticker for mark in valuation.marks}
-    if holding_tickers != valuation_tickers:
+    holding_tickers = tuple(sorted(position.ticker for position in holdings.positions))
+    capture_tickers = normalized_capture.requested_ticker_domain
+    mark_tickers = tuple(ticker for ticker, _mark in normalized_capture.marks)
+    if holding_tickers != capture_tickers or mark_tickers != capture_tickers:
         raise _ExposureInputError(
-            "REPORT_ONLY_EXPOSURE_VALUATION_TICKER_DOMAIN_MISMATCH"
+            "REPORT_ONLY_EXPOSURE_CAPTURE_TICKER_DOMAIN_MISMATCH"
         )
-    marks_by_ticker = {mark.ticker: mark for mark in valuation.marks}
+    marks_by_ticker: dict[str, tuple[Decimal, str]] = {}
+    for ticker, mark_text in normalized_capture.marks:
+        marks_by_ticker[ticker] = (
+            _parse_positive_decimal(
+                mark_text,
+                code="REPORT_ONLY_EXPOSURE_CAPTURE_MARK_INVALID",
+            ),
+            mark_text,
+        )
     rows: list[ExposurePosition] = []
     unclassified: list[str] = []
     total = Decimal(0)
     try:
         with localcontext(_ARITHMETIC_CONTEXT):
             for position in holdings.positions:
-                mark = marks_by_ticker[position.ticker]
-                market_value = position.shares * mark.mark
+                mark, source_mark = marks_by_ticker[position.ticker]
+                market_value = position.shares * mark
                 total += market_value
                 classification = policy_roles.get(
                     position.ticker,
@@ -667,7 +709,7 @@ def _derive_projection(
                     ExposurePosition(
                         ticker=position.ticker,
                         shares=position.source_shares,
-                        mark=mark.source_mark,
+                        mark=source_mark,
                         market_value=normalize_decimal_string(market_value),
                         classification=classification,
                     )
@@ -681,19 +723,21 @@ def _derive_projection(
         ExposureProjection(
             schema_version="report_only_holdings_exposure_projection_v1",
             authority_effect=AUTHORITY_EFFECT_NONE,
-            portfolio_source_sha256=_source_sha256(portfolio_source),
+            portfolio_source_sha256=_source_observed_sha256(portfolio_source),
             portfolio_source_record_identity_sha256=_source_record_identity(
                 portfolio_source
             ),
-            valuation_source_sha256=valuation_source.observed_sha256,
             portfolio_scope_id=holdings.portfolio_scope_id,
             holdings_observation_date=holdings_observation_date,
-            valuation_mark_source_id=valuation.mark_source_id,
-            mark_as_of_date=(
-                verified_mark_as_of_date
-                if verified_mark_as_of_date is not None
-                else valuation.mark_as_of_date
-            ).isoformat(),
+            capture_artifact_sha256=normalized_capture.artifact_sha256,
+            capture_source_kind=normalized_capture.source_kind,
+            capture_provider_id=normalized_capture.provider_id,
+            capture_session_date=normalized_capture.session_date.isoformat(),
+            capture_trusted_evaluation_timestamp_utc=(
+                normalized_capture.capture_trusted_evaluation_timestamp_utc
+            ),
+            mark_ticker_domain=normalized_capture.requested_ticker_domain,
+            mark_as_of_date=normalized_capture.session_date.isoformat(),
             calendar_id=calendar_id,
             calendar_schedule_sha256=calendar_schedule_sha256,
             calendar_coverage_start_date=calendar_coverage_start_date,
@@ -735,12 +779,13 @@ def observe_current_report_only_holdings_exposure(
     strategy_settings_expected_sha256: str,
     portfolio_snapshot_expected_sha256: str,
 ) -> ExposureObservationResult:
-    """Observe current strict holdings and marks without authority effects.
+    """Observe current strict holdings and one fixed capture without authority.
 
     The existing MMI source capture and projection owners supply source-bound
-    universe roles and the sole canonical portfolio date.  The session owner
-    alone determines whether a parsed manual mark date is fresh.  This entry
-    point deliberately has no caller-supplied evaluation or session date.
+    universe roles and the sole canonical portfolio date.  The capture reader
+    owns normalized-capture parsing; the session owner alone determines
+    whether its captured session remains current.  This entry point accepts no
+    caller-supplied valuation, evaluation, or session fact.
     """
     run_context = begin_mmi_projection_run()
     strategy_source, strategy_reasons, strategy_invalid = (
@@ -755,10 +800,6 @@ def observe_current_report_only_holdings_exposure(
             expected_sha256=portfolio_snapshot_expected_sha256,
         )
     )
-    valuation_source, valuation_capture_reasons, valuation_capture_invalid = (
-        _capture_manual_valuation_source()
-    )
-
     invalid_reasons: list[str] = []
     unavailable_reasons: list[str] = []
     if strategy_invalid:
@@ -769,14 +810,7 @@ def observe_current_report_only_holdings_exposure(
         invalid_reasons.extend(portfolio_reasons)
     elif portfolio_source is None:
         unavailable_reasons.extend(portfolio_reasons)
-    if valuation_source is None:
-        if valuation_capture_invalid:
-            invalid_reasons.extend(valuation_capture_reasons)
-        else:
-            unavailable_reasons.extend(valuation_capture_reasons)
-
     holdings: _StrictHoldings | None = None
-    valuation: _ManualValuation | None = None
     if portfolio_source is not None:
         try:
             holdings = _parse_strict_holdings(portfolio_source.raw_bytes)
@@ -785,12 +819,6 @@ def observe_current_report_only_holdings_exposure(
                 unavailable_reasons.append(exc.code)
             else:
                 invalid_reasons.append(exc.code)
-    if valuation_source is not None:
-        try:
-            valuation = _parse_manual_valuation(valuation_source.raw_bytes)
-        except _ExposureInputError as exc:
-            invalid_reasons.append(exc.code)
-
     policy_projection: Mapping[str, object] | None = None
     portfolio_projection: Mapping[str, object] | None = None
     if strategy_source is not None:
@@ -826,18 +854,55 @@ def observe_current_report_only_holdings_exposure(
         )
     if (
         holdings is None
-        or valuation is None
         or policy_projection is None
         or portfolio_projection is None
         or portfolio_source is None
-        or valuation_source is None
+        or strategy_source is None
     ):
         return _result(
             ExposureObservationStatus.UNAVAILABLE,
             ("REPORT_ONLY_EXPOSURE_INTERNAL_INPUT_UNAVAILABLE",),
         )
 
+    normalized_capture, capture_reasons, capture_invalid = (
+        _read_current_normalized_valuation_capture()
+    )
+    if normalized_capture is None:
+        return _result(
+            (
+                ExposureObservationStatus.INVALID
+                if capture_invalid
+                else ExposureObservationStatus.UNAVAILABLE
+            ),
+            capture_reasons,
+        )
+
     try:
+        current_portfolio_sha256 = _source_observed_sha256(portfolio_source)
+        if normalized_capture.portfolio_source_sha256 != current_portfolio_sha256:
+            return _result(
+                ExposureObservationStatus.UNAVAILABLE,
+                ("REPORT_ONLY_EXPOSURE_CAPTURE_PORTFOLIO_SOURCE_MISMATCH",),
+            )
+        if normalized_capture.portfolio_scope_id != holdings.portfolio_scope_id:
+            return _result(
+                ExposureObservationStatus.INVALID,
+                ("REPORT_ONLY_EXPOSURE_CAPTURE_PORTFOLIO_SCOPE_MISMATCH",),
+            )
+        holding_tickers = tuple(
+            sorted(position.ticker for position in holdings.positions)
+        )
+        mark_tickers = tuple(
+            ticker for ticker, _mark in normalized_capture.marks
+        )
+        if (
+            holding_tickers != normalized_capture.requested_ticker_domain
+            or mark_tickers != normalized_capture.requested_ticker_domain
+        ):
+            return _result(
+                ExposureObservationStatus.INVALID,
+                ("REPORT_ONLY_EXPOSURE_CAPTURE_TICKER_DOMAIN_MISMATCH",),
+            )
         policy_roles, policy_identity = _policy_roles_and_identity(
             policy_projection
         )
@@ -851,9 +916,8 @@ def observe_current_report_only_holdings_exposure(
             )
         projection, unclassified = _derive_projection(
             holdings=holdings,
-            valuation=valuation,
+            normalized_capture=normalized_capture,
             portfolio_source=portfolio_source,
-            valuation_source=valuation_source,
             holdings_observation_date=holdings_observation_date,
             policy_roles=policy_roles,
             policy_projection_identity_sha256=policy_identity,
@@ -867,9 +931,19 @@ def observe_current_report_only_holdings_exposure(
             projection,
         )
     freshness = assess_manual_mark_freshness(
-        mark_as_of_date=valuation.mark_as_of_date,
+        mark_as_of_date=normalized_capture.session_date,
         run_context=run_context,
     )
+    completed_session = freshness.completed_session
+    if completed_session is not None and (
+        normalized_capture.calendar_id != completed_session.calendar_id
+        or normalized_capture.calendar_schedule_sha256
+        != completed_session.calendar_schedule_sha256
+    ):
+        return _result(
+            ExposureObservationStatus.INVALID,
+            ("REPORT_ONLY_EXPOSURE_CAPTURE_CALENDAR_PROVENANCE_MISMATCH",),
+        )
     if freshness.status is MarkFreshnessStatus.INVALID:
         return _result(ExposureObservationStatus.INVALID, freshness.reason_codes)
     if freshness.status is MarkFreshnessStatus.UNAVAILABLE:
@@ -879,23 +953,31 @@ def observe_current_report_only_holdings_exposure(
             ExposureObservationStatus.INVALID,
             ("US_EQUITY_SESSION_MARK_DATE_STATUS_INVALID",),
         )
-    if freshness.mark_as_of_date != valuation.mark_as_of_date:
+    if freshness.mark_as_of_date != normalized_capture.session_date:
         return _result(
             ExposureObservationStatus.INVALID,
             ("US_EQUITY_SESSION_MARK_DATE_PROVENANCE_MISMATCH",),
         )
-    completed_session = freshness.completed_session
     if completed_session is None:
         return _result(
             ExposureObservationStatus.INVALID,
             ("US_EQUITY_SESSION_FRESHNESS_FACT_UNAVAILABLE",),
         )
+    if (
+        normalized_capture.session_date.isoformat()
+        != completed_session.session_date
+        or normalized_capture.official_close_timestamp_et
+        != completed_session.official_close_timestamp_et
+    ):
+        return _result(
+            ExposureObservationStatus.INVALID,
+            ("REPORT_ONLY_EXPOSURE_CAPTURE_SESSION_PROVENANCE_MISMATCH",),
+        )
     try:
         projection, unclassified = _derive_projection(
             holdings=holdings,
-            valuation=valuation,
+            normalized_capture=normalized_capture,
             portfolio_source=portfolio_source,
-            valuation_source=valuation_source,
             holdings_observation_date=holdings_observation_date,
             policy_roles=policy_roles,
             policy_projection_identity_sha256=policy_identity,
@@ -910,7 +992,6 @@ def observe_current_report_only_holdings_exposure(
             latest_completed_session_close_timestamp_et=(
                 completed_session.official_close_timestamp_et
             ),
-            verified_mark_as_of_date=freshness.mark_as_of_date,
         )
     except _ExposureInputError as exc:
         return _result(ExposureObservationStatus.INVALID, (exc.code,))

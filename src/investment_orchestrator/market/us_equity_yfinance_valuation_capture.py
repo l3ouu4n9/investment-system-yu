@@ -13,15 +13,15 @@ import argparse
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+import errno
 from enum import Enum
 import hashlib
 from importlib.metadata import PackageNotFoundError, version
 import json
+import os
 from pathlib import Path
-from typing import Final
-
-import pandas as pd
-import yfinance as yf
+import stat
+from typing import Any, Final
 
 from investment_orchestrator.common.io import atomic_write_text
 from investment_orchestrator.common.paths import repo_root
@@ -38,6 +38,11 @@ from investment_orchestrator.mmi.contracts import (
     AUTHORITY_EFFECT_NONE,
     begin_mmi_projection_run,
 )
+from investment_orchestrator.mmi.stable_read import (
+    MmiStableReadError,
+    MmiStableReadErrorCode,
+    stable_read_exact_bytes,
+)
 from investment_orchestrator.market.us_equity_session_calendar import (
     CompletedUsEquitySession,
     MarkFreshnessStatus,
@@ -52,9 +57,12 @@ from investment_orchestrator.observability.report_only_holdings_exposure import 
 
 
 __all__ = (
+    "CurrentYfinanceValuationCaptureError",
+    "ValidatedYfinanceValuationCapture",
     "YfinanceValuationCaptureResult",
     "YfinanceValuationCaptureStatus",
     "capture_current_us_equity_yfinance_valuation",
+    "read_current_validated_us_equity_yfinance_valuation_capture",
 )
 
 
@@ -98,6 +106,40 @@ class YfinanceValuationCaptureResult:
     artifact_sha256: str | None
 
 
+class CurrentYfinanceValuationCaptureError(ValueError):
+    """Closed fixed-source failure for the normalized current capture."""
+
+    def __init__(
+        self,
+        reason_codes: tuple[str, ...],
+        *,
+        unavailable: bool,
+    ) -> None:
+        super().__init__(
+            reason_codes[0] if reason_codes else "YFINANCE_CAPTURE_INVALID"
+        )
+        self.reason_codes = reason_codes
+        self.unavailable = unavailable
+
+
+@dataclass(frozen=True, slots=True)
+class ValidatedYfinanceValuationCapture:
+    """One exact-byte, schema-validated, normalized current capture."""
+
+    artifact_sha256: str
+    portfolio_source_sha256: str
+    portfolio_scope_id: str
+    source_kind: str
+    provider_id: str
+    requested_ticker_domain: tuple[str, ...]
+    marks: tuple[tuple[str, str], ...]
+    calendar_id: str
+    calendar_schedule_sha256: str
+    capture_trusted_evaluation_timestamp_utc: str
+    session_date: date
+    official_close_timestamp_et: str
+
+
 class _CaptureFailure(ValueError):
     def __init__(
         self,
@@ -132,6 +174,225 @@ def _capture_path() -> Path:
     return repo_root().joinpath(*_CAPTURE_RELATIVE_PATH)
 
 
+def _open_current_capture_directory(root: Path) -> tuple[int, int]:
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+    root_fd: int | None = None
+    artifacts_fd: int | None = None
+    current_fd: int | None = None
+    capture_fd: int | None = None
+    try:
+        root_fd = os.open(os.fspath(root), flags)
+        artifacts_fd = os.open("artifacts", flags, dir_fd=root_fd)
+        current_fd = os.open("current", flags, dir_fd=artifacts_fd)
+        capture_fd = os.open(
+            "us_equity_yfinance_valuation",
+            flags,
+            dir_fd=current_fd,
+        )
+        if not all(
+            stat.S_ISDIR(os.fstat(fd).st_mode)
+            for fd in (root_fd, artifacts_fd, current_fd, capture_fd)
+        ):
+            raise OSError("current capture hierarchy is not a directory")
+        return root_fd, capture_fd
+    except OSError:
+        for fd in (capture_fd, current_fd, artifacts_fd, root_fd):
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        raise
+    finally:
+        for fd in (current_fd, artifacts_fd):
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+
+
+def _read_current_capture_bytes() -> bytes:
+    try:
+        root_fd, capture_fd = _open_current_capture_directory(repo_root())
+    except OSError as exc:
+        raise CurrentYfinanceValuationCaptureError(
+            ("YFINANCE_CAPTURE_CURRENT_SOURCE_UNAVAILABLE",),
+            unavailable=True,
+        ) from exc
+    try:
+        try:
+            return stable_read_exact_bytes(
+                capture_fd,
+                "capture.json",
+                maximum_bytes=_CAPTURE_MAXIMUM_CANONICAL_BYTES,
+            )
+        except MmiStableReadError as exc:
+            if exc.os_error_errno in {errno.EACCES, errno.EPERM}:
+                raise CurrentYfinanceValuationCaptureError(
+                    ("YFINANCE_CAPTURE_CURRENT_SOURCE_UNREADABLE",),
+                    unavailable=True,
+                ) from exc
+            if exc.code is MmiStableReadErrorCode.STABLE_READ_CAPABILITY_UNAVAILABLE:
+                raise CurrentYfinanceValuationCaptureError(
+                    ("YFINANCE_CAPTURE_CURRENT_SOURCE_UNAVAILABLE",),
+                    unavailable=True,
+                ) from exc
+            try:
+                os.stat("capture.json", dir_fd=capture_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                raise CurrentYfinanceValuationCaptureError(
+                    ("YFINANCE_CAPTURE_CURRENT_SOURCE_ABSENT",),
+                    unavailable=True,
+                ) from exc
+            except OSError:
+                raise CurrentYfinanceValuationCaptureError(
+                    ("YFINANCE_CAPTURE_CURRENT_SOURCE_UNREADABLE",),
+                    unavailable=True,
+                ) from exc
+            raise CurrentYfinanceValuationCaptureError(
+                ("YFINANCE_CAPTURE_CURRENT_SOURCE_INVALID",),
+                unavailable=False,
+            ) from exc
+        except OSError as exc:
+            raise CurrentYfinanceValuationCaptureError(
+                ("YFINANCE_CAPTURE_CURRENT_SOURCE_UNREADABLE",),
+                unavailable=True,
+            ) from exc
+    finally:
+        os.close(capture_fd)
+        os.close(root_fd)
+
+
+def _reject_duplicate_json_keys(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    output: dict[str, object] = {}
+    for key, value in pairs:
+        if key in output:
+            raise ValueError("duplicate JSON key")
+        output[key] = value
+    return output
+
+
+def _reject_json_constant(_value: str) -> object:
+    raise ValueError("non-finite JSON constant")
+
+
+def _validated_capture_from_payload(
+    *,
+    payload: object,
+    artifact_sha256: str,
+) -> ValidatedYfinanceValuationCapture:
+    _validate_capture_payload(payload)
+    if type(payload) is not dict:  # pragma: no cover - guarded above.
+        raise _CaptureFailure(
+            YfinanceValuationCaptureStatus.INVALID,
+            "YFINANCE_CAPTURE_NORMALIZED_SCHEMA_INVALID",
+        )
+    completed_session = payload["completed_session"]
+    requested = payload["requested_ticker_domain"]
+    marks = payload["marks"]
+    if (
+        type(completed_session) is not dict
+        or type(requested) is not list
+        or type(marks) is not list
+    ):
+        raise _CaptureFailure(
+            YfinanceValuationCaptureStatus.INVALID,
+            "YFINANCE_CAPTURE_NORMALIZED_SCHEMA_INVALID",
+        )
+    try:
+        session_date = date.fromisoformat(completed_session["session_date"])
+        capture_evaluation = datetime.fromisoformat(
+            completed_session["trusted_evaluation_timestamp_utc"].replace(
+                "Z", "+00:00"
+            )
+        )
+        official_close = datetime.fromisoformat(
+            completed_session["official_close_timestamp_et"]
+        )
+    except (TypeError, ValueError, AttributeError):
+        raise _CaptureFailure(
+            YfinanceValuationCaptureStatus.INVALID,
+            "YFINANCE_CAPTURE_COMPLETED_SESSION_INVALID",
+        ) from None
+    if (
+        capture_evaluation.tzinfo is None
+        or official_close.tzinfo is None
+        or official_close.date() != session_date
+        or capture_evaluation < official_close.astimezone(timezone.utc)
+    ):
+        raise _CaptureFailure(
+            YfinanceValuationCaptureStatus.INVALID,
+            "YFINANCE_CAPTURE_COMPLETED_SESSION_INVALID",
+        )
+    return ValidatedYfinanceValuationCapture(
+        artifact_sha256=artifact_sha256,
+        portfolio_source_sha256=payload["portfolio_source_sha256"],
+        portfolio_scope_id=payload["portfolio_scope_id"],
+        source_kind=payload["source_kind"],
+        provider_id=payload["provider_id"],
+        requested_ticker_domain=tuple(requested),
+        marks=tuple((mark["ticker"], mark["mark"]) for mark in marks),
+        calendar_id=completed_session["calendar_id"],
+        calendar_schedule_sha256=completed_session["calendar_schedule_sha256"],
+        capture_trusted_evaluation_timestamp_utc=(
+            completed_session["trusted_evaluation_timestamp_utc"]
+        ),
+        session_date=session_date,
+        official_close_timestamp_et=(
+            completed_session["official_close_timestamp_et"]
+        ),
+    )
+
+
+def read_current_validated_us_equity_yfinance_valuation_capture(
+) -> ValidatedYfinanceValuationCapture:
+    """Read only the fixed normalized current capture; never contact a provider."""
+    raw_bytes = _read_current_capture_bytes()
+    artifact_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+    try:
+        text = raw_bytes.decode("utf-8", errors="strict")
+        if text.startswith("\ufeff") or "\x00" in text:
+            raise ValueError("invalid capture text")
+        payload = json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=_reject_json_constant,
+        )
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
+        raise CurrentYfinanceValuationCaptureError(
+            ("YFINANCE_CAPTURE_CURRENT_SOURCE_JSON_INVALID",),
+            unavailable=False,
+        ) from exc
+    try:
+        capture = _validated_capture_from_payload(
+            payload=payload,
+            artifact_sha256=artifact_sha256,
+        )
+        canonical_bytes = canonical_json_bytes(
+            payload,
+            maximum_bytes=_CAPTURE_MAXIMUM_CANONICAL_BYTES,
+        )
+    except _CaptureFailure as exc:
+        raise CurrentYfinanceValuationCaptureError(
+            (exc.code,),
+            unavailable=False,
+        ) from exc
+    except MmiCanonicalizationError as exc:
+        raise CurrentYfinanceValuationCaptureError(
+            ("YFINANCE_CAPTURE_CURRENT_SOURCE_INVALID",),
+            unavailable=False,
+        ) from exc
+    if canonical_bytes != raw_bytes:
+        raise CurrentYfinanceValuationCaptureError(
+            ("YFINANCE_CAPTURE_CURRENT_SOURCE_CANONICAL_INVALID",),
+            unavailable=False,
+        )
+    return capture
+
+
 def _runtime_versions() -> tuple[str, str]:
     try:
         yfinance_version = version("yfinance")
@@ -154,13 +415,22 @@ def _runtime_versions() -> tuple[str, str]:
     return yfinance_version, pandas_version
 
 
+def _provider_modules() -> tuple[Any, Any]:
+    """Load provider dependencies only on the explicit acquisition path."""
+    import pandas as pandas_module
+    import yfinance as yfinance_module
+
+    return pandas_module, yfinance_module
+
+
 def _download_history_for_session(
     *,
     ticker: str,
     session_date: date,
-) -> pd.DataFrame | None:
+) -> object:
     """Request a one-civil-day window; calendar ownership remains upstream."""
-    return yf.download(
+    _pandas_module, yfinance_module = _provider_modules()
+    return yfinance_module.download(
         ticker,
         start=session_date.isoformat(),
         end=(session_date + timedelta(days=1)).isoformat(),
@@ -190,7 +460,8 @@ def _normalized_mark(value: object) -> str:
             "YFINANCE_CAPTURE_CLOSE_INVALID",
         )
     try:
-        if bool(pd.isna(value)):
+        pandas_module, _yfinance_module = _provider_modules()
+        if bool(pandas_module.isna(value)):
             raise _CaptureFailure(
                 YfinanceValuationCaptureStatus.INVALID,
                 "YFINANCE_CAPTURE_CLOSE_INVALID",
@@ -216,12 +487,13 @@ def _history_mark_for_session(
     history: object,
     session_date: date,
 ) -> dict[str, str]:
+    pandas_module, _yfinance_module = _provider_modules()
     if history is None:
         raise _CaptureFailure(
             YfinanceValuationCaptureStatus.UNAVAILABLE,
             "YFINANCE_CAPTURE_HISTORY_UNAVAILABLE",
         )
-    if type(history) is not pd.DataFrame:
+    if type(history) is not pandas_module.DataFrame:
         raise _CaptureFailure(
             YfinanceValuationCaptureStatus.INVALID,
             "YFINANCE_CAPTURE_RESPONSE_SHAPE_INVALID",
@@ -231,7 +503,7 @@ def _history_mark_for_session(
             YfinanceValuationCaptureStatus.UNAVAILABLE,
             "YFINANCE_CAPTURE_HISTORY_UNAVAILABLE",
         )
-    if isinstance(history.columns, pd.MultiIndex):
+    if isinstance(history.columns, pandas_module.MultiIndex):
         raise _CaptureFailure(
             YfinanceValuationCaptureStatus.INVALID,
             "YFINANCE_CAPTURE_RESPONSE_SHAPE_INVALID",
@@ -241,7 +513,10 @@ def _history_mark_for_session(
             YfinanceValuationCaptureStatus.INVALID,
             "YFINANCE_CAPTURE_RESPONSE_COLUMNS_INVALID",
         )
-    if type(history.index) is not pd.DatetimeIndex or history.index.tz is not None:
+    if (
+        type(history.index) is not pandas_module.DatetimeIndex
+        or history.index.tz is not None
+    ):
         raise _CaptureFailure(
             YfinanceValuationCaptureStatus.INVALID,
             "YFINANCE_CAPTURE_RESPONSE_INDEX_INVALID",
@@ -254,7 +529,7 @@ def _history_mark_for_session(
     session_rows = 0
     observed_session_date: date | None = None
     for timestamp in history.index:
-        if pd.isna(timestamp):
+        if pandas_module.isna(timestamp):
             raise _CaptureFailure(
                 YfinanceValuationCaptureStatus.INVALID,
                 "YFINANCE_CAPTURE_RESPONSE_INDEX_INVALID",

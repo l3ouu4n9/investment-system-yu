@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import errno
 import hashlib
 import inspect
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -16,6 +18,10 @@ from investment_orchestrator.market.us_equity_session_calendar import (
     CompletedUsEquitySession,
     MarkFreshnessStatus,
     UsEquitySessionResolutionError,
+)
+from investment_orchestrator.mmi.stable_read import (
+    MmiStableReadError,
+    MmiStableReadErrorCode,
 )
 from investment_orchestrator.observability.report_only_holdings_exposure import (
     StrictHoldingsDomain,
@@ -100,6 +106,57 @@ def _artifact_path(tmp_path: Path) -> Path:
     return tmp_path / "artifacts/current/us_equity_yfinance_valuation/capture.json"
 
 
+def _configure_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    download: object,
+) -> None:
+    provider = SimpleNamespace(download=download)
+    monkeypatch.setattr(
+        capture,
+        "_provider_modules",
+        lambda: (pd, provider),
+    )
+
+
+def _normalized_capture_payload(
+    *,
+    portfolio_source_sha256: str = _PORTFOLIO_SOURCE_SHA256,
+    tickers: tuple[str, ...] = ("QQQ", "SMH"),
+    session: CompletedUsEquitySession | None = None,
+) -> dict[str, object]:
+    completed_session = session if session is not None else _session()
+    return capture._capture_payload(
+        holdings=StrictHoldingsDomain(
+            portfolio_source_sha256=portfolio_source_sha256,
+            portfolio_scope_id="yu_etf_portfolio",
+            tickers=tickers,
+        ),
+        completed_session=completed_session,
+        yfinance_version="1.4.1",
+        pandas_version="3.0.3",
+        marks=tuple(
+            {
+                "ticker": ticker,
+                "actual_data_date": completed_session.session_date,
+                "provider_field": "Close",
+                "mark": str(index + 100),
+            }
+            for index, ticker in enumerate(sorted(tickers))
+        ),
+    )
+
+
+def _write_normalized_capture(
+    tmp_path: Path,
+    payload: dict[str, object],
+) -> bytes:
+    path = _artifact_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    raw = capture.canonical_json_bytes(payload, maximum_bytes=262_144)
+    path.write_bytes(raw)
+    return raw
+
+
 def _capture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     return capture.capture_current_us_equity_yfinance_valuation(
         portfolio_snapshot_expected_sha256="a" * 64,
@@ -133,7 +190,7 @@ def test_prerequisite_failure_never_reaches_yfinance(
         called = True
         raise AssertionError("network must not be called")
 
-    monkeypatch.setattr(capture.yf, "download", _unexpected_download)
+    _configure_provider(monkeypatch, _unexpected_download)
     monkeypatch.setattr(
         capture,
         "capture_current_validated_strict_holdings_domain",
@@ -175,7 +232,7 @@ def test_complete_capture_uses_trusted_session_raw_close_and_pinned_arguments(
         calls.append((ticker, kwargs))
         return _history(close=100.25 if ticker == "QQQ" else 200.5, adj_close=1)
 
-    monkeypatch.setattr(capture.yf, "download", _download)
+    _configure_provider(monkeypatch, _download)
     atomic_calls: list[tuple[Path, str]] = []
     real_atomic_write = capture.atomic_write_text
 
@@ -285,7 +342,7 @@ def test_invalid_or_nonexact_provider_content_never_writes_capture(
     history: pd.DataFrame,
 ) -> None:
     _configure_prerequisites(tmp_path, monkeypatch, tickers=("QQQ",))
-    monkeypatch.setattr(capture.yf, "download", lambda *_args, **_kwargs: history)
+    _configure_provider(monkeypatch, lambda *_args, **_kwargs: history)
     result = _capture(tmp_path, monkeypatch)
     assert result.status in {
         capture.YfinanceValuationCaptureStatus.UNAVAILABLE,
@@ -300,14 +357,13 @@ def test_network_or_empty_single_ticker_failure_preserves_prior_capture(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_prerequisites(tmp_path, monkeypatch, tickers=("QQQ",))
-    monkeypatch.setattr(capture.yf, "download", lambda *_args, **_kwargs: _history())
+    _configure_provider(monkeypatch, lambda *_args, **_kwargs: _history())
     success = _capture(tmp_path, monkeypatch)
     assert success.status is capture.YfinanceValuationCaptureStatus.CAPTURED
     prior = _artifact_path(tmp_path).read_bytes()
 
-    monkeypatch.setattr(
-        capture.yf,
-        "download",
+    _configure_provider(
+        monkeypatch,
         lambda *_args, **_kwargs: (_ for _ in ()).throw(TimeoutError("offline")),
     )
     unavailable = _capture(tmp_path, monkeypatch)
@@ -315,10 +371,11 @@ def test_network_or_empty_single_ticker_failure_preserves_prior_capture(
     assert unavailable.reason_codes == ("YFINANCE_CAPTURE_PROVIDER_REQUEST_UNAVAILABLE",)
     assert _artifact_path(tmp_path).read_bytes() == prior
 
-    monkeypatch.setattr(
-        capture.yf,
-        "download",
-        lambda *_args, **_kwargs: pd.DataFrame(columns=list(capture._EXPECTED_COLUMNS)),
+    _configure_provider(
+        monkeypatch,
+        lambda *_args, **_kwargs: pd.DataFrame(
+            columns=list(capture._EXPECTED_COLUMNS)
+        ),
     )
     unavailable = _capture(tmp_path, monkeypatch)
     assert unavailable.status is capture.YfinanceValuationCaptureStatus.UNAVAILABLE
@@ -339,7 +396,7 @@ def test_complete_domain_is_all_or_nothing_and_duplicate_holdings_fail_before_ne
             return pd.DataFrame(columns=list(capture._EXPECTED_COLUMNS))
         return _history()
 
-    monkeypatch.setattr(capture.yf, "download", _download)
+    _configure_provider(monkeypatch, _download)
     result = _capture(tmp_path, monkeypatch)
     assert result.status is capture.YfinanceValuationCaptureStatus.UNAVAILABLE
     assert calls == ["QQQ", "SMH"]
@@ -457,12 +514,126 @@ def test_runtime_version_drift_fails_closed_before_provider_request(
         called = True
         raise AssertionError("provider must not be called")
 
-    monkeypatch.setattr(capture.yf, "download", _unexpected_download)
+    _configure_provider(monkeypatch, _unexpected_download)
     monkeypatch.setattr(capture, "version", lambda _name: "0.0.0")
     result = _capture(tmp_path, monkeypatch)
     assert result.status is capture.YfinanceValuationCaptureStatus.INVALID
     assert result.reason_codes == ("YFINANCE_CAPTURE_YFINANCE_VERSION_UNSUPPORTED",)
     assert called is False
+
+
+def test_fixed_capture_reader_is_parameterless_canonical_and_provider_free(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(capture, "repo_root", lambda: tmp_path)
+    raw = _write_normalized_capture(tmp_path, _normalized_capture_payload())
+    monkeypatch.setattr(
+        capture,
+        "_provider_modules",
+        lambda: (_ for _ in ()).throw(AssertionError("provider import forbidden")),
+    )
+
+    validated = (
+        capture.read_current_validated_us_equity_yfinance_valuation_capture()
+    )
+
+    assert not inspect.signature(
+        capture.read_current_validated_us_equity_yfinance_valuation_capture
+    ).parameters
+    assert validated.artifact_sha256 == hashlib.sha256(raw).hexdigest()
+    assert validated.portfolio_source_sha256 == _PORTFOLIO_SOURCE_SHA256
+    assert validated.requested_ticker_domain == ("QQQ", "SMH")
+    assert validated.marks == (("QQQ", "100"), ("SMH", "101"))
+    assert validated.session_date.isoformat() == _SESSION_DATE
+
+
+@pytest.mark.parametrize(
+    ("raw", "reason", "unavailable"),
+    (
+        (b"{", "YFINANCE_CAPTURE_CURRENT_SOURCE_JSON_INVALID", False),
+        (
+            b'{"authority_effect":"NONE"}',
+            "YFINANCE_CAPTURE_NORMALIZED_SCHEMA_INVALID",
+            False,
+        ),
+    ),
+)
+def test_fixed_capture_reader_rejects_present_malformed_content(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    raw: bytes,
+    reason: str,
+    unavailable: bool,
+) -> None:
+    monkeypatch.setattr(capture, "repo_root", lambda: tmp_path)
+    path = _artifact_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(raw)
+
+    with pytest.raises(capture.CurrentYfinanceValuationCaptureError) as exc_info:
+        capture.read_current_validated_us_equity_yfinance_valuation_capture()
+
+    assert exc_info.value.reason_codes == (reason,)
+    assert exc_info.value.unavailable is unavailable
+
+
+def test_fixed_capture_reader_requires_exact_canonical_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(capture, "repo_root", lambda: tmp_path)
+    raw = _write_normalized_capture(tmp_path, _normalized_capture_payload())
+    _artifact_path(tmp_path).write_bytes(raw + b"\n")
+
+    with pytest.raises(capture.CurrentYfinanceValuationCaptureError) as exc_info:
+        capture.read_current_validated_us_equity_yfinance_valuation_capture()
+
+    assert exc_info.value.reason_codes == (
+        "YFINANCE_CAPTURE_CURRENT_SOURCE_CANONICAL_INVALID",
+    )
+    assert exc_info.value.unavailable is False
+
+
+def test_fixed_capture_reader_maps_absence_to_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(capture, "repo_root", lambda: tmp_path)
+
+    with pytest.raises(capture.CurrentYfinanceValuationCaptureError) as exc_info:
+        capture.read_current_validated_us_equity_yfinance_valuation_capture()
+
+    assert exc_info.value.unavailable is True
+    assert exc_info.value.reason_codes == (
+        "YFINANCE_CAPTURE_CURRENT_SOURCE_UNAVAILABLE",
+    )
+
+
+@pytest.mark.parametrize("error_number", (errno.EACCES, errno.EPERM))
+def test_fixed_capture_reader_maps_permission_denied_to_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error_number: int,
+) -> None:
+    monkeypatch.setattr(capture, "repo_root", lambda: tmp_path)
+    _write_normalized_capture(tmp_path, _normalized_capture_payload())
+
+    def _permission_denied(*_args: object, **_kwargs: object) -> bytes:
+        raise MmiStableReadError(
+            MmiStableReadErrorCode.STABLE_READ_INPUT_INVALID,
+            os_error_errno=error_number,
+        )
+
+    monkeypatch.setattr(capture, "stable_read_exact_bytes", _permission_denied)
+
+    with pytest.raises(capture.CurrentYfinanceValuationCaptureError) as exc_info:
+        capture.read_current_validated_us_equity_yfinance_valuation_capture()
+
+    assert exc_info.value.reason_codes == (
+        "YFINANCE_CAPTURE_CURRENT_SOURCE_UNREADABLE",
+    )
+    assert exc_info.value.unavailable is True
 
 
 def test_capture_never_changes_observer_or_prompt_network_boundary() -> None:
@@ -471,5 +642,6 @@ def test_capture_never_changes_observer_or_prompt_network_boundary() -> None:
         / "src/investment_orchestrator/observability/report_only_holdings_exposure.py"
     )
     observer_source = observer_path.read_text(encoding="utf-8")
-    assert "yfinance" not in observer_source
-    assert "us_equity_yfinance_valuation_capture" not in observer_source
+    assert "import yfinance" not in observer_source
+    assert "yf.download" not in observer_source
+    assert "subprocess" not in observer_source
