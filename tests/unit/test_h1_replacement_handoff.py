@@ -12,7 +12,7 @@ internals, the facts factory, and the availability bridge are not retested.
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -481,6 +481,165 @@ def test_present_portfolio_consume_builds_facts_and_claims_mapping_last(
         prepared.prepared_handoff_identity_sha256
     )
     assert env.names() == [PREPARED_LEAF, RESPONSE_LEAF]
+
+
+# --------------------------------------------------------------------------
+# Qualitative research projection (PR-P1). Carries no availability,
+# selection, or admission meaning; its identity is same-run provenance only.
+# The module isolation oracle above already proves this file imports
+# nothing from ``investment_orchestrator.state`` or any availability/
+# permission surface, which covers these new types too.
+# --------------------------------------------------------------------------
+def test_consume_projects_qualitative_facts_from_the_validated_response_only(
+    env: _Environment,
+) -> None:
+    prepared = _prepare_present(env)
+    view, prompt = _independent_prompt(env, with_portfolio=True)
+    instruments = view["policy_view"]["analysis_instruments"]
+    assert type(instruments) is list
+    env.leaf(RESPONSE_LEAF).write_bytes(_response_bytes(view, prompt))
+
+    consumed = consume_h1_replacement_handoff(
+        expected_prepared_handoff_identity_sha256=(
+            prepared.prepared_handoff_identity_sha256
+        ),
+    )
+    # No new artifact appeared: the projection is in-memory only.
+    assert env.names() == [MAPPING_LEAF, PREPARED_LEAF, RESPONSE_LEAF]
+
+    qualitative = consumed.qualitative_research_facts
+    assert type(qualitative) is handoff.H1QualitativeResearchFacts
+    assert qualitative.analysis_status == "QUALITATIVE_ANALYSIS_PROVIDED"
+    assert qualitative.instrument_views == tuple(
+        handoff.H1QualitativeInstrumentView(
+            ticker=item["ticker"],
+            evidence_status="EVIDENCE_SUPPORTED",
+            rationale_12m_plus="Evidence-linked qualitative rationale.",
+            references=(f"POLICY.INSTRUMENT.{index:04d}",),
+        )
+        for index, item in enumerate(instruments, start=1)
+        if type(item) is dict
+    )
+
+    # The identity is preserved exactly. Independently confirmed against the
+    # mapping report's own upstream identity chain — a separate code path
+    # that derives the same value from the same validated response object.
+    mapping = json.loads(env.leaf(MAPPING_LEAF).read_bytes())
+    assert (
+        qualitative.validated_grounded_analysis_response_identity_sha256
+        == mapping["upstream_identity_chain"][
+            "validated_grounded_analysis_response_identity_sha256"
+        ]
+    )
+
+    # Existing identities are unaffected by the new projection.
+    assert consumed.mapping_report_identity_sha256 == (
+        mapping["mapping_report_identity_sha256"]
+    )
+    assert consumed.prepared_handoff_identity_sha256 == (
+        prepared.prepared_handoff_identity_sha256
+    )
+
+
+def test_invalid_response_content_never_produces_qualitative_facts(
+    env: _Environment,
+) -> None:
+    """A response the existing validator rejects must never reach a result."""
+    prepared = _prepare_present(env)
+    view, prompt = _independent_prompt(env, with_portfolio=True)
+    valid_bytes = _response_bytes(view, prompt)
+    corrupted = valid_bytes.replace(
+        b"EVIDENCE_SUPPORTED", b"NOT_A_REAL_EVIDENCE_STATUS"
+    )
+    assert corrupted != valid_bytes
+    env.leaf(RESPONSE_LEAF).write_bytes(corrupted)
+
+    with pytest.raises(H1ReplacementHandoffError) as raised:
+        consume_h1_replacement_handoff(
+            expected_prepared_handoff_identity_sha256=(
+                prepared.prepared_handoff_identity_sha256
+            ),
+        )
+    assert raised.value.code is Code.H1_HANDOFF_RESPONSE_CONTENT_INVALID
+    assert MAPPING_LEAF not in env.names()
+
+
+def test_qualitative_projection_reads_only_the_validated_response_object() -> (
+    None
+):
+    """No second validator, no raw reparse, no candidate reconstruction.
+
+    Structural proof over the actual function body: it must not reference
+    the legacy compatibility candidate, re-acquire or re-decode raw response
+    bytes, or call the validator a second time. Instrument-tuple and
+    reference-membership enforcement stay exactly where they already live.
+    """
+    source_path = (
+        repo_root()
+        / "src/investment_orchestrator/workflow/h1_replacement_handoff.py"
+    )
+    tree = ast.parse(
+        source_path.read_text(encoding="utf-8"), filename=str(source_path)
+    )
+    [function] = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_build_qualitative_research_facts"
+    ]
+    body_source = ast.unparse(function)
+    for forbidden in (
+        "legacy_step1_compatibility_candidate",
+        "candidate",
+        "stable_read_exact_bytes",
+        "_acquire_response_bytes",
+        "response_bytes",
+        "raw_response_envelope",
+        "json.loads",
+        "_validated_response_v2",
+        "build_mmi_validated_grounded_analysis_response_v2",
+        "validate_mmi_validated_grounded_analysis_response_v2",
+        "_require_instrument_equality",
+        "_require_reference_membership",
+    ):
+        assert forbidden not in body_source, forbidden
+
+
+def test_qualitative_facts_surface_has_no_availability_or_permission_field() -> (
+    None
+):
+    forbidden = {
+        "persisted_state",
+        "persisted_source",
+        "allowed_actions",
+        "blocked_actions",
+        "permission_effect",
+        "h1_mapped_selected",
+        "state",
+        "source",
+        "disposition",
+        "eligibility",
+        "priority",
+        "quantity",
+        "order",
+        "budget",
+        "score",
+        "rank",
+    }
+    facts_surface = {f.name for f in fields(handoff.H1QualitativeResearchFacts)}
+    view_surface = {f.name for f in fields(handoff.H1QualitativeInstrumentView)}
+    assert facts_surface == {
+        "analysis_status",
+        "instrument_views",
+        "validated_grounded_analysis_response_identity_sha256",
+    }
+    assert view_surface == {
+        "ticker",
+        "evidence_status",
+        "rationale_12m_plus",
+        "references",
+    }
+    assert not (facts_surface | view_surface) & forbidden
 
 
 # --------------------------------------------------------------------------

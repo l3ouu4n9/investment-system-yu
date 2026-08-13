@@ -92,6 +92,8 @@ from investment_orchestrator.research.h1_mapped_recognition import (
 __all__ = (
     "H1ConsumeResult",
     "H1PrepareResult",
+    "H1QualitativeInstrumentView",
+    "H1QualitativeResearchFacts",
     "H1ReplacementHandoffError",
     "H1ReplacementHandoffErrorCode",
     "PORTFOLIO_SNAPSHOT_PRESENT",
@@ -203,12 +205,50 @@ class H1PrepareResult:
 
 
 @dataclass(frozen=True, slots=True)
+class H1QualitativeInstrumentView:
+    """One already-validated per-instrument qualitative research row.
+
+    Every field is copied unchanged from the response object the existing
+    grounded-response validator already accepted; this type performs no
+    parsing, re-validation, or interpretation of the qualitative text.
+    """
+
+    ticker: str
+    evidence_status: str
+    rationale_12m_plus: str | None
+    references: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class H1QualitativeResearchFacts:
+    """Already-validated H1 qualitative research, exposed unchanged.
+
+    Carries no availability, selection, or admission meaning: this module
+    never wires it into any availability, permission, gate, publication, or
+    order surface, and building it proves nothing about whether mapped H1
+    research is ever selected by a future availability owner.
+
+    ``validated_grounded_analysis_response_identity_sha256`` is a
+    run-instance identity — it transitively binds this consume run's
+    evaluation timestamp.  It is kept here only so a future same-run
+    consumer can prove this projection and this result's
+    ``mapped_recognition_facts`` came from the same consume run; it is never
+    a stable cross-run content, comparability, or currentness identity.
+    """
+
+    analysis_status: str
+    instrument_views: tuple[H1QualitativeInstrumentView, ...]
+    validated_grounded_analysis_response_identity_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
 class H1ConsumeResult:
     """Report-only outcome of one consumed prepared handoff.
 
-    ``mapped_recognition_facts`` is returned in memory for a future explicitly
-    reviewed availability owner.  This module never persists it and never
-    passes it to any availability, permission, gate, publication, or order
+    ``mapped_recognition_facts`` and ``qualitative_research_facts`` are
+    returned in memory for a future explicitly reviewed availability /
+    Phase-3 owner.  This module never persists either and never passes
+    either to any availability, permission, gate, publication, or order
     surface.
     """
 
@@ -217,6 +257,7 @@ class H1ConsumeResult:
     mapping_report_identity_sha256: str
     portfolio_snapshot_presence: str
     mapped_recognition_facts: H1MappedRecognitionFacts
+    qualitative_research_facts: H1QualitativeResearchFacts
 
 
 # --------------------------------------------------------------------------
@@ -902,12 +943,14 @@ def consume_h1_replacement_handoff(
         # Restart, source, and complete prompt continuity are proven.  Only
         # now may operator response bytes enter this process, exactly once.
         response_bytes = _acquire_response_bytes(directory_fd)
-        mapping_report, facts = _build_mapping_report_and_facts(
-            chain=chain,
-            policy_source=policy_source,
-            portfolio_source=portfolio_source,
-            run_context=run_context,
-            response_bytes=response_bytes,
+        mapping_report, facts, qualitative_facts = (
+            _build_mapping_report_and_facts(
+                chain=chain,
+                policy_source=policy_source,
+                portfolio_source=portfolio_source,
+                run_context=run_context,
+                response_bytes=response_bytes,
+            )
         )
         mapping_identity = mapping_report["mapping_report_identity_sha256"]
         if type(mapping_identity) is not str:
@@ -937,6 +980,7 @@ def consume_h1_replacement_handoff(
             else PORTFOLIO_SNAPSHOT_PRESENT
         ),
         mapped_recognition_facts=facts,
+        qualitative_research_facts=qualitative_facts,
     )
 
 
@@ -1024,6 +1068,37 @@ def _build_response_chain(
     )
 
 
+def _build_qualitative_research_facts(
+    validated_grounded_analysis_response: dict[str, object],
+) -> H1QualitativeResearchFacts:
+    """Project the already-validated qualitative response, unchanged.
+
+    Reads only ``validated_grounded_analysis_response`` — the object the
+    existing grounded-response validator already produced and validated.
+    Performs no schema check, no instrument-tuple check, and no reference
+    check of its own: those remain owned exactly where they already are.
+    """
+    payload = validated_grounded_analysis_response["response_payload"]
+    instrument_views = tuple(
+        H1QualitativeInstrumentView(
+            ticker=row["ticker"],
+            evidence_status=row["evidence_status"],
+            rationale_12m_plus=row["rationale_12m_plus"],
+            references=tuple(row["references"]),
+        )
+        for row in payload["instrument_views"]
+    )
+    return H1QualitativeResearchFacts(
+        analysis_status=payload["analysis_status"],
+        instrument_views=instrument_views,
+        validated_grounded_analysis_response_identity_sha256=(
+            validated_grounded_analysis_response[
+                "validated_grounded_analysis_response_identity_sha256"
+            ]
+        ),
+    )
+
+
 def _build_mapping_report_and_facts(
     *,
     chain: _Chain,
@@ -1031,12 +1106,15 @@ def _build_mapping_report_and_facts(
     portfolio_source: MmiCapturedSource | None,
     run_context: MmiProjectionRunContext,
     response_bytes: bytes,
-) -> tuple[dict[str, object], H1MappedRecognitionFacts]:
+) -> tuple[dict[str, object], H1MappedRecognitionFacts, H1QualitativeResearchFacts]:
     """Complete the response chain, the mapping report, and then the facts.
 
     Facts are constructed last and only in memory.  A portfolio source that
     was proven absent reaches the existing H1 mapping contract unchanged and
     fails closed there, so no completion artifact can be published for it.
+    ``qualitative_facts`` is projected directly from the validated response,
+    independent of the mapping report and mapped-recognition facts built
+    below it.
     """
     response_chain = _build_response_chain(
         chain=chain,
@@ -1044,6 +1122,9 @@ def _build_mapping_report_and_facts(
         portfolio_source=portfolio_source,
         run_context=run_context,
         response_bytes=response_bytes,
+    )
+    qualitative_facts = _build_qualitative_research_facts(
+        response_chain.validated_grounded_analysis_response
     )
     try:
         report = (
@@ -1093,4 +1174,4 @@ def _build_mapping_report_and_facts(
             H1ReplacementHandoffErrorCode.H1_HANDOFF_FACTS_INVALID,
             owner_reason_codes=(exc.code,),
         )
-    return mapping_report, facts
+    return mapping_report, facts, qualitative_facts
