@@ -958,6 +958,135 @@ def _h1_mapped_artifact_fields(result: ResearchAvailabilityResult) -> dict[str, 
     }
 
 
+class H1MappedResearchSelectionContractError(RuntimeError):
+    """Raised when an owner result claims a positive H1 selection it cannot prove.
+
+    ``research_availability`` remains the sole owner of ``h1_mapped_selected``;
+    this is not a second selection algorithm. It is a structural consistency
+    assertion over the ALREADY-DECIDED owner result: when
+    ``h1_mapped_selected`` is ``True`` but ``state`` / ``source`` /
+    ``h1_mapped_recognition`` are not what a genuine mapped-H1 selection always
+    produces, the contradiction is an internal defect, never a signal to
+    silently normalize the projection to unselected.
+    """
+
+
+# Schema version for :class:`H1MappedResearchSelectionProjection`. Independent
+# of every artifact schema version above: this projection is an in-memory,
+# same-run value, never persisted.
+_H1_SELECTION_PROJECTION_SCHEMA_VERSION: Final = "h1_mapped_research_selection_projection_v1"
+
+_SHA256_HEX_DIGITS: Final = frozenset("0123456789abcdef")
+
+
+def _is_sha256_hex(value: Any) -> bool:
+    return isinstance(value, str) and len(value) == 64 and set(value) <= _SHA256_HEX_DIGITS
+
+
+@dataclass(frozen=True, slots=True)
+class H1MappedResearchSelectionProjection:
+    """Narrow, immutable, SAME-RUN snapshot of availability's H1 selection facts.
+
+    This is NOT a Phase-3 admission, disposition, or permission grant — it
+    carries no ``allowed_actions`` / ``blocked_actions`` / permission field of
+    any kind, and it is not authorization for anything. It exposes only the
+    already-computed availability-owner facts a future same-run consumer needs
+    to bind an admission decision to the mapped-H1 candidate this run selected
+    (or did not select), without ever handing that consumer the raw, only
+    shallowly-frozen :class:`ResearchAvailabilityResult` or its mutable
+    ``allowed_actions`` / ``h1_mapped_recognition`` containers.
+
+    Identity doctrine: ``mapping_report_identity_sha256`` is meaningful ONLY
+    for SAME-RUN candidate cohesion — tying a later same-run consumer to the
+    exact mapping report this run's availability evaluation selected. It is
+    NOT a cross-run content identity, NOT a persistence/continuity identity,
+    NOT a policy-change identity, and NOT a currentness identity across runs.
+    Nothing about this projection proves the identified mapping report is
+    still current on a later run.
+    """
+
+    schema_version: str
+    h1_mapped_selected: bool
+    state: str
+    source: str
+    mapping_report_identity_sha256: str | None
+    report_only: bool
+    not_authorization: bool
+    authority_effect: str
+
+
+def build_h1_mapped_research_selection_projection(
+    result: ResearchAvailabilityResult,
+) -> H1MappedResearchSelectionProjection:
+    """Project only the H1 selection facts ``result`` already computed.
+
+    Does not recompute ``h1_mapped_selected``: ``research_availability``
+    remains the sole selection owner. Copies only immutable scalars — never a
+    reference into ``result.allowed_actions``, ``result.h1_mapped_recognition``,
+    or any other mutable container on ``result`` — so mutating those containers
+    after this call cannot alter the returned projection.
+
+    Positive (``h1_mapped_selected is True``): the owner result MUST already be
+    structurally consistent with ``state == H1_MAPPED_FRESH_NON_ACTIONABLE``,
+    ``source == H1_ROLE_MAPPED_SOURCE``, and a present, well-formed
+    ``h1_mapped_recognition["identity"]["mapping_report_identity_sha256"]`` —
+    every real evaluator selection satisfies this by construction. An owner
+    result that violates it is an impossible/internal contradiction, not a
+    routine "not selected" outcome, so this fails closed with
+    :class:`H1MappedResearchSelectionContractError` rather than silently
+    normalizing to ``h1_mapped_selected = False`` or reclassifying
+    state/source.
+
+    Negative (``h1_mapped_selected is False``): ``state`` / ``source`` are
+    preserved as-is, as plain observation facts about what the owner actually
+    selected instead (Legacy, compiled, promoted, or a fallback state) — this
+    function does not infer or reclassify why H1 was not selected.
+    ``mapping_report_identity_sha256`` is always ``None`` in this case, even if
+    ``result.h1_mapped_recognition`` happens to carry diagnostic identity
+    fields for an unselected/stale/future-dated H1 candidate: leaving it absent
+    means a future same-run consumer can never accidentally bind an admission
+    to a recognition receipt that was never selected.
+    """
+    if not result.h1_mapped_selected:
+        return H1MappedResearchSelectionProjection(
+            schema_version=_H1_SELECTION_PROJECTION_SCHEMA_VERSION,
+            h1_mapped_selected=False,
+            state=result.state,
+            source=result.source,
+            mapping_report_identity_sha256=None,
+            report_only=True,
+            not_authorization=True,
+            authority_effect="NONE",
+        )
+
+    recognition = result.h1_mapped_recognition
+    identity = recognition.get("identity") if isinstance(recognition, Mapping) else None
+    mapping_report_identity_sha256 = (
+        identity.get("mapping_report_identity_sha256") if isinstance(identity, Mapping) else None
+    )
+    if (
+        result.state != H1_MAPPED_FRESH_NON_ACTIONABLE
+        or result.source != H1_ROLE_MAPPED_SOURCE
+        or not _is_sha256_hex(mapping_report_identity_sha256)
+    ):
+        raise H1MappedResearchSelectionContractError(
+            "h1_mapped_selected=True but the owner result is not structurally "
+            "consistent with H1_MAPPED_FRESH_NON_ACTIONABLE / H1_ROLE_MAPPED / "
+            "a present mapping-report identity."
+        )
+
+    return H1MappedResearchSelectionProjection(
+        schema_version=_H1_SELECTION_PROJECTION_SCHEMA_VERSION,
+        h1_mapped_selected=True,
+        state=result.state,
+        source=result.source,
+        mapping_report_identity_sha256=mapping_report_identity_sha256,
+        report_only=True,
+        not_authorization=True,
+        authority_effect="NONE",
+    )
+
+
 def _classify_current_valid(
     age: int | None,
     fresh_days: int,

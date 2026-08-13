@@ -103,6 +103,9 @@ def _fresh_h1_facts() -> H1MappedRecognitionFacts:
     for field in fields(H1MappedRecognitionFacts):
         object.__setattr__(facts, field.name, f"{field.name}_value")
     object.__setattr__(facts, "source_kind", "H1_ROLE_MAPPED")
+    # A realistic sha256 hex string: the real factory always produces one, and
+    # the H1 selection projection now validates its shape when H1 is selected.
+    object.__setattr__(facts, "mapping_report_identity_sha256", "d" * 64)
     object.__setattr__(facts, "policy_as_of_date", "2026-06-25")
     object.__setattr__(facts, "portfolio_source_date", "2026-06-25")
     object.__setattr__(
@@ -157,6 +160,7 @@ class _FakeConsumeResult:
 class _StubAvailability:
     state: str = "INVALID_CONTRACT"
     h1_mapped_selected: bool = False
+    source: str = "raw_research_handoff"
 
 
 def _prepare_argv() -> list[str]:

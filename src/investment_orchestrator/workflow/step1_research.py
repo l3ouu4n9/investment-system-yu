@@ -137,6 +137,8 @@ from investment_orchestrator.state.last_good_research_handoff import (
     write_last_good_research_handoff_if_valid,
 )
 from investment_orchestrator.state.research_availability import (
+    H1MappedResearchSelectionProjection,
+    build_h1_mapped_research_selection_projection,
     evaluate_research_availability,
     research_availability_result_to_dict,
     research_degraded_mode_decision_to_dict,
@@ -1911,11 +1913,36 @@ def _resolve_no_output_warrant_for_h1_refresh() -> _NoOutputWarrant:
     )
 
 
-def refresh_research_availability_for_h1_replacement(
+@dataclass(frozen=True, slots=True)
+class H1ResearchAvailabilityRefreshResult:
+    """SAME-RUN composite over exactly one availability evaluation/write.
+
+    ``public_projection`` is the existing, unchanged legacy
+    ``refresh_research_availability_for_h1_replacement`` return dict —
+    ``dict[str, str]`` — kept here only so a future caller that needs both
+    views does not force a second evaluation. ``h1_selection`` is the narrow,
+    immutable :class:`H1MappedResearchSelectionProjection` this SAME
+    evaluation already computed, or ``None`` when no availability evaluation
+    ran at all this call (the "no base context" outcome, where
+    ``public_projection["research_availability_state"] == ""``).
+
+    Neither field is, or holds a reference into, the raw
+    ``ResearchAvailabilityResult``: ``public_projection`` is a plain string
+    dict and ``h1_selection`` copies only immutable scalars. A future Phase-3
+    admission factory may consume ``h1_selection`` for SAME-RUN selection
+    authority without ever receiving the owner's mutable ``allowed_actions`` /
+    ``h1_mapped_recognition`` containers or any permission vector.
+    """
+
+    public_projection: dict[str, str]
+    h1_selection: H1MappedResearchSelectionProjection | None
+
+
+def refresh_research_availability_for_h1_replacement_with_selection(
     *,
     h1_mapped_facts: Any | None = None,
     strategy_settings: Mapping[str, Any] | None = None,
-) -> dict[str, str]:
+) -> H1ResearchAvailabilityRefreshResult:
     """Clear, then optionally re-derive, the current Step 1 availability claim.
 
     The manual H1 replacement prepare / consume CLIs own the calls. With
@@ -1938,6 +1965,13 @@ def refresh_research_availability_for_h1_replacement(
     copied into a dict, persisted, reconstructed, or rebuilt from the mapping
     report, and nothing here discovers artifacts, writes a pointer or last-good
     handoff, or changes any state, freshness, or permission policy.
+
+    This is the SOLE owner of the clear + evaluate + write sequence: exactly
+    one availability evaluation and one artifact-write set happens per call,
+    regardless of which of ``public_projection`` / ``h1_selection`` a caller
+    actually uses. ``refresh_research_availability_for_h1_replacement`` is a
+    thin wrapper over this function that returns only ``public_projection``,
+    so existing callers observe no change at all.
     """
     _invalidate_current_research_availability_artifacts()
 
@@ -1964,21 +1998,27 @@ def refresh_research_availability_for_h1_replacement(
                 raise_on_failure=True,
             )
             if availability is not None:
-                return {
-                    "research_availability_state": availability.state,
-                    "research_availability_decision_present": str(
-                        file_exists(step1_research_degraded_mode_decision_path())
-                    ),
-                    "h1_mapped_selected": str(availability.h1_mapped_selected),
-                }
+                return H1ResearchAvailabilityRefreshResult(
+                    public_projection={
+                        "research_availability_state": availability.state,
+                        "research_availability_decision_present": str(
+                            file_exists(step1_research_degraded_mode_decision_path())
+                        ),
+                        "h1_mapped_selected": str(availability.h1_mapped_selected),
+                    },
+                    h1_selection=build_h1_mapped_research_selection_projection(availability),
+                )
 
         # The raw output refuted NO_OUTPUT, or the best-effort NO_OUTPUT writer
         # did not return an authoritative result. No H1 state is inferred here.
-        return {
-            "research_availability_state": "",
-            "research_availability_decision_present": "False",
-            "h1_mapped_selected": "False",
-        }
+        return H1ResearchAvailabilityRefreshResult(
+            public_projection={
+                "research_availability_state": "",
+                "research_availability_decision_present": "False",
+                "h1_mapped_selected": "False",
+            },
+            h1_selection=None,
+        )
 
     availability, _ = _evaluate_research_availability_report_only(
         candidate=candidate,
@@ -1987,15 +2027,36 @@ def refresh_research_availability_for_h1_replacement(
         payload=payload,
         h1_mapped_facts=h1_mapped_facts,
     )
-    return {
-        "research_availability_state": availability.state,
-        # Reported from disk, not from the returned result: the report-only
-        # evaluator swallows write failures, so only presence proves publication.
-        "research_availability_decision_present": str(
-            file_exists(step1_research_degraded_mode_decision_path())
-        ),
-        "h1_mapped_selected": str(availability.h1_mapped_selected),
-    }
+    return H1ResearchAvailabilityRefreshResult(
+        public_projection={
+            "research_availability_state": availability.state,
+            # Reported from disk, not from the returned result: the report-only
+            # evaluator swallows write failures, so only presence proves publication.
+            "research_availability_decision_present": str(
+                file_exists(step1_research_degraded_mode_decision_path())
+            ),
+            "h1_mapped_selected": str(availability.h1_mapped_selected),
+        },
+        h1_selection=build_h1_mapped_research_selection_projection(availability),
+    )
+
+
+def refresh_research_availability_for_h1_replacement(
+    *,
+    h1_mapped_facts: Any | None = None,
+    strategy_settings: Mapping[str, Any] | None = None,
+) -> dict[str, str]:
+    """Existing public refresh contract: unchanged legacy ``dict[str, str]``.
+
+    Thin wrapper over :func:`refresh_research_availability_for_h1_replacement_with_selection`
+    that discards ``h1_selection`` and returns only ``public_projection`` — see
+    that function's docstring for the full behavior contract. Existing callers
+    (the H1 replacement prepare / consume CLIs) need no changes.
+    """
+    return refresh_research_availability_for_h1_replacement_with_selection(
+        h1_mapped_facts=h1_mapped_facts,
+        strategy_settings=strategy_settings,
+    ).public_projection
 
 
 # S1A-11: the ONLY normalized paths the runtime-parity comparator may report for
