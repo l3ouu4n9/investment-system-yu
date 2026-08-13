@@ -583,6 +583,11 @@ def test_observer_stays_provider_free_and_disconnected_from_authority_flows() ->
     module_file = root / "observability/report_only_holdings_exposure.py"
     calendar_file = root / "market/us_equity_session_calendar.py"
     capture_file = root / "market/us_equity_yfinance_valuation_capture.py"
+    # The Budget Phase-2 increment-capacity observer is the one approved,
+    # typed-result-only consumer of this module (r x H basis derivation).
+    increment_capacity_file = (
+        root / "observability/report_only_increment_capacity.py"
+    )
     module_text = module_file.read_text(encoding="utf-8")
     assert "import yfinance" not in module_text
     assert "yf.download" not in module_text
@@ -603,5 +608,11 @@ def test_observer_stays_provider_free_and_disconnected_from_authority_flows() ->
         and "us_equity_session_calendar" not in candidate.read_text(encoding="utf-8")
         and "us_equity_yfinance_valuation_capture" not in candidate.read_text(encoding="utf-8")
         for candidate in root.rglob("*.py")
-        if candidate not in {module_file, calendar_file, capture_file}
+        if candidate
+        not in {
+            module_file,
+            calendar_file,
+            capture_file,
+            increment_capacity_file,
+        }
     )
