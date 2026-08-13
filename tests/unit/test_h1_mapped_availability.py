@@ -24,6 +24,7 @@ from investment_orchestrator.state.final_execution_safety_gate import (
 )
 from investment_orchestrator.state.research_availability import (
     _ALLOWED_ACTIONS_BY_STATE,
+    _H1_MAPPED_BLOCK_KEYS,
     evaluate_research_availability,
     research_availability_result_to_dict,
     research_degraded_mode_decision_to_dict,
@@ -649,3 +650,31 @@ def test_availability_consumes_real_factory_created_facts(
     assert (
         recognition["temporal_evidence"]["policy_as_of_date"] == facts.policy_as_of_date
     )
+
+
+# --- h1_mapped_* absence/presence writer invariant ---------------------------
+# The persisted research-selection refusal reader (research_availability.py)
+# independently declares the h1_mapped_* block's key set rather than importing
+# it from the writer. This pins the writer's actual output so the two cannot
+# silently drift apart.
+
+
+def test_unselected_result_emits_no_h1_mapped_keys() -> None:
+    payload = research_availability_result_to_dict(evaluate())
+
+    assert "h1_mapped_selected" not in payload
+    for key in _H1_MAPPED_BLOCK_KEYS:
+        assert key not in payload, key
+
+
+def test_selected_result_emits_exactly_the_complete_h1_mapped_block() -> None:
+    payload = research_availability_result_to_dict(evaluate(h1_mapped_facts=h1_facts()))
+
+    assert payload["h1_mapped_selected"] is True
+    for key in _H1_MAPPED_BLOCK_KEYS:
+        assert key in payload, key
+    # No key beyond the boolean flag and the declared block: an unexpected
+    # additional h1_mapped_* key would silently widen the reader's ABSENT vs
+    # COMPLETE_POSITIVE classification without either side noticing.
+    observed_h1_keys = {key for key in payload if key.startswith("h1_mapped_")}
+    assert observed_h1_keys == {"h1_mapped_selected", *_H1_MAPPED_BLOCK_KEYS}

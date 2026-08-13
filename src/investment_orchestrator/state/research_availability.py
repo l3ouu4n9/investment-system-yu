@@ -16,13 +16,22 @@ Key safety property: missing / stale / invalid research can never yield
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
+import os
+import stat
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any
+from enum import Enum
+from typing import Any, Final
 
+from investment_orchestrator.common.paths import repo_root
+from investment_orchestrator.mmi.stable_read import (
+    MmiStableReadError,
+    stable_read_exact_bytes,
+)
 from investment_orchestrator.research.h1_mapped_recognition import (
     H1MappedRecognitionFacts,
 )
@@ -1365,3 +1374,347 @@ def research_degraded_mode_decision_to_dict(result: ResearchAvailabilityResult) 
         **_h1_mapped_artifact_fields(result),
         "report_only": True,
     }
+
+
+# --- persisted research-selection refusal-only reader -------------------------
+#
+# This reader answers exactly one question about the *persisted*
+# ``research_availability.json`` artifact: "does this artifact contain a
+# usable, authenticated positive mapped-H1 admission?" It never says yes.
+#
+# It does NOT prove "mapped H1 is currently not selected." It proves only
+# that this persisted record does not offer a positive admission a Phase-3
+# consumer may rely on. A completed design audit proved that no cross-run
+# currentness binding exists for the persisted artifact today (the writer's
+# causal inputs include facts, such as ``h1_mapped_facts``, that are never
+# persisted and cannot be re-verified from disk). Consequently:
+#
+#   * a structurally valid artifact recording NO mapped-H1 selection is
+#     treated as usable refusal evidence (a stale negative is harmless: its
+#     only downstream meaning is "do not admit H1 research this run", and an
+#     always-fail-closed answer stays correct even if the artifact is stale);
+#   * a structurally valid artifact recording a positive mapped-H1 selection
+#     is *never* surfaced as usable, because currentness cannot be proven —
+#     it is reported as UNAVAILABLE, not as an admission and not as a content
+#     defect.
+#
+# This function performs zero writes, zero availability recomputation, and
+# reads no clock. It reads exactly one fixed file.
+
+_RESEARCH_SELECTION_ARTIFACT_LOCATOR: Final = (
+    "artifacts/current/step1_research/research_availability.json"
+)
+_RESEARCH_SELECTION_ARTIFACT_DIR_COMPONENTS: Final = (
+    "artifacts",
+    "current",
+    "step1_research",
+)
+_RESEARCH_SELECTION_ARTIFACT_LEAF: Final = "research_availability.json"
+# Generous bound: the current artifact is ~2.5 KB. This only protects against
+# reading an unbounded/corrupt file, not a meaningful format constraint.
+_RESEARCH_SELECTION_MAXIMUM_BYTES: Final = 262_144
+
+# The closed 4-token ``source`` vocabulary the evaluator assigns. No owning
+# constant enumerates all four together; three are inline literals in
+# ``evaluate_research_availability`` (raw/compiled/promoted) and the fourth is
+# the existing ``H1_ROLE_MAPPED_SOURCE`` constant, reused here rather than
+# duplicated.
+_RESEARCH_SELECTION_VALID_SOURCES: Final = frozenset(
+    {
+        "raw_research_handoff",
+        "compiled_research_handoff",
+        "promoted_compiled_actionable_handoff",
+        H1_ROLE_MAPPED_SOURCE,
+    }
+)
+
+# The non-boolean keys ``_h1_mapped_artifact_fields`` emits ONLY when mapped H1
+# is selected (``h1_mapped_selected`` is the companion boolean, checked
+# separately). Kept as an independently declared tuple rather than refactoring
+# the writer to expose it, so this reader change cannot alter writer output;
+# ``test_h1_mapped_availability.py`` pins the two in sync.
+_H1_MAPPED_BLOCK_KEYS: Final = (
+    "h1_mapped_source_kind",
+    "h1_mapped_freshness",
+    "h1_mapped_age_days",
+    "h1_mapped_identity",
+    "h1_mapped_current_source_identities",
+    "h1_mapped_temporal_evidence",
+)
+
+_RESEARCH_SELECTION_RESULT_SCHEMA_VERSION: Final = (
+    "research_selection_refusal_read_result_v1"
+)
+# Locally declared (not imported) so this reader has no dependency beyond the
+# stdlib and the two narrow, already-audited primitives below; mirrors the
+# same-named private constant in ``research/h1_mapped_recognition.py``.
+_RESEARCH_SELECTION_AUTHORITY_EFFECT_NONE: Final = "NONE"
+
+
+class ResearchSelectionRefusalReadStatus(str, Enum):
+    """Closed read-result vocabulary. Distinct from availability ``state``."""
+
+    UNAVAILABLE = "UNAVAILABLE"
+    INVALID = "INVALID"
+    REFUSAL_ONLY = "REFUSAL_ONLY"
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchSelectionRefusalReadResult:
+    """Refusal-only read outcome. Carries no permission or sizing fact.
+
+    ``persisted_state`` / ``persisted_source`` are populated only on
+    ``REFUSAL_ONLY``. On every other status, including the positive-artifact
+    UNAVAILABLE case, they are ``None`` by construction: this type has no
+    field through which a positive admission can be returned.
+    """
+
+    schema_version: str
+    status: ResearchSelectionRefusalReadStatus
+    reason_codes: tuple[str, ...]
+    authority_effect: str
+    report_only: bool
+    not_authorization: bool
+    artifact_locator: str
+    artifact_observed_sha256: str | None
+    artifact_observed_size_bytes: int | None
+    persisted_state: str | None
+    persisted_source: str | None
+
+
+def _close_quietly(file_descriptor: int | None) -> None:
+    if file_descriptor is not None:
+        try:
+            os.close(file_descriptor)
+        except OSError:
+            pass
+
+
+def _open_research_selection_artifact_directory() -> int:
+    """Descend the fixed path via symlink-safe opens; caller closes the result."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+    root_fd: int | None = None
+    artifacts_fd: int | None = None
+    current_fd: int | None = None
+    step1_fd: int | None = None
+    try:
+        root_fd = os.open(os.fspath(repo_root()), flags)
+        artifacts_fd = os.open(
+            _RESEARCH_SELECTION_ARTIFACT_DIR_COMPONENTS[0], flags, dir_fd=root_fd
+        )
+        current_fd = os.open(
+            _RESEARCH_SELECTION_ARTIFACT_DIR_COMPONENTS[1], flags, dir_fd=artifacts_fd
+        )
+        step1_fd = os.open(
+            _RESEARCH_SELECTION_ARTIFACT_DIR_COMPONENTS[2], flags, dir_fd=current_fd
+        )
+        if not all(
+            stat.S_ISDIR(os.fstat(fd).st_mode)
+            for fd in (root_fd, artifacts_fd, current_fd, step1_fd)
+        ):
+            raise OSError(errno.ENOTDIR, "expected a directory")
+        return step1_fd
+    except OSError:
+        _close_quietly(step1_fd)
+        raise
+    finally:
+        _close_quietly(current_fd)
+        _close_quietly(artifacts_fd)
+        _close_quietly(root_fd)
+
+
+def _reject_duplicate_object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate key in research selection artifact")
+        result[key] = value
+    return result
+
+
+def _research_selection_unavailable(reason_code: str) -> ResearchSelectionRefusalReadResult:
+    return ResearchSelectionRefusalReadResult(
+        schema_version=_RESEARCH_SELECTION_RESULT_SCHEMA_VERSION,
+        status=ResearchSelectionRefusalReadStatus.UNAVAILABLE,
+        reason_codes=(reason_code,),
+        authority_effect=_RESEARCH_SELECTION_AUTHORITY_EFFECT_NONE,
+        report_only=True,
+        not_authorization=True,
+        artifact_locator=_RESEARCH_SELECTION_ARTIFACT_LOCATOR,
+        artifact_observed_sha256=None,
+        artifact_observed_size_bytes=None,
+        persisted_state=None,
+        persisted_source=None,
+    )
+
+
+def _research_selection_invalid(
+    reason_code: str,
+    *,
+    observed_sha256: str | None,
+    observed_size_bytes: int | None,
+) -> ResearchSelectionRefusalReadResult:
+    return ResearchSelectionRefusalReadResult(
+        schema_version=_RESEARCH_SELECTION_RESULT_SCHEMA_VERSION,
+        status=ResearchSelectionRefusalReadStatus.INVALID,
+        reason_codes=(reason_code,),
+        authority_effect=_RESEARCH_SELECTION_AUTHORITY_EFFECT_NONE,
+        report_only=True,
+        not_authorization=True,
+        artifact_locator=_RESEARCH_SELECTION_ARTIFACT_LOCATOR,
+        artifact_observed_sha256=observed_sha256,
+        artifact_observed_size_bytes=observed_size_bytes,
+        persisted_state=None,
+        persisted_source=None,
+    )
+
+
+def _h1_mapped_block_shape(parsed: Mapping[str, Any]) -> str:
+    """Classify the persisted ``h1_mapped_*`` block as one of three shapes.
+
+    Returns ``"ABSENT"`` (writer's not-selected contract), ``"COMPLETE_POSITIVE"``
+    (writer's selected contract, fully present), or ``"MALFORMED"`` (neither —
+    a partial block, or a boolean/key combination the writer never produces).
+    """
+    has_selected_key = "h1_mapped_selected" in parsed
+    selected_value = parsed.get("h1_mapped_selected")
+    present_block_keys = frozenset(
+        key for key in _H1_MAPPED_BLOCK_KEYS if key in parsed
+    )
+    if not has_selected_key and not present_block_keys:
+        return "ABSENT"
+    if (
+        has_selected_key
+        and selected_value is True
+        and present_block_keys == frozenset(_H1_MAPPED_BLOCK_KEYS)
+    ):
+        return "COMPLETE_POSITIVE"
+    return "MALFORMED"
+
+
+def read_persisted_research_selection_refusal_only() -> ResearchSelectionRefusalReadResult:
+    """Read the fixed persisted availability artifact for refusal facts ONLY.
+
+    Proves nothing about currentness. See the module section header above for
+    the exact semantic contract. Performs zero writes and never calls
+    ``evaluate_research_availability`` or any of its classification helpers.
+    """
+    try:
+        directory_fd = _open_research_selection_artifact_directory()
+    except OSError:
+        return _research_selection_unavailable(
+            "RESEARCH_SELECTION_ARTIFACT_UNAVAILABLE"
+        )
+
+    try:
+        try:
+            raw_bytes = stable_read_exact_bytes(
+                directory_fd,
+                _RESEARCH_SELECTION_ARTIFACT_LEAF,
+                maximum_bytes=_RESEARCH_SELECTION_MAXIMUM_BYTES,
+            )
+        except (MmiStableReadError, OSError):
+            return _research_selection_unavailable(
+                "RESEARCH_SELECTION_ARTIFACT_UNAVAILABLE"
+            )
+    finally:
+        _close_quietly(directory_fd)
+
+    try:
+        text = raw_bytes.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return _research_selection_invalid(
+            "RESEARCH_SELECTION_ARTIFACT_MALFORMED",
+            observed_sha256=None,
+            observed_size_bytes=None,
+        )
+
+    try:
+        parsed = json.loads(text, object_pairs_hook=_reject_duplicate_object_pairs)
+    except (ValueError, RecursionError):
+        return _research_selection_invalid(
+            "RESEARCH_SELECTION_ARTIFACT_MALFORMED",
+            observed_sha256=None,
+            observed_size_bytes=None,
+        )
+    if type(parsed) is not dict:
+        return _research_selection_invalid(
+            "RESEARCH_SELECTION_ARTIFACT_MALFORMED",
+            observed_sha256=None,
+            observed_size_bytes=None,
+        )
+
+    observed_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+    observed_size_bytes = len(raw_bytes)
+
+    state = parsed.get("state")
+    if type(state) is not str or state not in _ALLOWED_ACTIONS_BY_STATE:
+        return _research_selection_invalid(
+            "RESEARCH_SELECTION_ARTIFACT_STATE_INVALID",
+            observed_sha256=observed_sha256,
+            observed_size_bytes=observed_size_bytes,
+        )
+
+    source = parsed.get("source")
+    if type(source) is not str or source not in _RESEARCH_SELECTION_VALID_SOURCES:
+        return _research_selection_invalid(
+            "RESEARCH_SELECTION_ARTIFACT_SOURCE_INVALID",
+            observed_sha256=observed_sha256,
+            observed_size_bytes=observed_size_bytes,
+        )
+
+    h1_block_shape = _h1_mapped_block_shape(parsed)
+    source_claims_h1 = source == H1_ROLE_MAPPED_SOURCE
+    state_claims_h1 = state == H1_MAPPED_FRESH_NON_ACTIONABLE
+
+    if h1_block_shape == "MALFORMED":
+        return _research_selection_invalid(
+            "RESEARCH_SELECTION_ARTIFACT_H1_BLOCK_MALFORMED",
+            observed_sha256=observed_sha256,
+            observed_size_bytes=observed_size_bytes,
+        )
+
+    if h1_block_shape == "COMPLETE_POSITIVE":
+        if not (source_claims_h1 and state_claims_h1):
+            return _research_selection_invalid(
+                "RESEARCH_SELECTION_ARTIFACT_SOURCE_STATE_INCONSISTENT",
+                observed_sha256=observed_sha256,
+                observed_size_bytes=observed_size_bytes,
+            )
+        # Structurally valid positive claim: never surfaced as usable. No
+        # currentness binding exists to authenticate it (see section header).
+        return ResearchSelectionRefusalReadResult(
+            schema_version=_RESEARCH_SELECTION_RESULT_SCHEMA_VERSION,
+            status=ResearchSelectionRefusalReadStatus.UNAVAILABLE,
+            reason_codes=("RESEARCH_SELECTION_POSITIVE_CURRENTNESS_UNAVAILABLE",),
+            authority_effect=_RESEARCH_SELECTION_AUTHORITY_EFFECT_NONE,
+            report_only=True,
+            not_authorization=True,
+            artifact_locator=_RESEARCH_SELECTION_ARTIFACT_LOCATOR,
+            artifact_observed_sha256=observed_sha256,
+            artifact_observed_size_bytes=observed_size_bytes,
+            persisted_state=None,
+            persisted_source=None,
+        )
+
+    # h1_block_shape == "ABSENT"
+    if source_claims_h1 or state_claims_h1:
+        return _research_selection_invalid(
+            "RESEARCH_SELECTION_ARTIFACT_SOURCE_STATE_INCONSISTENT",
+            observed_sha256=observed_sha256,
+            observed_size_bytes=observed_size_bytes,
+        )
+
+    return ResearchSelectionRefusalReadResult(
+        schema_version=_RESEARCH_SELECTION_RESULT_SCHEMA_VERSION,
+        status=ResearchSelectionRefusalReadStatus.REFUSAL_ONLY,
+        reason_codes=(),
+        authority_effect=_RESEARCH_SELECTION_AUTHORITY_EFFECT_NONE,
+        report_only=True,
+        not_authorization=True,
+        artifact_locator=_RESEARCH_SELECTION_ARTIFACT_LOCATOR,
+        artifact_observed_sha256=observed_sha256,
+        artifact_observed_size_bytes=observed_size_bytes,
+        persisted_state=state,
+        persisted_source=source,
+    )
