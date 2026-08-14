@@ -54,6 +54,14 @@ MMI_PRODUCTION_PATHS = (
     ),
     (
         "src/investment_orchestrator/mmi/"
+        "long_horizon_research_payload_v1.py"
+    ),
+    (
+        "src/investment_orchestrator/mmi/"
+        "long_horizon_research_payload_v2.py"
+    ),
+    (
+        "src/investment_orchestrator/mmi/"
         "mmi_h1_legacy_step1_mapping_report_v1.py"
     ),
     "src/investment_orchestrator/mmi/mmi_h1_prepared_handoff_v1.py",
@@ -234,13 +242,28 @@ def test_mmi_package_initialization_has_no_import_or_reexport() -> None:
     assert not any(isinstance(node, (ast.Import, ast.ImportFrom)) for node in ast.walk(tree))
 
 
-def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -> None:
-    inventory = ltetf._scan_production_inventory(repo_root())
-    imports_by_path = dict(inventory.imports_by_path)
-    assert tuple(
+def _discovered_mmi_production_paths(
+    inventory: "ltetf.ProductionInventory",
+) -> tuple[str, ...]:
+    """Live-discovered MMI production paths, sourced from the same scanner
+    used for the whole-repository inventory -- never from the declared,
+    potentially-stale ``MMI_PRODUCTION_PATHS`` tuple."""
+    return tuple(
         path for path in inventory.production_paths if "/mmi/" in path
-    ) == MMI_PRODUCTION_PATHS
-    for path in MMI_PRODUCTION_PATHS:
+    )
+
+
+def _assert_mmi_import_graph_is_closed(
+    mmi_paths: tuple[str, ...],
+    imports_by_path: dict[str, tuple[str, ...]],
+) -> None:
+    """Prohibited-import isolation oracle.
+
+    Operates on whatever ``mmi_paths`` it is given -- it does not read
+    ``MMI_PRODUCTION_PATHS`` itself, so it stays able to catch a violation in
+    an undeclared MMI module even while inventory completeness is red.
+    """
+    for path in mmi_paths:
         imports = imports_by_path[path]
         assert not any(
             imported == prefix or imported.startswith(f"{prefix}.")
@@ -352,15 +375,77 @@ def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -
                 or imported.startswith("investment_orchestrator.mmi.")
             ), (path, imported)
 
+
+def test_mmi_production_inventory_matches_declared_mmi_production_paths() -> None:
+    """MMI inventory completeness: the declared, frozen ``MMI_PRODUCTION_PATHS``
+    must exactly equal the live-discovered MMI production paths.  Kept
+    independent of the prohibited-import isolation oracle below: this test
+    may be red on its own (e.g. a new MMI module was added but not yet
+    declared here) without preventing that oracle from evaluating the actual,
+    live-discovered module set."""
+    inventory = ltetf._scan_production_inventory(repo_root())
+    assert _discovered_mmi_production_paths(inventory) == MMI_PRODUCTION_PATHS
+
+
+def test_mmi_inventory_drift_does_not_mask_prohibited_import_isolation() -> None:
+    """Masking-independence proof.
+
+    Shows that a stale declared ``MMI_PRODUCTION_PATHS`` (which would fail
+    the completeness invariant above) cannot hide a prohibited import in the
+    live-discovered MMI production set: the prohibited-import oracle is
+    evaluated against live discovery, not the declared tuple, so it still
+    independently catches a representative prohibited import.
+    """
+    inventory = ltetf._scan_production_inventory(repo_root())
+    mmi_paths = _discovered_mmi_production_paths(inventory)
+    imports_by_path = dict(inventory.imports_by_path)
+
+    stale_declared = MMI_PRODUCTION_PATHS[:-1]
+    assert stale_declared != mmi_paths
+
+    tainted_path = mmi_paths[0]
+    tainted_imports_by_path = dict(imports_by_path)
+    tainted_imports_by_path[tainted_path] = imports_by_path[tainted_path] + (
+        "subprocess",
+    )
+
+    with pytest.raises(AssertionError):
+        _assert_mmi_import_graph_is_closed(mmi_paths, tainted_imports_by_path)
+
+
+def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -> None:
+    inventory = ltetf._scan_production_inventory(repo_root())
+    imports_by_path = dict(inventory.imports_by_path)
+    mmi_paths = _discovered_mmi_production_paths(inventory)
+    _assert_mmi_import_graph_is_closed(mmi_paths, imports_by_path)
+
+
+def test_mmi_json_importer_inventory_is_closed() -> None:
+    """Closed inventory of which live-discovered MMI modules import ``json``.
+
+    Independent of the prohibited-import and external-reader invariants: a
+    change to this set signals json-importer drift on its own, without
+    depending on either of those other checks passing first.
+    """
+    inventory = ltetf._scan_production_inventory(repo_root())
+    mmi_paths = _discovered_mmi_production_paths(inventory)
     json_importers = tuple(
         path
         for path, imports in inventory.imports_by_path
-        if path in MMI_PRODUCTION_PATHS and "json" in imports
+        if path in mmi_paths and "json" in imports
     )
     assert json_importers == (
         "src/investment_orchestrator/mmi/canonical.py",
         "src/investment_orchestrator/mmi/contracts.py",
         "src/investment_orchestrator/mmi/grounded_prompt_v2.py",
+        (
+            "src/investment_orchestrator/mmi/"
+            "long_horizon_research_payload_v1.py"
+        ),
+        (
+            "src/investment_orchestrator/mmi/"
+            "long_horizon_research_payload_v2.py"
+        ),
         "src/investment_orchestrator/mmi/mmi_h1_prepared_handoff_v1.py",
         "src/investment_orchestrator/mmi/run_context_resumption.py",
         (
@@ -373,10 +458,35 @@ def test_mmi_import_graph_is_closed_to_stdlib_yaml_schema_validation_and_mmi() -
         ),
     )
 
+
+def test_mmi_external_readers_match_approved_allowlist() -> None:
+    """MMI external-reader closed architectural permission list.
+
+    This is a CLOSED APPROVAL LIST, not a drift snapshot: only these paths
+    may import MMI from outside the package, and none may be an admission or
+    action consumer.  It is independent of inventory completeness, the
+    prohibited-import scan, and the json-importer inventory above -- none of
+    those passing or failing determines this result, and this result does
+    not gate them either.
+
+    As of this test, there is a known, already-tracked architecture
+    violation: eight additional production modules (added across recent,
+    unrelated feature commits) import ``investment_orchestrator.mmi.*``
+    without ever having been reviewed against this allowlist.  This test is
+    EXPECTED TO FAIL red -- actual external readers (19) exceed this
+    approved set (11) -- until that debt is resolved by an explicitly
+    reviewed and approved allowlist change.  Do not add those eight paths
+    here without that review, and do not weaken this equality to a subset
+    check to silence the failure.
+    """
+    inventory = ltetf._scan_production_inventory(repo_root())
+    imports_by_path = dict(inventory.imports_by_path)
+    mmi_paths = _discovered_mmi_production_paths(inventory)
+
     external_mmi_readers = tuple(
         path
         for path, imports in inventory.imports_by_path
-        if path not in MMI_PRODUCTION_PATHS
+        if path not in mmi_paths
         and any(
             imported == "investment_orchestrator.mmi"
             or imported.startswith("investment_orchestrator.mmi.")
