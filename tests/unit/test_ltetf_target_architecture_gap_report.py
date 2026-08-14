@@ -1618,7 +1618,7 @@ def test_report_only_pipeline_internal_edge_declaration_is_one_exact_narrow_rela
         suite.suite_id = "changed"  # type: ignore[misc]
 
 
-def test_report_only_pipeline_edge_is_internal_and_yfinance_edge_remains_external() -> None:
+def test_report_only_pipeline_edge_is_internal_and_yfinance_edge_is_removed() -> None:
     """The narrow suite reclassifies exactly one edge; the graph proof."""
     inventory = gap._scan_production_inventory(repo_root())
     observed = inventory.observer_external_consumers
@@ -1626,14 +1626,10 @@ def test_report_only_pipeline_edge_is_internal_and_yfinance_edge_remains_externa
     assert (
         "src/investment_orchestrator/market/"
         "us_equity_yfinance_valuation_capture.py"
-    ) in observed
+    ) not in observed
     assert observed == (
         _OBSERVER_CLI_PATH,
         _WS01E_PUBLICATION_CLI_PATH,
-        (
-            "src/investment_orchestrator/market/"
-            "us_equity_yfinance_valuation_capture.py"
-        ),
     )
 
 

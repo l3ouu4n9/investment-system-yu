@@ -248,16 +248,6 @@ def _observe(
     )
 
 
-def test_strict_section_has_no_independent_holdings_date() -> None:
-    assert "holdings_as_of_date" not in exposure._POSITIONS_PREFIX
-    invalid_section = _strict_section(("QQQ | 1",)).replace(
-        b"QQQ | 1",
-        b"holdings_as_of_date = 2026-08-12\nQQQ | 1",
-    )
-    with pytest.raises(exposure._ExposureInputError) as exc_info:
-        exposure._parse_strict_holdings(invalid_section)
-    assert exc_info.value.code == "REPORT_ONLY_EXPOSURE_STRICT_HOLDINGS_ROW_INVALID"
-
 
 def test_public_observer_has_no_caller_valuation_or_session_bypass() -> None:
     parameters = inspect.signature(
@@ -276,28 +266,6 @@ def test_public_observer_has_no_caller_valuation_or_session_bypass() -> None:
         "valuation",
     } & set(parameters)
 
-
-def test_strict_holdings_domain_accessor_binds_existing_observed_sha(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    portfolio_bytes = _portfolio(("SMH | 3", "QQQ | 2.5"))
-    _prepared_current_root(tmp_path, portfolio_bytes=portfolio_bytes)
-    expected_sha256 = hashlib.sha256(portfolio_bytes).hexdigest()
-
-    def _capture(role: MmiSourceRole, *, expected_source_sha256: str):
-        return _capture_mmi_source_at_root(
-            tmp_path,
-            role=role,
-            expected_source_sha256=expected_source_sha256,
-        )
-
-    monkeypatch.setattr(exposure, "capture_current_mmi_source", _capture)
-    domain = exposure.capture_current_validated_strict_holdings_domain(
-        portfolio_snapshot_expected_sha256=expected_sha256,
-    )
-    assert domain.portfolio_source_sha256 == expected_sha256
-    assert domain.tickers == ("SMH", "QQQ")
 
 
 def test_valid_current_capture_returns_complete_decimal_valid_report_only(

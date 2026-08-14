@@ -23,7 +23,7 @@ from investment_orchestrator.common.stable_read import (
     MmiStableReadError,
     MmiStableReadErrorCode,
 )
-from investment_orchestrator.observability.report_only_holdings_exposure import (
+from investment_orchestrator.holdings.current_strict_positive_etf_positions import (
     StrictHoldingsDomain,
     StrictHoldingsDomainError,
 )

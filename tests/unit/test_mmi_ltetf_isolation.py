@@ -152,6 +152,10 @@ REPORT_ONLY_BUDGET_CAPACITY_RELATIVE_PATH = (
     "src/investment_orchestrator/observability/"
     "report_only_budget_capacity.py"
 )
+HOLDINGS_CURRENT_STRICT_POSITIVE_ETF_POSITIONS_RELATIVE_PATH = (
+    "src/investment_orchestrator/holdings/"
+    "current_strict_positive_etf_positions.py"
+)
 REPORT_ONLY_HOLDINGS_EXPOSURE_RELATIVE_PATH = (
     "src/investment_orchestrator/observability/"
     "report_only_holdings_exposure.py"
@@ -537,6 +541,7 @@ def test_mmi_external_readers_match_approved_allowlist() -> None:
         H1_MAPPED_RECOGNITION_RELATIVE_PATH,
         H1_REPLACEMENT_HANDOFF_RELATIVE_PATH,
         YFINANCE_VALUATION_CAPTURE_RELATIVE_PATH,
+        HOLDINGS_CURRENT_STRICT_POSITIVE_ETF_POSITIONS_RELATIVE_PATH,
         REPORT_ONLY_BUDGET_CAPACITY_RELATIVE_PATH,
         REPORT_ONLY_HOLDINGS_EXPOSURE_RELATIVE_PATH,
         REPORT_ONLY_INCREMENT_CAPACITY_RELATIVE_PATH,
@@ -573,6 +578,20 @@ def test_mmi_external_readers_match_approved_allowlist() -> None:
         "investment_orchestrator.mmi.canonical",
         "investment_orchestrator.mmi.canonical.MmiCanonicalizationError",
         "investment_orchestrator.mmi.canonical.normalize_decimal_string",
+    }
+    # The new strict holdings owner captures the fixed current source but uses
+    # no MMI policy or projection; acquiring any other symbol fails closed here.
+    assert mmi_surface(HOLDINGS_CURRENT_STRICT_POSITIVE_ETF_POSITIONS_RELATIVE_PATH) == {
+        "investment_orchestrator.mmi.canonical",
+        "investment_orchestrator.mmi.canonical.MmiCanonicalizationError",
+        "investment_orchestrator.mmi.canonical.normalize_decimal_string",
+        "investment_orchestrator.mmi.contracts",
+        "investment_orchestrator.mmi.contracts.AUTHORITY_EFFECT_NONE",
+        "investment_orchestrator.mmi.contracts.MmiCapturedSource",
+        "investment_orchestrator.mmi.contracts.MmiSourceRole",
+        "investment_orchestrator.mmi.source_capture",
+        "investment_orchestrator.mmi.source_capture."
+        "capture_current_mmi_source",
     }
     # The open-BUY capacity owner reads exactly one sha-pinned captured
     # source plus the strict section-(2a) commitment resolver.  It holds no

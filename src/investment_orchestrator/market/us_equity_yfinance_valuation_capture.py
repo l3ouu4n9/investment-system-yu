@@ -45,7 +45,7 @@ from investment_orchestrator.market.us_equity_session_calendar import (
     UsEquitySessionResolutionError,
     resolve_trusted_completed_us_equity_session,
 )
-from investment_orchestrator.observability.report_only_holdings_exposure import (
+from investment_orchestrator.holdings.current_strict_positive_etf_positions import (
     StrictHoldingsDomain,
     StrictHoldingsDomainError,
     capture_current_validated_strict_holdings_domain,
