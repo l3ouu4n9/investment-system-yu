@@ -101,7 +101,9 @@ def _observe(
         return exposure_result
 
     monkeypatch.setattr(
-        capacity, "observe_current_report_only_holdings_exposure", _fake_observer
+        capacity._holdings_exposure,
+        "observe_current_report_only_holdings_exposure",
+        _fake_observer,
     )
     return capacity.observe_current_report_only_increment_capacity(
         strategy_settings_expected_sha256=_STRATEGY_SHA,

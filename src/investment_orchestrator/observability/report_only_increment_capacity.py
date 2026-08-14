@@ -32,9 +32,8 @@ from investment_orchestrator.common.stable_read import (
     MmiStableReadErrorCode,
     stable_read_exact_bytes,
 )
-from investment_orchestrator.observability.report_only_holdings_exposure import (
-    ExposureObservationStatus,
-    observe_current_report_only_holdings_exposure,
+from investment_orchestrator.observability import (
+    report_only_holdings_exposure as _holdings_exposure,
 )
 
 
@@ -292,13 +291,13 @@ def _read_current_increment_fraction() -> tuple[
 
 
 _EXPOSURE_STATUS_MAP: Final = {
-    ExposureObservationStatus.UNAVAILABLE: (
+    _holdings_exposure.ExposureObservationStatus.UNAVAILABLE: (
         IncrementCapacityObservationStatus.UNAVAILABLE
     ),
-    ExposureObservationStatus.INVALID: (
+    _holdings_exposure.ExposureObservationStatus.INVALID: (
         IncrementCapacityObservationStatus.INVALID
     ),
-    ExposureObservationStatus.MANUAL_REVIEW: (
+    _holdings_exposure.ExposureObservationStatus.MANUAL_REVIEW: (
         IncrementCapacityObservationStatus.MANUAL_REVIEW
     ),
 }
@@ -330,11 +329,16 @@ def observe_current_report_only_increment_capacity(
             r_reasons,
         )
 
-    exposure_result = observe_current_report_only_holdings_exposure(
-        strategy_settings_expected_sha256=strategy_settings_expected_sha256,
-        portfolio_snapshot_expected_sha256=portfolio_snapshot_expected_sha256,
+    exposure_result = (
+        _holdings_exposure.observe_current_report_only_holdings_exposure(
+            strategy_settings_expected_sha256=strategy_settings_expected_sha256,
+            portfolio_snapshot_expected_sha256=portfolio_snapshot_expected_sha256,
+        )
     )
-    if exposure_result.status is not ExposureObservationStatus.VALID_REPORT_ONLY:
+    if (
+        exposure_result.status
+        is not _holdings_exposure.ExposureObservationStatus.VALID_REPORT_ONLY
+    ):
         return _result(
             _EXPOSURE_STATUS_MAP[exposure_result.status],
             tuple(exposure_result.reason_codes),

@@ -61,6 +61,22 @@ _WS01D_PUBLISHER_MODULE = (
     "investment_orchestrator.observability."
     "weekly_shadow_01_report_publisher"
 )
+_REPORT_ONLY_HOLDINGS_EXPOSURE_PATH = (
+    "src/investment_orchestrator/observability/"
+    "report_only_holdings_exposure.py"
+)
+_REPORT_ONLY_HOLDINGS_EXPOSURE_MODULE = (
+    "investment_orchestrator.observability."
+    "report_only_holdings_exposure"
+)
+_REPORT_ONLY_INCREMENT_CAPACITY_PATH = (
+    "src/investment_orchestrator/observability/"
+    "report_only_increment_capacity.py"
+)
+_REPORT_ONLY_INCREMENT_CAPACITY_MODULE = (
+    "investment_orchestrator.observability."
+    "report_only_increment_capacity"
+)
 _OBSERVER_CLI_PATH = (
     "src/investment_orchestrator/cli/"
     "observe_ltetf_target_architecture_gaps.py"
@@ -1436,7 +1452,7 @@ def test_exact_declared_ltetf_02a1_edge_is_internal_without_working_tree_modules
 
 def test_internal_edge_declaration_is_one_exact_immutable_suite_relationship() -> None:
     suites = gap._DECLARED_OBSERVER_CONTRACT_SUITES
-    assert type(suites) is tuple and len(suites) == 2
+    assert type(suites) is tuple and len(suites) == 3
     suite = suites[0]
     assert suite.suite_id == "ltetf_02a1_static_evidence_contract"
     assert tuple((item.relative_path, item.module_name) for item in suite.modules) == (
@@ -1474,6 +1490,7 @@ def test_ws01_internal_edge_declaration_is_one_exact_closed_chain() -> None:
     assert tuple(suite.suite_id for suite in suites) == (
         "ltetf_02a1_static_evidence_contract",
         "weekly_shadow_01b_grounding_runtime",
+        "report_only_holdings_increment_capacity_pipeline",
     )
     suite = suites[1]
     assert tuple((item.relative_path, item.module_name) for item in suite.modules) == (
@@ -1545,6 +1562,79 @@ def test_ws01_internal_edge_declaration_is_one_exact_closed_chain() -> None:
     )
     with pytest.raises(AttributeError):
         suite.suite_id = "changed"  # type: ignore[misc]
+
+
+def test_report_only_pipeline_internal_edge_declaration_is_one_exact_narrow_relationship() -> None:
+    suites = gap._DECLARED_OBSERVER_CONTRACT_SUITES
+    suite = suites[2]
+    assert suite.suite_id == (
+        "report_only_holdings_increment_capacity_pipeline"
+    )
+    assert tuple(
+        (item.relative_path, item.module_name) for item in suite.modules
+    ) == (
+        (
+            _REPORT_ONLY_HOLDINGS_EXPOSURE_PATH,
+            _REPORT_ONLY_HOLDINGS_EXPOSURE_MODULE,
+        ),
+        (
+            _REPORT_ONLY_INCREMENT_CAPACITY_PATH,
+            _REPORT_ONLY_INCREMENT_CAPACITY_MODULE,
+        ),
+    )
+    assert tuple(
+        (item.importer_module, item.importee_module, item.edge_kind)
+        for item in suite.allowed_internal_relations
+    ) == (
+        (
+            _REPORT_ONLY_INCREMENT_CAPACITY_MODULE,
+            _REPORT_ONLY_HOLDINGS_EXPOSURE_MODULE,
+            "static_module_binding",
+        ),
+    )
+    assert (
+        _REPORT_ONLY_HOLDINGS_EXPOSURE_PATH
+        not in gap._OBSERVER_INTERNAL_RELATIVE_PATHS
+    )
+    assert (
+        _REPORT_ONLY_INCREMENT_CAPACITY_PATH
+        not in gap._OBSERVER_INTERNAL_RELATIVE_PATHS
+    )
+    declared_relations = {
+        (item.importer_module, item.importee_module, item.edge_kind)
+        for item in suite.allowed_internal_relations
+    }
+    assert (
+        _REPORT_ONLY_HOLDINGS_EXPOSURE_MODULE,
+        _REPORT_ONLY_INCREMENT_CAPACITY_MODULE,
+        "static_module_binding",
+    ) not in declared_relations
+    assert all(
+        "*" not in value
+        for module in suite.modules
+        for value in (module.relative_path, module.module_name)
+    )
+    with pytest.raises(AttributeError):
+        suite.suite_id = "changed"  # type: ignore[misc]
+
+
+def test_report_only_pipeline_edge_is_internal_and_yfinance_edge_remains_external() -> None:
+    """The narrow suite reclassifies exactly one edge; the graph proof."""
+    inventory = gap._scan_production_inventory(repo_root())
+    observed = inventory.observer_external_consumers
+    assert _REPORT_ONLY_INCREMENT_CAPACITY_PATH not in observed
+    assert (
+        "src/investment_orchestrator/market/"
+        "us_equity_yfinance_valuation_capture.py"
+    ) in observed
+    assert observed == (
+        _OBSERVER_CLI_PATH,
+        _WS01E_PUBLICATION_CLI_PATH,
+        (
+            "src/investment_orchestrator/market/"
+            "us_equity_yfinance_valuation_capture.py"
+        ),
+    )
 
 
 def test_exact_declared_ws01b_edge_is_internal_in_synthetic_clean_checkout(
