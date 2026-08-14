@@ -38,7 +38,7 @@ from investment_orchestrator.mmi.portfolio_projection import (
     StrictCurrentOpenBuyCommitmentError,
     resolve_strict_current_open_buy_commitments,
 )
-from investment_orchestrator.mmi.stable_read import (
+from investment_orchestrator.common.stable_read import (
     MmiStableReadError,
     MmiStableReadErrorCode,
     stable_read_exact_bytes,

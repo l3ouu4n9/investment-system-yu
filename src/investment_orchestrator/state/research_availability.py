@@ -28,7 +28,7 @@ from enum import Enum
 from typing import Any, Final
 
 from investment_orchestrator.common.paths import repo_root
-from investment_orchestrator.mmi.stable_read import (
+from investment_orchestrator.common.stable_read import (
     MmiStableReadError,
     stable_read_exact_bytes,
 )

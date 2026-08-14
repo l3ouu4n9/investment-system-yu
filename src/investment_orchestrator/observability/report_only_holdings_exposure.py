@@ -49,7 +49,7 @@ from investment_orchestrator.mmi.portfolio_projection import (
 from investment_orchestrator.mmi.source_capture import (
     capture_current_mmi_source,
 )
-from investment_orchestrator.mmi.stable_read import (
+from investment_orchestrator.common.stable_read import (
     MmiStableReadError,
     MmiStableReadErrorCode,
     stable_read_exact_bytes,

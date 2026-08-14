@@ -126,7 +126,7 @@ from investment_orchestrator.validators.strategy_settings import (
     StrategySettingsValidationError,
     parse_strategy_settings_text,
 )
-from investment_orchestrator.mmi.stable_read import (
+from investment_orchestrator.common.stable_read import (
     MmiStableReadError as MmiH2cStableReadError,
     MmiStableReadErrorCode as MmiH2cStableReadErrorCode,
     stable_read_exact_bytes as _neutral_stable_read_exact_bytes,

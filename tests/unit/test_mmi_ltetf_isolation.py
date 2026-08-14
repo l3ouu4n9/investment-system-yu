@@ -71,7 +71,6 @@ MMI_PRODUCTION_PATHS = (
     "src/investment_orchestrator/mmi/raw_response_envelope_v2.py",
     "src/investment_orchestrator/mmi/run_context_resumption.py",
     "src/investment_orchestrator/mmi/source_capture.py",
-    "src/investment_orchestrator/mmi/stable_read.py",
     (
         "src/investment_orchestrator/mmi/"
         "validated_grounded_analysis_response.py"
@@ -894,7 +893,7 @@ def test_v2_prompt_envelope_and_response_graph_is_exact_and_dormant() -> None:
         "mmi_h2c_dual_side_persisted_case_receipt_v2"
     ) == (H2C_CONSUME_ENGINE_RELATIVE_PATH,)
     assert set(consumers(
-        "investment_orchestrator.mmi.stable_read"
+        "investment_orchestrator.common.stable_read"
     )) == {
         H2C_CONSUME_ENGINE_RELATIVE_PATH,
         H2C_ARCHIVED_SOURCE_RELATIVE_PATH,

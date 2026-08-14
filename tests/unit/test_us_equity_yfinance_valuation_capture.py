@@ -19,7 +19,7 @@ from investment_orchestrator.market.us_equity_session_calendar import (
     MarkFreshnessStatus,
     UsEquitySessionResolutionError,
 )
-from investment_orchestrator.mmi.stable_read import (
+from investment_orchestrator.common.stable_read import (
     MmiStableReadError,
     MmiStableReadErrorCode,
 )

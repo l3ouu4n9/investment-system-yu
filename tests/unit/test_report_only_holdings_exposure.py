@@ -28,7 +28,7 @@ from investment_orchestrator.mmi.contracts import (
 from investment_orchestrator.mmi.source_capture import (
     _capture_mmi_source_at_root,
 )
-from investment_orchestrator.mmi.stable_read import (
+from investment_orchestrator.common.stable_read import (
     MmiStableReadError,
     MmiStableReadErrorCode,
 )

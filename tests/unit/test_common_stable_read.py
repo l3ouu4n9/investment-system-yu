@@ -6,7 +6,7 @@ from unittest import mock
 
 import pytest
 
-from investment_orchestrator.mmi.stable_read import (
+from investment_orchestrator.common.stable_read import (
     MmiStableReadError,
     MmiStableReadErrorCode,
     stable_read_exact_bytes,
@@ -97,8 +97,8 @@ def test_stable_read_exact_bytes_single_open_close_oracle(tmp_path: Path) -> Non
         return original_close(fd)
 
     try:
-        with mock.patch("investment_orchestrator.mmi.stable_read.os.open", side_effect=tracked_open):
-            with mock.patch("investment_orchestrator.mmi.stable_read.os.close", side_effect=tracked_close):
+        with mock.patch("investment_orchestrator.common.stable_read.os.open", side_effect=tracked_open):
+            with mock.patch("investment_orchestrator.common.stable_read.os.close", side_effect=tracked_close):
                 result = stable_read_exact_bytes(case_fd, "test.txt", maximum_bytes=100)
 
         assert result == b"hello world"
@@ -139,8 +139,8 @@ def test_stable_read_fifo_nonblocking_oracle(tmp_path: Path) -> None:
         return original_close(fd)
 
     try:
-        with mock.patch("investment_orchestrator.mmi.stable_read.os.open", side_effect=tracked_open):
-            with mock.patch("investment_orchestrator.mmi.stable_read.os.close", side_effect=tracked_close):
+        with mock.patch("investment_orchestrator.common.stable_read.os.open", side_effect=tracked_open):
+            with mock.patch("investment_orchestrator.common.stable_read.os.close", side_effect=tracked_close):
                 with pytest.raises(MmiStableReadError) as exc_info:
                     stable_read_exact_bytes(case_fd, "test_fifo", maximum_bytes=100)
 
@@ -158,7 +158,7 @@ def test_stable_read_fifo_nonblocking_oracle(tmp_path: Path) -> None:
     finally:
         os.close(case_fd)
 
-@mock.patch("investment_orchestrator.mmi.stable_read.os.fstat")
+@mock.patch("investment_orchestrator.common.stable_read.os.fstat")
 def test_stable_read_mid_read_mutation_via_witness(mock_fstat, tmp_path: Path) -> None:
     # A cleaner test using mocked fstat that returns different witnesses.
     case_fd = 999
@@ -181,15 +181,15 @@ def test_stable_read_mid_read_mutation_via_witness(mock_fstat, tmp_path: Path) -
 
     mock_fstat.side_effect = [FakeStat(), FakeStatMutated()]
 
-    with mock.patch("investment_orchestrator.mmi.stable_read.os.open", return_value=123):
-        with mock.patch("investment_orchestrator.mmi.stable_read.os.read", side_effect=[b"hello", b""]):
-            with mock.patch("investment_orchestrator.mmi.stable_read.os.close"):
+    with mock.patch("investment_orchestrator.common.stable_read.os.open", return_value=123):
+        with mock.patch("investment_orchestrator.common.stable_read.os.read", side_effect=[b"hello", b""]):
+            with mock.patch("investment_orchestrator.common.stable_read.os.close"):
                 with pytest.raises(MmiStableReadError) as exc_info:
                     stable_read_exact_bytes(case_fd, "test.txt", maximum_bytes=100)
                 assert exc_info.value.code == MmiStableReadErrorCode.STABLE_READ_INPUT_INVALID
 
 
-@mock.patch("investment_orchestrator.mmi.stable_read.os.open")
+@mock.patch("investment_orchestrator.common.stable_read.os.open")
 def test_stable_read_capability_unavailable(mock_open, tmp_path: Path) -> None:
     mock_open.side_effect = OSError(errno.EMFILE, "Too many open files")
     case_fd = 999
@@ -200,7 +200,7 @@ def test_stable_read_capability_unavailable(mock_open, tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("error_number", (errno.EACCES, errno.EPERM))
-@mock.patch("investment_orchestrator.mmi.stable_read.os.open")
+@mock.patch("investment_orchestrator.common.stable_read.os.open")
 def test_stable_read_preserves_controlled_input_errno(
     mock_open,
     tmp_path: Path,
@@ -215,7 +215,7 @@ def test_stable_read_preserves_controlled_input_errno(
     assert exc_info.value.os_error_errno == error_number
 
 
-@mock.patch("investment_orchestrator.mmi.stable_read.os.open")
+@mock.patch("investment_orchestrator.common.stable_read.os.open")
 def test_stable_read_unexpected_error_not_swallowed(mock_open, tmp_path: Path) -> None:
     # A totally unexpected OS error like EIO or something not in the controlled list
     mock_open.side_effect = OSError(errno.EIO, "Input/output error")

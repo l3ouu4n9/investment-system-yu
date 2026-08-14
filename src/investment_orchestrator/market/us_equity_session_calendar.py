@@ -26,7 +26,7 @@ from investment_orchestrator.mmi.contracts import (
     MmiProjectionRunContext,
     _mmi_projection_run_context_provenance_is_valid,
 )
-from investment_orchestrator.mmi.stable_read import (
+from investment_orchestrator.common.stable_read import (
     MmiStableReadError,
     MmiStableReadErrorCode,
     stable_read_exact_bytes,

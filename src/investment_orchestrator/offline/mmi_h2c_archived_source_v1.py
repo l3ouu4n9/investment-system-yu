@@ -38,7 +38,7 @@ from investment_orchestrator.mmi.contracts import (
 
 )
 
-from investment_orchestrator.mmi.stable_read import (
+from investment_orchestrator.common.stable_read import (
 
     MmiStableReadError as MmiH2cStableReadError,
 

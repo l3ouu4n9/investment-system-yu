@@ -28,7 +28,7 @@ from investment_orchestrator.mmi.canonical import (
     normalize_decimal_string,
 )
 from investment_orchestrator.mmi.contracts import AUTHORITY_EFFECT_NONE
-from investment_orchestrator.mmi.stable_read import (
+from investment_orchestrator.common.stable_read import (
     MmiStableReadError,
     MmiStableReadErrorCode,
     stable_read_exact_bytes,
