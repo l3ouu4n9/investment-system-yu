@@ -44,9 +44,11 @@ from investment_orchestrator.mmi.contracts import (
 
 STRATEGY_SETTINGS_LOCATOR = "inputs/current/strategy_settings.yaml"
 PORTFOLIO_SNAPSHOT_LOCATOR = "inputs/current/portfolio_snapshot.txt"
+LONG_HORIZON_RESEARCH_LOCATOR = "inputs/current/long_horizon_research.json"
 LOCATOR_BY_ROLE = {
     MmiSourceRole.STRATEGY_SETTINGS: STRATEGY_SETTINGS_LOCATOR,
     MmiSourceRole.PORTFOLIO_SNAPSHOT: PORTFOLIO_SNAPSHOT_LOCATOR,
+    MmiSourceRole.LONG_HORIZON_RESEARCH: LONG_HORIZON_RESEARCH_LOCATOR,
 }
 
 PORTFOLIO_SECTION_START = (

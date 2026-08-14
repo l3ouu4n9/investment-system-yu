@@ -236,6 +236,7 @@ def test_source_catalog_is_exact_closed_and_code_owned() -> None:
     assert tuple(MMI_SOURCE_CATALOG) == (
         MmiSourceRole.STRATEGY_SETTINGS,
         MmiSourceRole.PORTFOLIO_SNAPSHOT,
+        MmiSourceRole.LONG_HORIZON_RESEARCH,
     )
     strategy = MMI_SOURCE_CATALOG[MmiSourceRole.STRATEGY_SETTINGS]
     assert strategy.source_id == "MMI_STRATEGY_SETTINGS"
@@ -256,6 +257,14 @@ def test_source_catalog_is_exact_closed_and_code_owned() -> None:
         "portfolio_snapshot.txt",
     )
     assert portfolio.maximum_bytes == 1_048_576
+    long_horizon = MMI_SOURCE_CATALOG[MmiSourceRole.LONG_HORIZON_RESEARCH]
+    assert long_horizon.source_id == "MMI_LONG_HORIZON_RESEARCH"
+    assert long_horizon.path_components == (
+        "inputs",
+        "current",
+        "long_horizon_research.json",
+    )
+    assert long_horizon.maximum_bytes == 262_144
     with pytest.raises(TypeError):
         MMI_SOURCE_CATALOG[MmiSourceRole.STRATEGY_SETTINGS] = portfolio
 

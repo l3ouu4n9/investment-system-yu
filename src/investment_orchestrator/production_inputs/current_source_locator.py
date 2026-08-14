@@ -40,6 +40,11 @@ PORTFOLIO_SNAPSHOT_PATH_COMPONENTS: Final = (
     "current",
     "portfolio_snapshot.txt",
 )
+LONG_HORIZON_RESEARCH_PATH_COMPONENTS: Final = (
+    "inputs",
+    "current",
+    "long_horizon_research.json",
+)
 
 
 class ProductionCheckoutLayoutError(RuntimeError):

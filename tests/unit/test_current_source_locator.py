@@ -66,17 +66,26 @@ def test_canonical_current_relative_paths_are_exact() -> None:
         "current",
         "portfolio_snapshot.txt",
     )
+    assert locator.LONG_HORIZON_RESEARCH_PATH_COMPONENTS == (
+        "inputs",
+        "current",
+        "long_horizon_research.json",
+    )
     assert str(
         PurePosixPath(*locator.STRATEGY_SETTINGS_PATH_COMPONENTS)
     ) == "inputs/current/strategy_settings.yaml"
     assert str(
         PurePosixPath(*locator.PORTFOLIO_SNAPSHOT_PATH_COMPONENTS)
     ) == "inputs/current/portfolio_snapshot.txt"
+    assert str(
+        PurePosixPath(*locator.LONG_HORIZON_RESEARCH_PATH_COMPONENTS)
+    ) == "inputs/current/long_horizon_research.json"
 
 
 def test_mmi_source_catalog_reuses_the_canonical_locator_paths() -> None:
     strategy = MMI_SOURCE_CATALOG[MmiSourceRole.STRATEGY_SETTINGS]
     portfolio = MMI_SOURCE_CATALOG[MmiSourceRole.PORTFOLIO_SNAPSHOT]
+    long_horizon = MMI_SOURCE_CATALOG[MmiSourceRole.LONG_HORIZON_RESEARCH]
     # Object identity, not equality: there is exactly one path owner.
     assert (
         strategy.path_components
@@ -86,21 +95,29 @@ def test_mmi_source_catalog_reuses_the_canonical_locator_paths() -> None:
         portfolio.path_components
         is locator.PORTFOLIO_SNAPSHOT_PATH_COMPONENTS
     )
+    assert (
+        long_horizon.path_components
+        is locator.LONG_HORIZON_RESEARCH_PATH_COMPONENTS
+    )
     assert tuple(MMI_SOURCE_CATALOG) == (
         MmiSourceRole.STRATEGY_SETTINGS,
         MmiSourceRole.PORTFOLIO_SNAPSHOT,
+        MmiSourceRole.LONG_HORIZON_RESEARCH,
     )
     # MMI keeps its own role, identifier and bound semantics.
     assert strategy.source_id == "MMI_STRATEGY_SETTINGS"
     assert portfolio.source_id == "MMI_PORTFOLIO_SNAPSHOT"
+    assert long_horizon.source_id == "MMI_LONG_HORIZON_RESEARCH"
     assert strategy.maximum_bytes == 262_144
     assert portfolio.maximum_bytes == 1_048_576
+    assert long_horizon.maximum_bytes == 262_144
     # No duplicate filesystem-path literal survives in the MMI contracts owner.
     contracts_source = (
         repo_root() / "src/investment_orchestrator/mmi/contracts.py"
     ).read_text(encoding="utf-8")
     assert "strategy_settings.yaml" not in contracts_source
     assert "portfolio_snapshot.txt" not in contracts_source
+    assert "long_horizon_research.json" not in contracts_source
 
 
 def test_locator_public_surface_is_exactly_paths_and_layout_error() -> None:
@@ -119,12 +136,13 @@ def test_locator_public_surface_is_exactly_paths_and_layout_error() -> None:
         and getattr(value, "__module__", None) == locator.__name__
     }
     assert set(public_callables) == {"ProductionCheckoutLayoutError"}
-    # The only public data is the two canonical path tuples.
+    # The only public data is the canonical path tuples.
     assert {
         name
         for name, value in vars(locator).items()
         if not name.startswith("_") and isinstance(value, tuple)
     } == {
+        "LONG_HORIZON_RESEARCH_PATH_COMPONENTS",
         "PORTFOLIO_SNAPSHOT_PATH_COMPONENTS",
         "STRATEGY_SETTINGS_PATH_COMPONENTS",
     }

@@ -36,6 +36,7 @@ from investment_orchestrator.mmi.canonical import (
     record_identity_sha256,
 )
 from investment_orchestrator.production_inputs.current_source_locator import (
+    LONG_HORIZON_RESEARCH_PATH_COMPONENTS,
     PORTFOLIO_SNAPSHOT_PATH_COMPONENTS,
     STRATEGY_SETTINGS_PATH_COMPONENTS,
 )
@@ -628,10 +629,11 @@ def mint_mmi_projection_run_context_from_canonical_timestamp(
 
 
 class MmiSourceRole(str, Enum):
-    """Closed source roles reserved across MMI-P1a and MMI-P1b."""
+    """Closed source roles reserved across MMI-P1a, MMI-P1b, and Phase-3."""
 
     STRATEGY_SETTINGS = "STRATEGY_SETTINGS"
     PORTFOLIO_SNAPSHOT = "PORTFOLIO_SNAPSHOT"
+    LONG_HORIZON_RESEARCH = "LONG_HORIZON_RESEARCH"
 
 
 @dataclass(frozen=True, slots=True)
@@ -663,12 +665,22 @@ _PORTFOLIO_SNAPSHOT_SPEC: Final = MmiSourceSpec(
     ),
     maximum_bytes=1_048_576,
 )
+_LONG_HORIZON_RESEARCH_SPEC: Final = MmiSourceSpec(
+    role=MmiSourceRole.LONG_HORIZON_RESEARCH,
+    source_id="MMI_LONG_HORIZON_RESEARCH",
+    path_components=LONG_HORIZON_RESEARCH_PATH_COMPONENTS,
+    repository_relative_locator=PurePosixPath(
+        *LONG_HORIZON_RESEARCH_PATH_COMPONENTS
+    ),
+    maximum_bytes=262_144,
+)
 
 MMI_SOURCE_CATALOG: Final[Mapping[MmiSourceRole, MmiSourceSpec]] = (
     MappingProxyType(
         {
             MmiSourceRole.STRATEGY_SETTINGS: _STRATEGY_SETTINGS_SPEC,
             MmiSourceRole.PORTFOLIO_SNAPSHOT: _PORTFOLIO_SNAPSHOT_SPEC,
+            MmiSourceRole.LONG_HORIZON_RESEARCH: _LONG_HORIZON_RESEARCH_SPEC,
         }
     )
 )

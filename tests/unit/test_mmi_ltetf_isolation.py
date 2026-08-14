@@ -161,6 +161,7 @@ MMI_CURRENT_SOURCE_LOCATOR_CONSUMERS = (
 ALLOWED_CURRENT_SOURCE_LOCATOR_IMPORTS = frozenset(
     {
         CURRENT_SOURCE_LOCATOR_MODULE,
+        f"{CURRENT_SOURCE_LOCATOR_MODULE}.LONG_HORIZON_RESEARCH_PATH_COMPONENTS",
         f"{CURRENT_SOURCE_LOCATOR_MODULE}.PORTFOLIO_SNAPSHOT_PATH_COMPONENTS",
         f"{CURRENT_SOURCE_LOCATOR_MODULE}.STRATEGY_SETTINGS_PATH_COMPONENTS",
         f"{CURRENT_SOURCE_LOCATOR_MODULE}.ProductionCheckoutLayoutError",
@@ -844,6 +845,11 @@ def test_source_roles_resolve_only_exact_approved_inputs() -> None:
             "MMI_PORTFOLIO_SNAPSHOT",
             "inputs/current/portfolio_snapshot.txt",
             1_048_576,
+        ),
+        MmiSourceRole.LONG_HORIZON_RESEARCH: (
+            "MMI_LONG_HORIZON_RESEARCH",
+            "inputs/current/long_horizon_research.json",
+            262_144,
         ),
     }
 

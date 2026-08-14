@@ -120,6 +120,33 @@
           "maximum": 1048576
         }
       }
+    },
+    {
+      "title": "Long-horizon research source record",
+      "required": [
+        "source_role",
+        "source_id",
+        "repository_relative_locator",
+        "maximum_bytes",
+        "observed_size_bytes"
+      ],
+      "properties": {
+        "source_role": {
+          "const": "LONG_HORIZON_RESEARCH"
+        },
+        "source_id": {
+          "const": "MMI_LONG_HORIZON_RESEARCH"
+        },
+        "repository_relative_locator": {
+          "const": "inputs/current/long_horizon_research.json"
+        },
+        "maximum_bytes": {
+          "const": 262144
+        },
+        "observed_size_bytes": {
+          "maximum": 262144
+        }
+      }
     }
   ],
   "$defs": {
