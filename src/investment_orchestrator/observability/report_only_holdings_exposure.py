@@ -932,7 +932,7 @@ def observe_current_report_only_holdings_exposure(
         )
     freshness = assess_manual_mark_freshness(
         mark_as_of_date=normalized_capture.session_date,
-        run_context=run_context,
+        evaluation_time_utc=run_context.evaluation_time_utc,
     )
     completed_session = freshness.completed_session
     if completed_session is not None and (

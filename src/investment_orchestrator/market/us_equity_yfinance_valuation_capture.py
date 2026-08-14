@@ -34,9 +34,6 @@ from investment_orchestrator.mmi.canonical import (
     canonical_json_bytes,
     normalize_decimal_string,
 )
-from investment_orchestrator.mmi.contracts import (
-    begin_mmi_projection_run,
-)
 from investment_orchestrator.common.stable_read import (
     MmiStableReadError,
     MmiStableReadErrorCode,
@@ -726,7 +723,7 @@ def capture_current_us_equity_yfinance_valuation(
         )
     try:
         completed_session = resolve_trusted_completed_us_equity_session(
-            run_context=begin_mmi_projection_run(),
+            evaluation_time_utc=datetime.now(timezone.utc),
         )
     except UsEquitySessionResolutionError as exc:
         return _result(

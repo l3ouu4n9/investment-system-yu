@@ -1,7 +1,7 @@
 """Offline freshness owner for the reviewed US-equity regular-session schedule.
 
-This module has one intentionally narrow job: using a provenance-valid MMI
-run context and the committed schedule, determine whether one manually
+This module has one intentionally narrow job: using a validated UTC
+evaluation instant and the committed schedule, determine whether one manually
 supplied closing-mark date is the latest completed regular US-equity session.
 It owns no prices, permissions, portfolio decisions, or publication.
 """
@@ -9,7 +9,7 @@ It owns no prices, permissions, portfolio decisions, or publication.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from enum import Enum
 import hashlib
 import json
@@ -21,10 +21,6 @@ from typing import Final
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from investment_orchestrator.common.paths import repo_root
-from investment_orchestrator.mmi.contracts import (
-    MmiProjectionRunContext,
-    _mmi_projection_run_context_provenance_is_valid,
-)
 from investment_orchestrator.common.stable_read import (
     MmiStableReadError,
     MmiStableReadErrorCode,
@@ -33,6 +29,7 @@ from investment_orchestrator.common.stable_read import (
 
 
 _AUTHORITY_EFFECT_NONE: Final = "NONE"
+_CANONICAL_UTC_TIMESTAMP_FORMAT: Final = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 
 __all__ = (
@@ -327,10 +324,10 @@ def _load_approved_schedule() -> tuple[_ValidatedSchedule | None, tuple[str, ...
 def _resolve_latest_completed_session(
     *,
     schedule: _ValidatedSchedule,
-    run_context: MmiProjectionRunContext,
+    evaluation_time_utc: datetime,
 ) -> CompletedUsEquitySession | None:
     try:
-        evaluation_et = run_context.evaluation_time_utc.astimezone(
+        evaluation_et = evaluation_time_utc.astimezone(
             ZoneInfo(_TIMEZONE_NAME)
         )
     except (ValueError, ZoneInfoNotFoundError):
@@ -361,17 +358,35 @@ def _resolve_latest_completed_session(
         calendar_schedule_sha256=schedule.observed_sha256,
         coverage_start_date=_COVERAGE_START_DATE.isoformat(),
         coverage_end_date=_COVERAGE_END_DATE.isoformat(),
-        trusted_evaluation_timestamp_utc=run_context.evaluation_timestamp_utc,
+        trusted_evaluation_timestamp_utc=evaluation_time_utc.strftime(
+            _CANONICAL_UTC_TIMESTAMP_FORMAT
+        ),
         session_date=latest.session_date.isoformat(),
         official_close_timestamp_et=latest_close.isoformat(timespec="seconds"),
     )
 
 
+def _evaluation_time_utc_is_valid(value: object) -> bool:
+    """Fail-closed acceptance test for a caller-supplied UTC evaluation instant.
+
+    Must run before any ``astimezone``/``strftime`` use: a naive datetime's
+    ``astimezone`` silently assumes the system-local timezone rather than
+    raising, so naivety has to be rejected here first.
+    """
+    if type(value) is not datetime:
+        return False
+    try:
+        offset = value.utcoffset()
+    except Exception:
+        return False
+    return offset == timedelta(0)
+
+
 def _resolve_trusted_completed_us_equity_session(
     *,
-    run_context: MmiProjectionRunContext,
+    evaluation_time_utc: datetime,
 ) -> tuple[CompletedUsEquitySession, _ValidatedSchedule]:
-    if not _mmi_projection_run_context_provenance_is_valid(run_context):
+    if not _evaluation_time_utc_is_valid(evaluation_time_utc):
         raise UsEquitySessionResolutionError(
             MarkFreshnessStatus.INVALID,
             ("US_EQUITY_SESSION_RUN_CONTEXT_INVALID",),
@@ -389,7 +404,7 @@ def _resolve_trusted_completed_us_equity_session(
         )
     completed_session = _resolve_latest_completed_session(
         schedule=schedule,
-        run_context=run_context,
+        evaluation_time_utc=evaluation_time_utc,
     )
     if completed_session is None:
         raise UsEquitySessionResolutionError(
@@ -401,9 +416,9 @@ def _resolve_trusted_completed_us_equity_session(
 
 def resolve_trusted_completed_us_equity_session(
     *,
-    run_context: MmiProjectionRunContext,
+    evaluation_time_utc: datetime,
 ) -> CompletedUsEquitySession:
-    """Return the one reviewed-calendar session fact for a trusted MMI run.
+    """Return the one reviewed-calendar session fact for a trusted UTC instant.
 
     This intentionally accepts no caller date, session, calendar path, or
     calendar identity.  It is the reusable acquisition seam for code that
@@ -411,7 +426,7 @@ def resolve_trusted_completed_us_equity_session(
     owner remains the only owner of session resolution and coverage semantics.
     """
     completed_session, _schedule = _resolve_trusted_completed_us_equity_session(
-        run_context=run_context,
+        evaluation_time_utc=evaluation_time_utc,
     )
     return completed_session
 
@@ -419,13 +434,14 @@ def resolve_trusted_completed_us_equity_session(
 def assess_manual_mark_freshness(
     *,
     mark_as_of_date: date,
-    run_context: MmiProjectionRunContext,
+    evaluation_time_utc: datetime,
 ) -> MarkFreshnessResult:
     """Compare one parsed mark date to the trusted latest completed session.
 
     ``mark_as_of_date`` is the factual date parsed from the manual valuation
-    source.  Callers cannot inject an evaluation date, completed-session date,
-    calendar path, or calendar identity.
+    source.  Callers supply the trusted evaluation instant directly; they
+    cannot inject a completed-session date, calendar path, or calendar
+    identity.
     """
     assessed_mark_as_of_date = (
         mark_as_of_date if type(mark_as_of_date) is date else None
@@ -438,7 +454,7 @@ def assess_manual_mark_freshness(
         )
     try:
         completed_session, schedule = _resolve_trusted_completed_us_equity_session(
-            run_context=run_context,
+            evaluation_time_utc=evaluation_time_utc,
         )
     except UsEquitySessionResolutionError as exc:
         reason_codes = exc.reason_codes
@@ -457,7 +473,7 @@ def assess_manual_mark_freshness(
             completed_session=completed_session,
         )
     try:
-        evaluation_date_et = run_context.evaluation_time_utc.astimezone(
+        evaluation_date_et = evaluation_time_utc.astimezone(
             ZoneInfo(_TIMEZONE_NAME)
         ).date()
     except (ValueError, ZoneInfoNotFoundError):

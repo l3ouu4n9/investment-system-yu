@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import errno
 import hashlib
 import inspect
@@ -84,11 +84,6 @@ def _configure_prerequisites(
             portfolio_scope_id="yu_etf_portfolio",
             tickers=tickers,
         ),
-    )
-    monkeypatch.setattr(
-        capture,
-        "begin_mmi_projection_run",
-        lambda: object(),
     )
     monkeypatch.setattr(
         capture,
@@ -300,6 +295,53 @@ def test_complete_capture_uses_trusted_session_raw_close_and_pinned_arguments(
     assert all(type(mark["mark"]) is str for mark in payload["marks"])
     assert payload["client_version"] == "1.4.1"
     assert payload["pandas_version"] == "3.0.3"
+
+
+def test_capture_uses_a_direct_utc_evaluation_instant_not_an_mmi_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert not hasattr(capture, "begin_mmi_projection_run")
+    _configure_prerequisites(tmp_path, monkeypatch)
+    call_order: list[str] = []
+    captured_kwargs: dict[str, object] = {}
+
+    def _resolve(**kwargs: object) -> CompletedUsEquitySession:
+        call_order.append("evaluation")
+        captured_kwargs.update(kwargs)
+        return _session()
+
+    monkeypatch.setattr(
+        capture,
+        "resolve_trusted_completed_us_equity_session",
+        _resolve,
+    )
+
+    def _download(ticker: str, **_kwargs: object) -> pd.DataFrame:
+        call_order.append(f"download:{ticker}")
+        return _history(close=100.25 if ticker == "QQQ" else 200.5, adj_close=1)
+
+    _configure_provider(monkeypatch, _download)
+
+    def _captured_at() -> str:
+        call_order.append("captured_at")
+        return "2026-08-12T20:01:02Z"
+
+    monkeypatch.setattr(capture, "_captured_at_utc", _captured_at)
+
+    result = _capture(tmp_path, monkeypatch)
+    assert result.status is capture.YfinanceValuationCaptureStatus.CAPTURED
+
+    assert set(captured_kwargs) == {"evaluation_time_utc"}
+    evaluation_time_utc = captured_kwargs["evaluation_time_utc"]
+    assert type(evaluation_time_utc) is datetime
+    assert evaluation_time_utc.utcoffset() == timedelta(0)
+    assert call_order == [
+        "evaluation",
+        "download:QQQ",
+        "download:SMH",
+        "captured_at",
+    ]
 
 
 @pytest.mark.parametrize(

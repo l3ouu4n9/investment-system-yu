@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import inspect
 import json
@@ -11,10 +11,6 @@ from pathlib import Path
 import pytest
 
 from investment_orchestrator.common.paths import repo_root
-from investment_orchestrator.mmi.contracts import (
-    MmiProjectionRunContext,
-    _begin_mmi_projection_run_with_clock,
-)
 from investment_orchestrator.market import us_equity_session_calendar as calendar
 
 
@@ -23,22 +19,10 @@ _APPROVED_SHA256 = (
 )
 
 
-class _FixedClock:
-    def __init__(self, value: datetime) -> None:
-        self._value = value
-
-    def now_utc(self) -> datetime:
-        return self._value
-
-
-def _context(value: datetime) -> MmiProjectionRunContext:
-    return _begin_mmi_projection_run_with_clock(_FixedClock(value))
-
-
 def _assess(value: datetime, mark_as_of_date: date):
     return calendar.assess_manual_mark_freshness(
         mark_as_of_date=mark_as_of_date,
-        run_context=_context(value),
+        evaluation_time_utc=value,
     )
 
 
@@ -83,12 +67,12 @@ def test_public_freshness_entry_has_no_bare_evaluation_or_session_bypass() -> No
         "resolve_trusted_completed_us_equity_session",
     )
     parameters = inspect.signature(calendar.assess_manual_mark_freshness).parameters
-    assert set(parameters) == {"mark_as_of_date", "run_context"}
+    assert set(parameters) == {"mark_as_of_date", "evaluation_time_utc"}
     assert not {"evaluation_date", "evaluation_timestamp", "latest_completed_session_date", "calendar_path"} & set(parameters)
-    forged = object.__new__(MmiProjectionRunContext)
+    naive = datetime(2026, 8, 12, 20)
     result = calendar.assess_manual_mark_freshness(
         mark_as_of_date=date(2026, 8, 12),
-        run_context=forged,
+        evaluation_time_utc=naive,
     )
     assert result.status is calendar.MarkFreshnessStatus.INVALID
     assert result.reason_codes == ("US_EQUITY_SESSION_RUN_CONTEXT_OR_MARK_DATE_INVALID",)
@@ -101,7 +85,7 @@ def test_completed_session_factory_has_no_caller_date_or_calendar_bypass() -> No
     parameters = inspect.signature(
         calendar.resolve_trusted_completed_us_equity_session
     ).parameters
-    assert set(parameters) == {"run_context"}
+    assert set(parameters) == {"evaluation_time_utc"}
     assert not {
         "evaluation_date",
         "evaluation_timestamp",
@@ -111,12 +95,38 @@ def test_completed_session_factory_has_no_caller_date_or_calendar_bypass() -> No
         "calendar_schedule_sha256",
     } & set(parameters)
     completed = calendar.resolve_trusted_completed_us_equity_session(
-        run_context=_context(datetime(2026, 8, 12, 20, tzinfo=timezone.utc)),
+        evaluation_time_utc=datetime(2026, 8, 12, 20, tzinfo=timezone.utc),
     )
     assert completed.session_date == "2026-08-12"
-    forged = object.__new__(MmiProjectionRunContext)
     with pytest.raises(calendar.UsEquitySessionResolutionError) as exc_info:
-        calendar.resolve_trusted_completed_us_equity_session(run_context=forged)
+        calendar.resolve_trusted_completed_us_equity_session(
+            evaluation_time_utc=date(2026, 8, 12),
+        )
+    assert exc_info.value.status is calendar.MarkFreshnessStatus.INVALID
+    assert exc_info.value.reason_codes == (
+        "US_EQUITY_SESSION_RUN_CONTEXT_INVALID",
+    )
+
+
+def test_completed_session_timestamp_matches_canonical_utc_rendering() -> None:
+    evaluation = datetime(2026, 8, 12, 20, 30, 45, 123456, tzinfo=timezone.utc)
+    completed = calendar.resolve_trusted_completed_us_equity_session(
+        evaluation_time_utc=evaluation,
+    )
+    assert completed.trusted_evaluation_timestamp_utc == (
+        evaluation.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    )
+    assert completed.trusted_evaluation_timestamp_utc == (
+        "2026-08-12T20:30:45.123456Z"
+    )
+
+
+def test_non_utc_offset_evaluation_time_is_invalid() -> None:
+    non_utc = datetime(2026, 8, 12, 20, tzinfo=timezone(timedelta(hours=-4)))
+    with pytest.raises(calendar.UsEquitySessionResolutionError) as exc_info:
+        calendar.resolve_trusted_completed_us_equity_session(
+            evaluation_time_utc=non_utc,
+        )
     assert exc_info.value.status is calendar.MarkFreshnessStatus.INVALID
     assert exc_info.value.reason_codes == (
         "US_EQUITY_SESSION_RUN_CONTEXT_INVALID",
