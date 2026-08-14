@@ -144,6 +144,22 @@ H2C_ARCHIVED_SOURCE_RELATIVE_PATH = (
     "src/investment_orchestrator/offline/"
     "mmi_h2c_archived_source_v1.py"
 )
+YFINANCE_VALUATION_CAPTURE_RELATIVE_PATH = (
+    "src/investment_orchestrator/market/"
+    "us_equity_yfinance_valuation_capture.py"
+)
+REPORT_ONLY_BUDGET_CAPACITY_RELATIVE_PATH = (
+    "src/investment_orchestrator/observability/"
+    "report_only_budget_capacity.py"
+)
+REPORT_ONLY_HOLDINGS_EXPOSURE_RELATIVE_PATH = (
+    "src/investment_orchestrator/observability/"
+    "report_only_holdings_exposure.py"
+)
+REPORT_ONLY_INCREMENT_CAPACITY_RELATIVE_PATH = (
+    "src/investment_orchestrator/observability/"
+    "report_only_increment_capacity.py"
+)
 EXPECTED_EXTERNAL_CONSUMERS = (
     "src/investment_orchestrator/cli/observe_ltetf_target_architecture_gaps.py",
     "src/investment_orchestrator/cli/weekly_shadow_01_report_publisher_cli.py",
@@ -468,15 +484,17 @@ def test_mmi_external_readers_match_approved_allowlist() -> None:
     those passing or failing determines this result, and this result does
     not gate them either.
 
-    As of this test, there is a known, already-tracked architecture
-    violation: eight additional production modules (added across recent,
-    unrelated feature commits) import ``investment_orchestrator.mmi.*``
-    without ever having been reviewed against this allowlist.  This test is
-    EXPECTED TO FAIL red -- actual external readers (19) exceed this
-    approved set (11) -- until that debt is resolved by an explicitly
-    reviewed and approved allowlist change.  Do not add those eight paths
-    here without that review, and do not weaken this equality to a subset
-    check to silence the failure.
+    Approval is architectural import permission only: it never grants
+    investment, action, or execution authority, and this list is never an
+    authority source.  Membership is by exact repository-relative path --
+    never by package, directory, prefix, or glob.  Where a reader's genuine
+    MMI dependency is narrow enough to freeze, its exact imported
+    module/symbol surface is pinned below as well, so that acquiring any
+    further MMI surface fails closed here rather than passing silently on a
+    path-only entry.
+
+    Do not add a path here without that review, and do not weaken any
+    equality below to a subset check to silence a failure.
     """
     inventory = ltetf._scan_production_inventory(repo_root())
     imports_by_path = dict(inventory.imports_by_path)
@@ -501,7 +519,11 @@ def test_mmi_external_readers_match_approved_allowlist() -> None:
     # preparation engine reads the same live chain report-only and has no
     # production consumer of its own.  P2b adds exactly one more external
     # reader: the current-lane H1 replacement prepare/consume composer, whose
-    # only consumers are its two foreground CLIs.
+    # only consumers are its two foreground CLIs.  E1 adds the four reviewed
+    # report-only sizing/capture readers: each is a genuine MMI contract
+    # client, each returns ``AUTHORITY_EFFECT_NONE`` only, and none is
+    # reachable from Step2/Step3/Step4, the final safety gate, publication,
+    # or any order path.
     assert set(external_mmi_readers) == {
         H2C_CASE_BUNDLE_RELATIVE_PATH,
         H2C_CONSUME_ENGINE_RELATIVE_PATH,
@@ -514,7 +536,73 @@ def test_mmi_external_readers_match_approved_allowlist() -> None:
         H2C_ARCHIVED_SOURCE_RELATIVE_PATH,
         H1_MAPPED_RECOGNITION_RELATIVE_PATH,
         H1_REPLACEMENT_HANDOFF_RELATIVE_PATH,
+        YFINANCE_VALUATION_CAPTURE_RELATIVE_PATH,
+        REPORT_ONLY_BUDGET_CAPACITY_RELATIVE_PATH,
+        REPORT_ONLY_HOLDINGS_EXPOSURE_RELATIVE_PATH,
+        REPORT_ONLY_INCREMENT_CAPACITY_RELATIVE_PATH,
     }
+
+    def mmi_surface(relative_path: str) -> set[str]:
+        """Live imported MMI module/symbol membership for one reader.
+
+        Reads the same scanned import graph the reader set above uses, so no
+        second import parser exists here.  Membership only: nothing about
+        source line order or import statement formatting is frozen.
+        """
+        return {
+            imported
+            for imported in imports_by_path[relative_path]
+            if imported.startswith("investment_orchestrator.mmi")
+        }
+
+    # The capture owner's only legitimate MMI dependency is the frozen
+    # canonical profile: its persisted artifact is byte-defined by
+    # ``canonical_json_bytes`` and its reader re-derives and requires exact
+    # byte equality.  It consumes no MMI source, projection, or run-context
+    # fact, and acquiring one would be authority-relevant.
+    assert mmi_surface(YFINANCE_VALUATION_CAPTURE_RELATIVE_PATH) == {
+        "investment_orchestrator.mmi.canonical",
+        "investment_orchestrator.mmi.canonical.MmiCanonicalizationError",
+        "investment_orchestrator.mmi.canonical.canonical_json_bytes",
+        "investment_orchestrator.mmi.canonical.normalize_decimal_string",
+    }
+    # The r x H basis owner adopts only the canonical decimal grammar its
+    # upstream H is already rendered in.  Any future MMI source, projection,
+    # or run-context import requires fresh review.
+    assert mmi_surface(REPORT_ONLY_INCREMENT_CAPACITY_RELATIVE_PATH) == {
+        "investment_orchestrator.mmi.canonical",
+        "investment_orchestrator.mmi.canonical.MmiCanonicalizationError",
+        "investment_orchestrator.mmi.canonical.normalize_decimal_string",
+    }
+    # The open-BUY capacity owner reads exactly one sha-pinned captured
+    # source plus the strict section-(2a) commitment resolver.  It holds no
+    # policy projection and no run context today; acquiring either -- or any
+    # other MMI symbol -- must fail closed here.
+    assert mmi_surface(REPORT_ONLY_BUDGET_CAPACITY_RELATIVE_PATH) == {
+        "investment_orchestrator.mmi.canonical",
+        "investment_orchestrator.mmi.canonical.MmiCanonicalizationError",
+        "investment_orchestrator.mmi.canonical.normalize_decimal_string",
+        "investment_orchestrator.mmi.contracts",
+        "investment_orchestrator.mmi.contracts.AUTHORITY_EFFECT_NONE",
+        "investment_orchestrator.mmi.contracts.MmiCapturedSource",
+        "investment_orchestrator.mmi.contracts.MmiSourceRole",
+        "investment_orchestrator.mmi.portfolio_projection",
+        "investment_orchestrator.mmi.portfolio_projection."
+        "StrictCurrentOpenBuyCommitmentError",
+        "investment_orchestrator.mmi.portfolio_projection."
+        "resolve_strict_current_open_buy_commitments",
+        "investment_orchestrator.mmi.source_capture",
+        "investment_orchestrator.mmi.source_capture."
+        "capture_current_mmi_source",
+    }
+    # The holdings-exposure owner is intentionally a broad, genuine MMI
+    # projection-run consumer (begin run, source capture, policy projection,
+    # portfolio projection, canonical profile), so it is deliberately
+    # path-approved above with no exact-symbol rider of its own.  Its safety
+    # boundary is separately owned: its report-only contract, its closed
+    # consumer island, and its absence of authority-path reachability.
+    #
+    # The original H2 comparison-report symbol restriction follows unchanged.
     assert {
         imported
         for imported in imports_by_path[H2_COMPARISON_REPORT_RELATIVE_PATH]
