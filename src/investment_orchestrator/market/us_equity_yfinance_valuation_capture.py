@@ -35,7 +35,6 @@ from investment_orchestrator.mmi.canonical import (
     normalize_decimal_string,
 )
 from investment_orchestrator.mmi.contracts import (
-    AUTHORITY_EFFECT_NONE,
     begin_mmi_projection_run,
 )
 from investment_orchestrator.common.stable_read import (
@@ -74,6 +73,7 @@ _CAPTURE_RELATIVE_PATH: Final = (
 )
 _SCHEMA_VERSION: Final = "us_equity_yfinance_valuation_capture_v1"
 _ACQUISITION_CONTRACT_VERSION: Final = "us_equity_yfinance_raw_close_v1"
+_AUTHORITY_EFFECT_NONE: Final = "NONE"
 _SOURCE_KIND: Final = "EXTERNAL_MARKET_DATA_CAPTURE"
 _PROVIDER_ID: Final = "YAHOO_FINANCE"
 _CLIENT_LIBRARY: Final = "yfinance"
@@ -158,7 +158,7 @@ def _result(
     artifact_sha256: str | None = None,
 ) -> YfinanceValuationCaptureResult:
     return YfinanceValuationCaptureResult(
-        authority_effect=AUTHORITY_EFFECT_NONE,
+        authority_effect=_AUTHORITY_EFFECT_NONE,
         status=status,
         reason_codes=reason_codes,
         artifact_repository_relative_path=(
@@ -598,7 +598,7 @@ def _capture_payload(
         )
     return {
         "schema_version": _SCHEMA_VERSION,
-        "authority_effect": AUTHORITY_EFFECT_NONE,
+        "authority_effect": _AUTHORITY_EFFECT_NONE,
         "source_kind": _SOURCE_KIND,
         "provider_id": _PROVIDER_ID,
         "client_library": _CLIENT_LIBRARY,

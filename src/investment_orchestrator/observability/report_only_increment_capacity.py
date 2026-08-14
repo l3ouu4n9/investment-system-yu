@@ -27,7 +27,6 @@ from investment_orchestrator.mmi.canonical import (
     MmiCanonicalizationError,
     normalize_decimal_string,
 )
-from investment_orchestrator.mmi.contracts import AUTHORITY_EFFECT_NONE
 from investment_orchestrator.common.stable_read import (
     MmiStableReadError,
     MmiStableReadErrorCode,
@@ -48,6 +47,7 @@ __all__ = (
 )
 
 
+_AUTHORITY_EFFECT_NONE: Final = "NONE"
 _INCREMENT_FRACTION_FILENAME: Final = "increment_fraction.txt"
 _INCREMENT_FRACTION_REPOSITORY_RELATIVE_LOCATOR: Final = (
     "inputs/current/increment_fraction.txt"
@@ -161,7 +161,7 @@ def _result(
     projection: IncrementCapacityProjection | None = None,
 ) -> IncrementCapacityObservationResult:
     return IncrementCapacityObservationResult(
-        authority_effect=AUTHORITY_EFFECT_NONE,
+        authority_effect=_AUTHORITY_EFFECT_NONE,
         status=status,
         reason_codes=reason_codes,
         projection=projection,
@@ -359,7 +359,7 @@ def observe_current_report_only_increment_capacity(
 
     projection = IncrementCapacityProjection(
         schema_version="report_only_increment_capacity_projection_v1",
-        authority_effect=AUTHORITY_EFFECT_NONE,
+        authority_effect=_AUTHORITY_EFFECT_NONE,
         increment_fraction_source=r_source,
         currency=exposure.currency,
         portfolio_source_sha256=exposure.portfolio_source_sha256,

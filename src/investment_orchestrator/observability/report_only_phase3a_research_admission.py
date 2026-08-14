@@ -16,7 +16,6 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Final
 
-from investment_orchestrator.mmi.contracts import AUTHORITY_EFFECT_NONE
 from investment_orchestrator.state.research_availability import (
     ResearchSelectionRefusalReadStatus,
     read_persisted_research_selection_refusal_only,
@@ -30,6 +29,7 @@ __all__ = (
 )
 
 
+_AUTHORITY_EFFECT_NONE: Final = "NONE"
 _RESULT_SCHEMA_VERSION: Final = (
     "phase3a_research_admission_observation_result_v1"
 )
@@ -93,7 +93,7 @@ def observe_current_report_only_phase3a_research_admission() -> (
         schema_version=_RESULT_SCHEMA_VERSION,
         status=status,
         reason_codes=reason_codes,
-        authority_effect=AUTHORITY_EFFECT_NONE,
+        authority_effect=_AUTHORITY_EFFECT_NONE,
         report_only=True,
         not_authorization=True,
         artifact_locator=upstream.artifact_locator,

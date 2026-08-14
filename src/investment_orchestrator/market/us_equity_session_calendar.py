@@ -22,7 +22,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from investment_orchestrator.common.paths import repo_root
 from investment_orchestrator.mmi.contracts import (
-    AUTHORITY_EFFECT_NONE,
     MmiProjectionRunContext,
     _mmi_projection_run_context_provenance_is_valid,
 )
@@ -31,6 +30,9 @@ from investment_orchestrator.common.stable_read import (
     MmiStableReadErrorCode,
     stable_read_exact_bytes,
 )
+
+
+_AUTHORITY_EFFECT_NONE: Final = "NONE"
 
 
 __all__ = (
@@ -130,7 +132,7 @@ def _result(
     completed_session: CompletedUsEquitySession | None = None,
 ) -> MarkFreshnessResult:
     return MarkFreshnessResult(
-        authority_effect=AUTHORITY_EFFECT_NONE,
+        authority_effect=_AUTHORITY_EFFECT_NONE,
         status=status,
         reason_codes=reason_codes,
         mark_as_of_date=mark_as_of_date,
@@ -354,7 +356,7 @@ def _resolve_latest_completed_session(
     if latest is None or latest_close is None:
         return None
     return CompletedUsEquitySession(
-        authority_effect=AUTHORITY_EFFECT_NONE,
+        authority_effect=_AUTHORITY_EFFECT_NONE,
         calendar_id=_CALENDAR_ID,
         calendar_schedule_sha256=schedule.observed_sha256,
         coverage_start_date=_COVERAGE_START_DATE.isoformat(),
