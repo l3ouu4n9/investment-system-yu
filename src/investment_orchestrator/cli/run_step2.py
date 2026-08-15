@@ -8,6 +8,7 @@ import sys
 from investment_orchestrator.workflow.step2_decision_builder import (
     parse_step2_output,
     render_step2_prompt,
+    step2_artifact_dir,
     step2_h1_capture_receipt_path,
     step2_prompt_path,
     step2_raw_output_path,
@@ -15,6 +16,9 @@ from investment_orchestrator.workflow.step2_decision_builder import (
 )
 from investment_orchestrator.workflow.step2_h1_provenance import (
     capture_h1_response,
+)
+from investment_orchestrator.workflow.step2_h1_report import (
+    validate_h1_report_workflow,
 )
 
 
@@ -26,6 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("render", help="Render Step 2 prompt and prepare raw_output.txt")
     subparsers.add_parser("parse", help="Parse raw_output.txt into template2_output.txt and decision_packet.json")
     subparsers.add_parser("capture", help="Capture operator-supplied Step 2 H1 raw response")
+    subparsers.add_parser("validate-h1", help="Validate structured H1 qualitative report")
     return parser
 
 
@@ -54,6 +59,13 @@ def main() -> int:
             )
             print(str(receipt_path))
             return 0
+
+        if args.command == "validate-h1":
+            validate_h1_report_workflow()
+            report_path = step2_artifact_dir() / "h1_qualitative_report.json"
+            print(str(report_path))
+            return 0
+
     except Exception as exc:  # noqa: BLE001
         print(str(exc), file=sys.stderr)
         return 1

@@ -1,7 +1,8 @@
-# H1 + LH2 QUALITATIVE RESEARCH REVIEW — RENDER ONLY
+# H1 + LH2 QUALITATIVE RESEARCH REVIEW — STRUCTURED REPORT
 
-This prompt is QUALITATIVE, NON-ACTIONABLE, RENDER-ONLY, and FOR MANUAL LLM HANDOFF.
-The operator submits it manually. In R1, the repository does not parse or consume the response.
+This prompt is QUALITATIVE, NON-ACTIONABLE, REPORT-ONLY, and FOR MANUAL LLM HANDOFF.
+The operator submits it manually. In R2B, the repository deterministically parses this
+report but grants no actionable authority.
 
 ## Authority boundary
 
@@ -12,8 +13,8 @@ authority.
 
 Do not provide authoritative scores or ranks, budgets, caps, allocation percentages, dollar
 amounts, share quantities, orders, or action instructions. Do not recommend or authorize NEW_BUY,
-SELL, ROTATION, REBALANCE, EXTENDED_ETF_ADMISSION, or ORDER_COMPILATION. Step2 response parsing,
-Step3, Step4, publication, order compilation, and broker execution remain blocked.
+SELL, ROTATION, REBALANCE, EXTENDED_ETF_ADMISSION, or ORDER_COMPILATION. Step2 response parsing
+for actionable decisions, Step3, Step4, publication, order compilation, and broker execution remain blocked.
 
 Ticker mentions are operator-declared evidence associations only; they are not investment-universe
 membership. Publisher and locator values are operator-declared metadata, not externally
@@ -30,8 +31,25 @@ Using only the evidence below, write a concise qualitative research memo coverin
 5. Change from a prior thesis only when the supplied evidence itself establishes that comparison;
    otherwise state that prior-thesis change cannot be determined.
 
-Do not output Template2, a decision packet, an action table, an order plan, or any machine-readable
-permission or readiness contract.
+You must output exactly ONE JSON document.
+Do NOT include any surrounding prose.
+Do NOT wrap the JSON in Markdown code fences (e.g., ```json).
+
+Your response must exactly match the following schema:
+
+{
+  "schema_version": "step2_h1_qualitative_response_v1",
+  "long_horizon_opportunity": "...",
+  "valuation_context": "...",
+  "portfolio_contribution": "...",
+  "evidence_integrity": "...",
+  "prior_thesis_change": "...",
+  "evidence_references": [
+    "<source_entry_identity_sha256>"
+  ]
+}
+
+Include a source_entry_identity_sha256 in evidence_references ONLY if you explicitly relied on that source.
 
 ## Authenticated current-process LH2 V2 evidence
 

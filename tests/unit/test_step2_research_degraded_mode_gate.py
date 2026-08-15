@@ -424,8 +424,8 @@ def test_h1_lh2_render_uses_one_gate_snapshot_and_exact_admitted_payload(
 
     prompt = step2_decision_builder.step2_prompt_path().read_text(encoding="utf-8")
     for expected in (
-        "QUALITATIVE, NON-ACTIONABLE, RENDER-ONLY",
-        "repository does not parse or consume the response",
+        "QUALITATIVE, NON-ACTIONABLE, REPORT-ONLY",
+        "repository deterministically parses this report but grants no actionable authority",
         "Publisher 0",
         "Publisher 1",
         now_date.isoformat(),

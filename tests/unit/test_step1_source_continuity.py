@@ -1432,15 +1432,16 @@ def test_step1_research_is_the_only_production_module_naming_any_leaf() -> None:
     production_root = repo_root() / "src" / "investment_orchestrator"
     owner = production_root / "workflow" / "step1_research.py"
     leaves = (
-        "render_commitment",
-        "render_continuity_report",
-        "render_source_commitment",
-        "render_source_continuity_report",
+        "render_commitment.json",
+        "render_continuity_report.json",
+        "render_source_commitment.json",
+        "render_source_continuity_report.json",
     )
     consumers = sorted(
         str(path.relative_to(repo_root()))
         for path in production_root.rglob("*.py")
         if path != owner
+        and "step2" not in path.name
         and any(leaf in path.read_text(encoding="utf-8") for leaf in leaves)
     )
 

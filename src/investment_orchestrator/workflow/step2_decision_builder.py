@@ -85,6 +85,7 @@ from investment_orchestrator.workflow.step1_research import (
     step1_research_output_path,
 )
 from investment_orchestrator.workflow.step2_h1_provenance import (
+    H1_LH2_STRUCTURED_REPORT_PROMPT_CONTRACT_VERSION,
     write_h1_render_commitment,
 )
 
@@ -386,6 +387,7 @@ def _build_h1_lh2_step2_prompt_text(
         "schema_version": payload.schema_version,
         "sources": [
             {
+                "source_entry_identity_sha256": entry.source_entry_identity_sha256,
                 "publisher": entry.publisher,
                 "published_at": entry.published_at,
                 "source_locator": entry.source_locator,
@@ -532,6 +534,7 @@ def render_step2_prompt() -> dict[str, str]:
         write_h1_render_commitment(
             step2_render_commitment_path(),
             prompt_text=prompt_text,
+            prompt_contract_version=H1_LH2_STRUCTURED_REPORT_PROMPT_CONTRACT_VERSION,
             evidence_identities_sha256=evidence_ids,
         )
 

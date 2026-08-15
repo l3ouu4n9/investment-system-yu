@@ -47,6 +47,7 @@ def test_h1_render_commitment_exact_contract(tmp_path: Path):
     write_h1_render_commitment(
         commitment_path,
         prompt_text=prompt_text,
+        prompt_contract_version="h1_lh2_render_only_v1",
         evidence_identities_sha256=["a" * 64, "b" * 64],
     )
     
@@ -77,6 +78,7 @@ def test_explicit_capture_operation_success(tmp_path: Path):
     write_h1_render_commitment(
         commitment_path,
         prompt_text=prompt_text,
+        prompt_contract_version="h1_lh2_render_only_v1",
         evidence_identities_sha256=["0" * 64],
     )
     
@@ -111,6 +113,7 @@ def test_explicit_capture_prompt_mismatch(tmp_path: Path):
     write_h1_render_commitment(
         commitment_path,
         prompt_text="Original prompt.",
+        prompt_contract_version="h1_lh2_render_only_v1",
         evidence_identities_sha256=["a" * 64],  # 64 chars
     )
     
@@ -140,13 +143,14 @@ def test_explicit_capture_empty_response(tmp_path: Path):
     write_h1_render_commitment(
         commitment_path,
         prompt_text=prompt_text,
+        prompt_contract_version="h1_lh2_render_only_v1",
         evidence_identities_sha256=["b" * 64],  # 64 chars
     )
     
     # Empty response
     raw_path.write_bytes(b"")
     
-    with pytest.raises(ValueError, match="Raw output file is empty"):
+    with pytest.raises(ValueError, match="Raw response byte size 0 is outside the allowed bounds"):
         capture_h1_response(
             commitment_path=commitment_path,
             prompt_path=prompt_path,
