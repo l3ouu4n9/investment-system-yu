@@ -367,6 +367,24 @@ def _fstat(file_fd: int) -> os.stat_result:
         raise _CaptureFailure("MMI_SOURCE_UNREADABLE") from None
 
 
+def _close_all_descriptors(descriptors: list[int]) -> bool:
+    """Close every retained descriptor in reverse order, reporting any failure.
+
+    This is the single owner of the retained-descriptor closure rule.  Every
+    descriptor is attempted even after an earlier close fails, so one failing
+    close can never leak the remaining descriptors.  The caller keeps the
+    failure precedence: this reports only whether some close failed, and never
+    decides that a close failure outranks an already pending capture failure.
+    """
+    close_failed = False
+    for descriptor in reversed(descriptors):
+        try:
+            os.close(descriptor)
+        except OSError:
+            close_failed = True
+    return close_failed
+
+
 def _read_exact_bounded(file_fd: int, *, expected_size: int) -> bytes:
     remaining = expected_size + 1
     chunks: list[bytes] = []
@@ -579,6 +597,70 @@ def _open_fixed_regular_path(
         opened_components=opened_components,
         missing_code=missing_code,
         unstable_code=unstable_code,
+    )
+
+
+def _open_trusted_repository_context(
+    repository_root: Path,
+    *,
+    production_module_path: Path | None,
+    directory_flags: int,
+    leaf_flags: int,
+    descriptors: list[int],
+    opened_components: list[_OpenedComponent],
+) -> tuple[
+    _RootAnchor,
+    int,
+    list[tuple[_MarkerSpec, int, _FileWitness]],
+    _OpenedComponent | None,
+]:
+    """Open the repository root and every production marker, opening no source.
+
+    This is the single owner of trusted-root acquisition: it anchors the
+    filesystem root, walks the repository root components, and opens each
+    production marker under that root.  It reads no marker byte and verifies no
+    module binding; content validation and the lexical module binding remain
+    separate later phases so their positions stay caller-owned.
+
+    Every descriptor it opens is appended, in open order, to the
+    caller-supplied ``descriptors`` list, which remains the sole closure owner.
+    """
+    root_anchor, repository_root_fd = _open_absolute_repository_root(
+        repository_root,
+        directory_flags=directory_flags,
+        descriptors=descriptors,
+        opened_components=opened_components,
+    )
+    marker_materials: list[
+        tuple[_MarkerSpec, int, _FileWitness]
+    ] = []
+    module_component: _OpenedComponent | None = None
+    if production_module_path is not None:
+        for marker_spec in _PRODUCTION_MARKERS:
+            marker_fd, marker_witness = _open_fixed_regular_path(
+                repository_root_fd,
+                marker_spec.path_components,
+                maximum_bytes=marker_spec.maximum_bytes,
+                directory_flags=directory_flags,
+                leaf_flags=leaf_flags,
+                descriptors=descriptors,
+                opened_components=opened_components,
+                missing_code="MMI_SOURCE_REPOSITORY_MARKER_INVALID",
+            )
+            marker_materials.append(
+                (marker_spec, marker_fd, marker_witness)
+            )
+            if marker_spec.path_components == _PRODUCTION_MODULE_SUFFIX:
+                module_component = opened_components[-1]
+        if module_component is None:
+            raise _CaptureFailure(
+                "MMI_SOURCE_INTERNAL_INVARIANT_FAILED"
+            )
+    return (
+        root_anchor,
+        repository_root_fd,
+        marker_materials,
+        module_component,
     )
 
 
@@ -960,6 +1042,24 @@ def _validate_marker_bytes(spec: _MarkerSpec, raw_bytes: bytes) -> None:
         raise _CaptureFailure("MMI_SOURCE_REPOSITORY_MARKER_INVALID")
 
 
+def _validate_marker_materials(
+    marker_materials: list[tuple[_MarkerSpec, int, _FileWitness]],
+) -> None:
+    """Read and validate every acquired marker through its retained descriptor.
+
+    This is the single owner of marker content validation.  Each marker is read
+    exactly to its recorded witness size, so a marker that grew or shrank after
+    acquisition fails closed through the bounded reader rather than being
+    validated at its new size.
+    """
+    for marker_spec, marker_fd, marker_witness in marker_materials:
+        marker_bytes = _read_exact_bounded(
+            marker_fd,
+            expected_size=marker_witness.size,
+        )
+        _validate_marker_bytes(marker_spec, marker_bytes)
+
+
 def _validate_built_source_record(
     record: dict[str, object],
     *,
@@ -1029,6 +1129,43 @@ def _lexical_production_checkout(
         ) from None
 
 
+def _verify_module_lexical_binding(
+    production_module_path: Path | None,
+    module_component: _OpenedComponent | None,
+) -> None:
+    """Bind the executing module's lexical path to the opened module component.
+
+    This is the single owner of the module lexical binding rule.  A no-follow
+    observation of the trusted import-time module path must witness exactly the
+    module file already opened under the walked repository root, so a root that
+    is not the executing checkout fails closed.  Callers own where this runs;
+    it never opens a descriptor and never reads a byte.
+    """
+    if production_module_path is None:
+        return
+    if module_component is None:
+        raise _CaptureFailure(
+            "MMI_SOURCE_INTERNAL_INVARIANT_FAILED"
+        )
+    try:
+        module_lexical = os.stat(
+            os.fspath(production_module_path),
+            follow_symlinks=False,
+        )
+    except OSError:
+        raise _CaptureFailure(
+            "MMI_SOURCE_REPOSITORY_ROOT_UNTRUSTED"
+        ) from None
+    if stat.S_ISLNK(module_lexical.st_mode):
+        raise _CaptureFailure(
+            "MMI_SOURCE_REPOSITORY_ROOT_UNTRUSTED"
+        )
+    if _witness(module_lexical) != module_component.witness:
+        raise _CaptureFailure(
+            "MMI_SOURCE_REPOSITORY_ROOT_UNTRUSTED"
+        )
+
+
 def _capture_fixed_source_bytes(
     repository_root: Path,
     *,
@@ -1047,37 +1184,19 @@ def _capture_fixed_source_bytes(
     success: MmiSourceCaptureResult | None = None
     pending_failure: _CaptureFailure | _CaptureContractFailure | None = None
     try:
-        root_anchor, repository_root_fd = _open_absolute_repository_root(
+        (
+            root_anchor,
+            repository_root_fd,
+            marker_materials,
+            module_component,
+        ) = _open_trusted_repository_context(
             repository_root,
+            production_module_path=production_module_path,
             directory_flags=directory_flags,
+            leaf_flags=leaf_flags,
             descriptors=descriptors,
             opened_components=opened_components,
         )
-        marker_materials: list[
-            tuple[_MarkerSpec, int, _FileWitness]
-        ] = []
-        module_component: _OpenedComponent | None = None
-        if production_module_path is not None:
-            for marker_spec in _PRODUCTION_MARKERS:
-                marker_fd, marker_witness = _open_fixed_regular_path(
-                    repository_root_fd,
-                    marker_spec.path_components,
-                    maximum_bytes=marker_spec.maximum_bytes,
-                    directory_flags=directory_flags,
-                    leaf_flags=leaf_flags,
-                    descriptors=descriptors,
-                    opened_components=opened_components,
-                    missing_code="MMI_SOURCE_REPOSITORY_MARKER_INVALID",
-                )
-                marker_materials.append(
-                    (marker_spec, marker_fd, marker_witness)
-                )
-                if marker_spec.path_components == _PRODUCTION_MODULE_SUFFIX:
-                    module_component = opened_components[-1]
-            if module_component is None:
-                raise _CaptureFailure(
-                    "MMI_SOURCE_INTERNAL_INVARIANT_FAILED"
-                )
 
         leaf_fd, leaf_witness = _open_fixed_regular_path(
             repository_root_fd,
@@ -1091,12 +1210,7 @@ def _capture_fixed_source_bytes(
             unstable_code="MMI_SOURCE_UNSTABLE",
         )
         source_component = opened_components[-1]
-        for marker_spec, marker_fd, marker_witness in marker_materials:
-            marker_bytes = _read_exact_bounded(
-                marker_fd,
-                expected_size=marker_witness.size,
-            )
-            _validate_marker_bytes(marker_spec, marker_bytes)
+        _validate_marker_materials(marker_materials)
         captured = _read_exact_bounded(
             leaf_fd,
             expected_size=leaf_witness.size,
@@ -1128,29 +1242,10 @@ def _capture_fixed_source_bytes(
             raise _CaptureContractFailure(
                 "MMI_SOURCE_RECORD_CONTRACT_FAILURE"
             ) from None
-        if production_module_path is not None:
-            if module_component is None:
-                raise _CaptureFailure(
-                    "MMI_SOURCE_INTERNAL_INVARIANT_FAILED"
-                )
-            try:
-                module_lexical = os.stat(
-                    os.fspath(production_module_path),
-                    follow_symlinks=False,
-                )
-            except OSError:
-                raise _CaptureFailure(
-                    "MMI_SOURCE_REPOSITORY_ROOT_UNTRUSTED"
-                ) from None
-            if stat.S_ISLNK(module_lexical.st_mode):
-                raise _CaptureFailure(
-                    "MMI_SOURCE_REPOSITORY_ROOT_UNTRUSTED"
-                )
-            module_lexical_witness = _witness(module_lexical)
-            if module_lexical_witness != module_component.witness:
-                raise _CaptureFailure(
-                    "MMI_SOURCE_REPOSITORY_ROOT_UNTRUSTED"
-                )
+        _verify_module_lexical_binding(
+            production_module_path,
+            module_component,
+        )
         # This operation verifies the complete fixed path and then takes the
         # authoritative bounded snapshot through its retained source
         # descriptor.  After it returns, only in-memory record, identity,
@@ -1210,12 +1305,7 @@ def _capture_fixed_source_bytes(
     except (OSError, TypeError, ValueError):
         pending_failure = _CaptureFailure("MMI_SOURCE_UNREADABLE")
     finally:
-        close_failed = False
-        for descriptor in reversed(descriptors):
-            try:
-                os.close(descriptor)
-            except OSError:
-                close_failed = True
+        close_failed = _close_all_descriptors(descriptors)
         if close_failed and pending_failure is None:
             pending_failure = _CaptureFailure(
                 "MMI_SOURCE_DESCRIPTOR_CLOSE_FAILED"
@@ -1367,37 +1457,19 @@ def _observe_fixed_source_absence(
     success: MmiSourceCaptureResult | None = None
     pending_failure: _CaptureFailure | _CaptureContractFailure | None = None
     try:
-        root_anchor, repository_root_fd = _open_absolute_repository_root(
+        (
+            root_anchor,
+            repository_root_fd,
+            marker_materials,
+            module_component,
+        ) = _open_trusted_repository_context(
             repository_root,
+            production_module_path=production_module_path,
             directory_flags=directory_flags,
+            leaf_flags=leaf_flags,
             descriptors=descriptors,
             opened_components=opened_components,
         )
-        marker_materials: list[
-            tuple[_MarkerSpec, int, _FileWitness]
-        ] = []
-        module_component: _OpenedComponent | None = None
-        if production_module_path is not None:
-            for marker_spec in _PRODUCTION_MARKERS:
-                marker_fd, marker_witness = _open_fixed_regular_path(
-                    repository_root_fd,
-                    marker_spec.path_components,
-                    maximum_bytes=marker_spec.maximum_bytes,
-                    directory_flags=directory_flags,
-                    leaf_flags=leaf_flags,
-                    descriptors=descriptors,
-                    opened_components=opened_components,
-                    missing_code="MMI_SOURCE_REPOSITORY_MARKER_INVALID",
-                )
-                marker_materials.append(
-                    (marker_spec, marker_fd, marker_witness)
-                )
-                if marker_spec.path_components == _PRODUCTION_MODULE_SUFFIX:
-                    module_component = opened_components[-1]
-            if module_component is None:
-                raise _CaptureFailure(
-                    "MMI_SOURCE_INTERNAL_INVARIANT_FAILED"
-                )
 
         # Every required parent component must exist and be a trusted
         # directory before any absence claim is permitted.  A missing
@@ -1414,34 +1486,11 @@ def _observe_fixed_source_absence(
                 opened_components=opened_components,
                 missing_code="MMI_SOURCE_PARENT_DIRECTORY_MISSING",
             )
-        for marker_spec, marker_fd, marker_witness in marker_materials:
-            marker_bytes = _read_exact_bounded(
-                marker_fd,
-                expected_size=marker_witness.size,
-            )
-            _validate_marker_bytes(marker_spec, marker_bytes)
-        if production_module_path is not None:
-            if module_component is None:
-                raise _CaptureFailure(
-                    "MMI_SOURCE_INTERNAL_INVARIANT_FAILED"
-                )
-            try:
-                module_lexical = os.stat(
-                    os.fspath(production_module_path),
-                    follow_symlinks=False,
-                )
-            except OSError:
-                raise _CaptureFailure(
-                    "MMI_SOURCE_REPOSITORY_ROOT_UNTRUSTED"
-                ) from None
-            if stat.S_ISLNK(module_lexical.st_mode):
-                raise _CaptureFailure(
-                    "MMI_SOURCE_REPOSITORY_ROOT_UNTRUSTED"
-                )
-            if _witness(module_lexical) != module_component.witness:
-                raise _CaptureFailure(
-                    "MMI_SOURCE_REPOSITORY_ROOT_UNTRUSTED"
-                )
+        _validate_marker_materials(marker_materials)
+        _verify_module_lexical_binding(
+            production_module_path,
+            module_component,
+        )
         # Observe the leaf, re-verify the complete opened path against its
         # recorded witnesses, then observe the leaf again.  A leaf that
         # appears, or any component whose binding moves, during the
@@ -1461,12 +1510,7 @@ def _observe_fixed_source_absence(
     except (OSError, TypeError, ValueError):
         pending_failure = _CaptureFailure("MMI_SOURCE_UNREADABLE")
     finally:
-        close_failed = False
-        for descriptor in reversed(descriptors):
-            try:
-                os.close(descriptor)
-            except OSError:
-                close_failed = True
+        close_failed = _close_all_descriptors(descriptors)
         if close_failed and pending_failure is None:
             pending_failure = _CaptureFailure(
                 "MMI_SOURCE_DESCRIPTOR_CLOSE_FAILED"

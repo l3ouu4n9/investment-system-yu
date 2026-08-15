@@ -3320,3 +3320,154 @@ def test_absence_prover_rejects_a_leaf_present_at_any_observation(
         assert "MMI_SOURCE_CONFIRMED_ABSENT" not in blocked.reason_codes
         assert not blocked.valid
         assert blocked.source is None
+
+
+def test_absence_prover_rejects_missing_and_content_invalid_markers(
+    tmp_path: Path,
+) -> None:
+    """A broken production checkout is never reported as confirmed absence.
+
+    Both marker phases are proven: a marker that cannot be acquired at all, and
+    a marker that is acquired but whose bytes no longer validate.  The second
+    case is the one that proves the absence prover really reads marker content
+    rather than merely opening the marker path.
+    """
+    raw = b"value: exact\n"
+
+    missing_checkout = tmp_path / "missing-marker"
+    missing_module = _install_checkout(missing_checkout, raw)
+    (missing_checkout / "pyproject.toml").unlink()
+    missing = (
+        source_capture._capture_current_mmi_source_absence_from_module_path(
+            missing_module,
+            MmiSourceRole.PORTFOLIO_SNAPSHOT,
+        )
+    )
+
+    invalid_checkout = tmp_path / "content-invalid-marker"
+    invalid_module = _install_checkout(invalid_checkout, raw)
+    (invalid_checkout / "pyproject.toml").write_bytes(
+        b'[project]\nname = "not-investment-orchestrator"\n'
+    )
+    invalid = (
+        source_capture._capture_current_mmi_source_absence_from_module_path(
+            invalid_module,
+            MmiSourceRole.PORTFOLIO_SNAPSHOT,
+        )
+    )
+
+    # Both checkouts hold a genuinely absent portfolio leaf, so an unproven
+    # marker is the only thing standing between them and confirmed absence.
+    assert not (missing_checkout / "inputs/current/portfolio_snapshot.txt").exists()
+    assert not (invalid_checkout / "inputs/current/portfolio_snapshot.txt").exists()
+    for blocked in (missing, invalid):
+        assert blocked.status is MmiProjectionResultCategory.PROJECTION_BLOCKED
+        assert blocked.reason_codes == (
+            "MMI_SOURCE_REPOSITORY_MARKER_INVALID",
+        )
+        assert "MMI_SOURCE_CONFIRMED_ABSENT" not in blocked.reason_codes
+        assert not blocked.valid
+        assert blocked.source is None
+
+
+def test_absence_prover_rejects_an_unbound_production_module_path(
+    tmp_path: Path,
+) -> None:
+    """An intact checkout stays untrusted unless it holds the executing module.
+
+    The lexical module path must witness exactly the module file opened under
+    the walked repository root.  A byte-identical file at another path, and a
+    module path that cannot be observed at all, both fail closed rather than
+    returning confirmed absence.
+    """
+    module = _install_checkout(tmp_path, b"value: exact\n")
+    leaf = tmp_path / "inputs" / "current" / "portfolio_snapshot.txt"
+    assert not leaf.exists()
+
+    def _absence(module_path: Path):
+        return _capture_mmi_source_absence_at_root(
+            tmp_path,
+            role=MmiSourceRole.PORTFOLIO_SNAPSHOT,
+            _production_module_path=module_path,
+        )
+
+    # Control: this same intact checkout confirms absence when the module path
+    # is the module actually opened under the walked root.
+    assert _absence(module).reason_codes == ("MMI_SOURCE_CONFIRMED_ABSENT",)
+
+    # A byte-identical decoy is still a different file.
+    decoy = tmp_path / "decoy_source_capture.py"
+    decoy.write_bytes(module.read_bytes())
+    foreign = _absence(decoy)
+    unobservable = _absence(tmp_path / "absent_source_capture.py")
+
+    for blocked in (foreign, unobservable):
+        assert blocked.status is MmiProjectionResultCategory.PROJECTION_BLOCKED
+        assert blocked.reason_codes == (
+            "MMI_SOURCE_REPOSITORY_ROOT_UNTRUSTED",
+        )
+        assert "MMI_SOURCE_CONFIRMED_ABSENT" not in blocked.reason_codes
+        assert not blocked.valid
+        assert blocked.source is None
+
+
+def test_absence_prover_closes_every_descriptor_on_a_controlled_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every descriptor the absence prover opens is closed exactly once.
+
+    The controlled failure is taken late, after the filesystem root, every
+    production marker, and the required parent chain are already open, so the
+    closure claim covers the full retained set rather than a trivial prefix.
+    """
+    module = _install_checkout(tmp_path, b"value: exact\n")
+    leaf = tmp_path / "inputs" / "current" / "portfolio_snapshot.txt"
+    leaf.write_bytes(b"ticker,budget\n")
+
+    opened: list[int] = []
+    closed: list[int] = []
+    original_root = source_capture._open_root
+    original_relative = source_capture._open_relative
+    original_close = source_capture.os.close
+
+    def tracked_root(repository_root: Path, flags: int) -> int:
+        fd = original_root(repository_root, flags)
+        opened.append(fd)
+        return fd
+
+    def tracked_relative(
+        name: str,
+        *,
+        directory_fd: int,
+        flags: int,
+        unstable_code: str,
+    ) -> int:
+        fd = original_relative(
+            name,
+            directory_fd=directory_fd,
+            flags=flags,
+            unstable_code=unstable_code,
+        )
+        opened.append(fd)
+        return fd
+
+    def tracked_close(fd: int) -> None:
+        closed.append(fd)
+        original_close(fd)
+
+    monkeypatch.setattr(source_capture, "_open_root", tracked_root)
+    monkeypatch.setattr(source_capture, "_open_relative", tracked_relative)
+    monkeypatch.setattr(source_capture.os, "close", tracked_close)
+    result = _capture_mmi_source_absence_at_root(
+        tmp_path,
+        role=MmiSourceRole.PORTFOLIO_SNAPSHOT,
+        _production_module_path=module,
+    )
+
+    # Reaching MMI_SOURCE_PRESENT proves the root, marker, and parent
+    # descriptors were all opened before the controlled failure was taken.
+    assert result.reason_codes == ("MMI_SOURCE_PRESENT",)
+    assert opened
+    assert sorted(opened) == sorted(closed)
+    assert closed == list(reversed(opened))
