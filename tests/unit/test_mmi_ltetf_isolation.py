@@ -1127,9 +1127,9 @@ def test_reachable_schema_validation_call_graph_does_not_write(
 
 def test_ltetf_inventory_classification_is_unchanged_except_inventory_content() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
-    # Historical 162 baseline plus audited net +11 production-path growth
-    # (12 added, 1 removed).
-    assert len(inventory.production_paths) == 173
+    # Historical 162 baseline plus audited net +12 production-path growth
+    # (13 added, 1 removed).
+    assert len(inventory.production_paths) == 174
     assert inventory.dynamic_findings == ()
     assert inventory.observer_external_consumers == EXPECTED_EXTERNAL_CONSUMERS
     assert inventory.report_artifact_readers == ()

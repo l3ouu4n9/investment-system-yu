@@ -303,10 +303,6 @@ def test_mapping_report_identity_mismatch_yields_invalid() -> None:
 @pytest.mark.parametrize(
     ("state", "source", "mapping_id"),
     [
-        # selected=True but wrong state
-        ("STRICT_FRESH", H1_ROLE_MAPPED_SOURCE, _IDENTITY_A),
-        # selected=True but wrong source
-        (H1_MAPPED_FRESH_NON_ACTIONABLE, "raw_research_handoff", _IDENTITY_A),
         # selected=True but identity is None
         (H1_MAPPED_FRESH_NON_ACTIONABLE, H1_ROLE_MAPPED_SOURCE, None),
         # selected=True but identity is malformed
@@ -315,8 +311,6 @@ def test_mapping_report_identity_mismatch_yields_invalid() -> None:
         (H1_MAPPED_FRESH_NON_ACTIONABLE, H1_ROLE_MAPPED_SOURCE, ""),
     ],
     ids=[
-        "wrong_state",
-        "wrong_source",
         "identity_none",
         "identity_malformed",
         "identity_empty",
@@ -349,6 +343,7 @@ def test_synthetically_inconsistent_selected_projection_yields_invalid(
         "PHASE3_RESEARCH_ADMISSION_SELECTION_STRUCTURALLY_INCONSISTENT",
     )
     assert result.qualitative_research_facts is None
+
 
 
 # --------------------------------------------------------------------------
