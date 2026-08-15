@@ -84,6 +84,9 @@ from investment_orchestrator.workflow.step1_research import (
     step1_research_degraded_mode_decision_path,
     step1_research_output_path,
 )
+from investment_orchestrator.workflow.step2_h1_provenance import (
+    write_h1_render_commitment,
+)
 
 
 STEP2_DIRNAME = "step2_decision_builder"
@@ -158,6 +161,16 @@ def step2_decision_packet_path() -> Path:
 def step2_blocked_by_research_gate_path() -> Path:
     """Return the deterministic Step 2 research-gate block artifact path."""
     return step2_artifact_dir() / STEP2_BLOCKED_BY_RESEARCH_GATE_FILENAME
+
+
+def step2_render_commitment_path() -> Path:
+    """Return the H1 render commitment path."""
+    return step2_artifact_dir() / "render_commitment.json"
+
+
+def step2_h1_capture_receipt_path() -> Path:
+    """Return the H1 response capture receipt path."""
+    return step2_artifact_dir() / "h1_capture_receipt.json"
 
 
 def step2_promoted_decision_only_path() -> Path:
@@ -513,6 +526,14 @@ def render_step2_prompt() -> dict[str, str]:
         raw_output_path,
         prompt_path=prompt_output_path,
     )
+
+    if h1_lh2_payload is not None:
+        evidence_ids = [entry.source_entry_identity_sha256 for entry in h1_lh2_payload.sources]
+        write_h1_render_commitment(
+            step2_render_commitment_path(),
+            prompt_text=prompt_text,
+            evidence_identities_sha256=evidence_ids,
+        )
 
     result = {
         "artifact_dir": str(artifact_dir),
