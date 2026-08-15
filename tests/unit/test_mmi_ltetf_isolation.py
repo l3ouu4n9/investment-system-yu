@@ -54,6 +54,10 @@ MMI_PRODUCTION_PATHS = (
     ),
     (
         "src/investment_orchestrator/mmi/"
+        "lh2_manual_capture_receipt_v1.py"
+    ),
+    (
+        "src/investment_orchestrator/mmi/"
         "long_horizon_research_payload_v1.py"
     ),
     (
@@ -143,6 +147,9 @@ H2C_ARCHIVED_CONSUME_CLI_RELATIVE_PATH = (
 H2C_ARCHIVED_SOURCE_RELATIVE_PATH = (
     "src/investment_orchestrator/offline/"
     "mmi_h2c_archived_source_v1.py"
+)
+LH2_MANUAL_CAPTURE_CLI_RELATIVE_PATH = (
+    "src/investment_orchestrator/cli/run_lh2_manual_capture.py"
 )
 YFINANCE_VALUATION_CAPTURE_RELATIVE_PATH = (
     "src/investment_orchestrator/market/"
@@ -545,6 +552,7 @@ def test_mmi_external_readers_match_approved_allowlist() -> None:
         REPORT_ONLY_BUDGET_CAPACITY_RELATIVE_PATH,
         REPORT_ONLY_HOLDINGS_EXPOSURE_RELATIVE_PATH,
         REPORT_ONLY_INCREMENT_CAPACITY_RELATIVE_PATH,
+        LH2_MANUAL_CAPTURE_CLI_RELATIVE_PATH,
     }
 
     def mmi_surface(relative_path: str) -> set[str]:
@@ -570,6 +578,30 @@ def test_mmi_external_readers_match_approved_allowlist() -> None:
         "investment_orchestrator.mmi.canonical.MmiCanonicalizationError",
         "investment_orchestrator.mmi.canonical.canonical_json_bytes",
         "investment_orchestrator.mmi.canonical.normalize_decimal_string",
+    }
+    # The LH2 manual capture CLI reads exactly one stable-digest operation
+    # plus the closed four-field receipt contract and the fixed source role.
+    # It acquires no captured source, no source record, no projection, and no
+    # run context: it can persist only a SHA-256 and a byte length, so it
+    # creates no availability, freshness, admission, or order authority.
+    # Acquiring any further MMI symbol must fail closed here.
+    assert mmi_surface(LH2_MANUAL_CAPTURE_CLI_RELATIVE_PATH) == {
+        "investment_orchestrator.mmi.contracts",
+        "investment_orchestrator.mmi.contracts.MmiSourceRole",
+        "investment_orchestrator.mmi.lh2_manual_capture_receipt_v1",
+        "investment_orchestrator.mmi.lh2_manual_capture_receipt_v1."
+        "LH2_MANUAL_CAPTURE_RECEIPT_PATH_COMPONENTS",
+        "investment_orchestrator.mmi.lh2_manual_capture_receipt_v1."
+        "Lh2ManualCaptureReceiptV1Error",
+        "investment_orchestrator.mmi.lh2_manual_capture_receipt_v1."
+        "build_lh2_manual_capture_receipt_v1",
+        "investment_orchestrator.mmi.lh2_manual_capture_receipt_v1."
+        "lh2_manual_capture_receipt_v1_canonical_text",
+        "investment_orchestrator.mmi.source_capture",
+        "investment_orchestrator.mmi.source_capture."
+        "MmiStableSourceDigestError",
+        "investment_orchestrator.mmi.source_capture."
+        "capture_current_mmi_stable_source_digest",
     }
     # The r x H basis owner adopts only the canonical decimal grammar its
     # upstream H is already rendered in.  Any future MMI source, projection,
@@ -1127,9 +1159,9 @@ def test_reachable_schema_validation_call_graph_does_not_write(
 
 def test_ltetf_inventory_classification_is_unchanged_except_inventory_content() -> None:
     inventory = ltetf._scan_production_inventory(repo_root())
-    # Historical 162 baseline plus audited net +12 production-path growth
-    # (13 added, 1 removed).
-    assert len(inventory.production_paths) == 174
+    # Historical 162 baseline plus audited net +14 production-path growth
+    # (15 added, 1 removed).
+    assert len(inventory.production_paths) == 176
     assert inventory.dynamic_findings == ()
     assert inventory.observer_external_consumers == EXPECTED_EXTERNAL_CONSUMERS
     assert inventory.report_artifact_readers == ()

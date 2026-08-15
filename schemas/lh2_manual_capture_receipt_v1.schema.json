@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://investment-system.local/schemas/lh2_manual_capture_receipt_v1.schema.json",
+  "title": "LH2 manual capture receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "source_role",
+    "observed_sha256",
+    "observed_size_bytes"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "lh2_manual_capture_receipt_v1"
+    },
+    "source_role": {
+      "const": "LONG_HORIZON_RESEARCH"
+    },
+    "observed_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "observed_size_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 262144
+    }
+  }
+}

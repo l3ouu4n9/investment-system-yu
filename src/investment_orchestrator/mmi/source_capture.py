@@ -190,6 +190,30 @@ class _CaptureContractFailure(RuntimeError):
         self.code = code
 
 
+@dataclass(frozen=True, slots=True)
+class MmiStableSourceDigest:
+    """SHA-256 and byte length of one exact stable source byte snapshot.
+
+    Both values are computed from the same final byte object taken under the
+    existing stability oracle.  This is deliberately not an
+    ``MmiCapturedSource``: it carries no raw bytes, no source record, no
+    provenance seal, and no expected digest, and it establishes no external
+    authenticity, payload validity, freshness, availability, or permission.
+    """
+
+    role: MmiSourceRole
+    observed_sha256: str
+    observed_size_bytes: int
+
+
+class MmiStableSourceDigestError(RuntimeError):
+    """One controlled stable-digest failure carrying an ``MMI_SOURCE_*`` code."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
 def _capture_result(
     status: MmiProjectionResultCategory,
     *reason_codes: str,
@@ -939,7 +963,7 @@ def _capture_final_bound_source_snapshot(
     leaf_fd: int,
     source_component: _OpenedComponent,
     initial_bytes: bytes,
-    expected_source_sha256: str,
+    expected_source_sha256: str | None,
     maximum_bytes: int,
     leaf_flags: int,
 ) -> _FinalSourceSnapshot:
@@ -1008,7 +1032,13 @@ def _capture_final_bound_source_snapshot(
             or final_size > maximum_bytes
             or final_witness.size != final_size
             or final_bytes != initial_bytes
-            or final_sha256 != expected_source_sha256
+            # Expected-SHA binding stays mandatory for every bound caller; the
+            # manual stable-digest caller supplies no expected digest and is
+            # bound only by the identical stability predicates above.
+            or (
+                expected_source_sha256 is not None
+                and final_sha256 != expected_source_sha256
+            )
         ):
             raise _CaptureFailure("MMI_SOURCE_UNSTABLE")
         final_snapshot = _FinalSourceSnapshot(
@@ -1432,6 +1462,161 @@ def capture_current_mmi_source(
         _PRODUCTION_MODULE_FILE,
         role,
         expected_source_sha256=expected_source_sha256,
+    )
+
+
+def _capture_fixed_source_stable_digest(
+    repository_root: Path,
+    *,
+    spec: MmiSourceSpec,
+    production_module_path: Path | None = None,
+) -> MmiStableSourceDigest:
+    """Take one stable snapshot of a fixed catalog source, keeping no bytes.
+
+    This composes exactly the same repository, marker, module-binding, and
+    final-snapshot owners the bound capture uses, minus the expected-SHA
+    binding, the source record, and the authenticated captured source.  The
+    two content samples must still agree under the unchanged stability oracle,
+    so a source that changes during the operation fails closed.
+    """
+    if not _required_filesystem_primitives_available():
+        raise _CaptureFailure("MMI_SOURCE_FILESYSTEM_PRIMITIVES_UNAVAILABLE")
+    directory_flags = (
+        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+    )
+    leaf_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+    descriptors: list[int] = []
+    opened_components: list[_OpenedComponent] = []
+    digest: MmiStableSourceDigest | None = None
+    pending_failure: _CaptureFailure | None = None
+    try:
+        (
+            root_anchor,
+            repository_root_fd,
+            marker_materials,
+            module_component,
+        ) = _open_trusted_repository_context(
+            repository_root,
+            production_module_path=production_module_path,
+            directory_flags=directory_flags,
+            leaf_flags=leaf_flags,
+            descriptors=descriptors,
+            opened_components=opened_components,
+        )
+
+        leaf_fd, leaf_witness = _open_fixed_regular_path(
+            repository_root_fd,
+            spec.path_components,
+            maximum_bytes=spec.maximum_bytes,
+            directory_flags=directory_flags,
+            leaf_flags=leaf_flags,
+            descriptors=descriptors,
+            opened_components=opened_components,
+            missing_code="MMI_SOURCE_MISSING",
+            unstable_code="MMI_SOURCE_UNSTABLE",
+        )
+        source_component = opened_components[-1]
+        _validate_marker_materials(marker_materials)
+        captured = _read_exact_bounded(
+            leaf_fd,
+            expected_size=leaf_witness.size,
+        )
+        _verify_module_lexical_binding(
+            production_module_path,
+            module_component,
+        )
+        # The captured bytes are never validated, decoded, or parsed here; the
+        # snapshot below re-reads the kernel-resolved fixed path and requires
+        # byte equality with this first sample.  Only the SHA-256 and byte
+        # length of the final stable bytes leave this function.
+        final_snapshot = _capture_final_bound_source_snapshot(
+            root_anchor,
+            opened_components,
+            repository_root=repository_root,
+            spec=spec,
+            leaf_fd=leaf_fd,
+            source_component=source_component,
+            initial_bytes=captured,
+            expected_source_sha256=None,
+            maximum_bytes=spec.maximum_bytes,
+            leaf_flags=leaf_flags,
+        )
+        digest = MmiStableSourceDigest(
+            role=spec.role,
+            observed_sha256=final_snapshot.observed_sha256,
+            observed_size_bytes=final_snapshot.observed_size_bytes,
+        )
+    except _CaptureFailure as exc:
+        pending_failure = exc
+    except (OSError, TypeError, ValueError):
+        pending_failure = _CaptureFailure("MMI_SOURCE_UNREADABLE")
+    finally:
+        close_failed = _close_all_descriptors(descriptors)
+        if close_failed and pending_failure is None:
+            pending_failure = _CaptureFailure(
+                "MMI_SOURCE_DESCRIPTOR_CLOSE_FAILED"
+            )
+    if pending_failure is not None:
+        raise pending_failure
+    if digest is None:
+        raise _CaptureFailure("MMI_SOURCE_INTERNAL_INVARIANT_FAILED")
+    return digest
+
+
+def _capture_mmi_stable_source_digest_at_root(
+    repository_root: Path,
+    *,
+    role: MmiSourceRole,
+    _production_module_path: Path | None = None,
+) -> MmiStableSourceDigest:
+    """Internal test surface retaining the production role/path contract."""
+    if type(role) is not MmiSourceRole:
+        raise MmiStableSourceDigestError("MMI_SOURCE_ROLE_INVALID")
+    if not isinstance(repository_root, Path):
+        raise MmiStableSourceDigestError("MMI_SOURCE_REPOSITORY_ROOT_INVALID")
+    spec = MMI_SOURCE_CATALOG[role]
+    try:
+        return _capture_fixed_source_stable_digest(
+            repository_root,
+            spec=spec,
+            production_module_path=_production_module_path,
+        )
+    except _CaptureFailure as exc:
+        raise MmiStableSourceDigestError(exc.code) from None
+
+
+def _capture_current_mmi_stable_source_digest_from_module_path(
+    module_file: str | Path,
+    role: MmiSourceRole,
+) -> MmiStableSourceDigest:
+    try:
+        repository_root, module_path = _lexical_production_checkout(
+            module_file
+        )
+    except _CaptureFailure as exc:
+        raise MmiStableSourceDigestError(exc.code) from None
+    return _capture_mmi_stable_source_digest_at_root(
+        repository_root,
+        role=role,
+        _production_module_path=module_path,
+    )
+
+
+def capture_current_mmi_stable_source_digest(
+    role: MmiSourceRole,
+) -> MmiStableSourceDigest:
+    """Digest one exact code-owned current source without an expected hash.
+
+    Success means only that deterministic code obtained two consistent content
+    samples from the fixed catalog source under the existing repository, path,
+    and witness provenance checks, and that the returned SHA-256 and byte
+    length describe those exact final stable bytes.  It establishes no external
+    authenticity, no payload validity, no freshness, no availability, and no
+    permission, and it returns no ``MmiCapturedSource``.
+    """
+    return _capture_current_mmi_stable_source_digest_from_module_path(
+        _PRODUCTION_MODULE_FILE,
+        role,
     )
 
 

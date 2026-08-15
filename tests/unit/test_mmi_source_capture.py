@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import copy
-from dataclasses import replace
+from dataclasses import fields, replace
 import errno
 import hashlib
 import inspect
@@ -3471,3 +3471,180 @@ def test_absence_prover_closes_every_descriptor_on_a_controlled_failure(
     assert opened
     assert sorted(opened) == sorted(closed)
     assert closed == list(reversed(opened))
+
+
+def _install_lh2_checkout(root: Path, raw: bytes) -> tuple[Path, Path]:
+    """Install a trusted checkout whose long-horizon research leaf holds ``raw``."""
+    module = _install_checkout(root, b"as_of: '2026-07-25'\n")
+    leaf = (
+        root
+        / MMI_SOURCE_CATALOG[
+            MmiSourceRole.LONG_HORIZON_RESEARCH
+        ].repository_relative_locator
+    )
+    leaf.write_bytes(raw)
+    return module, leaf
+
+
+def _stable_digest(root: Path, module: Path):
+    return source_capture._capture_mmi_stable_source_digest_at_root(
+        root,
+        role=MmiSourceRole.LONG_HORIZON_RESEARCH,
+        _production_module_path=module,
+    )
+
+
+def test_stable_digest_binds_the_fixed_catalog_source_and_its_exact_bytes(
+    tmp_path: Path,
+) -> None:
+    """The digest describes the code-owned leaf and nothing else.
+
+    The operation accepts only a role, so no caller can redirect it at another
+    file, and both persisted values describe the same exact captured bytes.
+    """
+    raw = b'{"declared": "bytes", "never": "parsed"}\n'
+    module, leaf = _install_lh2_checkout(tmp_path, raw)
+
+    digest = _stable_digest(tmp_path, module)
+
+    assert digest.role is MmiSourceRole.LONG_HORIZON_RESEARCH
+    assert digest.observed_sha256 == hashlib.sha256(raw).hexdigest()
+    assert digest.observed_size_bytes == len(raw)
+    assert leaf.read_bytes() == raw
+
+    # A decoy elsewhere in the checkout cannot be selected: there is no source
+    # argument, and the locator is owned by the closed catalog.
+    (tmp_path / "decoy_long_horizon_research.json").write_bytes(b"decoy\n")
+    (tmp_path / "inputs" / "decoy.json").write_bytes(b"decoy\n")
+    assert _stable_digest(tmp_path, module) == digest
+
+    # The returned value is exactly three fields: no raw bytes, no source
+    # record, no captured source, no expected digest, no status or authority.
+    assert tuple(field.name for field in fields(digest)) == (
+        "role",
+        "observed_sha256",
+        "observed_size_bytes",
+    )
+
+
+def test_stable_digest_fails_closed_when_the_source_changes_between_samples(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A same-inode, same-length rewrite between the two samples fails closed.
+
+    Identity and size checks alone cannot see this mutation, so passing proves
+    the byte-equality oracle is load-bearing for the manual digest exactly as
+    it is for bound capture.
+    """
+    raw = b'{"sample": "first"}\n'
+    mutated_raw = b'{"sample": "secnd"}\n'
+    assert len(mutated_raw) == len(raw) and mutated_raw != raw
+    module, leaf = _install_lh2_checkout(tmp_path, raw)
+    mutated = False
+
+    def mutate() -> None:
+        nonlocal mutated
+        leaf.write_bytes(mutated_raw)
+        mutated = True
+
+    opened, closed = _track_capture_descriptors(
+        monkeypatch,
+        before_openat2=mutate,
+    )
+
+    with pytest.raises(source_capture.MmiStableSourceDigestError) as caught:
+        _stable_digest(tmp_path, module)
+
+    assert mutated
+    assert caught.value.code == "MMI_SOURCE_UNSTABLE"
+    assert sorted(opened) == sorted(closed)
+
+
+def test_stable_digest_fails_closed_on_path_substitution_and_closes_descriptors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A byte-identical replacement at the fixed path is still not the source.
+
+    The substituted leaf carries the same bytes but a different identity, so
+    the digest fails closed, and every descriptor opened before the controlled
+    failure is closed exactly once.
+    """
+    raw = b'{"bound": "path"}\n'
+    module, leaf = _install_lh2_checkout(tmp_path, raw)
+    substituted = False
+
+    def substitute() -> None:
+        nonlocal substituted
+        current = leaf.parent
+        current.rename(current.with_name("current.detached"))
+        replacement = current
+        replacement.mkdir()
+        (replacement / leaf.name).write_bytes(raw)
+        substituted = True
+
+    opened, closed = _track_capture_descriptors(
+        monkeypatch,
+        before_openat2=substitute,
+    )
+
+    with pytest.raises(source_capture.MmiStableSourceDigestError) as caught:
+        _stable_digest(tmp_path, module)
+
+    assert substituted
+    assert caught.value.code == "MMI_SOURCE_PATH_UNSTABLE"
+    assert opened
+    assert sorted(opened) == sorted(closed)
+    assert len(closed) == len(set(closed))
+
+
+def test_nullable_expected_sha_never_reaches_the_bound_capture_contract(
+    tmp_path: Path,
+) -> None:
+    """Bound capture still requires, compares, and binds an expected digest.
+
+    The manual digest caller is the only one that may omit an expected SHA;
+    the bound contract rejects an absent one before any descriptor is opened,
+    still fails the early mismatch, and still authenticates a matching one.
+    """
+    raw = b"as_of: '2026-07-25'\n"
+    module = _install_checkout(tmp_path, raw)
+
+    for absent in (None, ""):
+        required = _capture_mmi_source_at_root(
+            tmp_path,
+            role=MmiSourceRole.STRATEGY_SETTINGS,
+            expected_source_sha256=absent,
+            _production_module_path=module,
+        )
+        assert required.status is (
+            MmiProjectionResultCategory.PROJECTION_BLOCKED
+        )
+        assert required.reason_codes == (
+            "MMI_SOURCE_EXPECTED_SHA256_REQUIRED",
+        )
+        assert required.source is None
+
+    mismatch = _capture_mmi_source_at_root(
+        tmp_path,
+        role=MmiSourceRole.STRATEGY_SETTINGS,
+        expected_source_sha256="0" * 64,
+        _production_module_path=module,
+    )
+    assert mismatch.reason_codes == ("MMI_SOURCE_EXPECTED_SHA256_MISMATCH",)
+    assert mismatch.source is None
+
+    bound = _capture_mmi_source_at_root(
+        tmp_path,
+        role=MmiSourceRole.STRATEGY_SETTINGS,
+        expected_source_sha256=hashlib.sha256(raw).hexdigest(),
+        _production_module_path=module,
+    )
+    assert bound.status is MmiProjectionResultCategory.PROJECTION_VALID_COMPLETE
+    assert bound.source is not None
+    assert bound.source.raw_bytes == raw
+    assert bound.source.source_record["expected_sha256"] == (
+        bound.source.source_record["observed_sha256"]
+    )
+    assert _mmi_captured_source_provenance_is_valid(bound.source)
