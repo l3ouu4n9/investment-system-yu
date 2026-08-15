@@ -20,6 +20,9 @@ from investment_orchestrator.workflow.step2_h1_provenance import (
 from investment_orchestrator.workflow.step2_h1_report import (
     validate_h1_report_workflow,
 )
+from investment_orchestrator.workflow.step2_h1_currentness import (
+    evaluate_h1_currentness_workflow,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -31,6 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("parse", help="Parse raw_output.txt into template2_output.txt and decision_packet.json")
     subparsers.add_parser("capture", help="Capture operator-supplied Step 2 H1 raw response")
     subparsers.add_parser("validate-h1", help="Validate structured H1 qualitative report")
+    subparsers.add_parser("check-h1-currentness", help="Evaluate deterministic H1 currentness observation")
     return parser
 
 
@@ -64,6 +68,12 @@ def main() -> int:
             validate_h1_report_workflow()
             report_path = step2_artifact_dir() / "h1_qualitative_report.json"
             print(str(report_path))
+            return 0
+
+        if args.command == "check-h1-currentness":
+            evaluate_h1_currentness_workflow()
+            observation_path = step2_artifact_dir() / "h1_qualitative_currentness_observation.json"
+            print(str(observation_path))
             return 0
 
     except Exception as exc:  # noqa: BLE001

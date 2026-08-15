@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from enum import Enum
 import hashlib
 import json
 from pathlib import Path
@@ -119,7 +120,7 @@ class _Lh2ReceiptBinding:
     observed_size_bytes: int
 
 
-class _H1Lh2InvocationAdmissionError(RuntimeError):
+class H1Lh2InvocationAdmissionError(RuntimeError):
     """Controlled fail-closed H1/LH2 invocation-admission failure."""
 
     def __init__(self, reason_codes: tuple[str, ...]) -> None:
@@ -127,6 +128,28 @@ class _H1Lh2InvocationAdmissionError(RuntimeError):
             reason_codes = ("H1_LH2_INVOCATION_ADMISSION_FAILED",)
         super().__init__("; ".join(reason_codes))
         self.reason_codes = reason_codes
+
+
+class H1Lh2TemporalFailureKind(str, Enum):
+    """Stable machine-readable H1/LH2 temporal failure classifications."""
+
+    STALE = "STALE"
+    FUTURE = "FUTURE"
+
+
+class H1Lh2TemporalPolicyError(H1Lh2InvocationAdmissionError):
+    """Temporal-policy denial preserving invocation-admission compatibility."""
+
+    def __init__(
+        self,
+        reason_codes: tuple[str, ...],
+        *,
+        failure_kinds: frozenset[H1Lh2TemporalFailureKind],
+    ) -> None:
+        if not failure_kinds:
+            raise ValueError("H1/LH2 temporal failure requires a classification.")
+        super().__init__(reason_codes)
+        self.failure_kinds = failure_kinds
 
 
 def current_inputs_dir() -> Path:
@@ -244,7 +267,7 @@ def build_step2_prompt_text() -> str:
     return rendered.rstrip() + "\n"
 
 
-def _is_exact_h1_render_prerequisite(
+def is_exact_h1_render_prerequisite(
     evaluation: ResearchDegradedModeGateResult,
 ) -> bool:
     """Recognize only the canonical non-actionable H1 gate snapshot.
@@ -285,18 +308,18 @@ def _read_fixed_lh2_receipt(repo_root_path: Path) -> _Lh2ReceiptBinding:
     try:
         receipt = read_json(receipt_path)
     except FileNotFoundError:
-        raise _H1Lh2InvocationAdmissionError(
+        raise H1Lh2InvocationAdmissionError(
             ("H1_LH2_RECEIPT_MISSING",)
         ) from None
     except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
-        raise _H1Lh2InvocationAdmissionError(
+        raise H1Lh2InvocationAdmissionError(
             ("H1_LH2_RECEIPT_JSON_INVALID",)
         ) from None
 
     try:
         validate_lh2_manual_capture_receipt_v1(receipt)
     except Lh2ManualCaptureReceiptV1Error as exc:
-        raise _H1Lh2InvocationAdmissionError((exc.code,)) from None
+        raise H1Lh2InvocationAdmissionError((exc.code,)) from None
 
     return _Lh2ReceiptBinding(
         observed_sha256=cast(str, receipt["observed_sha256"]),
@@ -304,12 +327,12 @@ def _read_fixed_lh2_receipt(repo_root_path: Path) -> _Lh2ReceiptBinding:
     )
 
 
-def _system_now_date() -> date:
+def system_now_date() -> date:
     """Return the system-owned production date for invocation admission."""
     return date.today()
 
 
-def _validate_h1_lh2_temporal_policy(
+def validate_h1_lh2_temporal_policy(
     payload: MmiLongHorizonResearchPayloadV2,
     *,
     now_date: date,
@@ -324,47 +347,53 @@ def _validate_h1_lh2_temporal_policy(
         for index, entry in enumerate(payload.sources)
     )
     reason_codes: list[str] = []
+    failure_kinds: set[H1Lh2TemporalFailureKind] = set()
     for index, published_at, age_days in evaluated_entries:
         if age_days < 0:
+            failure_kinds.add(H1Lh2TemporalFailureKind.FUTURE)
             reason_codes.append(
                 "H1_LH2_SOURCE_FUTURE_DATED:"
                 f"index={index};published_at={published_at};age_days={age_days}"
             )
         elif age_days > H1_LH2_MAX_AGE_DAYS:
+            failure_kinds.add(H1Lh2TemporalFailureKind.STALE)
             reason_codes.append(
                 "H1_LH2_SOURCE_STALE:"
                 f"index={index};published_at={published_at};age_days={age_days}"
             )
     if reason_codes:
-        raise _H1Lh2InvocationAdmissionError(tuple(reason_codes))
+        raise H1Lh2TemporalPolicyError(
+            tuple(reason_codes),
+            failure_kinds=frozenset(failure_kinds),
+        )
 
 
-def _load_current_h1_lh2_payload(
+def load_current_h1_lh2_payload(
     *,
     repo_root_path: Path,
 ) -> MmiLongHorizonResearchPayloadV2:
-    """Reconstruct, parse, and temporally admit the current authenticated LH2."""
+    """Reconstruct and parse the one current authenticated LH2 payload."""
     receipt = _read_fixed_lh2_receipt(repo_root_path)
     capture = capture_current_mmi_source(
         role=MmiSourceRole.LONG_HORIZON_RESEARCH,
         expected_source_sha256=receipt.observed_sha256,
     )
     if capture.status is not MmiProjectionResultCategory.PROJECTION_VALID_COMPLETE:
-        raise _H1Lh2InvocationAdmissionError(
+        raise H1Lh2InvocationAdmissionError(
             capture.reason_codes or ("H1_LH2_SOURCE_CAPTURE_INCOMPLETE",)
         )
     if capture.authority_effect != AUTHORITY_EFFECT_NONE or capture.source is None:
-        raise _H1Lh2InvocationAdmissionError(
+        raise H1Lh2InvocationAdmissionError(
             ("H1_LH2_SOURCE_CAPTURE_RESULT_INVALID",)
         )
 
     captured_size = capture.source.source_record.get("observed_size_bytes")
     if type(captured_size) is not int:
-        raise _H1Lh2InvocationAdmissionError(
+        raise H1Lh2InvocationAdmissionError(
             ("H1_LH2_SOURCE_RECORD_SIZE_INVALID",)
         )
     if receipt.observed_size_bytes != captured_size:
-        raise _H1Lh2InvocationAdmissionError(
+        raise H1Lh2InvocationAdmissionError(
             ("H1_LH2_RECEIPT_SIZE_MISMATCH",)
         )
 
@@ -373,9 +402,8 @@ def _load_current_h1_lh2_payload(
             capture.source
         )
     except MmiLongHorizonResearchPayloadV2Error as exc:
-        raise _H1Lh2InvocationAdmissionError((exc.code,)) from None
+        raise H1Lh2InvocationAdmissionError((exc.code,)) from None
 
-    _validate_h1_lh2_temporal_policy(payload, now_date=_system_now_date())
     return payload
 
 
@@ -464,12 +492,16 @@ def _enforce_step2_invocation_admission(
             None,
         )
 
-    if _is_exact_h1_render_prerequisite(evaluation):
+    if is_exact_h1_render_prerequisite(evaluation):
         try:
-            payload = _load_current_h1_lh2_payload(
+            payload = load_current_h1_lh2_payload(
                 repo_root_path=repo_root_path
             )
-        except _H1Lh2InvocationAdmissionError as exc:
+            validate_h1_lh2_temporal_policy(
+                payload,
+                now_date=system_now_date(),
+            )
+        except H1Lh2InvocationAdmissionError as exc:
             _block_h1_lh2_invocation(
                 evaluation,
                 reason_codes=exc.reason_codes,

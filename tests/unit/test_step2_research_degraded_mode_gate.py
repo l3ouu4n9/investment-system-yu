@@ -16,6 +16,9 @@ from investment_orchestrator.mmi.contracts import (
     MmiSourceCaptureResult,
     MmiSourceRole,
 )
+from investment_orchestrator.mmi.long_horizon_research_payload_v2 import (
+    validate_mmi_long_horizon_research_payload_v2,
+)
 from investment_orchestrator.parsers import extract_template2_and_decision_packet as step2_parser
 from investment_orchestrator.state import research_degraded_mode_gate as research_gate
 from investment_orchestrator.state.research_degraded_mode_gate import (
@@ -378,7 +381,7 @@ def test_h1_lh2_render_uses_one_gate_snapshot_and_exact_admitted_payload(
     )
     monkeypatch.setattr(
         step2_decision_builder,
-        "_system_now_date",
+        "system_now_date",
         lambda: now_date,
     )
 
@@ -423,9 +426,12 @@ def test_h1_lh2_render_uses_one_gate_snapshot_and_exact_admitted_payload(
     assert result["new_buy_permission"] == "False"
 
     prompt = step2_decision_builder.step2_prompt_path().read_text(encoding="utf-8")
+    assert (
+        "repository deterministically parses this report but grants no actionable authority"
+        in " ".join(prompt.split())
+    )
     for expected in (
         "QUALITATIVE, NON-ACTIONABLE, REPORT-ONLY",
-        "repository deterministically parses this report but grants no actionable authority",
         "Publisher 0",
         "Publisher 1",
         now_date.isoformat(),
@@ -439,7 +445,11 @@ def test_h1_lh2_render_uses_one_gate_snapshot_and_exact_admitted_payload(
     ):
         assert expected in prompt
     assert BAD_RESEARCH_SENTINEL not in prompt
-    assert "source_entry_identity_sha256" not in prompt
+    admitted_payload = validate_mmi_long_horizon_research_payload_v2(json.loads(raw))
+    assert all(
+        entry.source_entry_identity_sha256 in prompt
+        for entry in admitted_payload.sources
+    )
     assert step2_decision_builder.step2_raw_output_path().read_bytes() == b""
     assert Path(result["raw_output_metadata_path"]).is_file()
     assert not step2_decision_builder.step2_blocked_by_research_gate_path().exists()
@@ -539,7 +549,7 @@ def test_r1_render_admission_requires_exact_canonical_h1_blocked_actions(
     )
     monkeypatch.setattr(
         step2_decision_builder,
-        "_system_now_date",
+        "system_now_date",
         lambda: now_date,
     )
 
@@ -687,7 +697,7 @@ def test_h1_receipt_current_source_continuity_fails_closed(
     )
     monkeypatch.setattr(
         step2_decision_builder,
-        "_system_now_date",
+        "system_now_date",
         lambda: now_date,
     )
 
@@ -766,7 +776,7 @@ def test_h1_lh2_temporal_denial_evaluates_whole_payload(
     )
     monkeypatch.setattr(
         step2_decision_builder,
-        "_system_now_date",
+        "system_now_date",
         lambda: now_date,
     )
 

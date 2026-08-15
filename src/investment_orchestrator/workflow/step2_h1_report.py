@@ -14,7 +14,7 @@ import math
 from pathlib import Path
 from typing import Final, Any
 
-from investment_orchestrator.common.io import write_json
+from investment_orchestrator.common.io import read_text, write_json
 from investment_orchestrator.common.paths import repo_root
 from investment_orchestrator.mmi.canonical import MAXIMUM_MMI_RAW_RESPONSE_BYTES
 from investment_orchestrator.workflow.step2_decision_builder import (
@@ -149,6 +149,70 @@ def parse_h1_qualitative_response(
         prior_thesis_change=data["prior_thesis_change"],
         evidence_references=tuple(raw_refs),
     )
+
+
+def read_and_validate_h1_report(report_path: Path) -> dict[str, Any]:
+    """Read and strict-validate the persisted H1 qualitative report."""
+    try:
+        data = json.loads(
+            read_text(report_path),
+            object_pairs_hook=_reject_duplicates,
+        )
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Missing H1 qualitative report at {report_path}") from None
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Malformed H1 qualitative report JSON: {exc}") from None
+
+    if not isinstance(data, dict):
+        raise ValueError("Report JSON root must be an object.")
+
+    expected_keys = {
+        "schema_version",
+        "prompt_contract_version",
+        "rendered_prompt_sha256",
+        "raw_response_sha256",
+        "evidence_references",
+    } | _QUALITATIVE_FIELDS
+
+    if set(data.keys()) != expected_keys:
+        raise ValueError(f"Exact report schema keys required: {expected_keys}")
+
+    if data["schema_version"] != STEP2_H1_QUALITATIVE_REPORT_SCHEMA_VERSION:
+        raise ValueError(
+            f"Invalid schema_version. Expected '{STEP2_H1_QUALITATIVE_REPORT_SCHEMA_VERSION}', "
+            f"got '{data['schema_version']}'"
+        )
+
+    if data["prompt_contract_version"] != H1_LH2_STRUCTURED_REPORT_PROMPT_CONTRACT_VERSION:
+        raise ValueError(
+            f"Unsupported prompt contract version '{data['prompt_contract_version']}' "
+            "for structured report validation."
+        )
+
+    require_sha256_representation(data["rendered_prompt_sha256"], "rendered_prompt_sha256")
+    require_sha256_representation(data["raw_response_sha256"], "raw_response_sha256")
+
+    for field in _QUALITATIVE_FIELDS:
+        val = data[field]
+        if type(val) is not str:
+            raise ValueError(f"Field {field} must be a string.")
+        if not val.strip():
+            raise ValueError(f"Field {field} must contain non-whitespace text.")
+
+    raw_refs = data["evidence_references"]
+    if not isinstance(raw_refs, list) or not raw_refs:
+        raise ValueError("Field evidence_references must be a non-empty list.")
+
+    seen_refs = set()
+    for ref in raw_refs:
+        if type(ref) is not str:
+            raise ValueError("evidence_references entries must be strings.")
+        require_sha256_representation(ref, "Evidence reference")
+        if ref in seen_refs:
+            raise ValueError(f"Duplicate evidence reference: {ref}")
+        seen_refs.add(ref)
+
+    return data
 
 
 def validate_h1_report_workflow() -> None:
