@@ -1,13 +1,23 @@
 from __future__ import annotations
 
+from datetime import date, timedelta
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+import _mmi_hermetic_source_checkout as hermetic
 from investment_orchestrator.common.io import write_json, write_text
+from investment_orchestrator.mmi.contracts import (
+    AUTHORITY_EFFECT_NONE,
+    MmiProjectionResultCategory,
+    MmiSourceCaptureResult,
+    MmiSourceRole,
+)
 from investment_orchestrator.parsers import extract_template2_and_decision_packet as step2_parser
+from investment_orchestrator.state import research_degraded_mode_gate as research_gate
 from investment_orchestrator.state.research_degraded_mode_gate import (
     ResearchDegradedModeGateError,
 )
@@ -32,6 +42,7 @@ BLOCKED_PARSE_STATES = (
     ("INVALID_CONTRACT", False),
     ("NO_OUTPUT", False),
     ("MANUAL_REVIEW_REQUIRED", True),
+    ("H1_MAPPED_FRESH_NON_ACTIONABLE", False),
 )
 
 
@@ -78,6 +89,110 @@ def blocked_permission(state: str, *, manual_review_required: bool = False) -> d
         "non_blocker_reasons": [],
         "report_only": True,
     }
+
+
+# Independently declared here as literals, not imported from the production
+# owner: this is the canonical H1 blocked complement an R1 render admission may
+# recognize, and nothing else.
+CANONICAL_H1_BLOCKED_ACTIONS = (
+    "SELL",
+    "NEW_BUY",
+    "ROTATION",
+    "REBALANCE",
+    "EXTENDED_ETF_ADMISSION",
+    "ORDER_COMPILATION",
+)
+
+
+def h1_permission(**overrides: Any) -> dict[str, Any]:
+    permission = blocked_permission("H1_MAPPED_FRESH_NON_ACTIONABLE")
+    permission["source"] = "H1_ROLE_MAPPED"
+    permission["blocked_actions"] = list(CANONICAL_H1_BLOCKED_ACTIONS)
+    permission.update(overrides)
+    return permission
+
+
+def _lh2_entry(
+    *,
+    published_at: date,
+    suffix: str,
+) -> dict[str, object]:
+    return {
+        "publisher": f"Publisher {suffix}",
+        "published_at": published_at.isoformat(),
+        "source_locator": f"operator/source-{suffix}.txt",
+        "tickers": [f"ETF{suffix}"],
+        "excerpt_text": f"Qualitative evidence excerpt {suffix}.",
+    }
+
+
+def _prepare_h1_lh2_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    published_dates: tuple[date, ...],
+    raw_bytes: bytes | None = None,
+    receipt_sha256: str | None = None,
+    receipt_size_bytes: int | None = None,
+    capture_status: MmiProjectionResultCategory = (
+        MmiProjectionResultCategory.PROJECTION_VALID_COMPLETE
+    ),
+    capture_reason_codes: tuple[str, ...] = (),
+    source_in_result: bool = True,
+) -> tuple[bytes, list[tuple[MmiSourceRole, str]]]:
+    raw = (
+        raw_bytes
+        if raw_bytes is not None
+        else json.dumps(
+            {
+                "schema_version": "mmi_long_horizon_research_payload_v2",
+                "sources": [
+                    _lh2_entry(published_at=value, suffix=str(index))
+                    for index, value in enumerate(published_dates)
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ).encode("utf-8")
+    )
+    source = hermetic.capture_source(
+        tmp_path,
+        role=MmiSourceRole.LONG_HORIZON_RESEARCH,
+        raw=raw,
+    )
+    observed_sha256 = hashlib.sha256(raw).hexdigest()
+    write_json(
+        tmp_path / "inputs" / "current" / "lh2_manual_capture_receipt.json",
+        {
+            "schema_version": "lh2_manual_capture_receipt_v1",
+            "source_role": "LONG_HORIZON_RESEARCH",
+            "observed_sha256": receipt_sha256 or observed_sha256,
+            "observed_size_bytes": (
+                len(raw) if receipt_size_bytes is None else receipt_size_bytes
+            ),
+        },
+    )
+    calls: list[tuple[MmiSourceRole, str]] = []
+
+    def capture(
+        role: MmiSourceRole,
+        *,
+        expected_source_sha256: str,
+    ) -> MmiSourceCaptureResult:
+        calls.append((role, expected_source_sha256))
+        return MmiSourceCaptureResult(
+            status=capture_status,
+            authority_effect=AUTHORITY_EFFECT_NONE,
+            reason_codes=capture_reason_codes,
+            source=source if source_in_result else None,
+        )
+
+    monkeypatch.setattr(
+        step2_decision_builder,
+        "capture_current_mmi_source",
+        capture,
+    )
+    return raw, calls
 
 
 def prepare_tmp_repo(
@@ -168,7 +283,10 @@ def test_non_strict_fresh_permissions_block_before_step2_prompt_render(
     prepare_tmp_repo(
         tmp_path,
         monkeypatch,
-        permission=blocked_permission(state, manual_review_required=manual_review_required),
+        permission=blocked_permission(
+            state,
+            manual_review_required=manual_review_required,
+        ),
     )
 
     blocked = assert_render_blocked()
@@ -242,6 +360,423 @@ def test_blocked_path_does_not_read_bad_research_into_step2_prompt(
 
     assert blocked["state"] == "NO_OUTPUT"
     assert not step2_decision_builder.step2_prompt_path().exists()
+
+
+# --- H1 + LH2 invocation-local Step 2 render-only admission -----------------
+
+
+def test_h1_lh2_render_uses_one_gate_snapshot_and_exact_admitted_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now_date = date(2026, 8, 14)
+    prepare_tmp_repo(tmp_path, monkeypatch, permission=h1_permission())
+    raw, capture_calls = _prepare_h1_lh2_inputs(
+        tmp_path,
+        monkeypatch,
+        published_dates=(now_date, now_date - timedelta(days=180)),
+    )
+    monkeypatch.setattr(
+        step2_decision_builder,
+        "_system_now_date",
+        lambda: now_date,
+    )
+
+    gate_reads: list[Path] = []
+    real_gate_read_json = research_gate.read_json
+    gate_path = step1_research.step1_research_degraded_mode_decision_path()
+
+    def counted_gate_read_json(path: Path) -> Any:
+        if Path(path) == gate_path:
+            gate_reads.append(Path(path))
+        return real_gate_read_json(path)
+
+    monkeypatch.setattr(research_gate, "read_json", counted_gate_read_json)
+
+    receipt_reads: list[Path] = []
+    real_workflow_read_json = step2_decision_builder.read_json
+    receipt_path = tmp_path / "inputs" / "current" / "lh2_manual_capture_receipt.json"
+
+    def counted_workflow_read_json(path: Path) -> Any:
+        if Path(path) == receipt_path:
+            receipt_reads.append(Path(path))
+        return real_workflow_read_json(path)
+
+    monkeypatch.setattr(
+        step2_decision_builder,
+        "read_json",
+        counted_workflow_read_json,
+    )
+
+    result = step2_decision_builder.render_step2_prompt()
+
+    expected_sha256 = hashlib.sha256(raw).hexdigest()
+    assert gate_reads == [gate_path]
+    assert receipt_reads == [receipt_path]
+    assert capture_calls == [
+        (MmiSourceRole.LONG_HORIZON_RESEARCH, expected_sha256)
+    ]
+    assert result["mode"] == "h1_lh2_render_only"
+    assert result["render_only"] == "True"
+    assert result["step2_parse_allowed"] == "False"
+    assert result["order_compilation_allowed"] == "False"
+    assert result["new_buy_permission"] == "False"
+
+    prompt = step2_decision_builder.step2_prompt_path().read_text(encoding="utf-8")
+    for expected in (
+        "QUALITATIVE, NON-ACTIONABLE, RENDER-ONLY",
+        "repository does not parse or consume the response",
+        "Publisher 0",
+        "Publisher 1",
+        now_date.isoformat(),
+        (now_date - timedelta(days=180)).isoformat(),
+        "operator/source-0.txt",
+        "operator/source-1.txt",
+        "ETF0",
+        "ETF1",
+        "Qualitative evidence excerpt 0.",
+        "Qualitative evidence excerpt 1.",
+    ):
+        assert expected in prompt
+    assert BAD_RESEARCH_SENTINEL not in prompt
+    assert "source_entry_identity_sha256" not in prompt
+    assert step2_decision_builder.step2_raw_output_path().read_bytes() == b""
+    assert Path(result["raw_output_metadata_path"]).is_file()
+    assert not step2_decision_builder.step2_blocked_by_research_gate_path().exists()
+    assert not step2_decision_builder.step2_promoted_decision_only_path().exists()
+    assert not step2_decision_builder.step2_template2_output_path().exists()
+    assert not step2_decision_builder.step2_decision_packet_path().exists()
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    (
+        {"allowed_actions": ["HOLD", "NO_TRADE", "SELL"]},
+        {"manual_review_required": True},
+        {"blocked_actions": ["HOLD", "NEW_BUY", "ORDER_COMPILATION"]},
+        {"source": "raw_research_handoff"},
+    ),
+)
+def test_noncanonical_h1_prerequisite_uses_existing_generic_denial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, object],
+) -> None:
+    prepare_tmp_repo(
+        tmp_path,
+        monkeypatch,
+        permission=h1_permission(**overrides),
+    )
+    monkeypatch.setattr(
+        step2_decision_builder,
+        "capture_current_mmi_source",
+        lambda *_args, **_kwargs: pytest.fail(
+            "noncanonical H1 reached LH2 reconstruction"
+        ),
+    )
+
+    blocked = assert_render_blocked()
+
+    assert blocked["reason"] == "research_degraded_mode_gate"
+    assert blocked["state"] == "H1_MAPPED_FRESH_NON_ACTIONABLE"
+
+
+@pytest.mark.parametrize(
+    ("raw_blocked_actions", "qualifies"),
+    (
+        (list(CANONICAL_H1_BLOCKED_ACTIONS), True),
+        # Ordering is incidental at this seam: the canonical contract owns
+        # membership, so a reordered canonical row must still qualify.
+        (list(reversed(CANONICAL_H1_BLOCKED_ACTIONS)), True),
+        # Real incomplete membership: the sleeve actions are simply absent.
+        (["SELL", "NEW_BUY", "ORDER_COMPILATION"], False),
+        # The gate evaluator normalizes an empty row into exactly NEW_BUY /
+        # ORDER_COMPILATION, leaving a snapshot that is disjoint from
+        # HOLD / NO_TRADE and canonical in every other field. Disjointness
+        # alone would admit it; exact complement membership must not.
+        ([], False),
+        # A malformed (non string-array) row is unreachable as a malformed
+        # evaluated value -- it reaches this seam as the same normalized pair.
+        # The reachable normalization is what must fail closed.
+        ("NEW_BUY", False),
+        ([*CANONICAL_H1_BLOCKED_ACTIONS, "PROMOTED_RESEARCH_DECISION"], False),
+        ([*CANONICAL_H1_BLOCKED_ACTIONS, "SELL"], False),
+    ),
+    ids=(
+        "canonical",
+        "canonical_reordered",
+        "incomplete_membership",
+        "normalized_from_empty",
+        "malformed_shape_normalized",
+        "extra_action",
+        "duplicate_action",
+    ),
+)
+def test_r1_render_admission_requires_exact_canonical_h1_blocked_actions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    raw_blocked_actions: Any,
+    qualifies: bool,
+) -> None:
+    """Only the exact canonical H1 blocked complement may reach LH2 access.
+
+    Every other R1 prerequisite is canonical in every case, and the LH2 receipt
+    and current source are present and admissible throughout. A noncanonical
+    blocked row that is still denied therefore proves the denial came from the
+    persisted H1 prerequisite itself, before any LH2 access -- not from the LH2
+    chain failing afterwards.
+    """
+    now_date = date(2026, 8, 14)
+    prepare_tmp_repo(
+        tmp_path,
+        monkeypatch,
+        permission=h1_permission(blocked_actions=raw_blocked_actions),
+    )
+    _raw, capture_calls = _prepare_h1_lh2_inputs(
+        tmp_path,
+        monkeypatch,
+        published_dates=(now_date,),
+    )
+    monkeypatch.setattr(
+        step2_decision_builder,
+        "_system_now_date",
+        lambda: now_date,
+    )
+
+    receipt_path = tmp_path / "inputs" / "current" / "lh2_manual_capture_receipt.json"
+    receipt_reads: list[Path] = []
+    real_workflow_read_json = step2_decision_builder.read_json
+
+    def counted_workflow_read_json(path: Path) -> Any:
+        if Path(path) == receipt_path:
+            receipt_reads.append(Path(path))
+        return real_workflow_read_json(path)
+
+    monkeypatch.setattr(
+        step2_decision_builder,
+        "read_json",
+        counted_workflow_read_json,
+    )
+
+    if qualifies:
+        result = step2_decision_builder.render_step2_prompt()
+
+        assert result["mode"] == "h1_lh2_render_only"
+        assert receipt_reads == [receipt_path]
+        assert len(capture_calls) == 1
+        assert not (
+            step2_decision_builder.step2_blocked_by_research_gate_path().exists()
+        )
+        return
+
+    blocked = assert_render_blocked()
+
+    # The ordinary generic gate denial, NOT the H1/LH2 invocation-admission
+    # block -- reaching the latter would itself prove LH2 access occurred.
+    assert blocked["reason"] == "research_degraded_mode_gate"
+    assert blocked["state"] == "H1_MAPPED_FRESH_NON_ACTIONABLE"
+    assert blocked["mode"] == "blocked"
+    assert blocked["order_compilation_allowed"] is False
+    assert blocked["new_buy_permission"] is False
+    # Fail closed BEFORE any LH2 access: neither the receipt nor the current
+    # source was read, although both are present and would have been admitted.
+    assert receipt_reads == []
+    assert capture_calls == []
+
+
+@pytest.mark.parametrize(
+    ("receipt_case", "expected_code"),
+    (
+        ("missing", "H1_LH2_RECEIPT_MISSING"),
+        ("malformed", "H1_LH2_RECEIPT_JSON_INVALID"),
+        ("invalid", "LH2_MANUAL_CAPTURE_RECEIPT_V1_INVALID"),
+    ),
+)
+def test_h1_receipt_operator_input_failures_use_single_invocation_block(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    receipt_case: str,
+    expected_code: str,
+) -> None:
+    prepare_tmp_repo(tmp_path, monkeypatch, permission=h1_permission())
+    receipt_path = tmp_path / "inputs" / "current" / "lh2_manual_capture_receipt.json"
+    if receipt_case == "malformed":
+        write_text(receipt_path, "{not-json")
+    elif receipt_case == "invalid":
+        write_json(
+            receipt_path,
+            {
+                "schema_version": "lh2_manual_capture_receipt_v1",
+                "source_role": "STRATEGY_SETTINGS",
+                "observed_sha256": "a" * 64,
+                "observed_size_bytes": 10,
+            },
+        )
+    monkeypatch.setattr(
+        step2_decision_builder,
+        "capture_current_mmi_source",
+        lambda *_args, **_kwargs: pytest.fail(
+            "invalid receipt reached source capture"
+        ),
+    )
+
+    blocked = assert_render_blocked()
+
+    assert blocked["reason"] == "h1_lh2_invocation_admission_failed"
+    assert blocked["state"] == "H1_MAPPED_FRESH_NON_ACTIONABLE"
+    assert blocked["mode"] == "blocked"
+    assert blocked["blocker_reasons"] == [expected_code]
+    assert blocked["order_compilation_allowed"] is False
+    assert blocked["new_buy_permission"] is False
+
+
+def test_h1_receipt_native_io_failure_is_not_flattened_into_operator_input(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepare_tmp_repo(tmp_path, monkeypatch, permission=h1_permission())
+    receipt_path = tmp_path / "inputs" / "current" / "lh2_manual_capture_receipt.json"
+    real_read_json = step2_decision_builder.read_json
+
+    def fail_receipt_io(path: Path) -> Any:
+        if Path(path) == receipt_path:
+            raise PermissionError("receipt denied by test")
+        return real_read_json(path)
+
+    monkeypatch.setattr(step2_decision_builder, "read_json", fail_receipt_io)
+
+    with pytest.raises(PermissionError, match="receipt denied by test"):
+        step2_decision_builder.render_step2_prompt()
+
+    assert not step2_decision_builder.step2_blocked_by_research_gate_path().exists()
+    assert not step2_decision_builder.step2_prompt_path().exists()
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_code"),
+    (
+        ("sha", "MMI_SOURCE_EXPECTED_SHA256_MISMATCH"),
+        ("size", "H1_LH2_RECEIPT_SIZE_MISMATCH"),
+    ),
+)
+def test_h1_receipt_current_source_continuity_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+    expected_code: str,
+) -> None:
+    now_date = date(2026, 8, 14)
+    prepare_tmp_repo(tmp_path, monkeypatch, permission=h1_permission())
+    raw, capture_calls = _prepare_h1_lh2_inputs(
+        tmp_path,
+        monkeypatch,
+        published_dates=(now_date,),
+        receipt_sha256="0" * 64 if case == "sha" else None,
+        receipt_size_bytes=0 if case == "size" else None,
+        capture_status=(
+            MmiProjectionResultCategory.PROJECTION_BLOCKED
+            if case == "sha"
+            else MmiProjectionResultCategory.PROJECTION_VALID_COMPLETE
+        ),
+        capture_reason_codes=(
+            ("MMI_SOURCE_EXPECTED_SHA256_MISMATCH",)
+            if case == "sha"
+            else ()
+        ),
+        source_in_result=case != "sha",
+    )
+    monkeypatch.setattr(
+        step2_decision_builder,
+        "_system_now_date",
+        lambda: now_date,
+    )
+
+    blocked = assert_render_blocked()
+
+    expected_sha = "0" * 64 if case == "sha" else hashlib.sha256(raw).hexdigest()
+    assert capture_calls == [
+        (MmiSourceRole.LONG_HORIZON_RESEARCH, expected_sha)
+    ]
+    assert blocked["reason"] == "h1_lh2_invocation_admission_failed"
+    assert blocked["blocker_reasons"] == [expected_code]
+
+
+def test_h1_source_capture_requires_exact_complete_category(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now_date = date(2026, 8, 14)
+    prepare_tmp_repo(tmp_path, monkeypatch, permission=h1_permission())
+    _prepare_h1_lh2_inputs(
+        tmp_path,
+        monkeypatch,
+        published_dates=(now_date,),
+        capture_status=MmiProjectionResultCategory.PROJECTION_VALID_WITH_GAPS,
+    )
+
+    blocked = assert_render_blocked()
+
+    assert blocked["reason"] == "h1_lh2_invocation_admission_failed"
+    assert blocked["blocker_reasons"] == ["H1_LH2_SOURCE_CAPTURE_INCOMPLETE"]
+
+
+def test_h1_authenticated_source_v2_failure_uses_invocation_block(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepare_tmp_repo(tmp_path, monkeypatch, permission=h1_permission())
+    _prepare_h1_lh2_inputs(
+        tmp_path,
+        monkeypatch,
+        published_dates=(),
+        raw_bytes=b'{"schema_version":"wrong","sources":[]}',
+    )
+
+    blocked = assert_render_blocked()
+
+    assert blocked["reason"] == "h1_lh2_invocation_admission_failed"
+    assert blocked["blocker_reasons"] == [
+        "MMI_LONG_HORIZON_RESEARCH_PAYLOAD_V2_SCHEMA_VERSION_INVALID"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("ages", "expected_prefixes"),
+    (
+        ((181,), ("H1_LH2_SOURCE_STALE:",)),
+        ((-1,), ("H1_LH2_SOURCE_FUTURE_DATED:",)),
+        (
+            (0, 181, -1),
+            ("H1_LH2_SOURCE_STALE:", "H1_LH2_SOURCE_FUTURE_DATED:"),
+        ),
+    ),
+)
+def test_h1_lh2_temporal_denial_evaluates_whole_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ages: tuple[int, ...],
+    expected_prefixes: tuple[str, ...],
+) -> None:
+    now_date = date(2026, 8, 14)
+    prepare_tmp_repo(tmp_path, monkeypatch, permission=h1_permission())
+    _prepare_h1_lh2_inputs(
+        tmp_path,
+        monkeypatch,
+        published_dates=tuple(now_date - timedelta(days=age) for age in ages),
+    )
+    monkeypatch.setattr(
+        step2_decision_builder,
+        "_system_now_date",
+        lambda: now_date,
+    )
+
+    blocked = assert_render_blocked()
+
+    reasons = blocked["blocker_reasons"]
+    assert blocked["reason"] == "h1_lh2_invocation_admission_failed"
+    assert len(reasons) == len(expected_prefixes)
+    for prefix in expected_prefixes:
+        assert sum(reason.startswith(prefix) for reason in reasons) == 1
 
 
 # --- R2E.5b-6c promoted Step 2 decision-only path -----------------------------
@@ -472,7 +1007,14 @@ def test_blocked_states_fail_before_step2_parse_and_preserve_prior_outputs(
     prepare_tmp_repo(
         tmp_path,
         monkeypatch,
-        permission=blocked_permission(state, manual_review_required=manual_review_required),
+        permission=(
+            h1_permission()
+            if state == "H1_MAPPED_FRESH_NON_ACTIONABLE"
+            else blocked_permission(
+                state,
+                manual_review_required=manual_review_required,
+            )
+        ),
     )
     prior = _seed_prior_step2_outputs()
     calls: list[object] = []

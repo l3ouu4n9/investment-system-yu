@@ -73,6 +73,7 @@ class ResearchDegradedModeGateResult:
     step3_allowed: bool = False
     step4_allowed: bool = False
     recommended_terminal_result_after_step2: str | None = None
+    source: str | None = None
 
 
 def enforce_step2_research_gate(
@@ -83,6 +84,22 @@ def enforce_step2_research_gate(
 ) -> ResearchDegradedModeGateResult:
     """Fail closed unless Step 1 explicitly permits actionable Step 2 work."""
     result = load_and_evaluate_step2_research_gate(source_artifact_path)
+    return enforce_evaluated_step2_research_gate(
+        result,
+        source_artifact_path=source_artifact_path,
+        blocked_artifact_path=blocked_artifact_path,
+        repo_root_path=repo_root_path,
+    )
+
+
+def enforce_evaluated_step2_research_gate(
+    result: ResearchDegradedModeGateResult,
+    *,
+    source_artifact_path: Path,
+    blocked_artifact_path: Path,
+    repo_root_path: Path | None = None,
+) -> ResearchDegradedModeGateResult:
+    """Enforce one already-evaluated Step 2 gate result without a state reread."""
     if result.allowed:
         return result
 
@@ -129,6 +146,7 @@ def evaluate_step2_research_gate(payload: Any) -> ResearchDegradedModeGateResult
         )
 
     state = payload.get("state")
+    source_value = payload.get("source")
     allowed_actions_value = payload.get("allowed_actions")
     blocked_actions_value = payload.get("blocked_actions")
     manual_review_required = payload.get("manual_review_required")
@@ -138,6 +156,12 @@ def evaluate_step2_research_gate(payload: Any) -> ResearchDegradedModeGateResult
     if not isinstance(state, str) or not state:
         malformed_reasons.append("state must be a non-empty string.")
         state = MALFORMED_RESEARCH_PERMISSION
+
+    source = (
+        source_value
+        if isinstance(source_value, str) and source_value
+        else None
+    )
 
     allowed_actions = _string_list(allowed_actions_value)
     if allowed_actions is None:
@@ -241,6 +265,7 @@ def evaluate_step2_research_gate(payload: Any) -> ResearchDegradedModeGateResult
         recommended_terminal_result_after_step2=(
             NO_TRADE_PENDING_FINAL_GATES if promoted_allowed else None
         ),
+        source=source,
     )
 
 

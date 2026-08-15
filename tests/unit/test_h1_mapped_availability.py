@@ -558,10 +558,12 @@ def h1_permission_artifact() -> dict[str, Any]:
     return research_degraded_mode_decision_to_dict(evaluate(h1_mapped_facts=h1_facts()))
 
 
-def test_h1_state_cannot_enter_step2_render_or_parse() -> None:
+def test_h1_state_remains_blocked_by_generic_gate_for_parse_and_downstream() -> None:
+    """R1 render admission is invocation-local; the generic gate stays denied."""
     gate = evaluate_step2_research_gate(h1_permission_artifact())
 
     assert gate.allowed is False
+    assert gate.source == H1_SOURCE_KIND
     assert gate.mode == "blocked"
     assert gate.step3_allowed is False
     assert gate.step4_allowed is False

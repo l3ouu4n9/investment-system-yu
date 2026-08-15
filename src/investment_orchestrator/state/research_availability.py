@@ -189,6 +189,19 @@ _ALLOWED_ACTIONS_BY_STATE: dict[str, tuple[str, ...]] = {
     H1_MAPPED_FRESH_NON_ACTIONABLE: ("HOLD", "NO_TRADE"),
 }
 
+
+def canonical_blocked_actions_for_state(state: str) -> tuple[str, ...]:
+    """Blocked complement of one recognized state, in canonical ``ACTIONS`` order.
+
+    This is THE derivation of ``blocked_actions``: the availability writer below
+    uses it, and consumers that must recognize a canonical persisted permission
+    row derive from it rather than re-declaring the complement. Unknown states
+    raise ``KeyError``, the same fail-closed behavior as the table itself.
+    """
+    allowed = _ALLOWED_ACTIONS_BY_STATE[state]
+    return tuple(action for action in ACTIONS if action not in allowed)
+
+
 # R2E.5b-6b artifact contract literals, kept as literals to avoid a
 # state->research layer import; Step 1 passes the artifacts those modules wrote,
 # so these match by construction and any drift fails closed (no upgrade).
@@ -576,7 +589,7 @@ def evaluate_research_availability(
     stale_label = _stale_label(age_for_label, fresh_days, stale_days)
 
     allowed_actions = list(_ALLOWED_ACTIONS_BY_STATE[state])
-    blocked_actions = [action for action in ACTIONS if action not in allowed_actions]
+    blocked_actions = list(canonical_blocked_actions_for_state(state))
     manual_review_required = state == MANUAL_REVIEW_REQUIRED
 
     return ResearchAvailabilityResult(

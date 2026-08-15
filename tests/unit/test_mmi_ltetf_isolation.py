@@ -151,6 +151,9 @@ H2C_ARCHIVED_SOURCE_RELATIVE_PATH = (
 LH2_MANUAL_CAPTURE_CLI_RELATIVE_PATH = (
     "src/investment_orchestrator/cli/run_lh2_manual_capture.py"
 )
+STEP2_DECISION_BUILDER_RELATIVE_PATH = (
+    "src/investment_orchestrator/workflow/step2_decision_builder.py"
+)
 YFINANCE_VALUATION_CAPTURE_RELATIVE_PATH = (
     "src/investment_orchestrator/market/"
     "us_equity_yfinance_valuation_capture.py"
@@ -489,8 +492,9 @@ def test_mmi_external_readers_match_approved_allowlist() -> None:
     """MMI external-reader closed architectural permission list.
 
     This is a CLOSED APPROVAL LIST, not a drift snapshot: only these paths
-    may import MMI from outside the package, and none may be an admission or
-    action consumer.  It is independent of inventory completeness, the
+    may import MMI from outside the package. The sole admission consumer is
+    the exact R1 Step2 render-only path pinned below; it grants no action or
+    downstream authority. It is independent of inventory completeness, the
     prohibited-import scan, and the json-importer inventory above -- none of
     those passing or failing determines this result, and this result does
     not gate them either.
@@ -521,9 +525,10 @@ def test_mmi_external_readers_match_approved_allowlist() -> None:
             for imported in imports
         )
     )
-    # Only closed report-only H2 owners and explicit report-only H2c owners
-    # may read MMI outside the package; none is an admission or action
-    # consumer.  The H1 mapping adapter now lives inside the MMI package
+    # Only closed report-only owners plus the exact H1/LH2 R1 Step2
+    # render-only admission owner may read MMI outside the package. The R1
+    # reader cannot parse a response or reach downstream action authority.
+    # The H1 mapping adapter now lives inside the MMI package
     # itself, so it is no longer an external reader.  The H2c case-bundle
     # owner structurally envelopes MMI artifact mappings; its only consumer
     # is the explicit foreground capture session asserted below.  The Phase A
@@ -553,6 +558,7 @@ def test_mmi_external_readers_match_approved_allowlist() -> None:
         REPORT_ONLY_HOLDINGS_EXPOSURE_RELATIVE_PATH,
         REPORT_ONLY_INCREMENT_CAPACITY_RELATIVE_PATH,
         LH2_MANUAL_CAPTURE_CLI_RELATIVE_PATH,
+        STEP2_DECISION_BUILDER_RELATIVE_PATH,
     }
 
     def mmi_surface(relative_path: str) -> set[str]:
@@ -567,6 +573,33 @@ def test_mmi_external_readers_match_approved_allowlist() -> None:
             for imported in imports_by_path[relative_path]
             if imported.startswith("investment_orchestrator.mmi")
         }
+
+    # R1: the Step2 workflow consumes exactly the fixed receipt contract,
+    # authenticated current-source capture, and captured-source-only V2
+    # reader. This exact surface permits qualitative prompt rendering only;
+    # parse and every downstream action boundary remain independently closed.
+    assert mmi_surface(STEP2_DECISION_BUILDER_RELATIVE_PATH) == {
+        "investment_orchestrator.mmi.contracts",
+        "investment_orchestrator.mmi.contracts.AUTHORITY_EFFECT_NONE",
+        "investment_orchestrator.mmi.contracts.MmiProjectionResultCategory",
+        "investment_orchestrator.mmi.contracts.MmiSourceRole",
+        "investment_orchestrator.mmi.lh2_manual_capture_receipt_v1",
+        "investment_orchestrator.mmi.lh2_manual_capture_receipt_v1."
+        "LH2_MANUAL_CAPTURE_RECEIPT_PATH_COMPONENTS",
+        "investment_orchestrator.mmi.lh2_manual_capture_receipt_v1."
+        "Lh2ManualCaptureReceiptV1Error",
+        "investment_orchestrator.mmi.lh2_manual_capture_receipt_v1."
+        "validate_lh2_manual_capture_receipt_v1",
+        "investment_orchestrator.mmi.long_horizon_research_payload_v2",
+        "investment_orchestrator.mmi.long_horizon_research_payload_v2."
+        "MmiLongHorizonResearchPayloadV2",
+        "investment_orchestrator.mmi.long_horizon_research_payload_v2."
+        "MmiLongHorizonResearchPayloadV2Error",
+        "investment_orchestrator.mmi.long_horizon_research_payload_v2."
+        "read_mmi_long_horizon_research_payload_v2_from_captured_source",
+        "investment_orchestrator.mmi.source_capture",
+        "investment_orchestrator.mmi.source_capture.capture_current_mmi_source",
+    }
 
     # The capture owner's only legitimate MMI dependency is the frozen
     # canonical profile: its persisted artifact is byte-defined by

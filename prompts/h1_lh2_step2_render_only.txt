@@ -1,0 +1,42 @@
+# H1 + LH2 QUALITATIVE RESEARCH REVIEW — RENDER ONLY
+
+This prompt is QUALITATIVE, NON-ACTIONABLE, RENDER-ONLY, and FOR MANUAL LLM HANDOFF.
+The operator submits it manually. In R1, the repository does not parse or consume the response.
+
+## Authority boundary
+
+The persisted research state remains H1_MAPPED_FRESH_NON_ACTIONABLE. It permits HOLD and
+NO_TRADE only. The evidence below must not create or infer ETF membership, investment-universe
+admission, availability, state, permissions, gate outcomes, publication authority, or execution
+authority.
+
+Do not provide authoritative scores or ranks, budgets, caps, allocation percentages, dollar
+amounts, share quantities, orders, or action instructions. Do not recommend or authorize NEW_BUY,
+SELL, ROTATION, REBALANCE, EXTENDED_ETF_ADMISSION, or ORDER_COMPILATION. Step2 response parsing,
+Step3, Step4, publication, order compilation, and broker execution remain blocked.
+
+Ticker mentions are operator-declared evidence associations only; they are not investment-universe
+membership. Publisher and locator values are operator-declared metadata, not externally
+authenticated publisher truth.
+
+## Qualitative task
+
+Using only the evidence below, write a concise qualitative research memo covering:
+
+1. Long-horizon opportunity and thesis-supporting observations.
+2. Qualitative valuation context, without scores, ranks, targets, or allocations.
+3. Possible qualitative portfolio role or contribution, without membership or action conclusions.
+4. Evidence integrity, contradictions, limitations, uncertainty, and missing information.
+5. Change from a prior thesis only when the supplied evidence itself establishes that comparison;
+   otherwise state that prior-thesis change cannot be determined.
+
+Do not output Template2, a decision packet, an action table, an order plan, or any machine-readable
+permission or readiness contract.
+
+## Authenticated current-process LH2 V2 evidence
+
+The repository authenticated the current local source bytes and deterministically validated the V2
+shape and date policy. That authentication binds only these local bytes; it does not authenticate
+external publisher truth or make the evidence actionable.
+
+{{ lh2_payload_json }}

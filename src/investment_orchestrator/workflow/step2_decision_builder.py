@@ -14,11 +14,12 @@ byte-for-byte unchanged.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
 import hashlib
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Final, NoReturn, cast
 
 from investment_orchestrator.common.io import (
     ensure_dir,
@@ -34,19 +35,45 @@ from investment_orchestrator.llm.manual_output import (
     render_prompt,
     write_rendered_prompt,
 )
+from investment_orchestrator.mmi.contracts import (
+    AUTHORITY_EFFECT_NONE,
+    MmiProjectionResultCategory,
+    MmiSourceRole,
+)
+from investment_orchestrator.mmi.lh2_manual_capture_receipt_v1 import (
+    LH2_MANUAL_CAPTURE_RECEIPT_PATH_COMPONENTS,
+    Lh2ManualCaptureReceiptV1Error,
+    validate_lh2_manual_capture_receipt_v1,
+)
+from investment_orchestrator.mmi.long_horizon_research_payload_v2 import (
+    MmiLongHorizonResearchPayloadV2,
+    MmiLongHorizonResearchPayloadV2Error,
+    read_mmi_long_horizon_research_payload_v2_from_captured_source,
+)
+from investment_orchestrator.mmi.source_capture import capture_current_mmi_source
 from investment_orchestrator.parsers.extract_template2_and_decision_packet import (
     extract_template2_and_decision_packet,
 )
 from investment_orchestrator.research.promoted_handoff_verifier import (
     verify_promoted_handoff_for_step2_decision,
 )
+from investment_orchestrator.state.research_availability import (
+    H1_MAPPED_FRESH_NON_ACTIONABLE,
+    H1_ROLE_MAPPED_SOURCE,
+    canonical_blocked_actions_for_state,
+)
 from investment_orchestrator.state.research_degraded_mode_gate import (
+    HOLD_NO_TRADE_ACTIONS,
+    MODE_BLOCKED,
     MODE_PROMOTED_STEP2_DECISION_ONLY,
     NO_TRADE_PENDING_FINAL_GATES,
     PROMOTED_SOURCE,
     ResearchDegradedModeGateError,
     ResearchDegradedModeGateResult,
+    enforce_evaluated_step2_research_gate,
     enforce_step2_research_gate,
+    load_and_evaluate_step2_research_gate,
+    step2_research_gate_blocked_artifact,
 )
 from investment_orchestrator.validators.strategy_settings import parse_strategy_settings_text
 from investment_orchestrator.workflow.step1_research import (
@@ -68,6 +95,34 @@ STEP2_BLOCKED_BY_RESEARCH_GATE_FILENAME = "step2_blocked_by_research_gate.json"
 STEP2_PROMOTED_DECISION_ONLY_FILENAME = "step2_promoted_decision_only.json"
 STEP2_PROMOTED_DECISION_ONLY_SCHEMA_VERSION = "step2_promoted_decision_only_v1"
 PROMOTED_VERIFICATION_FAILED_REASON = "promoted_step2_verification_failed"
+# The canonical H1 blocked complement is never re-declared here: it is derived
+# once from the availability owner's own action universe and H1 allowed row, so
+# ``research_availability`` remains the sole owner of that policy row.
+H1_CANONICAL_BLOCKED_ACTIONS: Final = canonical_blocked_actions_for_state(
+    H1_MAPPED_FRESH_NON_ACTIONABLE
+)
+H1_LH2_RENDER_ONLY_MODE = "h1_lh2_render_only"
+H1_LH2_INVOCATION_ADMISSION_FAILED_REASON = (
+    "h1_lh2_invocation_admission_failed"
+)
+H1_LH2_PROMPT_TEMPLATE_FILENAME = "h1_lh2_step2_render_only.txt"
+H1_LH2_MAX_AGE_DAYS: Final = 180
+
+
+@dataclass(frozen=True, slots=True)
+class _Lh2ReceiptBinding:
+    observed_sha256: str
+    observed_size_bytes: int
+
+
+class _H1Lh2InvocationAdmissionError(RuntimeError):
+    """Controlled fail-closed H1/LH2 invocation-admission failure."""
+
+    def __init__(self, reason_codes: tuple[str, ...]) -> None:
+        if not reason_codes:
+            reason_codes = ("H1_LH2_INVOCATION_ADMISSION_FAILED",)
+        super().__init__("; ".join(reason_codes))
+        self.reason_codes = reason_codes
 
 
 def current_inputs_dir() -> Path:
@@ -175,21 +230,248 @@ def build_step2_prompt_text() -> str:
     return rendered.rstrip() + "\n"
 
 
+def _is_exact_h1_render_prerequisite(
+    evaluation: ResearchDegradedModeGateResult,
+) -> bool:
+    """Recognize only the canonical non-actionable H1 gate snapshot.
+
+    Both action rows are matched for semantic exactness — equal length plus
+    equal membership — so a row that is incomplete, over-wide, duplicated, or
+    carries any non-canonical value is rejected. The gate evaluator can
+    normalize an incomplete or malformed raw ``blocked_actions`` into
+    NEW_BUY / ORDER_COMPILATION, so disjointness alone would admit a
+    noncanonical H1 artifact; exact complement membership is required instead.
+    Incidental ordering is deliberately not required.
+    """
+    return (
+        evaluation.state == H1_MAPPED_FRESH_NON_ACTIONABLE
+        and evaluation.source == H1_ROLE_MAPPED_SOURCE
+        and evaluation.allowed is False
+        and evaluation.malformed_reasons == []
+        and len(evaluation.allowed_actions) == len(HOLD_NO_TRADE_ACTIONS)
+        and set(evaluation.allowed_actions) == set(HOLD_NO_TRADE_ACTIONS)
+        and len(evaluation.blocked_actions) == len(H1_CANONICAL_BLOCKED_ACTIONS)
+        and set(evaluation.blocked_actions) == set(H1_CANONICAL_BLOCKED_ACTIONS)
+        and set(evaluation.allowed_actions).isdisjoint(evaluation.blocked_actions)
+        and evaluation.manual_review_required is False
+        and evaluation.order_compilation_allowed is False
+        and evaluation.new_buy_permission is False
+        and evaluation.step3_allowed is False
+        and evaluation.step4_allowed is False
+        and evaluation.mode == MODE_BLOCKED
+        and evaluation.recommended_terminal_result_after_step2 is None
+    )
+
+
+def _read_fixed_lh2_receipt(repo_root_path: Path) -> _Lh2ReceiptBinding:
+    """Read and validate the one code-owned current LH2 receipt path."""
+    receipt_path = repo_root_path.joinpath(
+        *LH2_MANUAL_CAPTURE_RECEIPT_PATH_COMPONENTS
+    )
+    try:
+        receipt = read_json(receipt_path)
+    except FileNotFoundError:
+        raise _H1Lh2InvocationAdmissionError(
+            ("H1_LH2_RECEIPT_MISSING",)
+        ) from None
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
+        raise _H1Lh2InvocationAdmissionError(
+            ("H1_LH2_RECEIPT_JSON_INVALID",)
+        ) from None
+
+    try:
+        validate_lh2_manual_capture_receipt_v1(receipt)
+    except Lh2ManualCaptureReceiptV1Error as exc:
+        raise _H1Lh2InvocationAdmissionError((exc.code,)) from None
+
+    return _Lh2ReceiptBinding(
+        observed_sha256=cast(str, receipt["observed_sha256"]),
+        observed_size_bytes=cast(int, receipt["observed_size_bytes"]),
+    )
+
+
+def _system_now_date() -> date:
+    """Return the system-owned production date for invocation admission."""
+    return date.today()
+
+
+def _validate_h1_lh2_temporal_policy(
+    payload: MmiLongHorizonResearchPayloadV2,
+    *,
+    now_date: date,
+) -> None:
+    """Require every V2 source entry to be current under the 180-day policy."""
+    evaluated_entries = tuple(
+        (
+            index,
+            entry.published_at,
+            (now_date - date.fromisoformat(entry.published_at)).days,
+        )
+        for index, entry in enumerate(payload.sources)
+    )
+    reason_codes: list[str] = []
+    for index, published_at, age_days in evaluated_entries:
+        if age_days < 0:
+            reason_codes.append(
+                "H1_LH2_SOURCE_FUTURE_DATED:"
+                f"index={index};published_at={published_at};age_days={age_days}"
+            )
+        elif age_days > H1_LH2_MAX_AGE_DAYS:
+            reason_codes.append(
+                "H1_LH2_SOURCE_STALE:"
+                f"index={index};published_at={published_at};age_days={age_days}"
+            )
+    if reason_codes:
+        raise _H1Lh2InvocationAdmissionError(tuple(reason_codes))
+
+
+def _load_current_h1_lh2_payload(
+    *,
+    repo_root_path: Path,
+) -> MmiLongHorizonResearchPayloadV2:
+    """Reconstruct, parse, and temporally admit the current authenticated LH2."""
+    receipt = _read_fixed_lh2_receipt(repo_root_path)
+    capture = capture_current_mmi_source(
+        role=MmiSourceRole.LONG_HORIZON_RESEARCH,
+        expected_source_sha256=receipt.observed_sha256,
+    )
+    if capture.status is not MmiProjectionResultCategory.PROJECTION_VALID_COMPLETE:
+        raise _H1Lh2InvocationAdmissionError(
+            capture.reason_codes or ("H1_LH2_SOURCE_CAPTURE_INCOMPLETE",)
+        )
+    if capture.authority_effect != AUTHORITY_EFFECT_NONE or capture.source is None:
+        raise _H1Lh2InvocationAdmissionError(
+            ("H1_LH2_SOURCE_CAPTURE_RESULT_INVALID",)
+        )
+
+    captured_size = capture.source.source_record.get("observed_size_bytes")
+    if type(captured_size) is not int:
+        raise _H1Lh2InvocationAdmissionError(
+            ("H1_LH2_SOURCE_RECORD_SIZE_INVALID",)
+        )
+    if receipt.observed_size_bytes != captured_size:
+        raise _H1Lh2InvocationAdmissionError(
+            ("H1_LH2_RECEIPT_SIZE_MISMATCH",)
+        )
+
+    try:
+        payload = read_mmi_long_horizon_research_payload_v2_from_captured_source(
+            capture.source
+        )
+    except MmiLongHorizonResearchPayloadV2Error as exc:
+        raise _H1Lh2InvocationAdmissionError((exc.code,)) from None
+
+    _validate_h1_lh2_temporal_policy(payload, now_date=_system_now_date())
+    return payload
+
+
+def _build_h1_lh2_step2_prompt_text(
+    payload: MmiLongHorizonResearchPayloadV2,
+) -> str:
+    """Render the exact admitted V2 payload as qualitative evidence only."""
+    prompt_evidence = {
+        "schema_version": payload.schema_version,
+        "sources": [
+            {
+                "publisher": entry.publisher,
+                "published_at": entry.published_at,
+                "source_locator": entry.source_locator,
+                "tickers": list(entry.tickers),
+                "excerpt_text": entry.excerpt_text,
+            }
+            for entry in payload.sources
+        ],
+    }
+    prompt_template = read_text(
+        require_prompt_path(H1_LH2_PROMPT_TEMPLATE_FILENAME)
+    )
+    rendered = render_prompt(
+        prompt_template,
+        {
+            "lh2_payload_json": json.dumps(
+                prompt_evidence,
+                ensure_ascii=False,
+                indent=2,
+            )
+        },
+    )
+    return rendered.rstrip() + "\n"
+
+
+def _block_h1_lh2_invocation(
+    evaluation: ResearchDegradedModeGateResult,
+    *,
+    reason_codes: tuple[str, ...],
+    source_artifact_path: Path,
+    blocked_artifact_path: Path,
+    repo_root_path: Path,
+) -> NoReturn:
+    """Write the existing Step2 block shape once, then fail this invocation."""
+    blocked_payload = step2_research_gate_blocked_artifact(
+        evaluation,
+        source_artifact_path=source_artifact_path,
+        repo_root_path=repo_root_path,
+    )
+    blocked_payload["reason"] = H1_LH2_INVOCATION_ADMISSION_FAILED_REASON
+    blocked_payload["blocker_reasons"] = list(reason_codes)
+    write_json(blocked_artifact_path, blocked_payload)
+    raise ResearchDegradedModeGateError(
+        "Step 2 blocked by H1/LH2 invocation admission: "
+        f"blockers={list(reason_codes)}; "
+        f"blocked_artifact={_display_path(blocked_artifact_path)}"
+    )
+
+
 def _enforce_step2_invocation_admission(
     *,
     source_artifact_path: Path,
     blocked_artifact_path: Path,
     repo_root_path: Path,
-) -> ResearchDegradedModeGateResult:
+) -> tuple[
+    ResearchDegradedModeGateResult,
+    MmiLongHorizonResearchPayloadV2 | None,
+]:
     """Evaluate all invocation-local prerequisites and the Step 1 state gate.
 
-    This is the single admission seam for Step 2 execution. It currently delegates
-    entirely to the Step 1 research gate.
+    One persisted gate snapshot is retained throughout this synchronous render
+    admission. Generic modes preserve their existing enforcement; exact H1 may
+    proceed only with current authenticated and temporally valid LH2 evidence.
     """
-    return enforce_step2_research_gate(
-        source_artifact_path=source_artifact_path,
-        blocked_artifact_path=blocked_artifact_path,
-        repo_root_path=repo_root_path,
+    evaluation = load_and_evaluate_step2_research_gate(source_artifact_path)
+    if evaluation.allowed:
+        return (
+            enforce_evaluated_step2_research_gate(
+                evaluation,
+                source_artifact_path=source_artifact_path,
+                blocked_artifact_path=blocked_artifact_path,
+                repo_root_path=repo_root_path,
+            ),
+            None,
+        )
+
+    if _is_exact_h1_render_prerequisite(evaluation):
+        try:
+            payload = _load_current_h1_lh2_payload(
+                repo_root_path=repo_root_path
+            )
+        except _H1Lh2InvocationAdmissionError as exc:
+            _block_h1_lh2_invocation(
+                evaluation,
+                reason_codes=exc.reason_codes,
+                source_artifact_path=source_artifact_path,
+                blocked_artifact_path=blocked_artifact_path,
+                repo_root_path=repo_root_path,
+            )
+        return evaluation, payload
+
+    return (
+        enforce_evaluated_step2_research_gate(
+            evaluation,
+            source_artifact_path=source_artifact_path,
+            blocked_artifact_path=blocked_artifact_path,
+            repo_root_path=repo_root_path,
+        ),
+        None,
     )
 
 
@@ -200,17 +482,25 @@ def render_step2_prompt() -> dict[str, str]:
     Promoted decision-only runs (R2E.5b-6c) render from the promoted effective
     handoff after a fail-closed live verification, and additionally write the
     ``step2_promoted_decision_only.json`` marker.
+    Exact H1 runs may render one qualitative LH2 prompt only after synchronous
+    receipt, current-source, V2, and temporal admission; parse stays closed.
     """
-    gate = _enforce_step2_invocation_admission(
+    gate, h1_lh2_payload = _enforce_step2_invocation_admission(
         source_artifact_path=step1_research_degraded_mode_decision_path(),
         blocked_artifact_path=step2_blocked_by_research_gate_path(),
         repo_root_path=repo_root(),
     )
 
-    if gate.mode == MODE_PROMOTED_STEP2_DECISION_ONLY:
+    if h1_lh2_payload is not None:
+        prompt_text = _build_h1_lh2_step2_prompt_text(h1_lh2_payload)
+        promoted_context = None
+        render_mode = H1_LH2_RENDER_ONLY_MODE
+    elif gate.mode == MODE_PROMOTED_STEP2_DECISION_ONLY:
         prompt_text, promoted_context = _build_promoted_step2_prompt_or_block(gate)
+        render_mode = gate.mode
     else:
         prompt_text, promoted_context = build_step2_prompt_text(), None
+        render_mode = gate.mode
 
     artifact_dir = step2_artifact_dir()
     prompt_output_path = step2_prompt_path()
@@ -229,8 +519,13 @@ def render_step2_prompt() -> dict[str, str]:
         "prompt_path": str(prompt_output_path),
         "raw_output_path": str(raw_output_path),
         "raw_output_metadata_path": str(metadata_path),
-        "mode": gate.mode,
+        "mode": render_mode,
     }
+    if h1_lh2_payload is not None:
+        result["render_only"] = "True"
+        result["step2_parse_allowed"] = "False"
+        result["order_compilation_allowed"] = "False"
+        result["new_buy_permission"] = "False"
     if promoted_context is not None:
         marker_path = _write_promoted_decision_only_marker(gate, promoted_context)
         result["step2_promoted_decision_only_path"] = str(marker_path)
