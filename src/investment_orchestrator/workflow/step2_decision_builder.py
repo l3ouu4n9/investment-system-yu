@@ -175,6 +175,24 @@ def build_step2_prompt_text() -> str:
     return rendered.rstrip() + "\n"
 
 
+def _enforce_step2_invocation_admission(
+    *,
+    source_artifact_path: Path,
+    blocked_artifact_path: Path,
+    repo_root_path: Path,
+) -> ResearchDegradedModeGateResult:
+    """Evaluate all invocation-local prerequisites and the Step 1 state gate.
+
+    This is the single admission seam for Step 2 execution. It currently delegates
+    entirely to the Step 1 research gate.
+    """
+    return enforce_step2_research_gate(
+        source_artifact_path=source_artifact_path,
+        blocked_artifact_path=blocked_artifact_path,
+        repo_root_path=repo_root_path,
+    )
+
+
 def render_step2_prompt() -> dict[str, str]:
     """Write the rendered Step 2 prompt and prepare the manual output artifact.
 
@@ -183,7 +201,7 @@ def render_step2_prompt() -> dict[str, str]:
     handoff after a fail-closed live verification, and additionally write the
     ``step2_promoted_decision_only.json`` marker.
     """
-    gate = enforce_step2_research_gate(
+    gate = _enforce_step2_invocation_admission(
         source_artifact_path=step1_research_degraded_mode_decision_path(),
         blocked_artifact_path=step2_blocked_by_research_gate_path(),
         repo_root_path=repo_root(),
