@@ -983,6 +983,10 @@ def test_v2_prompt_envelope_and_response_graph_is_exact_and_dormant() -> None:
     )) == {
         H1_REPLACEMENT_CONSUME_CLI_RELATIVE_PATH,
         H1_REPLACEMENT_PREPARE_CLI_RELATIVE_PATH,
+        (
+            "src/investment_orchestrator/observability/"
+            "report_only_phase3_same_run_research_admission.py"
+        ),
     }
     assert consumers(
         "investment_orchestrator.offline."
@@ -1002,8 +1006,17 @@ def test_v2_prompt_envelope_and_response_graph_is_exact_and_dormant() -> None:
     assert set(consumers(
         "investment_orchestrator.common.stable_read"
     )) == {
-        H2C_CONSUME_ENGINE_RELATIVE_PATH,
+        (
+            "src/investment_orchestrator/market/"
+            "us_equity_session_calendar.py"
+        ),
+        YFINANCE_VALUATION_CAPTURE_RELATIVE_PATH,
+        REPORT_ONLY_BUDGET_CAPACITY_RELATIVE_PATH,
+        REPORT_ONLY_HOLDINGS_EXPOSURE_RELATIVE_PATH,
+        REPORT_ONLY_INCREMENT_CAPACITY_RELATIVE_PATH,
         H2C_ARCHIVED_SOURCE_RELATIVE_PATH,
+        H2C_CONSUME_ENGINE_RELATIVE_PATH,
+        "src/investment_orchestrator/state/research_availability.py",
         H1_REPLACEMENT_HANDOFF_RELATIVE_PATH,
     }
     # D4b: the dormant prepared-case contract gains exactly one production
