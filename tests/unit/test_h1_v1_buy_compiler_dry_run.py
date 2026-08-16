@@ -147,6 +147,44 @@ def _evaluate(
     return result
 
 
+def test_public_wrapper_delegates_one_generation_to_package_internal_seam(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _case(tmp_path, positions=(("QQQ", "100"),), x="50", r_cap="50")
+    h1_calls = _install_case_inputs(case, monkeypatch)
+    generation = proposal.evaluate_h1_v1_proposal_generation()
+    assert h1_calls == [None]
+    expected = dry_run._evaluate_h1_v1_buy_compiler_dry_run_from_generation(
+        generation
+    )
+    delegated: list[proposal.H1V1ProposalEvaluation] = []
+    from_generation = (
+        dry_run._evaluate_h1_v1_buy_compiler_dry_run_from_generation
+    )
+
+    def capture_generation(
+        value: proposal.H1V1ProposalEvaluation,
+    ) -> dry_run.H1V1BuyCompilerDryRunResult:
+        delegated.append(value)
+        return from_generation(value)
+
+    monkeypatch.setattr(
+        dry_run._proposal,
+        "evaluate_h1_v1_proposal_generation",
+        lambda: generation,
+    )
+    monkeypatch.setattr(
+        dry_run,
+        "_evaluate_h1_v1_buy_compiler_dry_run_from_generation",
+        capture_generation,
+    )
+
+    assert dry_run.evaluate_h1_v1_buy_compiler_dry_run() == expected
+    assert delegated == [generation]
+    assert h1_calls == [None]
+
+
 def test_core_dry_run_is_exact_one_generation_non_authoritative_and_write_free(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

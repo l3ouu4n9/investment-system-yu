@@ -562,9 +562,10 @@ def _ticker_exposures(
     )
 
 
-def evaluate_h1_v1_buy_compiler_dry_run() -> H1V1BuyCompilerDryRunResult:
-    """Evaluate one current, permission-checked, side-effect-free BUY dry-run."""
-    evaluation = _proposal.evaluate_h1_v1_proposal_generation()
+def _evaluate_h1_v1_buy_compiler_dry_run_from_generation(
+    evaluation: _proposal.H1V1ProposalEvaluation,
+) -> H1V1BuyCompilerDryRunResult:
+    """Compile one already-bound P1 generation without rereading any source."""
     proposal, _state, source_bindings = _validate_generation(evaluation)
     selected_ticker = proposal["selected_ticker"]
     target_text = proposal["target_increment"]
@@ -793,3 +794,9 @@ def evaluate_h1_v1_buy_compiler_dry_run() -> H1V1BuyCompilerDryRunResult:
         postcompile_core_exposure=_text(final_z),
         ticker_exposures=ticker_exposures,
     )
+
+
+def evaluate_h1_v1_buy_compiler_dry_run() -> H1V1BuyCompilerDryRunResult:
+    """Evaluate one current, permission-checked, side-effect-free BUY dry-run."""
+    evaluation = _proposal.evaluate_h1_v1_proposal_generation()
+    return _evaluate_h1_v1_buy_compiler_dry_run_from_generation(evaluation)
