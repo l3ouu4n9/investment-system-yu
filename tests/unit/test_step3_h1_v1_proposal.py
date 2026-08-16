@@ -686,7 +686,7 @@ def test_satellite_target_is_capped_and_extended_exposure_counts_in_alpha(
     assert _candidate(result, "QUAL")["disposition"] == "EXCLUDE"
 
 
-def test_uncited_ticker_evidence_is_maintain_only_not_exclude(
+def test_uncited_ticker_evidence_is_increment_eligible_despite_omission(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -698,11 +698,10 @@ def test_uncited_ticker_evidence_is_maintain_only_not_exclude(
     )
     result = _run_case(case, monkeypatch)
 
-    assert result["terminal_result"] == "HOLD"
-    assert result["reason_code"] == "NO_INCREMENT_ELIGIBLE_TICKER"
+    assert result["terminal_result"] == "POSITIVE_INCREMENT_CANDIDATE"
     qqq = _candidate(result, "QQQ")
-    assert qqq["disposition"] == "MAINTAIN_ONLY"
-    assert qqq["evidence_coverage_identities"] == []
+    assert qqq["disposition"] == "INCREMENT_ELIGIBLE"
+    assert len(qqq["evidence_coverage_identities"]) == 1
 
 
 def test_qualitative_prose_has_no_disposition_or_allocation_authority(
@@ -717,6 +716,35 @@ def test_qualitative_prose_has_no_disposition_or_allocation_authority(
     first = _run_case(case, monkeypatch)
     payload = case.h1_evaluation.context.current_lh2_payload
     second_h1 = _current_h1(payload, prose_suffix="opposite prose")
+    second = _run_case(case, monkeypatch, h1_evaluation=second_h1)
+
+    decision_fields = (
+        "terminal_result",
+        "reason_code",
+        "capacity",
+        "candidates",
+        "selected_ticker",
+        "target_increment",
+    )
+    assert {key: first[key] for key in decision_fields} == {
+        key: second[key] for key in decision_fields
+    }
+
+
+def test_llm_citation_subset_invariance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _build_case(
+        tmp_path,
+        positions=(("QQQ", "1000"),),
+        evidence_groups=(("QQQ",), ("VOO",)),
+    )
+    first = _run_case(case, monkeypatch)
+    payload = case.h1_evaluation.context.current_lh2_payload
+    # The first evaluation defaults to citing all evidence.
+    # The second evaluation cites only index 1 (VOO), omitting index 0 (QQQ).
+    second_h1 = _current_h1(payload, cited_indexes=(1,))
     second = _run_case(case, monkeypatch, h1_evaluation=second_h1)
 
     decision_fields = (

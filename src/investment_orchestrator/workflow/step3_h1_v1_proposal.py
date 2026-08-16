@@ -612,7 +612,6 @@ def _validated_result_candidates(
         if (
             list(evidence_ids) != sorted(evidence_ids)
             or not set(evidence_ids).issubset(current_set)
-            or not set(evidence_ids).issubset(cited_set)
         ):
             _raise_result_contract_invalid()
 
@@ -1069,16 +1068,14 @@ def _complete_proposal(
     }
 
     context = h1_evaluation.context
-    cited_entries_by_ticker: dict[str, tuple[str, ...]] = {}
+    bound_entries_by_ticker: dict[str, tuple[str, ...]] = {}
     if context is not None:
-        cited = frozenset(context.evidence_references)
         for ticker in holdings_by_ticker:
-            cited_entries_by_ticker[ticker] = tuple(
+            bound_entries_by_ticker[ticker] = tuple(
                 sorted(
                     entry.source_entry_identity_sha256
                     for entry in context.current_lh2_payload.sources
-                    if entry.source_entry_identity_sha256 in cited
-                    and ticker in entry.tickers
+                    if ticker in entry.tickers
                 )
             )
 
@@ -1101,7 +1098,7 @@ def _complete_proposal(
     candidates: list[dict[str, object]] = []
     for ticker in holdings_by_ticker:
         role = snapshot.role_by_ticker.get(ticker)
-        evidence_ids = cited_entries_by_ticker.get(ticker, ())
+        evidence_ids = bound_entries_by_ticker.get(ticker, ())
         if role not in _RECOGNIZED_EXPOSURE_ROLES:
             disposition = DISPOSITION_UNRESOLVED
         elif ticker not in _V1_BASE_TICKERS:
