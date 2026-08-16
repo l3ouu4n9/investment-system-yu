@@ -33,6 +33,7 @@ from investment_orchestrator.workflow.step2_decision_builder import (
 )
 from investment_orchestrator.workflow.step2_h1_currentness import (
     STEP2_H1_CURRENTNESS_OBSERVATION_SCHEMA_VERSION,
+    evaluate_current_h1_context,
     evaluate_h1_currentness_workflow,
 )
 from investment_orchestrator.workflow.step2_h1_provenance import (
@@ -292,6 +293,37 @@ def test_current_day_180_uses_one_date_one_payload_and_only_writes_observation(
         case.observation_path.relative_to(tmp_path).as_posix()
     }
     assert all(after[path] == content for path, content in before.items())
+
+
+def test_pure_current_context_returns_bound_payload_without_observation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evaluation_date = date(2026, 8, 15)
+    case = _prepare_currentness_case(
+        tmp_path,
+        monkeypatch,
+        evaluation_date=evaluation_date,
+        published_dates=(evaluation_date,),
+    )
+    before = _snapshot_files(tmp_path)
+
+    evaluation = evaluate_current_h1_context()
+
+    assert evaluation.is_current is True
+    assert evaluation.reason_code is None
+    assert evaluation.context is not None
+    assert evaluation.context.current_lh2_payload.sources[0].source_entry_identity_sha256 == (
+        case.current_evidence_shas[0]
+    )
+    assert evaluation.context.evidence_entry_identities_sha256 == (
+        case.current_evidence_shas
+    )
+    assert evaluation.context.evidence_references == case.current_evidence_shas
+    assert not case.observation_path.exists()
+    assert _snapshot_files(tmp_path) == before
+    assert case.clock_calls == [evaluation_date]
+    assert len(case.capture_calls) == 1
 
 
 def test_real_shared_h1_prerequisite_rejects_incomplete_blocked_complement(

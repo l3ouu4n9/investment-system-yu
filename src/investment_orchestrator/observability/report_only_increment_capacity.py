@@ -43,6 +43,7 @@ __all__ = (
     "IncrementCapacityProjection",
     "IncrementFractionSource",
     "observe_current_report_only_increment_capacity",
+    "observe_report_only_increment_capacity_from_exposure",
 )
 
 
@@ -335,6 +336,38 @@ def observe_current_report_only_increment_capacity(
             portfolio_snapshot_expected_sha256=portfolio_snapshot_expected_sha256,
         )
     )
+    return _project_increment_capacity_from_exposure(
+        r_source=r_source,
+        exposure_result=exposure_result,
+    )
+
+
+def observe_report_only_increment_capacity_from_exposure(
+    *,
+    exposure_result: _holdings_exposure.ExposureObservationResult,
+) -> IncrementCapacityObservationResult:
+    """Observe fixed r against one already-observed exact H generation."""
+    r_source, r_reasons, r_invalid = _read_current_increment_fraction()
+    if r_source is None:
+        return _result(
+            (
+                IncrementCapacityObservationStatus.INVALID
+                if r_invalid
+                else IncrementCapacityObservationStatus.UNAVAILABLE
+            ),
+            r_reasons,
+        )
+    return _project_increment_capacity_from_exposure(
+        r_source=r_source,
+        exposure_result=exposure_result,
+    )
+
+
+def _project_increment_capacity_from_exposure(
+    *,
+    r_source: IncrementFractionSource,
+    exposure_result: _holdings_exposure.ExposureObservationResult,
+) -> IncrementCapacityObservationResult:
     if (
         exposure_result.status
         is not _holdings_exposure.ExposureObservationStatus.VALID_REPORT_ONLY

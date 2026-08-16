@@ -14,14 +14,17 @@ from investment_orchestrator.workflow.step2_decision_builder import (
     step2_raw_output_path,
     step2_render_commitment_path,
 )
+from investment_orchestrator.workflow.step2_h1_currentness import (
+    evaluate_h1_currentness_workflow,
+)
 from investment_orchestrator.workflow.step2_h1_provenance import (
     capture_h1_response,
 )
 from investment_orchestrator.workflow.step2_h1_report import (
     validate_h1_report_workflow,
 )
-from investment_orchestrator.workflow.step2_h1_currentness import (
-    evaluate_h1_currentness_workflow,
+from investment_orchestrator.workflow.step3_h1_v1_proposal import (
+    build_h1_v1_proposal_workflow,
 )
 
 
@@ -35,6 +38,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("capture", help="Capture operator-supplied Step 2 H1 raw response")
     subparsers.add_parser("validate-h1", help="Validate structured H1 qualitative report")
     subparsers.add_parser("check-h1-currentness", help="Evaluate deterministic H1 currentness observation")
+    subparsers.add_parser(
+        "build-v1-proposal",
+        help="Build the report-only deterministic H1 V1 BUY proposal",
+    )
     return parser
 
 
@@ -74,6 +81,11 @@ def main() -> int:
             evaluate_h1_currentness_workflow()
             observation_path = step2_artifact_dir() / "h1_qualitative_currentness_observation.json"
             print(str(observation_path))
+            return 0
+
+        if args.command == "build-v1-proposal":
+            proposal_path = build_h1_v1_proposal_workflow()
+            print(str(proposal_path))
             return 0
 
     except Exception as exc:  # noqa: BLE001

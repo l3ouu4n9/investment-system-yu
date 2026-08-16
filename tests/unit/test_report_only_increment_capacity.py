@@ -509,7 +509,7 @@ def test_public_observer_has_no_r_h_x_or_market_data_bypass() -> None:
     } & set(parameters)
 
 
-def test_increment_capacity_module_is_x_and_downstream_free() -> None:
+def test_increment_capacity_module_is_x_free_with_one_report_only_consumer() -> None:
     root = Path(__file__).resolve().parents[2] / "src/investment_orchestrator"
     module_file = root / "observability/report_only_increment_capacity.py"
     module_text = module_file.read_text(encoding="utf-8")
@@ -534,10 +534,11 @@ def test_increment_capacity_module_is_x_and_downstream_free() -> None:
             "investment_orchestrator.llm",
         )
     )
-    assert all(
-        "report_only_increment_capacity" not in candidate.read_text(
-            encoding="utf-8"
-        )
+    consumers = {
+        candidate.relative_to(root).as_posix()
         for candidate in root.rglob("*.py")
         if candidate != module_file
-    )
+        and "report_only_increment_capacity"
+        in candidate.read_text(encoding="utf-8")
+    }
+    assert consumers == {"workflow/step3_h1_v1_proposal.py"}
