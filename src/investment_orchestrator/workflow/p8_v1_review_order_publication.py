@@ -188,7 +188,10 @@ def publish_h1_v1_review_order() -> V1ReviewOrderPublicationResult:
         raise V1P8APublicationError("V1_P8A_PUBLICATION_SUBJECT_MISMATCH")
 
     # 3. Construct minimal complete exact package
-    source_bindings_dict = {k: v for k, v in p6_result.source_bindings}
+    source_bindings_dict = {
+        k: list(v) if type(v) is tuple else v
+        for k, v in p6_result.source_bindings
+    }
 
     # Require values for a valid buy candidate
     if p6_result.selected_ticker is None:

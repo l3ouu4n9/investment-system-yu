@@ -68,8 +68,8 @@ def mock_p6(monkeypatch):
             ("valuation_source_kind", "abc"),
             ("valuation_trusted_evaluation_timestamp_utc", "2024-01-01T12:00:00Z"),
             ("x_source_sha256", "abc"),
-            ("h1_evidence_entry_identities_sha256", ["abc", "def"]),
-            ("h1_report_evidence_references", ["xyz"]),
+            ("h1_evidence_entry_identities_sha256", ("abc", "def")),
+            ("h1_report_evidence_references", ("xyz",)),
         ),
         authority_effect=AUTHORITY_EFFECT_NONE,
         not_authorization=True,
@@ -168,7 +168,10 @@ def test_exact_package_contract_and_hash_oracle(mock_p6, isolated_artifact_dir):
                 "candidate_notional": "950.00",
             }
         ],
-        "source_bindings": dict(mock_p6.result.source_bindings),
+        "source_bindings": {
+            k: list(v) if type(v) is tuple else v
+            for k, v in mock_p6.result.source_bindings
+        },
         "authority_effect": AUTHORITY_EFFECT_NONE,
         "not_authorization": True,
     }
@@ -245,3 +248,58 @@ def test_step4_isolation():
     step4_dir = artifacts_dir() / "current" / "step4_order_compiler"
     assert p8_dir != step4_dir
     assert "current" not in p8_dir.parts
+
+
+def test_source_bindings_tuples_converted_to_json_lists(mock_p6, isolated_artifact_dir, monkeypatch):
+    """Proves P8 correctly normalizes P6 frozen tuple bindings to JSON arrays.
+    Also proves scalar values are unmodified and unsupported types fail closed.
+    """
+    import dataclasses
+
+    # 1. P6 result contains a source_bindings field with tuple[str, ...]
+    assert any(
+        k == "h1_evidence_entry_identities_sha256" and type(v) is tuple
+        for k, v in mock_p6.result.source_bindings
+    )
+
+    # 2 & 3. Publish and verify canonical json succeeds
+    result = _p8a.publish_h1_v1_review_order()
+
+    # 4 & 5. Published payload contains exactly the same ordered string elements
+    with open(result.immutable_path) as f:
+        data = json.load(f)
+
+    published_bindings = data["source_bindings"]
+    assert type(published_bindings["h1_evidence_entry_identities_sha256"]) is list
+    assert published_bindings["h1_evidence_entry_identities_sha256"] == ["abc", "def"]
+    assert type(published_bindings["h1_report_evidence_references"]) is list
+    assert published_bindings["h1_report_evidence_references"] == ["xyz"]
+
+    # 6. Existing scalar source_bindings values remain unchanged
+    assert published_bindings["calendar_id"] == "NY"
+    assert published_bindings["valuation_trusted_evaluation_timestamp_utc"] == "2024-01-01T12:00:00Z"
+
+    # 7 & 8. Resulting canonical bytes are deterministic/idempotent
+    canonical_from_file = canonical_json_bytes(data)
+    assert hashlib.sha256(canonical_from_file).hexdigest() == result.immutable_path.stem
+    assert result.immutable_path.read_bytes() == canonical_from_file
+
+    # 9. Genuinely unsupported unrelated type NOT silently coerced
+    class UnrecognizedObj:
+        pass
+
+    bad_bindings = tuple(
+        (k, UnrecognizedObj() if k == "calendar_id" else v)
+        for k, v in mock_p6.result.source_bindings
+    )
+    mock_p6.result = dataclasses.replace(mock_p6.result, source_bindings=bad_bindings)
+
+    # Temporarily bypass the strict schema validator to ensure the canonicalizer still fails closed
+    monkeypatch.setattr(
+        "investment_orchestrator.workflow.p8_v1_review_order_publication._validate_payload",
+        lambda p: p,
+    )
+
+    from investment_orchestrator.mmi.canonical import MmiCanonicalizationError
+    with pytest.raises(MmiCanonicalizationError, match="MMI_CANONICAL_TYPE_UNSUPPORTED"):
+        _p8a.publish_h1_v1_review_order()
