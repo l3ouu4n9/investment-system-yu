@@ -52,13 +52,12 @@ H1_BLOCKED_ACTIONS = (
     "EXTENDED_ETF_ADMISSION",
     "ORDER_COMPILATION",
 )
-V1_ALLOWED_ACTIONS = ("HOLD", "NO_TRADE", "NEW_BUY")
+V1_ALLOWED_ACTIONS = ("HOLD", "NO_TRADE", "NEW_BUY", "ORDER_COMPILATION")
 V1_BLOCKED_ACTIONS = (
     "SELL",
     "ROTATION",
     "REBALANCE",
     "EXTENDED_ETF_ADMISSION",
-    "ORDER_COMPILATION",
 )
 PROMOTED_ACTIONS = ("PROMOTED_RESEARCH_DECISION", "PROMOTED_RESEARCH_AUDIT")
 
@@ -645,7 +644,7 @@ def test_h1_state_cannot_satisfy_final_safety_or_produce_order_readiness() -> No
     assert result.checked_conditions["order_compilation_allowed"] is False
 
 
-def test_v1_new_buy_permission_does_not_open_step3_step4_or_final_safety() -> None:
+def test_v1_order_permissions_do_not_open_step3_step4_or_final_safety() -> None:
     artifact = v1_permission_artifact()
     gate = evaluate_step2_research_gate(artifact)
 
@@ -679,7 +678,7 @@ def test_v1_new_buy_permission_does_not_open_step3_step4_or_final_safety() -> No
     assert result.ready_for_order_compilation is False
     assert result.checked_conditions["new_buy_allowed_if_needed"] is True
     assert result.checked_conditions["step1_state_strict_fresh"] is False
-    assert result.checked_conditions["order_compilation_allowed"] is False
+    assert result.checked_conditions["order_compilation_allowed"] is True
 
 
 def test_selected_h1_writes_no_lkg_publication_pointer_or_order_field() -> None:

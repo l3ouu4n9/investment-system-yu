@@ -479,7 +479,7 @@ def test_positive_core_candidate_uses_fixed_priority_and_is_report_only(
     }
 
 
-def test_positive_current_proposal_recognizes_exact_new_buy_permission_without_writes(
+def test_positive_current_proposal_recognizes_exact_order_permissions_without_writes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -501,7 +501,12 @@ def test_positive_current_proposal_recognizes_exact_new_buy_permission_without_w
 
     assert state is not None
     assert state.state == "H1_V1_DETERMINISTIC_PROPOSAL_READY"
-    assert state.allowed_actions == ("HOLD", "NO_TRADE", "NEW_BUY")
+    assert state.allowed_actions == (
+        "HOLD",
+        "NO_TRADE",
+        "NEW_BUY",
+        "ORDER_COMPILATION",
+    )
     expected_blocked = tuple(
         action
         for action in research_availability.ACTIONS
@@ -517,12 +522,12 @@ def test_positive_current_proposal_recognizes_exact_new_buy_permission_without_w
     assert state.authority_effect == "NONE"
     assert state.not_authorization is True
     assert state.new_buy_permission is True
-    assert state.order_compilation_allowed is False
+    assert state.order_compilation_allowed is True
     assert state.step3_allowed is False
     assert state.step4_allowed is False
     assert "SELL" in state.blocked_actions
     assert "NEW_BUY" not in state.blocked_actions
-    assert "ORDER_COMPILATION" in state.blocked_actions
+    assert "ORDER_COMPILATION" not in state.blocked_actions
     assert not (tmp_path / proposal.V1_PROPOSAL_ARTIFACT_RELATIVE_PATH).exists()
     after = {
         path.relative_to(tmp_path).as_posix(): path.read_bytes()

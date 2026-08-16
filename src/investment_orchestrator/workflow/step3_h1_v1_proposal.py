@@ -1387,7 +1387,7 @@ def _recognize_h1_v1_proposal_state(
         H1_V1_DETERMINISTIC_PROPOSAL_READY
     )
     if not (
-        allowed_actions == ("HOLD", "NO_TRADE", "NEW_BUY")
+        allowed_actions == ("HOLD", "NO_TRADE", "NEW_BUY", "ORDER_COMPILATION")
         and blocked_actions
         == tuple(action for action in ACTIONS if action not in allowed_actions)
         and len(allowed_actions) + len(blocked_actions) == len(ACTIONS)

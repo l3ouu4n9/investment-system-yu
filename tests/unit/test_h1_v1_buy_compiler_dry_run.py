@@ -496,7 +496,7 @@ def test_pre_p1_projection_generation_mismatch_preserves_provenance_failure(
     assert exc_info.value.failure_class == "provenance/currentness"
 
 
-def test_complete_p2_state_is_permission_subject_but_order_compilation_stays_blocked(
+def test_complete_p2_state_has_exact_order_compilation_permission(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -507,13 +507,19 @@ def test_complete_p2_state_is_permission_subject_but_order_compilation_stays_blo
     state = proposal._recognize_h1_v1_proposal_state(evaluation.proposal)
 
     assert state is not None
-    assert state.allowed_actions == ("HOLD", "NO_TRADE", "NEW_BUY")
+    assert state.allowed_actions == (
+        "HOLD",
+        "NO_TRADE",
+        "NEW_BUY",
+        "ORDER_COMPILATION",
+    )
     assert state.blocked_actions == tuple(
         action
         for action in research_availability.ACTIONS
         if action not in state.allowed_actions
     )
-    assert "ORDER_COMPILATION" in state.blocked_actions
+    assert "ORDER_COMPILATION" not in state.blocked_actions
+    assert state.order_compilation_allowed is True
     assert state.step3_allowed is False
     assert state.step4_allowed is False
     assert evaluation.proposal["new_buy_permission"] is False

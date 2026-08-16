@@ -381,9 +381,10 @@ def _validate_generation(
         )
     if (
         state.state != _proposal.H1_V1_DETERMINISTIC_PROPOSAL_READY
-        or state.allowed_actions != ("HOLD", "NO_TRADE", "NEW_BUY")
+        or state.allowed_actions
+        != ("HOLD", "NO_TRADE", "NEW_BUY", "ORDER_COMPILATION")
         or not state.new_buy_permission
-        or state.order_compilation_allowed
+        or not state.order_compilation_allowed
         or state.step3_allowed
         or state.step4_allowed
     ):

@@ -96,9 +96,8 @@ H1_MAPPED_FRESH_NON_ACTIONABLE = "H1_MAPPED_FRESH_NON_ACTIONABLE"
 # V1 downstream proposal state.  The availability evaluator does not emit this
 # state: the pure V1 proposal owner recognizes it only after a complete current
 # positive proposal evaluation.  Its row lives here solely so the canonical
-# state/action owner owns the exact permission contract.  V1-P3 grants only
-# NEW_BUY; ORDER_COMPILATION and every downstream route remain separately
-# blocked.
+# state/action owner owns the exact permission contract.  V1-P5 grants NEW_BUY
+# and ORDER_COMPILATION; every downstream route remains separately blocked.
 H1_V1_DETERMINISTIC_PROPOSAL_READY = "H1_V1_DETERMINISTIC_PROPOSAL_READY"
 
 # Source label recorded when mapped H1 research is the selected availability
@@ -194,10 +193,15 @@ _ALLOWED_ACTIONS_BY_STATE: dict[str, tuple[str, ...]] = {
     # none of the promoted decision/audit actions. No wildcard, no inheritance,
     # no fallthrough — unknown states remain fail closed via KeyError.
     H1_MAPPED_FRESH_NON_ACTIONABLE: ("HOLD", "NO_TRADE"),
-    # V1-P3 permission only.  The complete positive deterministic proposal may
-    # continue along the future BUY-only path, but ORDER_COMPILATION and every
-    # other action remain blocked pending their own explicit PRs.
-    H1_V1_DETERMINISTIC_PROPOSAL_READY: ("HOLD", "NO_TRADE", "NEW_BUY"),
+    # V1-P5 permission only.  The complete positive deterministic proposal may
+    # continue toward future deterministic order compilation, but every
+    # downstream route and all remaining actions stay separately blocked.
+    H1_V1_DETERMINISTIC_PROPOSAL_READY: (
+        "HOLD",
+        "NO_TRADE",
+        "NEW_BUY",
+        "ORDER_COMPILATION",
+    ),
 }
 
 
