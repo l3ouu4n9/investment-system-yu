@@ -241,6 +241,25 @@ class H1V1ProposalStateRecognition:
 
 
 @dataclass(frozen=True, slots=True)
+class H1V1ProposalEvaluation:
+    """One coherent pure P1 generation and its validated deterministic inputs.
+
+    The proposal remains the closed report-only P1 result.  The optional typed
+    projections are retained only so a downstream pure derivative can consume
+    the exact generation that produced that result without rereading sources.
+    They are absent whenever P1 could not establish a complete projection
+    generation.
+    """
+
+    proposal: dict[str, object]
+    strategy_source: MmiCapturedSource | None
+    role_by_ticker: Mapping[str, str] | None
+    budget: _budget_capacity.BudgetCapacityProjection | None
+    exposure: _holdings_exposure.ExposureProjection | None
+    increment: _increment_capacity.IncrementCapacityProjection | None
+
+
+@dataclass(frozen=True, slots=True)
 class _CurrentSourceSnapshot:
     strategy_source: MmiCapturedSource
     portfolio_source: MmiCapturedSource
@@ -1232,23 +1251,30 @@ def _complete_proposal(
     )
 
 
-def evaluate_h1_v1_proposal() -> dict[str, object]:
-    """Evaluate one complete current V1 proposal without persistence."""
+def evaluate_h1_v1_proposal_generation() -> H1V1ProposalEvaluation:
+    """Evaluate one complete current P1 generation without persistence."""
     h1_evaluation = _h1_currentness.evaluate_current_h1_context()
     bindings = _base_source_bindings(h1_evaluation)
     try:
         snapshot = _load_current_source_snapshot()
     except V1ProposalInputError as exc:
-        return _proposal(
-            h1_evaluation=h1_evaluation,
-            terminal_result=TERMINAL_NO_TRADE,
-            reason_code="INPUT_SOURCE_CONTRACT_NOT_VALID",
-            diagnostic_reason_codes=exc.reason_codes,
-            source_bindings=bindings,
-            capacity=_empty_capacity(),
-            candidates=[],
-            selected_ticker=None,
-            target_increment=None,
+        return H1V1ProposalEvaluation(
+            proposal=_proposal(
+                h1_evaluation=h1_evaluation,
+                terminal_result=TERMINAL_NO_TRADE,
+                reason_code="INPUT_SOURCE_CONTRACT_NOT_VALID",
+                diagnostic_reason_codes=exc.reason_codes,
+                source_bindings=bindings,
+                capacity=_empty_capacity(),
+                candidates=[],
+                selected_ticker=None,
+                target_increment=None,
+            ),
+            strategy_source=None,
+            role_by_ticker=None,
+            budget=None,
+            exposure=None,
+            increment=None,
         )
 
     bindings.update(
@@ -1291,41 +1317,59 @@ def evaluate_h1_v1_proposal() -> dict[str, object]:
             exposure_result,
             increment_result,
         ))))
-        return _proposal(
-            h1_evaluation=h1_evaluation,
-            terminal_result=TERMINAL_NO_TRADE,
-            reason_code=(
-                "INPUT_GENERATION_MISMATCH"
-                if "V1_PROPOSAL_INPUT_GENERATION_MISMATCH" in exc.reason_codes
-                else "INPUT_OWNER_NOT_VALID"
+        return H1V1ProposalEvaluation(
+            proposal=_proposal(
+                h1_evaluation=h1_evaluation,
+                terminal_result=TERMINAL_NO_TRADE,
+                reason_code=(
+                    "INPUT_GENERATION_MISMATCH"
+                    if "V1_PROPOSAL_INPUT_GENERATION_MISMATCH" in exc.reason_codes
+                    else "INPUT_OWNER_NOT_VALID"
+                ),
+                diagnostic_reason_codes=reasons,
+                source_bindings=bindings,
+                capacity=_empty_capacity(),
+                candidates=_partial_candidates(exposure_result.projection),
+                selected_ticker=None,
+                target_increment=None,
             ),
-            diagnostic_reason_codes=reasons,
-            source_bindings=bindings,
-            capacity=_empty_capacity(),
-            candidates=_partial_candidates(exposure_result.projection),
-            selected_ticker=None,
-            target_increment=None,
+            strategy_source=snapshot.strategy_source,
+            role_by_ticker=snapshot.role_by_ticker,
+            budget=None,
+            exposure=None,
+            increment=None,
         )
 
-    return _complete_proposal(
-        h1_evaluation=h1_evaluation,
-        snapshot=snapshot,
+    return H1V1ProposalEvaluation(
+        proposal=_complete_proposal(
+            h1_evaluation=h1_evaluation,
+            snapshot=snapshot,
+            budget=budget,
+            exposure=exposure,
+            increment=increment,
+        ),
+        strategy_source=snapshot.strategy_source,
+        role_by_ticker=snapshot.role_by_ticker,
         budget=budget,
         exposure=exposure,
         increment=increment,
     )
 
 
-def evaluate_h1_v1_proposal_state(
+def evaluate_h1_v1_proposal() -> dict[str, object]:
+    """Evaluate one complete current V1 proposal without persistence."""
+    return evaluate_h1_v1_proposal_generation().proposal
+
+
+def _recognize_h1_v1_proposal_state(
+    proposal: Mapping[str, object],
 ) -> H1V1ProposalStateRecognition | None:
-    """Recognize the narrowly permissioned V1 state from one fresh evaluation.
+    """Recognize the narrowly permissioned V1 state from one P1 result.
 
     HOLD and NO_TRADE are complete P1 outcomes but are not the positive-ready
-    state.  Hard input failures propagate from the pure proposal owner.  No
-    persisted proposal or currentness observation is read, and nothing is
-    written.
+    state.  This performs complete result-contract validation only; it neither
+    reloads proposal inputs nor writes any artifact.
     """
-    proposal = evaluate_h1_v1_proposal()
     try:
         _validate_h1_v1_proposal_result(proposal)
     except V1ProposalInputError:
@@ -1366,6 +1410,12 @@ def evaluate_h1_v1_proposal_state(
         step3_allowed=False,
         step4_allowed=False,
     )
+
+
+def evaluate_h1_v1_proposal_state(
+) -> H1V1ProposalStateRecognition | None:
+    """Recognize the state from one fresh pure P1 evaluation with no writes."""
+    return _recognize_h1_v1_proposal_state(evaluate_h1_v1_proposal())
 
 
 def build_h1_v1_proposal_workflow() -> Path:
