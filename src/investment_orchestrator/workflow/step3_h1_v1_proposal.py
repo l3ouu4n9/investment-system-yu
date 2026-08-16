@@ -1,9 +1,10 @@
 """Report-only deterministic H1 V1 BUY proposal.
 
 This workflow implements only the proposal calculations closed by
-``docs/v1_buy_only_policy_v1.md``.  It can recognize the downstream
-non-actionable proposal state, but creates no permission, gate, publication,
-order, or execution authority.
+``docs/v1_buy_only_policy_v1.md``.  Its persisted P1 proposal remains
+report-only and non-authorizing.  The separately owned state permission may
+grant NEW_BUY after complete proposal recognition, but this module creates no
+gate, publication, order, or execution authority.
 """
 
 from __future__ import annotations
@@ -219,7 +220,12 @@ class V1ProposalStateRecognitionError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class H1V1ProposalStateRecognition:
-    """Non-actionable state recognized from one fresh pure P1 evaluation."""
+    """Permission state recognized from one fresh pure P1 evaluation.
+
+    ``report_only`` / ``authority_effect`` / ``not_authorization`` describe the
+    underlying P1 proposal.  The canonical state action row and
+    ``new_buy_permission`` are the state permission contract.
+    """
 
     state: str
     allowed_actions: tuple[str, ...]
@@ -1312,7 +1318,7 @@ def evaluate_h1_v1_proposal() -> dict[str, object]:
 
 def evaluate_h1_v1_proposal_state(
 ) -> H1V1ProposalStateRecognition | None:
-    """Recognize the non-actionable V1 state from one fresh pure evaluation.
+    """Recognize the narrowly permissioned V1 state from one fresh evaluation.
 
     HOLD and NO_TRADE are complete P1 outcomes but are not the positive-ready
     state.  Hard input failures propagate from the pure proposal owner.  No
@@ -1337,7 +1343,7 @@ def evaluate_h1_v1_proposal_state(
         H1_V1_DETERMINISTIC_PROPOSAL_READY
     )
     if not (
-        allowed_actions == ("HOLD", "NO_TRADE")
+        allowed_actions == ("HOLD", "NO_TRADE", "NEW_BUY")
         and blocked_actions
         == tuple(action for action in ACTIONS if action not in allowed_actions)
         and len(allowed_actions) + len(blocked_actions) == len(ACTIONS)
@@ -1355,8 +1361,8 @@ def evaluate_h1_v1_proposal_state(
         report_only=True,
         authority_effect=AUTHORITY_EFFECT_NONE,
         not_authorization=True,
-        new_buy_permission=False,
-        order_compilation_allowed=False,
+        new_buy_permission="NEW_BUY" in allowed_actions,
+        order_compilation_allowed="ORDER_COMPILATION" in allowed_actions,
         step3_allowed=False,
         step4_allowed=False,
     )

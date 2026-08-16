@@ -52,6 +52,14 @@ H1_BLOCKED_ACTIONS = (
     "EXTENDED_ETF_ADMISSION",
     "ORDER_COMPILATION",
 )
+V1_ALLOWED_ACTIONS = ("HOLD", "NO_TRADE", "NEW_BUY")
+V1_BLOCKED_ACTIONS = (
+    "SELL",
+    "ROTATION",
+    "REBALANCE",
+    "EXTENDED_ETF_ADMISSION",
+    "ORDER_COMPILATION",
+)
 PROMOTED_ACTIONS = ("PROMOTED_RESEARCH_DECISION", "PROMOTED_RESEARCH_AUDIT")
 
 NOW = "2026-06-30"
@@ -90,7 +98,7 @@ EXPECTED_PERMISSION_TABLE: dict[str, tuple[str, ...]] = {
     "NO_OUTPUT": ("HOLD", "NO_TRADE"),
     "MANUAL_REVIEW_REQUIRED": ("HOLD", "NO_TRADE"),
     H1_STATE: ("HOLD", "NO_TRADE"),
-    V1_PROPOSAL_STATE: ("HOLD", "NO_TRADE"),
+    V1_PROPOSAL_STATE: V1_ALLOWED_ACTIONS,
 }
 
 
@@ -164,13 +172,19 @@ def test_v1_proposal_state_action_contract_is_exact_and_complete() -> None:
     allowed = canonical_allowed_actions_for_state(V1_PROPOSAL_STATE)
     blocked = canonical_blocked_actions_for_state(V1_PROPOSAL_STATE)
 
-    assert allowed == ("HOLD", "NO_TRADE")
+    assert allowed == V1_ALLOWED_ACTIONS
+    assert blocked == V1_BLOCKED_ACTIONS
     assert blocked == tuple(action for action in ACTIONS if action not in allowed)
     assert len(allowed) + len(blocked) == len(ACTIONS)
     assert set(allowed).isdisjoint(blocked)
     assert set(allowed) | set(blocked) == set(ACTIONS)
-    for action in H1_BLOCKED_ACTIONS + PROMOTED_ACTIONS:
+    for action in V1_BLOCKED_ACTIONS + PROMOTED_ACTIONS:
         assert action not in allowed, action
+
+
+def test_unknown_state_has_no_permission_row() -> None:
+    with pytest.raises(KeyError):
+        canonical_allowed_actions_for_state("UNKNOWN_V1_STATE")
 
 
 def test_selected_h1_result_reports_exact_allowed_and_blocked_actions() -> None:
@@ -576,6 +590,18 @@ def h1_permission_artifact() -> dict[str, Any]:
     return research_degraded_mode_decision_to_dict(evaluate(h1_mapped_facts=h1_facts()))
 
 
+def v1_permission_artifact() -> dict[str, Any]:
+    allowed = canonical_allowed_actions_for_state(V1_PROPOSAL_STATE)
+    return {
+        "state": V1_PROPOSAL_STATE,
+        "source": H1_SOURCE_KIND,
+        "allowed_actions": list(allowed),
+        "blocked_actions": list(canonical_blocked_actions_for_state(V1_PROPOSAL_STATE)),
+        "manual_review_required": False,
+        "blocker_reasons": [],
+    }
+
+
 def test_h1_state_remains_blocked_by_generic_gate_for_parse_and_downstream() -> None:
     """R1 render admission is invocation-local; the generic gate stays denied."""
     gate = evaluate_step2_research_gate(h1_permission_artifact())
@@ -615,6 +641,43 @@ def test_h1_state_cannot_satisfy_final_safety_or_produce_order_readiness() -> No
     )
 
     assert result.ready_for_order_compilation is False
+    assert result.checked_conditions["step1_state_strict_fresh"] is False
+    assert result.checked_conditions["order_compilation_allowed"] is False
+
+
+def test_v1_new_buy_permission_does_not_open_step3_step4_or_final_safety() -> None:
+    artifact = v1_permission_artifact()
+    gate = evaluate_step2_research_gate(artifact)
+
+    assert artifact["allowed_actions"] == list(V1_ALLOWED_ACTIONS)
+    assert gate.allowed is False
+    assert gate.new_buy_permission is False
+    assert gate.order_compilation_allowed is False
+    assert gate.step3_allowed is False
+    assert gate.step4_allowed is False
+
+    result = evaluate_final_execution_safety(
+        step1_permission=artifact,
+        step2_decision_packet={
+            "active_shortlist": [],
+            "buy_side_delta_table": [{"ticker": "QQQ", "action": "NEW_BUY"}],
+            "sell_side_delta_table_8_2": [],
+            "execution_plan_drafts_8_5": [],
+            "sell_execution_plan_drafts_8_6": [],
+            "assumptions_and_data_gaps": [],
+        },
+        step3_audited_packet={
+            "audit_passed": True,
+            "order_compiler_ready": True,
+            "final_buy_side_delta_table": [],
+            "final_sell_side_delta_table": [],
+            "final_execution_plans": [],
+            "final_sell_execution_plans": [],
+        },
+    )
+
+    assert result.ready_for_order_compilation is False
+    assert result.checked_conditions["new_buy_allowed_if_needed"] is True
     assert result.checked_conditions["step1_state_strict_fresh"] is False
     assert result.checked_conditions["order_compilation_allowed"] is False
 
