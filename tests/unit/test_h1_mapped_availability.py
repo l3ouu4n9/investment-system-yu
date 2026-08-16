@@ -323,6 +323,85 @@ def test_precedence_e_f_fallback_states_yield_to_fresh_h1(
     assert tuple(result.allowed_actions) == H1_ALLOWED_ACTIONS
 
 
+def test_precedence_stale_legacy_lkg_yields_to_fresh_h1() -> None:
+    # 1. output_present=False, expired LKG (>16d) -> MANUAL_REVIEW_REQUIRED
+    legacy_kwargs = {
+        "candidate": None,
+        "parsed_output_available": False,
+        "last_good_handoff": {"lkg": True},
+        "last_good_metadata": {"source_as_of_date": "2026-06-01"},  # 29 days old
+    }
+    baseline = evaluate(**legacy_kwargs)
+    assert baseline.state == "MANUAL_REVIEW_REQUIRED"
+    assert "last-known-good is too old" in "".join(baseline.blocker_reasons)
+
+    # 2. Add fresh valid H1 -> should supersede!
+    result = evaluate(**legacy_kwargs, h1_mapped_facts=h1_facts())
+    assert result.state == H1_STATE
+    assert result.h1_mapped_selected is True
+    assert tuple(result.allowed_actions) == H1_ALLOWED_ACTIONS
+    assert "last-known-good is too old" not in "".join(result.blocker_reasons)
+
+
+def test_precedence_stale_legacy_lkg_retained_if_h1_missing_stale_or_future() -> None:
+    legacy_kwargs = {
+        "candidate": None,
+        "parsed_output_available": False,
+        "last_good_handoff": {"lkg": True},
+        "last_good_metadata": {"source_as_of_date": "2026-06-01"},  # 29 days old
+    }
+
+    baseline = evaluate(**legacy_kwargs)
+
+    # 1. Missing H1 -> MANUAL_REVIEW_REQUIRED, identical blockers
+    result1 = evaluate(**legacy_kwargs, h1_mapped_facts=None)
+    assert result1.state == baseline.state
+    assert result1.blocker_reasons == baseline.blocker_reasons
+    assert result1.allowed_actions == baseline.allowed_actions
+
+    # 2. Stale H1 -> MANUAL_REVIEW_REQUIRED, identical blockers
+    stale_h1 = h1_facts(
+        policy_as_of_date="2026-06-20",
+        portfolio_source_date="2026-06-20",
+        policy_source_run_timestamp_utc="2026-06-20T09:00:00.000000Z",
+        context_evaluation_timestamp_utc="2026-06-20T12:00:00.000000Z",
+    )  # 10 days old (stale)
+    result2 = evaluate(**legacy_kwargs, h1_mapped_facts=stale_h1)
+    assert result2.state == baseline.state
+    assert result2.blocker_reasons == baseline.blocker_reasons
+    assert result2.allowed_actions == baseline.allowed_actions
+
+    # 3. Future-dated H1 -> MANUAL_REVIEW_REQUIRED, identical blockers
+    future_h1 = h1_facts(
+        policy_as_of_date="2026-07-02",
+        portfolio_source_date="2026-07-02",
+        policy_source_run_timestamp_utc="2026-07-02T09:00:00.000000Z",
+        context_evaluation_timestamp_utc="2026-07-02T12:00:00.000000Z",
+    )  # -2 days old (future)
+    result3 = evaluate(**legacy_kwargs, h1_mapped_facts=future_h1)
+    assert result3.state == baseline.state
+    assert result3.blocker_reasons == baseline.blocker_reasons
+    assert result3.allowed_actions == baseline.allowed_actions
+
+
+def test_unrelated_manual_review_required_never_yields_to_fresh_h1() -> None:
+    # 1. output_present=False, recent LKG but universe changed -> MANUAL_REVIEW_REQUIRED
+    legacy_kwargs = {
+        "candidate": None,
+        "parsed_output_available": False,
+        "last_good_handoff": {"lkg": True},
+        "last_good_metadata": {"source_as_of_date": "2026-06-25", "strategy_universe": ["SPY"]},
+        "strategy_settings": {"strategy_universe": ["QQQ"]},  # universe match False
+    }
+    baseline = evaluate(**legacy_kwargs)
+    assert baseline.state == "MANUAL_REVIEW_REQUIRED"
+    assert "universe changed" in "".join(baseline.blocker_reasons)
+
+    # 2. Add fresh valid H1 -> should STILL be MANUAL_REVIEW_REQUIRED
+    result = evaluate(**legacy_kwargs, h1_mapped_facts=h1_facts())
+    assert result.state == "MANUAL_REVIEW_REQUIRED"
+    assert result.h1_mapped_selected is False
+
 @pytest.mark.parametrize(
     "h1_candidate",
     [

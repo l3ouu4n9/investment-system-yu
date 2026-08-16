@@ -573,6 +573,14 @@ def evaluate_research_availability(
     )
     h1_mapped_selected = False
     if h1 is not None:
+        solely_expired_legacy_lkg = (
+            state == MANUAL_REVIEW_REQUIRED
+            and not candidate_present
+            and not output_present
+            and last_good_available
+            and last_good_age_days is not None
+            and last_good_age_days > stale_days
+        )
         h1_controls = state in _H1_MAPPED_REPLACEABLE
         if h1["freshness"] in ("future_dated", "too_old"):
             # Mirrors the existing compiled/current/last-good convention: escalate
@@ -589,7 +597,9 @@ def evaluate_research_availability(
                 state = MANUAL_REVIEW_REQUIRED
             else:
                 non_blocker_reasons.append(reason)
-        elif h1["freshness"] == "fresh" and h1_controls:
+        elif h1["freshness"] == "fresh" and (h1_controls or solely_expired_legacy_lkg):
+            if solely_expired_legacy_lkg:
+                blocker_reasons.clear()
             state = H1_MAPPED_FRESH_NON_ACTIONABLE
             source = H1_ROLE_MAPPED_SOURCE
             h1_mapped_selected = True
