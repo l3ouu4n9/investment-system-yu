@@ -23,8 +23,11 @@ from investment_orchestrator.state.final_execution_safety_gate import (
     evaluate_final_execution_safety,
 )
 from investment_orchestrator.state.research_availability import (
+    ACTIONS,
     _ALLOWED_ACTIONS_BY_STATE,
     _H1_MAPPED_BLOCK_KEYS,
+    canonical_allowed_actions_for_state,
+    canonical_blocked_actions_for_state,
     evaluate_research_availability,
     research_availability_result_to_dict,
     research_degraded_mode_decision_to_dict,
@@ -38,6 +41,7 @@ from investment_orchestrator.state.research_degraded_mode_gate import (
 # Literals, not imports from the production module under test.
 
 H1_STATE = "H1_MAPPED_FRESH_NON_ACTIONABLE"
+V1_PROPOSAL_STATE = "H1_V1_DETERMINISTIC_PROPOSAL_READY"
 H1_SOURCE_KIND = "H1_ROLE_MAPPED"
 H1_ALLOWED_ACTIONS = ("HOLD", "NO_TRADE")
 H1_BLOCKED_ACTIONS = (
@@ -86,6 +90,7 @@ EXPECTED_PERMISSION_TABLE: dict[str, tuple[str, ...]] = {
     "NO_OUTPUT": ("HOLD", "NO_TRADE"),
     "MANUAL_REVIEW_REQUIRED": ("HOLD", "NO_TRADE"),
     H1_STATE: ("HOLD", "NO_TRADE"),
+    V1_PROPOSAL_STATE: ("HOLD", "NO_TRADE"),
 }
 
 
@@ -153,6 +158,19 @@ def test_h1_state_allows_exactly_hold_and_no_trade() -> None:
     assert _ALLOWED_ACTIONS_BY_STATE[H1_STATE] == H1_ALLOWED_ACTIONS
     for action in H1_BLOCKED_ACTIONS + PROMOTED_ACTIONS:
         assert action not in _ALLOWED_ACTIONS_BY_STATE[H1_STATE], action
+
+
+def test_v1_proposal_state_action_contract_is_exact_and_complete() -> None:
+    allowed = canonical_allowed_actions_for_state(V1_PROPOSAL_STATE)
+    blocked = canonical_blocked_actions_for_state(V1_PROPOSAL_STATE)
+
+    assert allowed == ("HOLD", "NO_TRADE")
+    assert blocked == tuple(action for action in ACTIONS if action not in allowed)
+    assert len(allowed) + len(blocked) == len(ACTIONS)
+    assert set(allowed).isdisjoint(blocked)
+    assert set(allowed) | set(blocked) == set(ACTIONS)
+    for action in H1_BLOCKED_ACTIONS + PROMOTED_ACTIONS:
+        assert action not in allowed, action
 
 
 def test_selected_h1_result_reports_exact_allowed_and_blocked_actions() -> None:

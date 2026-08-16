@@ -1,14 +1,16 @@
 """Report-only deterministic H1 V1 BUY proposal.
 
 This workflow implements only the proposal calculations closed by
-``docs/v1_buy_only_policy_v1.md``.  It creates no state, permission, gate,
-publication, order, or execution authority.
+``docs/v1_buy_only_policy_v1.md``.  It can recognize the downstream
+non-actionable proposal state, but creates no permission, gate, publication,
+order, or execution authority.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal, InvalidOperation
 import json
 from pathlib import Path
@@ -40,7 +42,16 @@ from investment_orchestrator.observability import (
     report_only_holdings_exposure as _holdings_exposure,
     report_only_increment_capacity as _increment_capacity,
 )
+from investment_orchestrator.state.research_availability import (
+    ACTIONS,
+    H1_V1_DETERMINISTIC_PROPOSAL_READY,
+    canonical_allowed_actions_for_state,
+    canonical_blocked_actions_for_state,
+)
 from investment_orchestrator.workflow import step2_h1_currentness as _h1_currentness
+from investment_orchestrator.workflow.step2_h1_provenance import (
+    require_sha256_representation,
+)
 
 
 V1_PROPOSAL_SCHEMA_VERSION: Final = "step3_h1_v1_buy_only_proposal_v1"
@@ -70,6 +81,129 @@ _V1_BASE_TICKERS: Final = frozenset(V1_PRIORITY_ORDER)
 _RECOGNIZED_EXPOSURE_ROLES: Final = frozenset(
     {ROLE_CORE, ROLE_SATELLITE, ROLE_APPROVED_EXTENDED}
 )
+
+_PROPOSAL_KEYS: Final = frozenset(
+    {
+        "schema_version",
+        "policy_contract_version",
+        "observed_on",
+        "report_only",
+        "authority_effect",
+        "not_authorization",
+        "new_buy_permission",
+        "order_compilation_allowed",
+        "terminal_result",
+        "reason_code",
+        "diagnostic_reason_codes",
+        "source_bindings",
+        "capacity",
+        "candidates",
+        "selected_ticker",
+        "target_increment",
+    }
+)
+_SOURCE_BINDING_KEYS: Final = frozenset(
+    {
+        "h1_rendered_prompt_sha256",
+        "h1_raw_response_sha256",
+        "h1_evidence_entry_identities_sha256",
+        "h1_report_evidence_references",
+        "strategy_source_sha256",
+        "strategy_source_record_identity_sha256",
+        "portfolio_source_sha256",
+        "portfolio_source_record_identity_sha256",
+        "role_universe_projection_identity_sha256",
+        "holdings_policy_projection_identity_sha256",
+        "portfolio_scope_id",
+        "holdings_observation_date",
+        "valuation_capture_sha256",
+        "valuation_source_kind",
+        "valuation_provider_id",
+        "valuation_session_date",
+        "valuation_trusted_evaluation_timestamp_utc",
+        "calendar_id",
+        "calendar_schedule_sha256",
+        "latest_completed_session_date",
+        "valuation_freshness_status",
+        "x_source_sha256",
+        "r_source_sha256",
+    }
+)
+_SOURCE_BINDING_SHA_KEYS: Final = frozenset(
+    {
+        "h1_rendered_prompt_sha256",
+        "h1_raw_response_sha256",
+        "strategy_source_sha256",
+        "strategy_source_record_identity_sha256",
+        "portfolio_source_sha256",
+        "portfolio_source_record_identity_sha256",
+        "role_universe_projection_identity_sha256",
+        "holdings_policy_projection_identity_sha256",
+        "valuation_capture_sha256",
+        "calendar_schedule_sha256",
+        "x_source_sha256",
+        "r_source_sha256",
+    }
+)
+_SNAPSHOT_SOURCE_BINDING_KEYS: Final = frozenset(
+    {
+        "strategy_source_sha256",
+        "strategy_source_record_identity_sha256",
+        "portfolio_source_sha256",
+        "portfolio_source_record_identity_sha256",
+        "role_universe_projection_identity_sha256",
+    }
+)
+_PROJECTION_SOURCE_BINDING_KEYS: Final = (
+    _SOURCE_BINDING_KEYS
+    - _SNAPSHOT_SOURCE_BINDING_KEYS
+    - {
+        "h1_rendered_prompt_sha256",
+        "h1_raw_response_sha256",
+        "h1_evidence_entry_identities_sha256",
+        "h1_report_evidence_references",
+    }
+)
+_SOURCE_BINDING_DATE_KEYS: Final = frozenset(
+    {
+        "holdings_observation_date",
+        "valuation_session_date",
+        "latest_completed_session_date",
+    }
+)
+_CAPACITY_KEYS: Final = frozenset(
+    {"X", "H", "E", "R", "C", "A_initial", "Z_initial"}
+)
+_CANDIDATE_KEYS: Final = frozenset(
+    {
+        "ticker",
+        "role",
+        "disposition",
+        "evidence_coverage_identities",
+        "priority",
+    }
+)
+_HOLD_REASON_CODES: Final = frozenset(
+    {
+        "NO_SHARED_CAPACITY",
+        "NO_INCREMENT_ELIGIBLE_TICKER",
+        "SELECTED_TARGET_NOT_POSITIVE",
+    }
+)
+_NO_TRADE_REASON_CODES: Final = frozenset(
+    {
+        "INPUT_SOURCE_CONTRACT_NOT_VALID",
+        "INPUT_GENERATION_MISMATCH",
+        "INPUT_OWNER_NOT_VALID",
+        "H1_CONTEXT_NOT_CURRENT",
+        "REQUIRED_EXPOSURE_ROLE_UNRESOLVED",
+        "EXISTING_COMMITMENT_EXCEEDS_X",
+        "EXISTING_COMMITMENT_EXCEEDS_R",
+        "INITIAL_ALPHA_EXCEEDS_CORE",
+    }
+)
+
+
 class V1ProposalInputError(RuntimeError):
     """Controlled failure to obtain one validated deterministic input owner."""
 
@@ -77,6 +211,27 @@ class V1ProposalInputError(RuntimeError):
         closed_reasons = reason_codes or ("V1_PROPOSAL_INPUT_INVALID",)
         super().__init__("; ".join(closed_reasons))
         self.reason_codes = closed_reasons
+
+
+class V1ProposalStateRecognitionError(RuntimeError):
+    """An impossible proposal result tried to cross the state boundary."""
+
+
+@dataclass(frozen=True, slots=True)
+class H1V1ProposalStateRecognition:
+    """Non-actionable state recognized from one fresh pure P1 evaluation."""
+
+    state: str
+    allowed_actions: tuple[str, ...]
+    blocked_actions: tuple[str, ...]
+    manual_review_required: bool
+    report_only: bool
+    authority_effect: str
+    not_authorization: bool
+    new_buy_permission: bool
+    order_compilation_allowed: bool
+    step3_allowed: bool
+    step4_allowed: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -310,7 +465,365 @@ def _proposal(
     }
 
 
+def _raise_result_contract_invalid() -> None:
+    raise V1ProposalInputError(("V1_PROPOSAL_RESULT_CONTRACT_INVALID",))
+
+
+def _is_canonical_iso_date(value: object) -> bool:
+    if type(value) is not str:
+        return False
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError:
+        return False
+    return parsed.isoformat() == value
+
+
+def _is_sha256(value: object) -> bool:
+    try:
+        require_sha256_representation(value, "V1 proposal identity")
+    except ValueError:
+        return False
+    return True
+
+
+def _validated_sha_list(value: object) -> tuple[str, ...]:
+    if type(value) is not list or any(not _is_sha256(item) for item in value):
+        _raise_result_contract_invalid()
+    identities = tuple(value)
+    if len(set(identities)) != len(identities):
+        _raise_result_contract_invalid()
+    return identities
+
+
+def _validated_result_capacity(
+    value: object,
+) -> dict[str, Decimal | None]:
+    if type(value) is not dict or set(value) != _CAPACITY_KEYS:
+        _raise_result_contract_invalid()
+    parsed: dict[str, Decimal | None] = {}
+    for key in _CAPACITY_KEYS:
+        raw = value[key]
+        if raw is None:
+            parsed[key] = None
+            continue
+        try:
+            parsed[key] = _decimal(raw, field=f"CAPACITY_{key.upper()}")
+        except V1ProposalInputError:
+            _raise_result_contract_invalid()
+
+    base_values = tuple(parsed[key] for key in ("X", "H", "E", "R"))
+    if any(item is None for item in base_values) != all(
+        item is None for item in base_values
+    ):
+        _raise_result_contract_invalid()
+    if all(item is None for item in base_values):
+        if any(
+            parsed[key] is not None
+            for key in ("C", "A_initial", "Z_initial")
+        ):
+            _raise_result_contract_invalid()
+        return parsed
+
+    x_value = parsed["X"]
+    h_value = parsed["H"]
+    e_value = parsed["E"]
+    r_value = parsed["R"]
+    if (
+        x_value is None
+        or h_value is None
+        or e_value is None
+        or r_value is None
+        or r_value > h_value
+    ):
+        _raise_result_contract_invalid()
+
+    a_value = parsed["A_initial"]
+    z_value = parsed["Z_initial"]
+    if (a_value is None) != (z_value is None):
+        _raise_result_contract_invalid()
+    if a_value is not None and z_value is not None:
+        if _sum([a_value, z_value]) != _sum([h_value, e_value]):
+            _raise_result_contract_invalid()
+
+    c_value = parsed["C"]
+    if c_value is not None:
+        if (
+            a_value is None
+            or z_value is None
+            or e_value > x_value
+            or e_value > r_value
+            or c_value
+            != _sum([min(x_value, r_value), e_value.copy_negate()])
+        ):
+            _raise_result_contract_invalid()
+    return parsed
+
+
+def _validated_result_candidates(
+    value: object,
+    *,
+    current_evidence: tuple[str, ...],
+    cited_evidence: tuple[str, ...],
+) -> list[dict[str, object]]:
+    if type(value) is not list:
+        _raise_result_contract_invalid()
+    rows: list[dict[str, object]] = []
+    tickers: list[str] = []
+    current_set = set(current_evidence)
+    cited_set = set(cited_evidence)
+    for raw_row in value:
+        if type(raw_row) is not dict or set(raw_row) != _CANDIDATE_KEYS:
+            _raise_result_contract_invalid()
+        ticker = raw_row["ticker"]
+        role = raw_row["role"]
+        disposition = raw_row["disposition"]
+        priority = raw_row["priority"]
+        if type(ticker) is not str or not ticker:
+            _raise_result_contract_invalid()
+        evidence_ids = _validated_sha_list(
+            raw_row["evidence_coverage_identities"]
+        )
+        if (
+            list(evidence_ids) != sorted(evidence_ids)
+            or not set(evidence_ids).issubset(current_set)
+            or not set(evidence_ids).issubset(cited_set)
+        ):
+            _raise_result_contract_invalid()
+
+        expected_role = (
+            ROLE_CORE
+            if ticker in V1_CORE_TICKERS
+            else ROLE_SATELLITE if ticker in V1_SATELLITE_TICKERS else None
+        )
+        if expected_role is not None and role != expected_role:
+            _raise_result_contract_invalid()
+        if disposition == DISPOSITION_UNRESOLVED:
+            valid_row = role == "UNRESOLVED" and priority is None
+        elif disposition == DISPOSITION_EXCLUDE:
+            valid_row = (
+                ticker not in _V1_BASE_TICKERS
+                and role in _RECOGNIZED_EXPOSURE_ROLES
+                and priority is None
+            )
+        elif disposition == DISPOSITION_MAINTAIN_ONLY:
+            valid_row = (
+                ticker in _V1_BASE_TICKERS
+                and role == expected_role
+                and priority is None
+            )
+        elif disposition == DISPOSITION_INCREMENT_ELIGIBLE:
+            valid_row = (
+                ticker in _V1_BASE_TICKERS
+                and role == expected_role
+                and bool(evidence_ids)
+                and priority
+                == ("PREFERRED" if role == ROLE_CORE else "STANDARD")
+            )
+        else:
+            valid_row = False
+        if not valid_row:
+            _raise_result_contract_invalid()
+        rows.append(raw_row)
+        tickers.append(ticker)
+
+    if len(set(tickers)) != len(tickers):
+        _raise_result_contract_invalid()
+    priority_index = {ticker: index for index, ticker in enumerate(V1_PRIORITY_ORDER)}
+    if tickers != sorted(
+        tickers,
+        key=lambda ticker: (priority_index.get(ticker, len(priority_index)), ticker),
+    ):
+        _raise_result_contract_invalid()
+    return rows
+
+
+def _validate_h1_v1_proposal_result(proposal: Mapping[str, object]) -> None:
+    """Validate the complete closed P1 in-memory result contract."""
+    if type(proposal) is not dict or set(proposal) != _PROPOSAL_KEYS:
+        _raise_result_contract_invalid()
+    if not (
+        proposal["schema_version"] == V1_PROPOSAL_SCHEMA_VERSION
+        and proposal["policy_contract_version"] == V1_POLICY_CONTRACT_VERSION
+        and _is_canonical_iso_date(proposal["observed_on"])
+        and proposal["report_only"] is True
+        and proposal["authority_effect"] == AUTHORITY_EFFECT_NONE
+        and proposal["not_authorization"] is True
+        and proposal["new_buy_permission"] is False
+        and proposal["order_compilation_allowed"] is False
+    ):
+        _raise_result_contract_invalid()
+
+    diagnostic_reasons = proposal["diagnostic_reason_codes"]
+    if type(diagnostic_reasons) is not list or any(
+        type(reason) is not str or not reason for reason in diagnostic_reasons
+    ):
+        _raise_result_contract_invalid()
+
+    terminal_result = proposal["terminal_result"]
+    reason_code = proposal["reason_code"]
+    if terminal_result == TERMINAL_POSITIVE_CANDIDATE:
+        if reason_code != TERMINAL_POSITIVE_CANDIDATE or diagnostic_reasons != []:
+            _raise_result_contract_invalid()
+    elif terminal_result == TERMINAL_HOLD:
+        if reason_code not in _HOLD_REASON_CODES or diagnostic_reasons != []:
+            _raise_result_contract_invalid()
+    elif terminal_result == TERMINAL_NO_TRADE:
+        if reason_code not in _NO_TRADE_REASON_CODES:
+            _raise_result_contract_invalid()
+    else:
+        _raise_result_contract_invalid()
+
+    source_bindings = proposal["source_bindings"]
+    if type(source_bindings) is not dict or set(source_bindings) != _SOURCE_BINDING_KEYS:
+        _raise_result_contract_invalid()
+    if not (
+        _is_sha256(source_bindings["h1_rendered_prompt_sha256"])
+        and _is_sha256(source_bindings["h1_raw_response_sha256"])
+    ):
+        _raise_result_contract_invalid()
+    current_evidence = _validated_sha_list(
+        source_bindings["h1_evidence_entry_identities_sha256"]
+    )
+    cited_evidence = _validated_sha_list(
+        source_bindings["h1_report_evidence_references"]
+    )
+    if not set(cited_evidence).issubset(current_evidence):
+        _raise_result_contract_invalid()
+    if (
+        terminal_result in (TERMINAL_HOLD, TERMINAL_POSITIVE_CANDIDATE)
+        or reason_code
+        in {
+            "REQUIRED_EXPOSURE_ROLE_UNRESOLVED",
+            "EXISTING_COMMITMENT_EXCEEDS_X",
+            "EXISTING_COMMITMENT_EXCEEDS_R",
+            "INITIAL_ALPHA_EXCEEDS_CORE",
+        }
+    ) and (not current_evidence or not cited_evidence):
+        _raise_result_contract_invalid()
+    if reason_code == "H1_CONTEXT_NOT_CURRENT" and (
+        current_evidence or cited_evidence
+    ):
+        _raise_result_contract_invalid()
+    for key in _SOURCE_BINDING_SHA_KEYS - {
+        "h1_rendered_prompt_sha256",
+        "h1_raw_response_sha256",
+    }:
+        value = source_bindings[key]
+        if value is not None and not _is_sha256(value):
+            _raise_result_contract_invalid()
+    for key in _SOURCE_BINDING_DATE_KEYS:
+        value = source_bindings[key]
+        if value is not None and not _is_canonical_iso_date(value):
+            _raise_result_contract_invalid()
+    typed_string_keys = (
+        _SOURCE_BINDING_KEYS
+        - _SOURCE_BINDING_SHA_KEYS
+        - _SOURCE_BINDING_DATE_KEYS
+        - {
+            "h1_evidence_entry_identities_sha256",
+            "h1_report_evidence_references",
+        }
+    )
+    for key in typed_string_keys:
+        value = source_bindings[key]
+        if value is not None and (type(value) is not str or not value.strip()):
+            _raise_result_contract_invalid()
+
+    if reason_code == "INPUT_SOURCE_CONTRACT_NOT_VALID":
+        if any(
+            source_bindings[key] is not None
+            for key in _SNAPSHOT_SOURCE_BINDING_KEYS
+            | _PROJECTION_SOURCE_BINDING_KEYS
+        ):
+            _raise_result_contract_invalid()
+    elif reason_code in {"INPUT_GENERATION_MISMATCH", "INPUT_OWNER_NOT_VALID"}:
+        if any(
+            source_bindings[key] is None for key in _SNAPSHOT_SOURCE_BINDING_KEYS
+        ) or any(
+            source_bindings[key] is not None
+            for key in _PROJECTION_SOURCE_BINDING_KEYS
+        ):
+            _raise_result_contract_invalid()
+    elif any(
+        source_bindings[key] is None
+        for key in _SNAPSHOT_SOURCE_BINDING_KEYS | _PROJECTION_SOURCE_BINDING_KEYS
+    ):
+        _raise_result_contract_invalid()
+
+    capacity = _validated_result_capacity(proposal["capacity"])
+    candidates = _validated_result_candidates(
+        proposal["candidates"],
+        current_evidence=current_evidence,
+        cited_evidence=cited_evidence,
+    )
+    selected_ticker = proposal["selected_ticker"]
+    target_text = proposal["target_increment"]
+
+    if terminal_result in (TERMINAL_HOLD, TERMINAL_NO_TRADE):
+        if selected_ticker is not None or target_text is not None:
+            _raise_result_contract_invalid()
+        if terminal_result == TERMINAL_HOLD and any(
+            capacity[key] is None for key in _CAPACITY_KEYS
+        ):
+            _raise_result_contract_invalid()
+        if terminal_result == TERMINAL_NO_TRADE:
+            if capacity["C"] is not None or any(
+                row["disposition"] == DISPOSITION_INCREMENT_ELIGIBLE
+                for row in candidates
+            ):
+                _raise_result_contract_invalid()
+        return
+
+    if (
+        type(selected_ticker) is not str
+        or selected_ticker not in V1_PRIORITY_ORDER
+        or any(capacity[key] is None for key in _CAPACITY_KEYS)
+        or not current_evidence
+        or not cited_evidence
+        or any(value is None for value in source_bindings.values())
+    ):
+        _raise_result_contract_invalid()
+    try:
+        target = _decimal(target_text, field="TARGET_INCREMENT")
+    except V1ProposalInputError:
+        _raise_result_contract_invalid()
+    if target <= 0:
+        _raise_result_contract_invalid()
+
+    eligible = [
+        row
+        for row in candidates
+        if row["disposition"] == DISPOSITION_INCREMENT_ELIGIBLE
+    ]
+    selected_rows = [row for row in eligible if row["ticker"] == selected_ticker]
+    eligible_tickers = {str(row["ticker"]) for row in eligible}
+    expected_selected = next(
+        (ticker for ticker in V1_PRIORITY_ORDER if ticker in eligible_tickers),
+        None,
+    )
+    if len(selected_rows) != 1 or selected_ticker != expected_selected:
+        _raise_result_contract_invalid()
+
+    c_value = capacity["C"]
+    a_value = capacity["A_initial"]
+    z_value = capacity["Z_initial"]
+    if c_value is None or a_value is None or z_value is None or c_value <= 0:
+        _raise_result_contract_invalid()
+    selected = selected_rows[0]
+    if selected["role"] == ROLE_CORE:
+        expected_target = c_value
+    elif selected["role"] == ROLE_SATELLITE:
+        headroom = _sum([z_value, a_value.copy_negate()])
+        expected_target = min(c_value, headroom)
+    else:
+        _raise_result_contract_invalid()
+    if a_value > z_value or target != expected_target or expected_target <= 0:
+        _raise_result_contract_invalid()
+
+
 def _persist_proposal(proposal: Mapping[str, object]) -> Path:
+    _validate_h1_v1_proposal_result(proposal)
     path = h1_v1_proposal_path()
     atomic_write_text(
         path,
@@ -713,25 +1226,23 @@ def _complete_proposal(
     )
 
 
-def build_h1_v1_proposal_workflow() -> Path:
-    """Build and atomically persist one non-authoritative V1 proposal."""
+def evaluate_h1_v1_proposal() -> dict[str, object]:
+    """Evaluate one complete current V1 proposal without persistence."""
     h1_evaluation = _h1_currentness.evaluate_current_h1_context()
     bindings = _base_source_bindings(h1_evaluation)
     try:
         snapshot = _load_current_source_snapshot()
     except V1ProposalInputError as exc:
-        return _persist_proposal(
-            _proposal(
-                h1_evaluation=h1_evaluation,
-                terminal_result=TERMINAL_NO_TRADE,
-                reason_code="INPUT_SOURCE_CONTRACT_NOT_VALID",
-                diagnostic_reason_codes=exc.reason_codes,
-                source_bindings=bindings,
-                capacity=_empty_capacity(),
-                candidates=[],
-                selected_ticker=None,
-                target_increment=None,
-            )
+        return _proposal(
+            h1_evaluation=h1_evaluation,
+            terminal_result=TERMINAL_NO_TRADE,
+            reason_code="INPUT_SOURCE_CONTRACT_NOT_VALID",
+            diagnostic_reason_codes=exc.reason_codes,
+            source_bindings=bindings,
+            capacity=_empty_capacity(),
+            candidates=[],
+            selected_ticker=None,
+            target_increment=None,
         )
 
     bindings.update(
@@ -774,29 +1285,83 @@ def build_h1_v1_proposal_workflow() -> Path:
             exposure_result,
             increment_result,
         ))))
-        return _persist_proposal(
-            _proposal(
-                h1_evaluation=h1_evaluation,
-                terminal_result=TERMINAL_NO_TRADE,
-                reason_code=(
-                    "INPUT_GENERATION_MISMATCH"
-                    if "V1_PROPOSAL_INPUT_GENERATION_MISMATCH" in exc.reason_codes
-                    else "INPUT_OWNER_NOT_VALID"
-                ),
-                diagnostic_reason_codes=reasons,
-                source_bindings=bindings,
-                capacity=_empty_capacity(),
-                candidates=_partial_candidates(exposure_result.projection),
-                selected_ticker=None,
-                target_increment=None,
-            )
+        return _proposal(
+            h1_evaluation=h1_evaluation,
+            terminal_result=TERMINAL_NO_TRADE,
+            reason_code=(
+                "INPUT_GENERATION_MISMATCH"
+                if "V1_PROPOSAL_INPUT_GENERATION_MISMATCH" in exc.reason_codes
+                else "INPUT_OWNER_NOT_VALID"
+            ),
+            diagnostic_reason_codes=reasons,
+            source_bindings=bindings,
+            capacity=_empty_capacity(),
+            candidates=_partial_candidates(exposure_result.projection),
+            selected_ticker=None,
+            target_increment=None,
         )
 
-    proposal = _complete_proposal(
+    return _complete_proposal(
         h1_evaluation=h1_evaluation,
         snapshot=snapshot,
         budget=budget,
         exposure=exposure,
         increment=increment,
     )
-    return _persist_proposal(proposal)
+
+
+def evaluate_h1_v1_proposal_state(
+) -> H1V1ProposalStateRecognition | None:
+    """Recognize the non-actionable V1 state from one fresh pure evaluation.
+
+    HOLD and NO_TRADE are complete P1 outcomes but are not the positive-ready
+    state.  Hard input failures propagate from the pure proposal owner.  No
+    persisted proposal or currentness observation is read, and nothing is
+    written.
+    """
+    proposal = evaluate_h1_v1_proposal()
+    try:
+        _validate_h1_v1_proposal_result(proposal)
+    except V1ProposalInputError:
+        raise V1ProposalStateRecognitionError(
+            "V1_PROPOSAL_STATE_RECOGNITION_INVARIANT_FAILED"
+        ) from None
+    terminal_result = proposal["terminal_result"]
+    if terminal_result in (TERMINAL_HOLD, TERMINAL_NO_TRADE):
+        return None
+
+    allowed_actions = canonical_allowed_actions_for_state(
+        H1_V1_DETERMINISTIC_PROPOSAL_READY
+    )
+    blocked_actions = canonical_blocked_actions_for_state(
+        H1_V1_DETERMINISTIC_PROPOSAL_READY
+    )
+    if not (
+        allowed_actions == ("HOLD", "NO_TRADE")
+        and blocked_actions
+        == tuple(action for action in ACTIONS if action not in allowed_actions)
+        and len(allowed_actions) + len(blocked_actions) == len(ACTIONS)
+        and set(allowed_actions).isdisjoint(blocked_actions)
+        and set(allowed_actions) | set(blocked_actions) == set(ACTIONS)
+    ):
+        raise V1ProposalStateRecognitionError(
+            "V1_PROPOSAL_STATE_ACTION_CONTRACT_INVALID"
+        )
+    return H1V1ProposalStateRecognition(
+        state=H1_V1_DETERMINISTIC_PROPOSAL_READY,
+        allowed_actions=allowed_actions,
+        blocked_actions=blocked_actions,
+        manual_review_required=False,
+        report_only=True,
+        authority_effect=AUTHORITY_EFFECT_NONE,
+        not_authorization=True,
+        new_buy_permission=False,
+        order_compilation_allowed=False,
+        step3_allowed=False,
+        step4_allowed=False,
+    )
+
+
+def build_h1_v1_proposal_workflow() -> Path:
+    """Evaluate and atomically persist one non-authoritative V1 proposal."""
+    return _persist_proposal(evaluate_h1_v1_proposal())

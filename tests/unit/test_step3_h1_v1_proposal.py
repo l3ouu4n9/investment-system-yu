@@ -33,6 +33,7 @@ from investment_orchestrator.observability import (
     report_only_holdings_exposure as holdings_exposure,
     report_only_increment_capacity as increment_capacity,
 )
+from investment_orchestrator.state import research_availability
 from investment_orchestrator.workflow import (
     step2_h1_currentness,
     step3_h1_v1_proposal as proposal,
@@ -324,12 +325,12 @@ def _build_case(
     )
 
 
-def _run_case(
+def _install_case_inputs(
     case: _Case,
     monkeypatch: pytest.MonkeyPatch,
     *,
     h1_evaluation: step2_h1_currentness.H1CurrentContextEvaluation | None = None,
-) -> dict[str, object]:
+) -> list[None]:
     sources = {
         MmiSourceRole.STRATEGY_SETTINGS: case.strategy_source,
         MmiSourceRole.PORTFOLIO_SNAPSHOT: case.portfolio_source,
@@ -369,9 +370,39 @@ def _run_case(
         "observe_report_only_increment_capacity_from_exposure",
         lambda **_: case.increment_result,
     )
+    return h1_calls
+
+
+def _run_case(
+    case: _Case,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    h1_evaluation: step2_h1_currentness.H1CurrentContextEvaluation | None = None,
+) -> dict[str, object]:
+    h1_calls = _install_case_inputs(
+        case,
+        monkeypatch,
+        h1_evaluation=h1_evaluation,
+    )
     path = proposal.build_h1_v1_proposal_workflow()
     assert h1_calls == [None]
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _recognize_case(
+    case: _Case,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    h1_evaluation: step2_h1_currentness.H1CurrentContextEvaluation | None = None,
+) -> proposal.H1V1ProposalStateRecognition | None:
+    h1_calls = _install_case_inputs(
+        case,
+        monkeypatch,
+        h1_evaluation=h1_evaluation,
+    )
+    result = proposal.evaluate_h1_v1_proposal_state()
+    assert h1_calls == [None]
+    return result
 
 
 def _candidate(result: dict[str, object], ticker: str) -> dict[str, object]:
@@ -446,6 +477,151 @@ def test_positive_core_candidate_uses_fixed_priority_and_is_report_only(
     assert set(after) - set(before) == {
         proposal.V1_PROPOSAL_ARTIFACT_RELATIVE_PATH
     }
+
+
+def test_positive_current_proposal_recognizes_exact_nonactionable_state_without_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _build_case(
+        tmp_path,
+        positions=(("VOO", "600"), ("QQQ", "1400")),
+        commitments=(("QQQ", "100"),),
+        x="1000",
+        r_cap="1000",
+        evidence_groups=(("VOO",), ("QQQ",)),
+    )
+    before = {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+
+    state = _recognize_case(case, monkeypatch)
+
+    assert state is not None
+    assert state.state == "H1_V1_DETERMINISTIC_PROPOSAL_READY"
+    assert state.allowed_actions == ("HOLD", "NO_TRADE")
+    expected_blocked = tuple(
+        action
+        for action in research_availability.ACTIONS
+        if action not in state.allowed_actions
+    )
+    assert state.blocked_actions == expected_blocked
+    assert set(state.allowed_actions).isdisjoint(state.blocked_actions)
+    assert set(state.allowed_actions) | set(state.blocked_actions) == set(
+        research_availability.ACTIONS
+    )
+    assert state.manual_review_required is False
+    assert state.report_only is True
+    assert state.authority_effect == "NONE"
+    assert state.not_authorization is True
+    assert state.new_buy_permission is False
+    assert state.order_compilation_allowed is False
+    assert state.step3_allowed is False
+    assert state.step4_allowed is False
+    assert "SELL" in state.blocked_actions
+    assert "NEW_BUY" in state.blocked_actions
+    assert "ORDER_COMPILATION" in state.blocked_actions
+    assert not (tmp_path / proposal.V1_PROPOSAL_ARTIFACT_RELATIVE_PATH).exists()
+    after = {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+
+
+def test_hold_and_noncurrent_no_trade_do_not_recognize_proposal_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hold_case = _build_case(
+        tmp_path / "hold",
+        positions=(("QQQ", "1000"),),
+        evidence_groups=(("VOO",),),
+    )
+    assert _recognize_case(hold_case, monkeypatch) is None
+    assert not (
+        hold_case.root / proposal.V1_PROPOSAL_ARTIFACT_RELATIVE_PATH
+    ).exists()
+
+    no_trade_case = _build_case(
+        tmp_path / "no_trade",
+        positions=(("QQQ", "1000"),),
+        h1_evaluation=_not_current_h1(),
+    )
+    forged_path = (
+        no_trade_case.root / proposal.V1_PROPOSAL_ARTIFACT_RELATIVE_PATH
+    )
+    forged_path.parent.mkdir(parents=True, exist_ok=True)
+    forged_bytes = b'{"terminal_result":"POSITIVE_INCREMENT_CANDIDATE"}\n'
+    forged_path.write_bytes(forged_bytes)
+
+    assert _recognize_case(no_trade_case, monkeypatch) is None
+    assert forged_path.read_bytes() == forged_bytes
+
+
+def test_near_valid_positive_missing_capacity_fails_state_recognition_invariant(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _build_case(
+        tmp_path,
+        positions=(("QQQ", "2000"),),
+        commitments=(("QQQ", "100"),),
+        x="1000",
+        r_cap="1000",
+        evidence_groups=(("QQQ",),),
+    )
+    h1_calls = _install_case_inputs(case, monkeypatch)
+    complete = proposal.evaluate_h1_v1_proposal()
+    assert h1_calls == [None]
+    assert complete["terminal_result"] == "POSITIVE_INCREMENT_CANDIDATE"
+    incomplete = dict(complete)
+    del incomplete["capacity"]
+
+    monkeypatch.setattr(
+        proposal,
+        "evaluate_h1_v1_proposal",
+        lambda: incomplete,
+    )
+    with pytest.raises(
+        proposal.V1ProposalStateRecognitionError,
+        match="V1_PROPOSAL_STATE_RECOGNITION_INVARIANT_FAILED",
+    ):
+        proposal.evaluate_h1_v1_proposal_state()
+
+
+def test_near_valid_positive_target_mismatch_fails_state_recognition_invariant(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _build_case(
+        tmp_path,
+        positions=(("QQQ", "2000"),),
+        commitments=(("QQQ", "100"),),
+        x="1000",
+        r_cap="1000",
+        evidence_groups=(("QQQ",),),
+    )
+    h1_calls = _install_case_inputs(case, monkeypatch)
+    complete = proposal.evaluate_h1_v1_proposal()
+    assert h1_calls == [None]
+    assert complete["target_increment"] == "900"
+    inconsistent = dict(complete)
+    inconsistent["target_increment"] = "1"
+
+    monkeypatch.setattr(
+        proposal,
+        "evaluate_h1_v1_proposal",
+        lambda: inconsistent,
+    )
+    with pytest.raises(
+        proposal.V1ProposalStateRecognitionError,
+        match="V1_PROPOSAL_STATE_RECOGNITION_INVARIANT_FAILED",
+    ):
+        proposal.evaluate_h1_v1_proposal_state()
 
 
 def test_large_mixed_scale_aggregates_remain_mathematically_exact(

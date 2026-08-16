@@ -93,6 +93,11 @@ MANUAL_REVIEW_REQUIRED = "MANUAL_REVIEW_REQUIRED"
 # and stale mapped H1 is never relabeled STRICT_STALE (which carries SELL). The
 # word FRESH in the name describes source freshness only; it grants nothing.
 H1_MAPPED_FRESH_NON_ACTIONABLE = "H1_MAPPED_FRESH_NON_ACTIONABLE"
+# V1-P2 downstream proposal state.  The availability evaluator does not emit
+# this state: the pure V1 proposal owner recognizes it only after a complete
+# current positive proposal evaluation.  Its row lives here solely so the
+# canonical state/action owner continues to own the exact permission contract.
+H1_V1_DETERMINISTIC_PROPOSAL_READY = "H1_V1_DETERMINISTIC_PROPOSAL_READY"
 
 # Source label recorded when mapped H1 research is the selected availability
 # source. Matches the H1 bridge's own ``source_kind`` literal.
@@ -187,7 +192,16 @@ _ALLOWED_ACTIONS_BY_STATE: dict[str, tuple[str, ...]] = {
     # none of the promoted decision/audit actions. No wildcard, no inheritance,
     # no fallthrough — unknown states remain fail closed via KeyError.
     H1_MAPPED_FRESH_NON_ACTIONABLE: ("HOLD", "NO_TRADE"),
+    # V1-P2 state recognition only.  A positive deterministic proposal grants
+    # neither NEW_BUY nor ORDER_COMPILATION (nor any other action beyond the
+    # two universally safe terminal outcomes).
+    H1_V1_DETERMINISTIC_PROPOSAL_READY: ("HOLD", "NO_TRADE"),
 }
+
+
+def canonical_allowed_actions_for_state(state: str) -> tuple[str, ...]:
+    """Exact allowed action row for one recognized state."""
+    return _ALLOWED_ACTIONS_BY_STATE[state]
 
 
 def canonical_blocked_actions_for_state(state: str) -> tuple[str, ...]:
@@ -198,7 +212,7 @@ def canonical_blocked_actions_for_state(state: str) -> tuple[str, ...]:
     row derive from it rather than re-declaring the complement. Unknown states
     raise ``KeyError``, the same fail-closed behavior as the table itself.
     """
-    allowed = _ALLOWED_ACTIONS_BY_STATE[state]
+    allowed = canonical_allowed_actions_for_state(state)
     return tuple(action for action in ACTIONS if action not in allowed)
 
 
@@ -588,7 +602,7 @@ def evaluate_research_availability(
     age_for_label = handoff_age_days if handoff_valid else (last_good_age_days if last_good_available else None)
     stale_label = _stale_label(age_for_label, fresh_days, stale_days)
 
-    allowed_actions = list(_ALLOWED_ACTIONS_BY_STATE[state])
+    allowed_actions = list(canonical_allowed_actions_for_state(state))
     blocked_actions = list(canonical_blocked_actions_for_state(state))
     manual_review_required = state == MANUAL_REVIEW_REQUIRED
 
